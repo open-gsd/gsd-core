@@ -2093,40 +2093,45 @@ test('finding-4: releaseLock STILL deletes our own unchanged lock (inode guard i
 test('CONC-2: acquireLock returns null on contention exhaustion WITHOUT a stack overflow (bounded loop)', (t) => {
   const dir = runtime();
   const { mock } = require('node:test');
-  fs.mkdirSync(path.join(dir, '.gsd', 'capabilities'), { recursive: true });
+  const lockPath = path.join(dir, '.gsd', 'capabilities', '.lock');
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
-  // Force every open to look "held" (EEXIST) and every stat to look STALE with a DEAD pid,
-  // so the steal path is always taken — but the rename never actually frees the lock (we make
-  // the lockfile re-appear). This exercises the retry loop to exhaustion.
+  // TV-06/07/11/17: a FAITHFUL pathological-contention sim. Write a REAL, stale, DEAD-pid JSON lock body
+  // on disk so the lock body is read through the actual fd-based bounded reader (openSync 'r' → fstatSync
+  // → readSync) — exactly the production path — instead of a bogus readFileSync mock that never fires.
+  // The DEAD pid (probe alive:false) makes the holder steal-eligible.
+  fs.writeFileSync(lockPath, lockBody({ pid: 999999999, host: os.hostname(), startTime: null, ts: Date.now() - 10 * 60 * 1000 }), 'utf8');
+  withLockProbes(t, { alive: false, startTime: null }); // dead, unverifiable → steal-eligible
+
+  // openSync: only the EXCLUSIVE create ('wx') of the .lock is forced to EEXIST (always "held"); every
+  // other open — including the fd reader's O_RDONLY open of the lock body — delegates to the real fn so
+  // the JSON body is genuinely read. TV-06: capture the real fn BEFORE mocking and delegate in else.
   const realOpen = fs.openSync.bind(fs);
   const openMock = mock.method(fs, 'openSync', function (p, flags, ...rest) {
     if (typeof p === 'string' && p.endsWith('.lock') && flags === 'wx') {
-      const err = new Error('EEXIST: file already exists');
-      err.code = 'EEXIST';
-      throw err;
+      const err = new Error('EEXIST: file already exists'); err.code = 'EEXIST'; throw err;
     }
     return realOpen(p, flags, ...rest);
   });
-  // statSync: present + stale (old mtime) so the steal branch is taken every time.
+  // statSync: keep the .lock looking PRESENT + STALE so the steal branch is taken on every attempt even
+  // after a real rename moves the file aside. TV-06: capture+delegate the real fn in the else branch.
+  // TV-11: include `size` (and dev/ino) so a stat consumer that reads them gets a complete stat object.
+  const realStat = fs.statSync.bind(fs);
+  const staleMtime = Date.now() - 10 * 60 * 1000;
   const statMock = mock.method(fs, 'statSync', function (p, ...rest) {
     if (typeof p === 'string' && p.endsWith('.lock')) {
-      return { mtimeMs: Date.now() - 10 * 60 * 1000, isFile: () => true };
+      return { mtimeMs: staleMtime, size: 256, dev: 1, ino: 1, isFile: () => true, isDirectory: () => false };
     }
-    return require('node:fs').statSync.wrappedMethod
-      ? require('node:fs').statSync.wrappedMethod(p, ...rest)
-      : p;
+    return realStat(p, ...rest);
   });
-  // The lockfile reads as a dead-pid token so the steal is "allowed" but never succeeds in
-  // freeing the path (open keeps throwing EEXIST).
-  const realReadFile = fs.readFileSync.bind(fs);
-  const readMock = mock.method(fs, 'readFileSync', function (p, ...rest) {
-    if (typeof p === 'string' && p.endsWith('.lock')) return '999999999-1-1';
-    return realReadFile(p, ...rest);
-  });
-  // rename "succeeds" (so we proceed to retry) but the next open still throws EEXIST.
-  const renameMock = mock.method(fs, 'renameSync', function () { /* no-op: lock stays held */ });
-  const rmMock = mock.method(fs, 'rmSync', function () { /* no-op */ });
-  t.after(() => { openMock.mock.restore(); statMock.mock.restore(); readMock.mock.restore(); renameMock.mock.restore(); rmMock.mock.restore(); });
+  // renameSync / rmSync: TV-18 — delegate to the REAL fns (capture before mocking). A real steal moves
+  // the lock aside and removes it, but the mocked 'wx' open keeps throwing EEXIST, so acquireLock can
+  // never actually acquire → the bounded loop runs to exhaustion and returns null (no recursion/SO).
+  const realRename = fs.renameSync.bind(fs);
+  const realRm = fs.rmSync.bind(fs);
+  const renameMock = mock.method(fs, 'renameSync', function (src, dst, ...rest) { return realRename(src, dst, ...rest); });
+  const rmMock = mock.method(fs, 'rmSync', function (p, ...rest) { return realRm(p, ...rest); });
+  t.after(() => { openMock.mock.restore(); statMock.mock.restore(); renameMock.mock.restore(); rmMock.mock.restore(); });
 
   let handle;
   assert.doesNotThrow(
@@ -2458,11 +2463,14 @@ test('DOS-2: reconcile with N pending entries writes the ledger at most once for
     return realWrite(rd, ledger);
   });
   // removeEntry also writes the ledger internally; spy it too so any per-entry path is visible.
+  // TV-10: the batched step-1 path must NEVER call removeEntry (it mutates the in-memory ledger and
+  // writes once). The spy is a pure COUNTER — it intentionally does NOT delegate to the real
+  // removeEntry: a call here would be the bug under test (a per-entry write), so we only record that it
+  // happened (the count assertion below fails) rather than masking it behind a misleading call-through.
   let removeEntryCalls = 0;
-  const realRemove = ledgerMod.removeEntry.bind(ledgerMod);
-  const removeMock = mock.method(ledgerMod, 'removeEntry', function (rd, id) {
+  const removeMock = mock.method(ledgerMod, 'removeEntry', function () {
     removeEntryCalls++;
-    return realRemove(rd, id);
+    return false; // not delegated on purpose — see TV-10 note above.
   });
   t.after(() => { writeMock.mock.restore(); removeMock.mock.restore(); });
 
@@ -2553,4 +2561,367 @@ test('W-3/DUR-5: reconcile sweeps a stale .gsd-capabilities.json.tmp.* orphan fr
 
   assert.ok(!fs.existsSync(staleTmp), 'stale orphan tmp file must be swept by reconcile (W-3/DUR-5)');
   assert.ok(fs.existsSync(freshTmp), 'a fresh tmp file (possible in-flight write) must NOT be swept');
+});
+
+// ---------------------------------------------------------------------------
+// Consent store binding on project install / upgrade / remove (#1459)
+// ---------------------------------------------------------------------------
+
+const consentMod = require('../gsd-core/bin/lib/capability-consent.cjs');
+const trustMod = require('../gsd-core/bin/lib/capability-trust.cjs');
+
+/** A consent home OUTSIDE the project tree (user-owned). */
+function consentHome() {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cap-consent-home-')));
+  cleanups.push(dir);
+  return dir;
+}
+
+/**
+ * #1459 CB-1/CB-2: the SECURITY binding `hasProjectConsent` checks is the RECOMPUTED full-bundle
+ * content hash over the INSTALLED capDir (`<runtimeDir>/.gsd/capabilities/<id>`) — exactly what the
+ * loader recomputes at load. Tests assert consent presence by recomputing the same hash here.
+ */
+function installedCapDir(runtimeDir, id) {
+  return path.join(runtimeDir, '.gsd', 'capabilities', id);
+}
+function installedContentHash(runtimeDir, id) {
+  return consentMod.bundleContentHash(installedCapDir(runtimeDir, id));
+}
+
+test('install (project scope, consented): writes a consent record under the consent home, NOT the project', async () => {
+  const dir = fs.realpathSync(runtime()); // project runtimeDir
+  const home = consentHome();
+  const cap = declarativeCap('proj-decl');
+  const res = await lifecycle.installCapability('./proj', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    _resolve: fakeResolve(cap, { integrity: 'sha512-proj' }),
+  });
+  assert.strictEqual(res.status, 'installed');
+  // The consent record matches what the loader will check — the RECOMPUTED full-bundle content hash
+  // over the installed capDir (#1459 CB-1/CB-2). A declarative-only cap has NO executable surface, so
+  // before content binding it had a constant disclosure signature and a repo-write could swap its
+  // manifest while consent still matched; the contentHash binds the whole bundle.
+  assert.strictEqual(
+    consentMod.hasProjectConsent({
+      gsdHome: home, projectRoot: dir, id: 'proj-decl',
+      contentHash: installedContentHash(dir, 'proj-decl'),
+    }),
+    true,
+    'a matching consent record was written under the consent home',
+  );
+  // It is under the consent HOME, not under the project runtimeDir.
+  assert.ok(fs.existsSync(consentMod.consentStorePath(home)), 'store under consent home');
+  assert.ok(!fs.existsSync(path.join(dir, '.gsd', 'consent.json')), 'NOT written inside the project');
+});
+
+test('install (project scope, executable + consented): consent record matches the executable disclosure signature', async () => {
+  const dir = fs.realpathSync(runtime());
+  const home = consentHome();
+  const cap = execCap('proj-exec', '1.0.0', { mcp: { srv: { command: 'node', env: { NODE_OPTIONS: '--inspect' } } } });
+  const res = await lifecycle.installCapability('./pe', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    consentGranted: true, sharedFiles: ['settings.json'],
+    _resolve: fakeResolve(cap, { integrity: 'sha512-pe' }),
+  });
+  assert.strictEqual(res.status, 'installed');
+  // The recorded contentHash must equal the recomputed full-bundle hash of the installed capDir so
+  // the loader re-activates it; a tampered manifest/script later changes the recomputed hash and
+  // deactivates (loader test). The stored disclosureSignature (incl. env) remains for the UX layer.
+  assert.strictEqual(
+    consentMod.hasProjectConsent({
+      gsdHome: home, projectRoot: dir, id: 'proj-exec',
+      contentHash: installedContentHash(dir, 'proj-exec'),
+    }),
+    true,
+  );
+  // The record ALSO retains the executable disclosure signature for the re-consent-on-change UX.
+  const store = consentMod.readConsentStore(home);
+  const rec = store.records[`${dir}\0proj-exec`];
+  assert.ok(rec, 'consent record present');
+  assert.strictEqual(rec.disclosureSignature, trustMod.signatureForManifest(cap), 'disclosure signature retained on the record');
+});
+
+test('install (GLOBAL scope): writes NO consent record (global is trusted as today)', async () => {
+  const dir = fs.realpathSync(runtime());
+  const home = consentHome();
+  const res = await lifecycle.installCapability('./g', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'global', consentStoreDir: home,
+    _resolve: fakeResolve(declarativeCap('global-decl'), { integrity: 'sha512-g' }),
+  });
+  assert.strictEqual(res.status, 'installed');
+  // No store file (or an empty one) — global scope never records consent.
+  const store = consentMod.readConsentStore(home);
+  assert.deepStrictEqual(Object.keys(store.records), [], 'global install records no consent');
+});
+
+test('remove (project scope): revokes the consent record', async () => {
+  const dir = fs.realpathSync(runtime());
+  const home = consentHome();
+  const cap = declarativeCap('proj-rm');
+  await lifecycle.installCapability('./rm', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    _resolve: fakeResolve(cap, { integrity: 'sha512-rm' }),
+  });
+  const rmHash = installedContentHash(dir, 'proj-rm');
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'proj-rm', contentHash: rmHash }),
+    true,
+    'consent present after install',
+  );
+  const rm = lifecycle.removeCapability('proj-rm', { runtimeDir: dir, scope: 'project', consentStoreDir: home });
+  assert.strictEqual(rm.status, 'removed');
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'proj-rm', contentHash: rmHash }),
+    false,
+    'remove fully revokes the consent record',
+  );
+});
+
+// Finding 3 (MED, #1459 round 6): removeProjectConsent now THROWS on a consent-lock failure
+// (round-3). removeCapability must NOT silently swallow that throw and still report a clean
+// 'removed' — that leaves a STALE consent record a byte-identical re-drop + forged ledger could
+// reactivate against. The revoke failure must be SURFACED (a stderr warning naming the record AND
+// a flag in the returned result) so the user knows to clear it (`gsd capability trust revoke`).
+function plantFreshConsentLockLife(home) {
+  const lockPath = consentMod.consentLockPath(home);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // A fresh JSON lock body (matching the shared lock primitive shape) so acquireConsentLock cannot
+  // steal it within its attempt budget → revokeProjectConsent throws.
+  const body = JSON.stringify({ token: `${process.pid}-${Date.now()}-1`, pid: process.pid, hostname: os.hostname(), startTime: 'CSTART', ts: Date.now() });
+  fs.writeFileSync(lockPath, body, 'utf8');
+  return lockPath;
+}
+
+test('remove (project scope): a revoke-on-lock-failure is SURFACED, not swallowed (no silent clean removed with a stale consent record)', async (t) => {
+  // revert-fails: the old remove path wrapped revokeProjectConsent in `try { … } catch { /* best-effort */ }`
+  // and returned `{ status: 'removed' }` regardless — so with the consent lock held, revoke throws, the
+  // catch swallows it, and the result is a clean 'removed' with NO indication the consent record is stale.
+  // This asserts the result carries consentRevokeFailed:true (and a warning) — which is FALSE/absent under
+  // the swallow-and-return-clean implementation and only true once the failure is surfaced.
+  const dir = fs.realpathSync(runtime());
+  const home = consentHome();
+  const cap = declarativeCap('proj-rm-lk');
+  await lifecycle.installCapability('./rmlk', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    _resolve: fakeResolve(cap, { integrity: 'sha512-rmlk' }),
+  });
+  const rmHash = installedContentHash(dir, 'proj-rm-lk');
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'proj-rm-lk', contentHash: rmHash }),
+    true, 'consent present after install',
+  );
+  // Hold the consent-store lock so the revoke inside remove cannot acquire it → revokeProjectConsent throws.
+  const lockPath = plantFreshConsentLockLife(home);
+  t.after(() => { try { fs.unlinkSync(lockPath); } catch { /* best-effort */ } });
+
+  const rm = lifecycle.removeCapability('proj-rm-lk', { runtimeDir: dir, scope: 'project', consentStoreDir: home });
+
+  // The files/ledger are gone (removal succeeded) — but the consent revoke FAILED and must be surfaced.
+  assert.strictEqual(rm.status, 'removed', 'the files+ledger removal still succeeds');
+  assert.strictEqual(readLedgerEntry(dir, 'proj-rm-lk'), null, 'ledger entry removed');
+  assert.strictEqual(rm.consentRevokeFailed, true,
+    'the result must flag consentRevokeFailed:true so the CLI can report a non-clean removal (a swallowed throw would leave this undefined)');
+  assert.ok(
+    typeof rm.consentRevokeWarning === 'string' && /consent|revoke|trust revoke/i.test(rm.consentRevokeWarning),
+    `the result must carry a warning naming the stale consent record; got: ${JSON.stringify(rm.consentRevokeWarning)}`,
+  );
+  // The consent record is STALE (could not be revoked) — confirming the failure was real, not a no-op.
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'proj-rm-lk', contentHash: rmHash }),
+    true, 'the consent record is left STALE (revoke was blocked by the held lock) — the user must clear it',
+  );
+});
+
+test('upgrade (project scope, consented): re-records the consent for the new version', async () => {
+  const dir = fs.realpathSync(runtime());
+  const home = consentHome();
+  const capV1 = execCap('proj-up', '1.0.0', { script: 'hooks/a.js' });
+  await lifecycle.installCapability('./up', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    consentGranted: true, sharedFiles: ['settings.json'],
+    _resolve: fakeResolve(capV1, { integrity: 'sha512-up1' }),
+  });
+  // Capture the V1 bundle content hash BEFORE the upgrade overwrites the on-disk bundle, so TV-05 can
+  // prove the OLD-version binding no longer matches after the re-record.
+  const v1Hash = installedContentHash(dir, 'proj-up');
+  // Upgrade to v2 with the SAME executable set (no re-consent prompt) — consent re-recorded for v2.
+  const capV2 = execCap('proj-up', '2.0.0', { script: 'hooks/a.js' });
+  const up = await lifecycle.upgradeCapability('./up', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    consentGranted: true, sharedFiles: ['settings.json'],
+    _resolve: fakeResolve(capV2, { integrity: 'sha512-up2' }),
+  });
+  assert.strictEqual(up.status, 'upgraded');
+  const v2Hash = installedContentHash(dir, 'proj-up');
+  assert.notStrictEqual(v1Hash, v2Hash, 'precondition: the v1 and v2 bundles hash differently');
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'proj-up', contentHash: v2Hash }),
+    true,
+    'consent re-recorded against the upgraded bundle content hash',
+  );
+  // TV-05: the upgrade must REPLACE the consent record in place — no second STALE record bound to the
+  // OLD version may linger. revert-fails: if the upgrade ADDED a new record instead of overwriting (or
+  // left the v1 binding around), the store would carry 2 records and/or the OLD hash would still match.
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'proj-up', contentHash: v1Hash }),
+    false,
+    'the OLD-version content hash no longer matches (no stale consent record)',
+  );
+  const store = consentMod.readConsentStore(home);
+  assert.strictEqual(Object.keys(store.records).length, 1, 'exactly one consent record for the (project, id) — no duplicate');
+});
+
+// ---------------------------------------------------------------------------
+// D — IC-01/CB-4: install from a SUBDIR records consent at the project root, so the loader (which
+// looks up via consentProjectRoot = realpath(findProjectRoot(cwd))) finds it from any descendant.
+// ---------------------------------------------------------------------------
+
+const { loadRegistry } = require('../gsd-core/bin/lib/capability-loader.cjs');
+
+test('D (IC-01/CB-4): install --scope project from a SUBDIR → cap is ACTIVE (record key matches loader lookup)', async () => {
+  // revert-fails: if the RECORD site bound consent to realpath(subdir) and the loader looked it up at
+  // realpath(findProjectRoot(cwd)), the keys would differ and the freshly installed cap would be
+  // immediately INACTIVE (install-then-inactive). The CLI resolves cwd→project root via
+  // findProjectRoot BEFORE install (capability is not in SKIP_ROOT_RESOLUTION), so the record lands at
+  // the project root; the loader's consentProjectRoot resolves the same root from a deep subdir. This
+  // test simulates that: install at the project root, then load from a nested subdir.
+  const projectRoot = fs.realpathSync(runtime());
+  fs.mkdirSync(path.join(projectRoot, '.planning'), { recursive: true }); // project-root marker for findProjectRoot
+  const subdir = path.join(projectRoot, 'a', 'b', 'c');
+  fs.mkdirSync(subdir, { recursive: true });
+  const home = consentHome();
+  const cap = declarativeCap('subdir-cap');
+  cap.skills = ['subdir-skill'];
+  const res = await lifecycle.installCapability('./sd', {
+    // The CLI passes the findProjectRoot-resolved cwd as runtimeDir; here that is the project root.
+    runtimeDir: projectRoot, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    _resolve: fakeResolve(cap, { integrity: '' }), // local install → empty integrity (CB-3 path)
+  });
+  assert.strictEqual(res.status, 'installed');
+  // Load the registry FROM the nested subdir, pointing the consent home at the same store. The loader
+  // resolves the project root (findProjectRoot finds the .planning/ marker) and finds the record.
+  const reg = loadRegistry({ includeInstalled: true, gsdHome: home, cwd: subdir, hostVersion: '1.6.0' });
+  assert.ok(reg.capabilities && reg.capabilities['subdir-cap'], 'cap ACTIVE when loaded from a subdir (no install-then-inactive)');
+  assert.strictEqual(reg.bySkill['subdir-skill'], 'subdir-cap', 'skill surface present from the subdir');
+});
+
+// ---------------------------------------------------------------------------
+// IC-03: a reconcile rollback that DELETES a project-scope entry whose bundle dir is gone must also
+// REVOKE the now-stale consent, so a later re-dropped BYTE-IDENTICAL bundle of the same id stays
+// INACTIVE (it cannot silently re-activate against the stale record whose content hash still matches).
+// ---------------------------------------------------------------------------
+
+test('IC-03: reconcile rollback of a deleted project bundle revokes consent → identical re-drop stays INACTIVE', async () => {
+  // revert-fails: drop the revokeStaleConsent(id) call in reconcile's install-rollback branch → the
+  // stale consent record survives the rollback, so the byte-identical re-drop (same content hash) would
+  // RE-ACTIVATE against it and the final inactive assertion would FAIL.
+  const dir = fs.realpathSync(runtime());
+  fs.mkdirSync(path.join(dir, '.planning'), { recursive: true }); // genuine project marker (CB-3 safe)
+  const home = consentHome();
+  const cap = declarativeCap('redrop-cap');
+  cap.skills = ['redrop-skill'];
+
+  // 1. Real project install — records a user consent record bound to the installed bundle content hash.
+  const installed = await lifecycle.installCapability('./rd', {
+    runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+    _resolve: fakeResolve(cap, { integrity: '' }),
+  });
+  assert.strictEqual(installed.status, 'installed');
+  const consentedHash = installedContentHash(dir, 'redrop-cap');
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'redrop-cap', contentHash: consentedHash }),
+    true, 'consent present after install',
+  );
+
+  // 2. Simulate a crashed/interrupted state: mark the entry as an in-flight (uncommitted) install and
+  //    delete its on-disk bundle dir. reconcile's install-rollback path then drops the entry.
+  recordPending(dir, 'redrop-cap', '1.0.0', { kind: 'install', backupName: null, sharedFiles: [] });
+  cleanup(path.join(dir, '.gsd', 'capabilities', 'redrop-cap')); // delete the on-disk bundle dir (helpers.cleanup: Windows-EBUSY retry budget)
+
+  // 3. Reconcile WITH the consent context — the rollback must revoke the stale consent.
+  const report = lifecycle.reconcileCapabilities({ runtimeDir: dir, scope: 'project', consentStoreDir: home });
+  assert.ok(report.rolledBack.includes('redrop-cap'), 'the deleted-bundle entry is rolled back');
+  assert.strictEqual(
+    consentMod.hasProjectConsent({ gsdHome: home, projectRoot: dir, id: 'redrop-cap', contentHash: consentedHash }),
+    false, 'reconcile rollback revoked the now-stale consent record',
+  );
+
+  // 4. Re-drop the BYTE-IDENTICAL bundle + a committed (forged) project ledger — no new consent.
+  const reDir = path.join(dir, '.gsd', 'capabilities', 'redrop-cap');
+  fs.mkdirSync(reDir, { recursive: true });
+  fs.writeFileSync(path.join(reDir, 'capability.json'), JSON.stringify(cap), 'utf8');
+  assert.strictEqual(consentMod.bundleContentHash(reDir), consentedHash, 'precondition: the re-drop is byte-identical (same hash)');
+  fs.writeFileSync(path.join(dir, '.gsd-capabilities.json'), JSON.stringify({
+    version: '1', updatedAt: '2026-01-01T00:00:00Z',
+    entries: { 'redrop-cap': { id: 'redrop-cap', version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
+  }), 'utf8');
+
+  // 5. The loader must NOT re-activate the identical re-drop — consent was revoked.
+  const reg = loadRegistry({ includeInstalled: true, gsdHome: home, cwd: dir, hostVersion: '1.6.0' });
+  assert.ok(reg.capabilities['redrop-cap'] === undefined, 'an identical re-drop stays INACTIVE after the rollback revoked consent');
+});
+
+// ---------------------------------------------------------------------------
+// IC-07: a PROJECT-scope install/upgrade with NO consentStoreDir cannot bind consent. That used to be
+// a SILENT skip (cap inactive with no explanation). It must now emit an observable stderr warning.
+// ---------------------------------------------------------------------------
+
+test('IC-07: project-scope install WITHOUT a consentStoreDir warns on stderr (consent binding skipped)', async () => {
+  // revert-fails: remove warnIfConsentSkipped's emit → the install still succeeds but NO warning is
+  // written, so the /consentStoreDir|consent binding was SKIPPED/i match below fails.
+  const dir = fs.realpathSync(runtime());
+  const orig = process.stderr.write.bind(process.stderr);
+  let buf = '';
+  process.stderr.write = (chunk, ...rest) => { buf += String(chunk); return orig(chunk, ...rest); };
+  let res;
+  try {
+    res = await lifecycle.installCapability('./nostore', {
+      // scope:'project' but NO consentStoreDir → bind cannot run.
+      runtimeDir: dir, hostVersion: '1.6.0', scope: 'project',
+      _resolve: fakeResolve(declarativeCap('no-store-cap'), { integrity: '' }),
+    });
+  } finally {
+    process.stderr.write = orig;
+  }
+  assert.strictEqual(res.status, 'installed', 'the install still succeeds (binding skip is non-fatal)');
+  assert.match(buf, /capability consent:/i, 'a consent diagnostic was written to stderr');
+  assert.match(buf, /no-store-cap/, 'the warning names the capability');
+  assert.match(buf, /skip/i, 'the warning states consent binding was skipped');
+});
+
+// ---------------------------------------------------------------------------
+// IC-05 / WIN-2: a consent-store write failure (read-only/UNC/NFS) must NOT fail an otherwise-
+// successful install — surface a non-fatal warning naming the store path and let the install succeed.
+// ---------------------------------------------------------------------------
+
+test('IC-05/WIN-2: a consent-store write failure leaves the install status:installed + warns', async () => {
+  // revert-fails: if bindProjectConsent re-threw (or the warning were dropped), the install would
+  // either throw / return non-installed OR succeed silently — both fail an assertion below.
+  const dir = fs.realpathSync(runtime());
+  const home = consentHome();
+  // Simulate an unwritable store: mock recordProjectConsent to throw (read-only/UNC/NFS surrogate).
+  const realRecord = consentMod.recordProjectConsent.bind(consentMod);
+  const recMock = mock.method(consentMod, 'recordProjectConsent', function () {
+    const err = new Error('EROFS: read-only file system, open consent.json'); err.code = 'EROFS'; throw err;
+  });
+  const orig = process.stderr.write.bind(process.stderr);
+  let buf = '';
+  process.stderr.write = (chunk, ...rest) => { buf += String(chunk); return orig(chunk, ...rest); };
+  let res;
+  try {
+    res = await lifecycle.installCapability('./rofs', {
+      runtimeDir: dir, hostVersion: '1.6.0', scope: 'project', consentStoreDir: home,
+      _resolve: fakeResolve(declarativeCap('rofs-cap'), { integrity: '' }),
+    });
+  } finally {
+    process.stderr.write = orig;
+    recMock.mock.restore();
+  }
+  void realRecord;
+  assert.strictEqual(res.status, 'installed', 'a consent-store IO error must NOT fail an otherwise-successful install');
+  assert.ok(fs.existsSync(path.join(dir, '.gsd', 'capabilities', 'rofs-cap', 'capability.json')), 'the bundle is committed on disk');
+  assert.match(buf, /capability consent:/i, 'a consent diagnostic was written to stderr');
+  assert.match(buf, /could not write the consent record/i, 'the warning explains the write failure');
+  assert.match(buf, new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the warning names the consent store path');
 });

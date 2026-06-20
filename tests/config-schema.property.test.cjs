@@ -184,12 +184,30 @@ describe('config-schema: cwd-aware overlay federation (ADR-1244 D2)', () => {
   before(() => {
     savedHome = process.env.GSD_HOME;
     sandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgschema-home-'));
-    process.env.GSD_HOME = sandboxHome; // empty global overlay root
-    withOverlay = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgschema-proj-'));
+    process.env.GSD_HOME = sandboxHome; // empty global overlay root + user-owned consent store
+    // realpath so the consent record's realpath(projectRoot) matches the loader's lookup.
+    withOverlay = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cfgschema-proj-')));
     fs.mkdirSync(path.join(withOverlay, '.planning'), { recursive: true }); // project-root marker
     const capDir = path.join(withOverlay, '.gsd', 'capabilities', 'cfgschema-overlay');
     fs.mkdirSync(capDir, { recursive: true });
     fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify(overlayCap), 'utf8');
+    // #1459: a PROJECT-scope overlay activates only with a committed ledger AND a user consent record
+    // on this machine. Write both so the cwd-aware federation behavior under test is exercised for a
+    // genuinely-installed+consented overlay (a forged in-repo ledger alone no longer activates it).
+    fs.writeFileSync(
+      path.join(withOverlay, '.gsd-capabilities.json'),
+      JSON.stringify({ version: '1', updatedAt: '2026-01-01T00:00:00Z', entries: {
+        'cfgschema-overlay': { id: 'cfgschema-overlay', version: '1.0.0', source: 's', integrity: 'sha512-cfg', files: [], sharedEdits: [] },
+      } }),
+      'utf8',
+    );
+    const trust = require('../gsd-core/bin/lib/capability-trust.cjs');
+    const consent = require('../gsd-core/bin/lib/capability-consent.cjs');
+    consent.recordProjectConsent({
+      gsdHome: sandboxHome, projectRoot: withOverlay, id: 'cfgschema-overlay',
+      integrity: 'sha512-cfg', disclosureSignature: trust.signatureForManifest(overlayCap, capDir),
+      contentHash: consent.bundleContentHash(capDir),
+    });
     withoutOverlay = fs.mkdtempSync(path.join(os.tmpdir(), 'cfgschema-bare-'));
     fs.mkdirSync(path.join(withoutOverlay, '.planning'), { recursive: true });
   });

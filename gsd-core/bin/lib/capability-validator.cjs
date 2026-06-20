@@ -13,7 +13,6 @@
  * fresh worktree before `npm run build:lib` has run.
  */
 
-const fs = require('node:fs');
 const path = require('node:path');
 
 const { LOOP_HOST_CONTRACT } = require('./loop-host-contract.cjs');
@@ -1016,12 +1015,35 @@ function validateRuntimeBody(cap) {
   return errors;
 }
 
+// #1459 CONVERGENCE finding 1(b) — GENEROUS DoS backstop on a (possibly project-plantable) hook
+// fragment file. A real fragment is a few KiB of markdown; 8 MiB is wildly more than any legitimate
+// fragment. The bounded reader refuses a non-regular (FIFO/device/symlink-to-nonregular) or oversized
+// fragment WITHOUT a raw blocking read, so a forged in-bundle FIFO/oversized fragment.path becomes an
+// un-materializable fragment (a validation error / skip) instead of hanging or OOM-ing the loop.
+const FRAGMENT_MAX_BYTES = 8 * 1024 * 1024;
+
 function materializeHookFragments(cap, capDir) {
   const errors = [];
   const hookGroups = [
     ['steps', Array.isArray(cap.steps) ? cap.steps : []],
     ['contributions', Array.isArray(cap.contributions) ? cap.contributions : []],
   ];
+
+  // #1459 CONVERGENCE finding 1(b): the fragment body is read via the SHARED bounded fd reader (open →
+  // fstat → require regular file → size cap → read exactly size), NOT a raw fs.readFileSync(abs,'utf8')
+  // which BLOCKS forever on a forged in-bundle FIFO and reads an oversized fragment unbounded into memory.
+  // Required lazily so the committed plain-.cjs validator does not hard-depend on the built ledger artifact
+  // at module-load time (materialize is a runtime path, reached only after build:lib). A bounded-reader
+  // throw (non-regular/oversized/IO) → an un-materializable-fragment validation error, not a hang.
+  let readSmallRegularFile;
+  try {
+    ({ readSmallRegularFile } = require('./capability-ledger.cjs'));
+  } catch {
+    // Defensive: if the bounded reader is unavailable, fall back to a fail-CLOSED stub so we never
+    // silently revert to an unbounded raw read. A null-returning stub turns every path fragment into an
+    // "could not be read" error rather than a hang (declarative-only fragments use `inline` and skip this).
+    readSmallRegularFile = () => null;
+  }
 
   for (const [groupName, hooks] of hookGroups) {
     for (let i = 0; i < hooks.length; i++) {
@@ -1043,8 +1065,18 @@ function materializeHookFragments(cap, capDir) {
       }
 
       try {
-        fragment.inline = fs.readFileSync(abs, 'utf8');
+        const body = readSmallRegularFile(abs, FRAGMENT_MAX_BYTES);
+        if (body === null) {
+          // null = genuinely missing (ENOENT) OR refused as non-regular/oversized via the stub fallback.
+          errors.push(
+            cap.id + '/' + groupName + '[' + i + '].fragment.path could not be read (missing, non-regular ' +
+            '(FIFO/device), or exceeds the size cap): ' + fragment.path,
+          );
+          continue;
+        }
+        fragment.inline = body;
       } catch (err) {
+        // Bounded-reader fail-closed throw (non-regular/oversized/IO) — an un-materializable fragment.
         errors.push(
           cap.id + '/' + groupName + '[' + i + '].fragment.path could not be read: ' +
           fragment.path + ' (' + err.message + ')',

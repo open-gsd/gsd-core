@@ -64,10 +64,32 @@ interface SemverModule {
 }
 interface ProjectRootModule {
   findProjectRoot: (startDir: string) => string | null;
+  /** #1459 IC-01/CB-4: the canonical realpath'd consent project root (RECORD/LOOKUP/revoke parity). */
+  consentProjectRoot: (cwd: string) => string;
 }
 interface GeneratorModule {
   buildRegistry: (capMap: Map<string, unknown>) => Registry;
   loadCentralConfigKeys: () => Set<string>;
+}
+interface LedgerModule {
+  /** THE single per-entry validator (shared with capability-ledger's readers) — loader parity. */
+  isValidLedgerEntry: (id: unknown, entry: unknown) => boolean;
+  /** Shared fd-based bounded reader: content, null for ENOENT, or THROWS (non-regular/oversized/IO). */
+  readSmallRegularFile: (filePath: string, maxBytes: number) => string | null;
+}
+interface ConsentModule {
+  /**
+   * #1459 CB-1/CB-2: the consent decision is bound to the RECOMPUTED full-bundle content hash, not
+   * the repo-plantable ledger integrity nor the executable-only disclosure signature.
+   */
+  hasProjectConsent: (args: {
+    gsdHome?: string;
+    projectRoot: string;
+    id: string;
+    contentHash: string;
+  }) => boolean;
+  /** Recompute the full-bundle content hash over capDir (manifest AND artifacts AND identity). */
+  bundleContentHash: (capDir: string) => string;
 }
 
 export interface LoadRegistryOptions {
@@ -85,6 +107,13 @@ export interface OverlaySkip {
   id: string;
   scope: 'global' | 'project';
   reason: string;
+  /**
+   * #1459 IC-02: a STRUCTURAL discriminant for the skip so consumers (gsd-tools `list`) classify a
+   * warning by `kind`, not by matching the human-readable `reason` prose (which is free to change).
+   * `'unconsented'` is the project-scope no-consent-record case the list command marks INACTIVE; other
+   * skips carry no `kind` (they are first-party-wins / validation / engines / pending diagnostics).
+   */
+  kind?: 'unconsented';
 }
 
 export interface BlockedGate {
@@ -120,6 +149,22 @@ export interface OverlayMeta {
 
 const RESERVED_ID_PREFIX = /^(gsd-|gsd-core-|anthropic-)/;
 const GSD_HOME_DIRNAME = '.gsd';
+/**
+ * GENEROUS DoS backstop for the bounded per-scope ledger read (mirrors capability-ledger's
+ * LEDGER_MAX_BYTES). The project-scope ledger is repo-plantable untrusted content; reading it via
+ * the shared fd reader (regular-file + size cap) means a FIFO/device/symlinked ledger can no longer
+ * BLOCK (the #1459 raw-readFileSync hang) or read unbounded.
+ */
+const LEDGER_MAX_BYTES = 8 * 1024 * 1024;
+/**
+ * #1459 finding 2 (HIGH): GENEROUS DoS backstop on a project-plantable `capability.json`. The loader
+ * MUST read the manifest via the shared bounded fd reader (regular-file + size cap, no FIFO hang),
+ * NOT a raw `fs.readFileSync` — a repo-planted FIFO/device manifest would otherwise BLOCK the loader
+ * forever and an oversized manifest would read unbounded into memory (OOM). A legitimate manifest is a
+ * few KiB of declarative JSON; 8 MiB is wildly more than any real capability.json. A null/oversized/
+ * non-regular read → SKIP the overlay (warning), fail-closed.
+ */
+const MANIFEST_MAX_BYTES = 8 * 1024 * 1024;
 
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -138,22 +183,104 @@ function readHostVersion(): string {
 }
 
 /**
+ * Canonicalize a directory path for dedup/scope-escalation comparison. #1459 finding 1 (HIGH): the dedup
+ * MUST collapse two DIFFERENT LEXICAL paths that name the SAME PHYSICAL directory (a symlink) to one key,
+ * else a symlinked GSD_HOME aliasing the project root is scanned once as trusted 'global' BEFORE the
+ * 'project' scan and the in-repo `.gsd/capabilities` bundle bypasses the CB-3 consent gate via aliasing.
+ * `fs.realpathSync` resolves symlinks to the physical path; on ENOENT/IO error it falls back to
+ * `path.resolve` (a not-yet-created overlay dir cannot be realpath'd).
+ *
+ * #1459 CONVERGENCE finding 3 (LOW/MED): the realpath FAILURE must be reported to the caller (the
+ * `realpathFailed` flag), NOT silently swallowed. The old behavior — fall back to `path.resolve` while
+ * preserving the candidate's ORIGINAL scope — was not strictly fail-safe: a symlinked GSD_HOME whose
+ * realpath THROWS (a race / odd-FS) would key on its SYMLINK-LEXICAL path, which differs from the
+ * project candidate's realpath'd key, so the two would NOT merge and the aliased global root would be
+ * scanned as trusted-'global' (no consent record required) — parking an aliased project tree in the
+ * trusted-global slot. The caller (`overlayRoots`) uses `realpathFailed` to classify a realpath-failed
+ * GLOBAL candidate CONSERVATIVELY (consent-required 'project'), so a race/odd-FS can never aliased-upgrade
+ * an in-repo bundle to trusted-global. The fallback key is still `path.resolve` (best-effort dedup); a
+ * normal ENOENT (the global capabilities dir simply does not exist yet) still resolves to no scan because
+ * the later readdir fails — the conservative reclassification is harmless when there is nothing to read.
+ */
+function canonicalDir(dir: string): { path: string; realpathFailed: boolean; enoent: boolean } {
+  try {
+    return { path: fs.realpathSync(dir), realpathFailed: false, enoent: false };
+  } catch (err) {
+    // #1459 finding 1 (round 6): distinguish a NON-EXISTENT overlay dir (ENOENT — there is simply nothing
+    // to scan at that scope, so the fail-safe demotion must NOT fire) from a realpath that fails for ANOTHER
+    // reason (race / odd-FS / EIO / EACCES — the dir may exist but is uncanonicalizable, so we cannot prove
+    // physical distinctness and MUST fail safe toward needs-consent).
+    const code = (err as NodeJS.ErrnoException).code;
+    const enoent = code === 'ENOENT' || code === 'ENOTDIR';
+    return { path: path.resolve(dir), realpathFailed: true, enoent };
+  }
+}
+
+/**
  * The ordered overlay install roots (global first, then project), deduped by
- * resolved absolute path so a single directory is never scanned twice (which
+ * CANONICAL (realpath'd) absolute path so a single physical directory is never scanned twice (which
  * would otherwise self-report a spurious id collision when the project lives
  * under the GSD home, or in tests where both resolve to the same fixture).
+ *
+ * #1459 CB-3: when the consent-global home resolves EQUAL to (or an ancestor whose .gsd collides with)
+ * a GENUINE project root, the global overlay dir and the project overlay dir are the SAME directory.
+ * The dedup must NOT then keep it as 'global' (trusted, no consent record required) — that would let an
+ * in-repo bundle bypass consent simply because GSD_HOME pointed at the repo. On a collision the
+ * surviving scope escalates to the MORE RESTRICTIVE 'project' (consent-required), but ONLY when the
+ * colliding root is a GENUINE marker'd project (a `.planning/` dir or a `.git`). `findProjectRoot` is
+ * total — it returns `cwd` itself when no marker exists — so a bare GSD_HOME with no project marker
+ * (the user's own home; also the test-fixture `cwd === home` no-op) must stay 'global' and NOT spuriously
+ * demand consent.
+ *
+ * #1459 finding 1 (HIGH): BOTH the dedup key AND the CB-3 collision comparison are keyed on the
+ * realpath'd path (canonicalDir), so a symlinked GSD_HOME that physically IS the project root collides
+ * and escalates to consent-required 'project' — it can no longer be aliased into the trusted-global slot.
+ *
+ * #1459 finding 1 (HIGH, ROUND 6): the trusted-global slot is now gated on PROVABLE distinctness from the
+ * project tree — realpath(global) AND realpath(project) must BOTH succeed AND resolve to DIFFERENT physical
+ * paths. The earlier one-sided rule (demote only a realpath-FAILED *global* candidate) still allowed the
+ * symlinked-GSD_HOME bypass: when GSD_HOME aliases the project root, the GLOBAL candidate realpaths fine
+ * while the PROJECT candidate's realpath fails, so the keys never collide and the in-repo bundle stays in
+ * the no-consent global slot. If distinctness cannot be proven (either realpath throws, or both resolve
+ * EQUAL) AND there is a genuine project root, the global is demoted to consent-required 'project'.
  */
+function hasGenuineProjectMarker(dir: string): boolean {
+  try {
+    const planning = path.join(dir, '.planning');
+    if (fs.existsSync(planning) && fs.statSync(planning).isDirectory()) return true;
+  } catch { /* fall through */ }
+  try {
+    if (fs.existsSync(path.join(dir, '.git'))) return true;
+  } catch { /* fall through */ }
+  return false;
+}
+
 function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope: 'global' | 'project' }> {
   const roots: Array<{ dir: string; scope: 'global' | 'project' }> = [];
-  const seen = new Set<string>();
-  const add = (dir: string, scope: 'global' | 'project'): void => {
+  const byPath = new Map<string, { dir: string; scope: 'global' | 'project' }>();
+  const add = (dir: string, scope: 'global' | 'project', canonical: { path: string; realpathFailed: boolean }, genuineProject = false): void => {
     const resolved = path.resolve(dir);
-    if (seen.has(resolved)) return;
-    seen.add(resolved);
-    roots.push({ dir: resolved, scope });
+    // #1459 finding 1: the DEDUP KEY (and thus the CB-3 scope-escalation comparison) is the CANONICAL
+    // (realpath'd) path, so a symlinked GSD_HOME that physically IS the project root collides here (and
+    // escalates below) instead of being scanned as a distinct trusted 'global' root. The SCANNED path
+    // (`entry.dir`) stays the lexical `path.resolve` value — the readdir/commandRoots path is unchanged
+    // for the common (non-symlinked) case; only the dedup/escalation decision is realpath-aware.
+    const key = canonical.path;
+    const existing = byPath.get(key);
+    if (existing) {
+      // CB-3: a dir already claimed escalates to the more restrictive scope ONLY for a GENUINE project
+      // root — so a real GSD_HOME == projectRoot (incl. via a symlink) still requires consent, while a
+      // marker-less home stays trusted-global (and the test-fixture cwd===home no-op is preserved).
+      if (existing.scope === 'global' && scope === 'project' && genuineProject) existing.scope = 'project';
+      return;
+    }
+    const entry = { dir: resolved, scope };
+    byPath.set(key, entry);
+    roots.push(entry);
   };
   const home = gsdHome || process.env['GSD_HOME'] || os.homedir();
-  add(path.join(home, GSD_HOME_DIRNAME, 'capabilities'), 'global');
+  const globalDir = path.join(home, GSD_HOME_DIRNAME, 'capabilities');
+  const globalCanon = canonicalDir(globalDir);
   let projectRoot: string | null = null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
@@ -162,10 +289,61 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
   } catch {
     projectRoot = null;
   }
-  if (projectRoot) {
-    add(path.join(projectRoot, GSD_HOME_DIRNAME, 'capabilities'), 'project');
+  const projectDir = projectRoot ? path.join(projectRoot, GSD_HOME_DIRNAME, 'capabilities') : null;
+  const projectCanon = projectDir ? canonicalDir(projectDir) : null;
+
+  // #1459 finding 1 (HIGH, round 6): the global overlay root is trusted (consent-FREE) ONLY when we can
+  // PROVE it is a distinct physical directory from the project overlay tree — i.e. realpath(global) AND
+  // realpath(project) BOTH succeed AND resolve to DIFFERENT physical paths. A one-sided rule (demote only a
+  // realpath-FAILED *global* candidate) left the symlinked-GSD_HOME bypass open: when GSD_HOME is a symlink
+  // alias of the project root, the GLOBAL candidate realpaths fine (stays trusted-global) while the PROJECT
+  // candidate's realpath fails → the two keys never collide → the in-repo bundle stays in the no-consent
+  // global slot. So the global is demoted to consent-required 'project' (only when there IS a GENUINE
+  // project root, so a marker-less home / cwd===home stays trusted-global) whenever distinctness cannot be
+  // proven: EITHER realpath throws, OR both succeed but resolve EQUAL (an alias). When the demoted-global
+  // and the project candidate physically coincide they then dedup onto one consent-required entry; when
+  // they are merely unprovable-distinct (e.g. global realpath failed) the global is independently demoted
+  // so an aliased in-repo tree it would scan still requires a record. A genuinely non-existent global dir
+  // (ENOENT) realpath-fails too, but its later readdir fails, so this demotion is a harmless no-op there.
+  let globalScope: 'global' | 'project' = 'global';
+  if (projectRoot && projectCanon && hasGenuineProjectMarker(projectRoot)) {
+    // The fail-safe only matters when there IS an in-repo overlay tree to protect. A NON-EXISTENT project
+    // overlay dir (ENOENT) has nothing to bypass into the trusted-global slot, so the global stays trusted
+    // (and a genuinely distinct real global cap is not spuriously demoted — the control case). Otherwise,
+    // demote the global to consent-required 'project' UNLESS we can PROVE physical distinctness:
+    //   - the project overlay actually exists (or can't be proven absent), AND
+    //   - either realpath can't canonicalize one side (race/odd-FS → can't prove distinct), OR
+    //   - both canonicalize EQUAL (an alias — GSD_HOME physically IS the project root).
+    const projectAbsent = projectCanon.realpathFailed && projectCanon.enoent;
+    if (!projectAbsent) {
+      const provablyDistinct =
+        !globalCanon.realpathFailed &&
+        !projectCanon.realpathFailed &&
+        globalCanon.path !== projectCanon.path;
+      if (!provablyDistinct) globalScope = 'project';
+    }
+  }
+  add(globalDir, globalScope, globalCanon);
+  if (projectDir && projectCanon) {
+    add(projectDir, 'project', projectCanon, hasGenuineProjectMarker(projectRoot as string));
   }
   return roots;
+}
+
+/**
+ * Resolve the PROJECT ROOT for `cwd` used to LOOK UP a project-scope consent record (#1459). Delegates
+ * to the SINGLE canonical `consentProjectRoot` helper (IC-01/CB-4) so the loader's lookup key always
+ * matches the install RECORD key and the `trust revoke` key — installing from a subdir then resolves
+ * to the same realpath'd project root the loader checks (no install-then-inactive). Falls back to
+ * `cwd` if the project-root module cannot be loaded at all (the consent store realpaths it).
+ */
+function projectRootFor(cwd: string): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+    const projectRootMod: ProjectRootModule = require('./project-root.cjs');
+    return projectRootMod.consentProjectRoot(cwd);
+  } catch { /* fall through */ }
+  return cwd;
 }
 
 /**
@@ -181,32 +359,32 @@ function overlayRoots(cwd: string, gsdHome?: string): Array<{ dir: string; scope
  * Never throws: a missing/invalid ledger yields empty sets.
  */
 /**
- * Is `e` a structurally-valid COMMITTED ledger entry for `id`? Mirrors the required shape that
- * capability-ledger's readLedger enforces (id/version/source/integrity strings + files/sharedEdits
- * arrays), and requires the key to equal `entry.id` and the entry to carry NO `_pending` marker.
- * A malformed or tampered entry fails this check and is therefore NOT treated as consent — fail
- * closed (Codex R2 low): only a genuine lifecycle-written commit authorizes command dispatch.
+ * Is `e` a structurally-valid COMMITTED ledger entry for `id`? Delegates the structural shape to
+ * capability-ledger's SHARED `isValidLedgerEntry` (loader/ledger validator PARITY — #1459 ROOT FIX:
+ * the loader previously hand-duplicated the shape and could drift), and ADDS the loader-specific
+ * "committed = valid AND carries NO `_pending` marker" semantic. A malformed/tampered/pending entry
+ * fails this check and is therefore NOT treated as committed — fail closed.
  */
-function isCommittedLedgerEntry(id: string, e: unknown): boolean {
+function isCommittedLedgerEntry(ledger: LedgerModule, id: string, e: unknown): boolean {
   if (!e || typeof e !== 'object' || Array.isArray(e)) return false;
-  const r = e as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(r, '_pending')) return false; // committed entries carry no intent
-  return (
-    r['id'] === id &&
-    typeof r['version'] === 'string' &&
-    typeof r['source'] === 'string' &&
-    typeof r['integrity'] === 'string' &&
-    Array.isArray(r['files']) &&
-    Array.isArray(r['sharedEdits'])
-  );
+  if (Object.prototype.hasOwnProperty.call(e as Record<string, unknown>, '_pending')) return false; // intent ⇒ uncommitted.
+  return ledger.isValidLedgerEntry(id, e);
 }
 
-function ledgerOverlayIds(rootDir: string): { pending: Set<string>; committed: Set<string> } {
+function ledgerOverlayIds(ledger: LedgerModule, rootDir: string): {
+  pending: Set<string>;
+  committed: Set<string>;
+} {
   const pending = new Set<string>();
   const committed = new Set<string>();
   try {
     const ledgerPath = path.join(rootDir, '..', '..', '.gsd-capabilities.json');
-    const parsed: unknown = JSON.parse(fs.readFileSync(ledgerPath, 'utf8'));
+    // #1459 (HIGH): read the per-scope ledger via the SHARED fd-based bounded reader (open → fstat →
+    // require regular file → size cap → read exactly size). The previous raw `fs.readFileSync` BLOCKED
+    // forever on a repo-planted FIFO ledger (a project-scope DoS) and read an oversized file whole.
+    const content = ledger.readSmallRegularFile(ledgerPath, LEDGER_MAX_BYTES);
+    if (content === null) return { pending, committed }; // genuinely missing.
+    const parsed: unknown = JSON.parse(content);
     if (!parsed || typeof parsed !== 'object') return { pending, committed };
     const entries = (parsed as Record<string, unknown>)['entries'];
     if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return { pending, committed };
@@ -214,12 +392,12 @@ function ledgerOverlayIds(rootDir: string): { pending: Set<string>; committed: S
       if (!entry || typeof entry !== 'object') continue;
       if ((entry as Record<string, unknown>)['_pending']) {
         pending.add(id); // a truthy in-flight intent — defer/skip until reconciliation
-      } else if (isCommittedLedgerEntry(id, entry)) {
-        committed.add(id); // a genuine, structurally-valid commit — the consent signal
+      } else if (isCommittedLedgerEntry(ledger, id, entry)) {
+        committed.add(id); // a genuine, structurally-valid commit
       }
       // else: malformed / tampered / falsy-_pending → neither (fail closed: declarative-only)
     }
-  } catch { /* missing/invalid ledger — no pending, no committed */ }
+  } catch { /* missing/invalid/non-regular/oversized ledger — no pending, no committed (fail closed) */ }
   return { pending, committed };
 }
 
@@ -245,9 +423,16 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
   const validator: ValidatorModule = require('./capability-validator.cjs');
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const semver: SemverModule = require('./semver-compare.cjs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+  const ledgerMod: LedgerModule = require('./capability-ledger.cjs');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+  const consentMod: ConsentModule = require('./capability-consent.cjs');
 
   const cwd = options.cwd || process.cwd();
   const hostVersion = options.hostVersion || readHostVersion();
+  // The user-owned consent home — SAME `gsdHome || GSD_HOME || homedir()` rule the CLI uses, so the
+  // consent the CLI records is the consent the loader checks. The consent store NEVER lives in a repo.
+  const gsdHome = options.gsdHome || process.env['GSD_HOME'] || os.homedir();
 
   const warnings: OverlaySkip[] = [];
   const incompatibleGateCapIds: string[] = [];
@@ -309,7 +494,7 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
     // install or upgrade). They are NOT yet committed, so they must not be activated — reconcile
     // will roll them forward or back. Fail OPEN (skip without a gate block): an uncommitted gate
     // is not a real installed gate. See capability-lifecycle.cts (ADR-1244 Phase 4).
-    const { pending: pendingIds, committed: committedIds } = ledgerOverlayIds(root.dir);
+    const { pending: pendingIds, committed: committedIds } = ledgerOverlayIds(ledgerMod, root.dir);
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
       const id = ent.name;
@@ -323,7 +508,17 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
 
       let cap: CapManifest;
       try {
-        cap = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as CapManifest;
+        // #1459 finding 2 (HIGH): read the manifest via the SHARED fd-based bounded reader (open → fstat
+        // → require regular file → size cap → read exactly size). A project-planted FIFO/device manifest
+        // can no longer BLOCK the loader (the raw readFileSync hang) and an oversized manifest can no
+        // longer read unbounded. A null read (genuinely missing OR refused as non-regular/oversized) →
+        // skip the overlay, fail-closed.
+        const manifestRaw = ledgerMod.readSmallRegularFile(manifestPath, MANIFEST_MAX_BYTES);
+        if (manifestRaw === null) {
+          warnings.push({ id, scope: root.scope, reason: 'capability.json missing, non-regular (FIFO/device), or exceeds the size cap — skipped' });
+          continue;
+        }
+        cap = JSON.parse(manifestRaw) as CapManifest;
       } catch (e) {
         warnings.push({ id, scope: root.scope, reason: 'unreadable or invalid capability.json: ' + errMessage(e) });
         continue;
@@ -384,9 +579,77 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
         skip('incompatible with GSD ' + hostVersion + ' (requires engines.gsd "' + range + '")');
         continue;
       }
-      // 5. Materialize path-based hook fragments (resolved against the overlay dir).
-      //    materializeHookFragments RETURNS errors (e.g. a fragment path escaping the
-      //    capability dir) — capture them; an un-materializable fragment is a skip.
+      // 5. #1459 — USER-OWNED CONSENT GATE (TRUST-1 + TRUST-3). For a PROJECT-scope overlay the
+      //    authoritative consent signal is NOT the in-repo ledger (repo-plantable: a clone/fork
+      //    activated executable surfaces AND declarative loop surfaces with no user decision) but a
+      //    record in the user-owned consent store on THIS machine, bound to (realpath(projectRoot),
+      //    id, RECOMPUTED full-bundle content hash). If there is NO matching record we do NOT push
+      //    the cap into acceptedMap/overlayCaps and do NOT set a commandRoot → the cap is
+      //    DISCOVERED-BUT-INACTIVE (a warning records why). This single gate closes BOTH
+      //    command-dispatch (TRUST-1) and declarative-surface (TRUST-3) activation. GLOBAL scope is
+      //    under the user's own home and is trusted as before (no consent record required).
+      //
+      //    CONVERGENCE finding 1 (HIGH): this gate now runs BEFORE the heavy/unbounded pre-activation
+      //    work (materializeHookFragments — which reads each `fragment.path` off disk — and the full
+      //    cross-capability validation). A forged in-repo PROJECT overlay can point a `fragment.path`
+      //    at an in-bundle FIFO/oversized file; materializing it BEFORE the consent check would
+      //    hang/OOM the loader before the unconsented → inactive fail-closed path is reached. Running
+      //    the (already bounded + fail-closed) consent recompute FIRST means an unconsented project
+      //    overlay skips with NO further disk work. The gate's DECISION is identical — only the
+      //    work-ordering moved (consented project overlays + GLOBAL overlays still materialize below).
+      //
+      //    CONTENT BINDING (#1459 round 2, CB-1/CB-2/TRUST2-5): the binding is the bundle CONTENT
+      //    HASH recomputed HERE over the on-disk capDir (manifest AND artifacts AND identity) — NOT
+      //    the ledger `integrity` (which is `''` for path/git/dir installs and taken verbatim from
+      //    the repo-plantable project ledger → degenerate `'' === ''`) and NOT the executable-only
+      //    disclosure signature (a declarative-only swap leaves it constant). Any tamper — a swapped
+      //    declarative capability.json, an edited hook script, an empty-integrity local install —
+      //    changes the recomputed hash and the cap stays inactive. `bundleContentHash` is itself
+      //    bounded + fail-closed (it refuses non-regular bundle files and reads via the shared bounded
+      //    reader), so it cannot hang on a forged FIFO bundle file. The whole lookup is wrapped so a
+      //    consent-store read / hash-recompute failure fails CLOSED (inactive), never crashing the
+      //    loop (the loader must stay non-throwing end to end).
+      //
+      //    IRREDUCIBLE TOCTOU LIMIT (#1459 / mirrors the #1462 lock-release residual): the hash
+      //    verified HERE binds the bundle's on-disk content at THIS instant. A local writer racing
+      //    between this verification and the capability's LATER execution (a hook firing, a command
+      //    dispatch) can still mutate the bundle files after the check passes — this is a filesystem
+      //    primitive limit, not a loader bug: short of fd-pinned execution or an atomic content
+      //    snapshot (which needs native support we do not have here), no userspace check can close the
+      //    window between "verify content" and "execute content". This is documented, not dismissed:
+      //    the gate is the strongest defense available at this layer (any persisted tamper is caught on
+      //    the NEXT load), and the residual race requires an attacker already able to write the project
+      //    tree at execution time.
+      if (root.scope === 'project') {
+        let consented = false;
+        try {
+          consented = consentMod.hasProjectConsent({
+            gsdHome,
+            projectRoot: projectRootFor(cwd),
+            id,
+            contentHash: consentMod.bundleContentHash(capDir),
+          });
+        } catch {
+          consented = false; // fail closed — a consent-store/hash-recompute failure never activates a cap.
+        }
+        if (!consented) {
+          // DISCOVERED-BUT-INACTIVE: no user consent record on this machine. NOT a gate block (an
+          // unconsented project gate is not a real installed gate — same fail-open posture as
+          // `_pending`); it simply does not contribute any surface. #1459 IC-02: tag the skip with the
+          // structural `kind: 'unconsented'` so gsd-tools `list` marks it INACTIVE by discriminant, not
+          // by matching the (changeable) reason prose. NOTE (convergence finding 1): we `continue` here
+          // BEFORE materializeHookFragments, so an unconsented project overlay's fragment files are never
+          // read — a forged FIFO/oversized fragment cannot hang/OOM the loop.
+          warnings.push({ id, scope: root.scope, kind: 'unconsented', reason: 'discovered — no user consent record (inactive)' });
+          continue;
+        }
+      }
+      // 5b. Materialize path-based hook fragments (resolved against the overlay dir). Runs AFTER the
+      //    project consent gate (convergence finding 1) so only a CONSENTED project overlay (or a
+      //    trusted GLOBAL overlay) reaches the fragment reads. materializeHookFragments RETURNS errors
+      //    (e.g. a fragment path escaping the capability dir, OR — convergence finding 1(b) — a fragment
+      //    that is non-regular/oversized and refused by the shared bounded reader) — capture them; an
+      //    un-materializable fragment is a skip, never a hang.
       let fragErrs: string[];
       try {
         fragErrs = validator.materializeHookFragments(cap, capDir) || [];

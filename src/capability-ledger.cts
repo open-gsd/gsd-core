@@ -162,6 +162,25 @@ class LedgerIOError extends Error {
  * normal small regular file is identical to the prior readFileSync(path,'utf8').
  */
 function readSmallRegularFile(filePath: string, maxBytes: number): string | null {
+  const buf = readSmallRegularFileBuffer(filePath, maxBytes);
+  if (buf === null) return null;
+  // Decode to UTF-8 for STRING consumers (JSON parsers, lock-body parsers). This decode is LOSSY for
+  // binary content (invalid byte sequences → U+FFFD), so a content-hash binding must NOT use this —
+  // it must hash the RAW bytes via readSmallRegularFileBuffer (#1459 finding 1b: a swapped binary
+  // artifact differing only in invalid-UTF-8 bytes would otherwise not change the digest).
+  return buf.toString('utf8');
+}
+
+/**
+ * #1459 finding 1 (HIGH): the RAW-BYTES variant of readSmallRegularFile. Identical open → fstat →
+ * require-regular-file → size-cap → read-exactly-size protocol (so a FIFO/device/swapped/oversized
+ * untrusted file can never block or read unbounded), but returns the bytes as a Buffer WITHOUT a
+ * UTF-8 decode. This is the SOLE correct reader for the consent content-hash binding: the binding
+ * must be byte-exact and INJECTIVE, and a utf8 decode is lossy (collapses distinct invalid byte
+ * sequences to U+FFFD) so two different binary artifacts could collide. Returns the bytes, or null
+ * for ENOENT (genuinely missing); throws LedgerIOError for every other fail-closed condition.
+ */
+function readSmallRegularFileBuffer(filePath: string, maxBytes: number): Buffer | null {
   // O_RDONLY | O_NONBLOCK: never block on opening a FIFO/device — return the fd so fstat can reject it.
   const openFlags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
   let fd: number;
@@ -191,7 +210,7 @@ function readSmallRegularFile(filePath: string, maxBytes: number): string | null
         'EFBIG',
       );
     }
-    if (st.size === 0) return '';
+    if (st.size === 0) return Buffer.alloc(0);
     const buf = Buffer.allocUnsafe(st.size);
     let off = 0;
     // Read EXACTLY st.size bytes from the fd (never a streaming/unbounded read).
@@ -200,7 +219,8 @@ function readSmallRegularFile(filePath: string, maxBytes: number): string | null
       if (n <= 0) break; // EOF earlier than fstat reported (truncated under us) — return what we got.
       off += n;
     }
-    return buf.toString('utf8', 0, off);
+    // Return EXACTLY the bytes we read (off may be < st.size on a truncated-under-us read).
+    return off === buf.length ? buf : buf.subarray(0, off);
   } catch (err) {
     if (err instanceof LedgerIOError) throw err;
     throw new LedgerIOError(`Cannot read ${filePath}: ${(err as Error).message}`, (err as NodeJS.ErrnoException).code);
@@ -808,6 +828,9 @@ export = {
   // Finding 2 (HIGH): the SINGLE shared bounded fd reader — also consumed by capability-lifecycle's
   // lock-body reads so every untrusted file read goes through the regular-file + size-capped fd path.
   readSmallRegularFile,
+  // #1459 finding 1 (HIGH): the RAW-BYTES variant — the SOLE correct reader for the byte-exact,
+  // injective consent content-hash binding (a utf8 decode is lossy and could collide binary artifacts).
+  readSmallRegularFileBuffer,
   // Exported for testing / introspection
   LEDGER_FILE_NAME,
   CorruptLedgerError,

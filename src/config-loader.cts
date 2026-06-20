@@ -367,7 +367,9 @@ function _federatedConfigSchema(cwd?: string): Record<string, unknown> | undefin
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
       const loaderMod: { loadRegistry: (o?: Record<string, unknown>) => { configSchema?: Record<string, unknown> } } = require('./capability-loader.cjs');
-      const schema = loaderMod.loadRegistry({ includeInstalled: true, cwd }).configSchema;
+      // #1459 IC-04: thread the consent home explicitly so a consented project cap's federated config
+      // key resolves at the SAME user-owned home that gated its activation (never the wrong home).
+      const schema = loaderMod.loadRegistry({ includeInstalled: true, cwd, gsdHome: process.env['GSD_HOME'] }).configSchema;
       if (schema && typeof schema === 'object') return schema;
     } catch { /* fall back to first-party */ }
   }

@@ -63,14 +63,65 @@ interface HookSurface {
 interface CommandModuleSurface {
   family: string;
   module: string;
+  /**
+   * TRUST2-3 (#1459): the exported function the host invokes from the module — WHICH code runs. A
+   * version that keeps family+module but retargets `router` to a different exported function changes
+   * what executes, so it is part of the disclosed + consent-bound surface. Empty when undeclared.
+   */
+  router: string;
 }
 
 interface McpServerSurface {
   name: string;
-  /** The command the server spawns (the actual executable — disclosed for honest consent). */
+  /**
+   * The transport TYPE: 'stdio' (spawns command/argv), 'http', or 'sse' (connects to a URL). TRUST2-2
+   * (#1459): a non-stdio server was previously invisible to the disclosure/signature — its url/headers
+   * could be swapped with no re-consent. Empty when undeclared (the host default is stdio).
+   */
+  transport: string;
+  /** The command the server spawns (the actual executable — disclosed for honest consent). stdio only. */
   command: string;
-  /** Arguments passed to the command. */
+  /**
+   * Arguments passed to the command. TRUST2-4 (#1459): this is a stringified view for the human
+   * summary; the consent SIGNATURE encodes the RAW args array (incl non-string members) via
+   * `rawArgs` so a non-string arg change still forces re-consent (the host receives the raw args).
+   */
   argv: string[];
+  /**
+   * The RAW args array as declared (may contain non-strings). Folded — stable-encoded — into the
+   * signature so a change to ANY member (incl a number/object/bool the host would still pass) forces
+   * re-consent (TRUST2-4). Empty array when none declared.
+   */
+  rawArgs: unknown[];
+  /**
+   * The URL an http/sse server connects to — TRUST2-2: WHERE the server talks to. A url change is a
+   * different remote endpoint and must force re-consent. Empty when undeclared (stdio servers).
+   */
+  url: string;
+  /**
+   * The HTTP headers an http/sse server is given (string→string, stable-sorted) — TRUST2-2: headers
+   * carry auth/behavior and a change must force re-consent. Header VALUES are redacted in the human
+   * summary but INCLUDED in the signature. Empty object when none.
+   */
+  headers: Record<string, string>;
+  /**
+   * Environment variables (string→string only) the server is spawned with — disclosed because
+   * env can change WHAT a command does (e.g. NODE_OPTIONS=--require /tmp/evil.js) without touching
+   * command/argv. Any add/change forces re-consent (TRUST-2, #1459). Empty object when none.
+   */
+  env: Record<string, string>;
+  /** The working directory the server is spawned in (if declared) — also affects what runs. */
+  cwd?: string;
+  /**
+   * Finding 5 (MEDIUM, #1459): the FULL declared server config object (prototype-pollution-safe
+   * shallow-cleaned copy). The writer persists the WHOLE config ({...config}), so the signature must
+   * bind the WHOLE config — not only the whitelisted fields above — or an upgrade that changes a
+   * host-honored field NOT in the whitelist (a future `envFile`/`workingDir`/launch option) would be
+   * written verbatim yet leave the signature constant → no re-consent prompt. This is folded into the
+   * signature as STABLE (recursively key-sorted) JSON, so any add/change forces re-consent while a
+   * pure key reorder does not. NOT shown in the human summary (which stays readable via the key fields).
+   */
+  rawConfig: Record<string, unknown>;
 }
 
 interface Disclosure {
@@ -184,8 +235,10 @@ function discloseExecutableSurfaces(manifest: CapabilityManifest, stagedDir?: st
       const rec = c as Record<string, unknown>;
       const moduleName = asString(rec['module']);
       const family = asString(rec['family']);
+      // TRUST2-3 (#1459): capture the router (which exported fn runs) so retargeting it forces re-consent.
+      const router = asString(rec['router']);
       if (moduleName) {
-        commandModules.push({ family, module: moduleName });
+        commandModules.push({ family, module: moduleName, router });
         if (stagedDir && !artifactExists(stagedDir, moduleName)) {
           missingArtifacts.push(moduleName);
         }
@@ -201,8 +254,51 @@ function discloseExecutableSurfaces(manifest: CapabilityManifest, stagedDir?: st
       if (!name) return;
       const cfg = (typeof config === 'object' && config !== null) ? (config as Record<string, unknown>) : {};
       const command = asString(cfg['command']);
-      const argv = Array.isArray(cfg['args']) ? cfg['args'].filter((a): a is string => typeof a === 'string') : [];
-      mcpServers.push({ name, command, argv });
+      // TRUST2-4 (#1459): the RAW args array (incl non-string members) is what the host receives, so it
+      // is folded — stable-encoded — into the signature. `argv` is the string-filtered view for the
+      // human summary; `rawArgs` is the full declared array bound into the signature.
+      const rawArgs = Array.isArray(cfg['args']) ? (cfg['args'] as unknown[]) : [];
+      const argv = rawArgs.filter((a): a is string => typeof a === 'string');
+      // TRUST2-2 (#1459): a non-stdio MCP server ({ type|transport, url, headers }) was previously
+      // invisible to the disclosure/signature. Capture the transport TYPE, the URL, and the HEADERS
+      // (string→string, prototype-pollution-safe) so a swapped endpoint or header forces re-consent.
+      const transport = asString(cfg['type']) || asString(cfg['transport']);
+      const url = asString(cfg['url']);
+      const headers: Record<string, string> = {};
+      const rawHeaders = cfg['headers'];
+      if (rawHeaders && typeof rawHeaders === 'object' && !Array.isArray(rawHeaders)) {
+        for (const [k, v] of Object.entries(rawHeaders as Record<string, unknown>)) {
+          if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+          if (typeof v === 'string') headers[k] = v;
+        }
+      }
+      // TRUST-2 (#1459): env can change WHAT a command does without touching command/argv, so it is
+      // part of the disclosed (and consent-bound) surface. Filter to string→string entries only —
+      // a non-string env value cannot be exported as a real environment variable, and including it
+      // would make the signature depend on un-runnable junk. Prototype-pollution-safe: copy only
+      // own enumerable string keys, never __proto__/constructor/prototype.
+      const env: Record<string, string> = {};
+      const rawEnv = cfg['env'];
+      if (rawEnv && typeof rawEnv === 'object' && !Array.isArray(rawEnv)) {
+        for (const [k, v] of Object.entries(rawEnv as Record<string, unknown>)) {
+          if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+          if (typeof v === 'string') env[k] = v;
+        }
+      }
+      const cwd = asString(cfg['cwd']);
+      // Finding 5 (MEDIUM, #1459): capture the FULL config (every declared field the writer persists),
+      // not just the whitelisted ones. Prototype-pollution-safe: copy only own enumerable keys and
+      // never the dangerous keys. The CAP_MARKER the writer stamps on persist (`_gsdCapability`) is the
+      // capability id (constant per cap), so it does not perturb the signature; we copy config as
+      // DECLARED here (pre-stamp) and the writer adds the marker at write time.
+      const rawConfig: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(cfg)) {
+        if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+        rawConfig[k] = v;
+      }
+      const surface: McpServerSurface = { name, transport, command, argv, rawArgs, url, headers, env, rawConfig };
+      if (cwd) surface.cwd = cwd;
+      mcpServers.push(surface);
     };
     if (Array.isArray(manifest.mcpServers)) {
       for (const s of manifest.mcpServers) {
@@ -459,13 +555,58 @@ function evaluateInstallTrust(args: InstallTrustArgs): InstallTrustVerdict {
 // Executable-set change detection (auto-update re-prompt trigger)
 // ---------------------------------------------------------------------------
 
+/**
+ * Serialize a value to JSON with object keys RECURSIVELY SORTED, so the result is stable under key
+ * reordering. Used to fold an MCP server's `env` map into the disclosure signature: ADDING or
+ * CHANGING any env entry changes the signature (forces re-consent), but merely REORDERING the keys
+ * does NOT (no false re-prompt). TRUST-2 (#1459).
+ */
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+}
+
 function disclosureSignature(d: Disclosure): string {
-  const hooks = d.hooks.map((h) => `hook:${h.event}:${h.script}`).sort();
-  const mods = d.commandModules.map((m) => `mod:${m.family}:${m.module}`).sort();
-  // Include the command + argv so a version that keeps the server NAME but swaps the executable
-  // it runs is detected as a changed surface (forces re-consent). argv is JSON-encoded (not
-  // space-joined) so an argument-boundary change (['a b'] vs ['a','b']) is still a change.
-  const mcp = d.mcpServers.map((s) => `mcp:${s.name}:${s.command}:${JSON.stringify(s.argv)}`).sort();
+  // TRUST2-1 (#1459): build EVERY surface line via stableJson of an ARRAY of its components, so each
+  // component is encoded — a `:`-delimited concatenation let a delimiter inside a component (e.g. an
+  // mcp name `x:a` vs command `b`) collide with a different decomposition. JSON-encoding every
+  // component makes each line an injective function of its components (no delimiter injection).
+  const hooks = d.hooks.map((h) => stableJson(['hook', h.event, h.script])).sort();
+  // TRUST2-3: include the router (which exported fn runs) so retargeting it forces re-consent.
+  const mods = d.commandModules.map((m) => stableJson(['mod', m.family, m.module, m.router || ''])).sort();
+  // Include transport + command + RAW args + url + headers + env + cwd + the FULL declared config so a
+  // version that:
+  //   - swaps the stdio executable it runs (command/args), OR
+  //   - changes the env it runs with (e.g. NODE_OPTIONS=--require evil.js), OR
+  //   - changes the cwd it runs in, OR
+  //   - (TRUST2-2) swaps the transport/url/headers of a non-stdio (http/sse) server, OR
+  //   - (TRUST2-4) changes a NON-STRING arg the host still receives, OR
+  //   - (finding 5) changes ANY OTHER declared field the writer persists (a future envFile/workingDir/
+  //     launch option NOT in the explicit whitelist above)
+  // is detected as a changed surface (forces re-consent). The explicit fields are kept FIRST for
+  // readability/stability; `rawConfig` is the completeness backstop. All are STABLE-encoded (recursively
+  // key-sorted JSON) so any add/change forces re-consent while a pure key reorder does NOT (no false
+  // re-prompt).
+  const mcp = d.mcpServers
+    .map((s) =>
+      stableJson([
+        'mcp',
+        s.name,
+        s.transport || '',
+        s.command,
+        s.rawArgs || [],
+        s.url || '',
+        s.headers || {},
+        s.env || {},
+        s.cwd || '',
+        // Finding 5: the FULL declared config — completeness so any persisted field change re-consents.
+        s.rawConfig || {},
+      ]),
+    )
+    .sort();
   return JSON.stringify([hooks, mods, mcp]);
 }
 
@@ -477,9 +618,30 @@ function executableSetChanged(oldD: Disclosure, newD: Disclosure): boolean {
   return disclosureSignature(oldD) !== disclosureSignature(newD);
 }
 
+/**
+ * THE single source of truth for the consent-binding signature of a capability manifest: run
+ * `discloseExecutableSurfaces` then `disclosureSignature`. Both the loader (which checks whether a
+ * previously-consented project cap still matches) and the lifecycle (which records the consent)
+ * compute the binding through THIS helper so they can never drift. `stagedDir` is forwarded for
+ * artifact existence-checking; the signature itself is over the executable SET (hooks/mods/mcp incl.
+ * env/cwd), not the missingArtifacts list, so it is a stable key regardless of the stagedDir.
+ */
+function signatureForManifest(manifest: CapabilityManifest, stagedDir?: string): string {
+  return disclosureSignature(discloseExecutableSurfaces(manifest, stagedDir));
+}
+
 // ---------------------------------------------------------------------------
 // Human-readable consent prompt
 // ---------------------------------------------------------------------------
+
+/** Max characters of an env VALUE shown in the human consent prompt before it is truncated. */
+const ENV_VALUE_MAX = 60;
+
+/** Truncate a long env value for the human prompt (the full value is still in the signature). */
+function truncateEnvValue(v: string): string {
+  if (typeof v !== 'string') return '';
+  return v.length > ENV_VALUE_MAX ? `${v.slice(0, ENV_VALUE_MAX)}… (${v.length} chars)` : v;
+}
 
 /**
  * Render a disclosure as consent-prompt lines. Returned as an array so the CLI/runtime edge can
@@ -503,14 +665,37 @@ function summarizeDisclosure(disclosure: Disclosure): string[] {
       `  command modules (${disclosure.commandModules.length}): require()'d into the GSD CLI process`,
     );
     for (const m of disclosure.commandModules) {
-      lines.push(`    - ${m.family || '(family?)'} -> ${m.module}`);
+      // TRUST2-3 (#1459): show the router (which exported fn runs) so the user consents to the exact entry point.
+      const routerSuffix = m.router ? ` [router: ${m.router}]` : '';
+      lines.push(`    - ${m.family || '(family?)'} -> ${m.module}${routerSuffix}`);
     }
   }
   if (disclosure.mcpServers.length > 0) {
-    lines.push(`  MCP servers (${disclosure.mcpServers.length}): spawned by the host runtime`);
+    lines.push(`  MCP servers (${disclosure.mcpServers.length}): spawned/connected by the host runtime`);
     for (const s of disclosure.mcpServers) {
-      const cmd = [s.command, ...s.argv].filter(Boolean).join(' ');
-      lines.push(`    - ${s.name} -> ${cmd || '(no command declared)'}`);
+      // TRUST2-2 (#1459): a non-stdio (http/sse) server connects to a URL; disclose the endpoint, not
+      // a (nonexistent) command. A stdio server discloses command + args as before.
+      const isRemote = (s.transport === 'http' || s.transport === 'sse') || (!s.command && !!s.url);
+      if (isRemote) {
+        const t = s.transport || 'http';
+        lines.push(`    - ${s.name} -> [${t}] ${s.url || '(no url declared)'}`);
+        // Header VALUES are redacted in the human summary (they may carry secrets); only the KEY set
+        // is shown. The full values ARE in the signature, so a value change forces re-consent.
+        const hdrKeys = s.headers ? Object.keys(s.headers) : [];
+        if (hdrKeys.length > 0) {
+          lines.push(`        headers: ${hdrKeys.map((k) => `${k}=<redacted>`).join(', ')}`);
+        }
+      } else {
+        const cmd = [s.command, ...s.argv].filter(Boolean).join(' ');
+        lines.push(`    - ${s.name} -> ${cmd || '(no command declared)'}`);
+      }
+      // TRUST-2 (#1459): env can change WHAT runs without touching the command, so show each env key
+      // and its (truncated) value — the user is consenting to this exact environment.
+      const envKeys = s.env ? Object.keys(s.env) : [];
+      if (envKeys.length > 0) {
+        lines.push(`        env: ${envKeys.map((k) => `${k}=${truncateEnvValue(s.env[k])}`).join(', ')}`);
+      }
+      if (s.cwd) lines.push(`        cwd: ${s.cwd}`);
     }
   }
   if (disclosure.missingArtifacts.length > 0) {
@@ -535,4 +720,7 @@ export = {
   evaluateInstallTrust,
   executableSetChanged,
   summarizeDisclosure,
+  // #1459: the consent-binding signature (single source of truth for loader + lifecycle consent).
+  disclosureSignature,
+  signatureForManifest,
 };

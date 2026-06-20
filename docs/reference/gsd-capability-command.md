@@ -7,7 +7,7 @@
 
 The `capability` family manages the installation, upgrade, removal, and inspection of GSD capabilities — both first-party (shipped) and third-party overlays. A row for this command also appears in [docs/COMMANDS.md](../COMMANDS.md) (that file is not edited here).
 
-**Implemented in 1.6.0:** `install`, `update`, `remove`, `list`, `disable`, `enable` (plus the pre-existing `state` and `set` introspection/activation subcommands). **Planned (not yet implemented):** `outdated` — see [Planned subcommands](#planned-subcommands).
+**Implemented in 1.6.0:** `install`, `update`, `remove`, `list`, `trust`, `disable`, `enable` (plus the pre-existing `state` and `set` introspection/activation subcommands). **Planned (not yet implemented):** `outdated` — see [Planned subcommands](#planned-subcommands).
 
 ---
 
@@ -175,7 +175,8 @@ Lists capabilities visible to the current session: first-party capabilities (fro
     "tier": "core | standard | full | null",
     "source": "first-party | <recorded source string>",
     "scope": "first-party | global | project",
-    "status": "active | incompatible",
+    "status": "active | incompatible | inactive",
+    "reason": "string | null",
     "title": "string | null"
   }
 ]
@@ -185,10 +186,44 @@ Lists capabilities visible to the current session: first-party capabilities (fro
 
 | Value | Meaning |
 |---|---|
-| `active` | Present and (for overlays) compatible with the running GSD version. |
+| `active` | Present and (for overlays) compatible with the running GSD version and — for project-scope overlays — backed by a user consent record on this machine. |
 | `incompatible` | An overlay whose `engines.gsd` range does not satisfy the current GSD version; skipped with a warning at load time. |
+| `inactive` | A **project-scope** overlay that is present on disk (and may have a committed-looking project ledger) but has **no user consent record on this machine** (#1459). It is *discovered but not activated*: it contributes no surfaces and runs nothing. The accompanying `reason` field explains why. Consent it by re-installing through the lifecycle (`gsd capability install … --scope project`). |
+
+The `reason` field is `null` for active/incompatible rows and carries a short explanation for `inactive` rows.
 
 > Whether a capability has been turned off via `disable` is reported by `gsd capability state` (the activation-state view), not by `list`.
+
+---
+
+### `trust`
+
+Manage the **user-owned consent store** (#1459) that gates project-scope third-party capability activation. The store lives at `${GSD_HOME||homedir()}/.gsd/consent.json` — **outside any repository** — and records, per `(realpath(projectRoot), capability id)`, the bundle integrity and disclosure signature you consented to **on this machine**. A project-scope overlay is inactive until such a record exists (so a forged or cloned in-repo project ledger activates nothing on its own); installing a project-scope capability through the lifecycle writes the record, and removing it revokes the record.
+
+**Synopsis**
+
+```
+gsd capability trust list [--scope project] [--json]
+gsd capability trust revoke <id> [--project <path>]
+```
+
+**`trust list`** emits a JSON array of the consent records for the current consent home:
+
+```json
+[
+  {
+    "id": "string",
+    "scope": "project",
+    "projectRoot": "/abs/realpath/of/project",
+    "integrity": "sha512-… | (empty)",
+    "consentedAt": "ISO-8601 timestamp"
+  }
+]
+```
+
+`--scope` is accepted for symmetry; only `project` records exist today.
+
+**`trust revoke <id>`** deletes the consent record for `<id>` at the project root. `--project <path>` pins the project root whose consent is revoked (defaults to `realpath(cwd)`). After revoking, the capability — even if its bundle and project ledger remain on disk — lists as `status: inactive` and contributes nothing until you re-consent. `remove` already revokes consent as part of an uninstall; `trust revoke` is the way to withdraw consent **without** uninstalling the bundle.
 
 ---
 

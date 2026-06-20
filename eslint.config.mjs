@@ -44,6 +44,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/capability-ledger.cjs',
       'gsd-core/bin/lib/capability-trust.cjs',
       'gsd-core/bin/lib/capability-lifecycle.cjs',
+      'gsd-core/bin/lib/capability-consent.cjs',
+      'gsd-core/bin/lib/capability-lock.cjs',
       'gsd-core/bin/lib/resolution.cjs',
       'gsd-core/bin/lib/plan-drift-guard.cjs',
       'gsd-core/bin/lib/cli-exit.cjs',

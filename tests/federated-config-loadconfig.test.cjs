@@ -341,8 +341,13 @@ describe('FIX 3: federated key present in config.json → no unknown-key warning
       // mytool.enabled is in the federated registry → KNOWN_TOP_LEVEL should include 'mytool'
       // → no "unknown config key(s)" warning for 'mytool'
       const stderrOutput = stderrChunks.join('');
+      // TV-16: ONE tight regex for an "unknown config key … mytool" warning (in either order on a line),
+      // asserted to NOT match. The prior `!includes(A) || !includes(B)` was loose: it passed whenever
+      // EITHER substring was absent, so an unknown-key warning that named a DIFFERENT key (A present, B
+      // absent) would still pass it vacuously. The single regex matches only the specific bad warning.
+      const unknownMyTool = /unknown config key[^\n]*\bmytool\b|\bmytool\b[^\n]*unknown config key/i;
       assert.ok(
-        !stderrOutput.includes('unknown config key') || !stderrOutput.includes('mytool'),
+        !unknownMyTool.test(stderrOutput),
         'Should NOT warn about mytool as an unknown key when it is a registered federated key. stderr: ' + stderrOutput,
       );
       // The value should be set from user config
@@ -452,6 +457,29 @@ describe('ADR-1244 D2: overlay config-key federation (cwd-aware, real loader)', 
     const capDir = path.join(withOverlay, '.gsd', 'capabilities', 'overlay-demo');
     fs.mkdirSync(capDir, { recursive: true });
     fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify(overlayCap), 'utf-8');
+    // #1459: a PROJECT-scope overlay activates only with a committed ledger AND a user consent record
+    // on this machine. Write both so the cwd-aware federation under test reflects a genuinely-installed
+    // + consented overlay (a forged/cloned in-repo project ledger alone no longer federates the key).
+    fs.writeFileSync(
+      path.join(withOverlay, '.gsd-capabilities.json'),
+      JSON.stringify({ version: '1', updatedAt: '2026-01-01T00:00:00Z', entries: {
+        'overlay-demo': { id: 'overlay-demo', version: '1.0.0', source: 's', integrity: 'sha512-od', files: [], sharedEdits: [] },
+      } }),
+      'utf-8',
+    );
+    {
+      const trust = require('../gsd-core/bin/lib/capability-trust.cjs');
+      const consent = require('../gsd-core/bin/lib/capability-consent.cjs');
+      consent.recordProjectConsent({
+        gsdHome: sandboxHome, projectRoot: withOverlay, id: 'overlay-demo',
+        integrity: 'sha512-od',
+        // IC-10: single-arg signatureForManifest (lifecycle RECORD convention). CB-1/CB-2: the contentHash
+        // is THE security binding the loader recomputes — it MUST be present + non-empty (recordProjectConsent
+        // now throws otherwise), and must equal the recomputed bundle hash over the on-disk capDir.
+        disclosureSignature: trust.signatureForManifest(overlayCap),
+        contentHash: consent.bundleContentHash(capDir),
+      });
+    }
     withoutOverlay = mkTemp();
   });
   afterEach(() => {
@@ -476,6 +504,36 @@ describe('ADR-1244 D2: overlay config-key federation (cwd-aware, real loader)', 
       other.workflow ? other.workflow.overlay_demo_gate : undefined,
       undefined,
       'overlay key does NOT federate into an unrelated project',
+    );
+  });
+
+  test('IC-08: a committed project ledger WITHOUT a consent record does NOT federate the overlay config key', () => {
+    // revert-fails: if the loader federated a project overlay's config key from the in-repo committed
+    // ledger alone (the pre-#1459 bypass), this key would be valid + federated WITHOUT any user consent
+    // record — a forged/cloned repo would inject config keys. The consent gate suppresses it, so the key
+    // is ABSENT from isValidConfigKey AND from loadConfig output.
+    const noConsent = mkTemp();
+    const capDir = path.join(noConsent, '.gsd', 'capabilities', 'overlay-demo');
+    fs.mkdirSync(capDir, { recursive: true });
+    fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify(overlayCap), 'utf-8');
+    // A committed-looking project ledger (repo-plantable) — but NO consent record on this machine.
+    fs.writeFileSync(
+      path.join(noConsent, '.gsd-capabilities.json'),
+      JSON.stringify({ version: '1', updatedAt: '2026-01-01T00:00:00Z', entries: {
+        'overlay-demo': { id: 'overlay-demo', version: '1.0.0', source: 's', integrity: 'sha512-od', files: [], sharedEdits: [] },
+      } }),
+      'utf-8',
+    );
+    // Sanity: the WITH-consent fixture DOES federate (proves the only difference is the consent record).
+    assert.equal(configSchema.isValidConfigKey(KEY, withOverlay), true, 'precondition: the consented fixture federates the key');
+    // The unconsented project: key is unknown + does not federate.
+    assert.equal(configSchema.isValidConfigKey(KEY, noConsent), false, 'unconsented project ledger does NOT make the key valid');
+    writeConfig(noConsent, {});
+    const cfg = loadConfig(noConsent);
+    assert.strictEqual(
+      cfg.workflow ? cfg.workflow.overlay_demo_gate : undefined,
+      undefined,
+      'unconsented project overlay config key is ABSENT from loadConfig output',
     );
   });
 });

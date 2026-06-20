@@ -22,7 +22,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import os from 'node:os';
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const sourceMod = require('./capability-source.cjs') as {
@@ -55,14 +54,31 @@ const trustMod = require('./capability-trust.cjs') as {
     parsed: { kind: string; raw: string; target: string },
     strict: string[] | null | undefined,
   ) => { allowed: boolean; reason: string | null };
+  // #1459: the consent-binding signature (single source of truth for loader + lifecycle).
+  signatureForManifest: (manifest: Record<string, unknown>, stagedDir?: string) => string;
 };
-const { platformWriteSync, execTool } = require('./shell-command-projection.cjs') as {
+const consentMod = require('./capability-consent.cjs') as {
+  recordProjectConsent: (args: { gsdHome?: string; projectRoot: string; id: string; integrity: string; disclosureSignature: string; contentHash: string }) => void;
+  revokeProjectConsent: (args: { gsdHome?: string; projectRoot: string; id: string }) => void;
+  /** #1459 CB-1/CB-2: recompute the full-bundle content hash (the consent security binding). */
+  bundleContentHash: (capDir: string) => string;
+  /** #1459 IC-05/WIN-2: resolve the consent store path for an unwritable-store warning message. */
+  consentStorePath: (gsdHome?: string) => string;
+};
+const projectRootMod = require('./project-root.cjs') as {
+  // #1459 IC-01/CB-4: the canonical consent project root (RECORD site parity with the loader LOOKUP).
+  consentProjectRoot: (cwd: string) => string;
+};
+// #1459 finding 4: the SHARED hardened lock primitive (single source of truth for lifecycle + consent).
+const lockMod = require('./capability-lock.cjs') as {
+  acquireLock: (lockPath: string) => { path: string; token: string; dev: number | null; ino: number | null } | null;
+  releaseLock: (handle: { path: string; token: string; dev: number | null; ino: number | null } | null) => void;
+  getProcessStartTime: (pid: number) => string | null;
+  _setLockProbes: (probes: Partial<{ isPidAlive: (pid: number) => boolean; getProcessStartTime: (pid: number) => string | null }>) => void;
+  _resetLockProbes: () => void;
+};
+const { platformWriteSync } = require('./shell-command-projection.cjs') as {
   platformWriteSync: (filePath: string, content: string) => void;
-  execTool: (
-    program: string,
-    args: string[],
-    opts?: { cwd?: string; env?: Record<string, string>; timeout?: number },
-  ) => { exitCode: number; stdout: string; stderr: string; signal: NodeJS.Signals | null; error: Error | null };
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -72,8 +88,21 @@ const { platformWriteSync, execTool } = require('./shell-command-projection.cjs'
 
 interface Disclosure {
   hooks: Array<{ event: string; script: string }>;
-  commandModules: Array<{ family: string; module: string }>;
-  mcpServers: Array<{ name: string; command: string; argv: string[] }>;
+  // #1459 TRUST2-3: router (which exported fn runs) is part of the disclosed/consent-bound surface.
+  commandModules: Array<{ family: string; module: string; router: string }>;
+  // #1459: env (string→string) and cwd are part of the disclosed/consent-bound MCP surface; TRUST2-2
+  // adds transport/url/headers for non-stdio servers; TRUST2-4 adds the raw args array.
+  mcpServers: Array<{
+    name: string;
+    transport: string;
+    command: string;
+    argv: string[];
+    rawArgs: unknown[];
+    url: string;
+    headers: Record<string, string>;
+    env: Record<string, string>;
+    cwd?: string;
+  }>;
   hasExecutable: boolean;
   missingArtifacts: string[];
 }
@@ -113,6 +142,19 @@ interface LifecycleOptions {
   /** Scope root: holds .gsd/capabilities/<id>, the ledger, and shared config files. */
   runtimeDir: string;
   hostVersion: string;
+  /**
+   * #1459: the scope of this operation. A PROJECT-scope consented install/upgrade records a user
+   * consent in the user-owned consent store (see consentStoreDir) and a remove revokes it; GLOBAL
+   * scope (under the user's own home) records nothing. Defaults to 'project' when a consentStoreDir
+   * is supplied (the conservative choice — bind consent unless explicitly global).
+   */
+  scope?: 'global' | 'project';
+  /**
+   * #1459: the USER-OWNED consent home (`GSD_HOME||homedir()`) where project-scope consent records
+   * live — OUTSIDE any repo. When omitted, no consent record is written/revoked (back-compat for
+   * callers that have not wired the consent store; the loader then leaves the project cap inactive).
+   */
+  consentStoreDir?: string;
   /** capabilities.strict_known_registries policy value. */
   strictKnownRegistries?: string[] | null;
   /** Whether the user has consented to executable surfaces (CLI/runtime edge supplies this). */
@@ -211,541 +253,37 @@ function newBackupName(id: string): string {
 // Cross-process mutual exclusion
 // ---------------------------------------------------------------------------
 
-/**
- * A lock older than this is a CANDIDATE for stealing (the holder may have crashed). A same-host
- * lock past this age whose recorded pid is DEAD is stolen immediately (fast local recovery).
- */
-const LOCK_STALE_MS = 60_000;
-/**
- * HARD deadman timeout (finding 1). A lock older than this is stolen REGARDLESS of pid liveness or
- * host. This is the only thing that can break a permanent deadlock caused by:
- *   - PID REUSE: a crashed holder's pid reused by an unrelated long-lived process makes
- *     `isPidAlive` return true forever, so the dead-pid fast-recovery branch never fires.
- *   - CROSS-HOST (NFS): a remote holder's pid is meaningless to local `process.kill(pid,0)`, so
- *     liveness cannot be judged at all — only the deadman can reclaim such a lock.
- * Much larger than LOCK_STALE_MS so a genuinely slow-but-live SAME-host holder is given a wide grace
- * window (it is protected by the same-host liveness check until then); 10 minutes is far longer than
- * any real sub-second capability fs critical section.
- */
-const LOCK_DEADMAN_MS = 600_000;
+// The lock primitive is now a SHARED LEAF module (src/capability-lock.cts → capability-lock.cjs),
+// used by BOTH this module and capability-consent (#1459 finding 4): one hardened steal protocol
+// (pid + process-start-time identity + hard deadman; never steals a verified-live same-host holder)
+// instead of two divergent ones. lockMod owns acquire/release; this module only computes the
+// per-runtimeDir lock PATH and re-exports the test seams its #1462 lock tests drive.
+
+// Non-lock orphan-sweep / id constants (kept local — not part of the shared lock primitive).
 /** A `.staging/*` dir younger than this may belong to an in-flight resolve; do not sweep it. */
 const STAGING_ORPHAN_MS = 600_000;
 /** A `.gsd-capabilities.json.tmp.*` temp younger than this may belong to an in-flight write; spare it (W-3/DUR-5). */
 const LEDGER_TMP_ORPHAN_MS = 300_000;
 /** Valid capability id (kebab-case). Used to reject tampered ledger keys before acting on them. */
 const KEBAB_ID_RE = /^[a-z][a-z0-9-]*$/;
-/**
- * Finding 2 (HIGH): the lockfile body is UNTRUSTED content. A well-formed lock body is a tiny JSON
- * object (a few hundred bytes at most). The body is read via the shared fd-based bounded reader
- * (ledgerMod.readSmallRegularFile): open → fstat → require a REGULAR file (reject FIFO/device/dir,
- * which could block/read-unbounded) → enforce this size cap on the fstat → read exactly size bytes.
- * A non-regular/oversized body is treated as UNPARSEABLE (no pid/host) → routed to the deadman policy
- * (cannot verify liveness → steal only after the deadman). 64 KiB is orders of magnitude larger than
- * any legitimate lock body.
- */
-const LOCK_MAX_BODY_BYTES = 64 * 1024;
+
+type LockHandle = { path: string; token: string; dev: number | null; ino: number | null };
 
 /**
- * A held lock: the lockfile path, the unique OWNER TOKEN we wrote into it, and the (dev, ino) of the
- * lockfile inode captured at acquire (finding 4). releaseLock re-confirms BOTH the token AND the
- * captured dev/ino still match the path on disk immediately before rmSync, so a successor lock that
- * replaced ours at the same path (different inode) is never deleted. dev/ino are null when the post-
- * create stat could not be taken (best-effort) — then release falls back to the token check alone.
- */
-interface LockHandle { path: string; token: string; dev: number | null; ino: number | null; }
-
-let _lockSeq = 0;
-/**
- * A per-acquire unique token so release is owner-safe (never deletes a successor's lock). The FIRST
- * `-`-delimited segment is the holder PID — acquireLock parses it back out to check liveness before
- * stealing a stale lock (CONC-1).
- */
-function newLockToken(): string {
-  return `${process.pid}-${Date.now()}-${++_lockSeq}`;
-}
-
-/** Bounded steal/retry attempts so a pathological never-acquirable lock cannot recurse forever (CONC-2). */
-const LOCK_MAX_ATTEMPTS = 8;
-const LOCK_RETRY_BACKOFF_MS = 25;
-let _lockSleepBuf: Int32Array | null = null;
-function lockBackoff(): void {
-  // Small jittered backoff between steal attempts (yields the thread via Atomics.wait).
-  if (_lockSleepBuf === null) _lockSleepBuf = new Int32Array(new SharedArrayBuffer(4));
-  const jitter = Math.floor(Math.random() * LOCK_RETRY_BACKOFF_MS);
-  Atomics.wait(_lockSleepBuf, 0, 0, LOCK_RETRY_BACKOFF_MS + jitter);
-}
-
-/**
- * Parse the holder PID from a legacy plain-token lockfile body (the first `-`-delimited segment).
- * Returns null when the body has no numeric leading segment (e.g. JSON content, or legacy no-pid).
- */
-function lockHolderPid(body: string): number | null {
-  const seg = body.split('-')[0];
-  if (!/^\d+$/.test(seg)) return null;
-  const pid = Number(seg);
-  return Number.isInteger(pid) && pid > 0 ? pid : null;
-}
-
-/**
- * Parsed view of a lockfile body. `hostname` is null for a legacy lock (no hostname was recorded
- * before finding 1) — a null hostname is treated as SAME-host (conservative, backward compatible:
- * legacy locks were always same-machine since the lock predates cross-host concerns). `startTime`
- * is the holder process's recorded start-time (finding 1, process-start-time liveness); null for a
- * legacy lock or one whose body did not record it — a null recorded start-time cannot be matched, so
- * liveness cannot be verified and the holder is treated as NOT verified-live (steal-eligible).
- */
-interface ParsedLock { pid: number | null; hostname: string | null; startTime: string | null; ts: number | null; }
-
-/**
- * Parse a lockfile body into { pid, hostname, startTime, ts }. The new format (finding 1) is JSON
- * `{ token, pid, hostname, startTime, ts }`; a legacy body is a plain `pid-ts-seq` token (or
- * non-numeric junk). Never throws — unparseable content yields all-null.
- *
- * Finding 1 (HIGH) — lock-steal TOCTOU: `ts` is the body's OWN recorded timestamp. The age decision
- * is bound to `now - ts` (a FRESH replacement body carries a FRESH ts → small age → not stolen), NOT
- * to the file `mtime` (which a stale-old `mtime` on a freshly-replaced body would mis-report). `ts` is
- * also the per-body identity re-checked immediately before the atomic rename-steal. A legacy/no-`ts`
- * body yields ts:null and the caller falls back to the file `mtime` age.
- */
-function parseLockBody(body: string): ParsedLock {
-  const trimmed = body.trim();
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const p = parsed as Record<string, unknown>;
-        const pidVal = p['pid'];
-        const pid = typeof pidVal === 'number' && Number.isInteger(pidVal) && pidVal > 0 ? pidVal : null;
-        const hostVal = p['hostname'];
-        const hostname = typeof hostVal === 'string' && hostVal ? hostVal : null;
-        const stVal = p['startTime'];
-        const startTime = typeof stVal === 'string' && stVal ? stVal : null;
-        const tsVal = p['ts'];
-        const ts = typeof tsVal === 'number' && Number.isFinite(tsVal) ? tsVal : null;
-        return { pid, hostname, startTime, ts };
-      }
-    } catch { /* fall through to legacy parse */ }
-  }
-  // Legacy plain-token body: hostname/startTime/ts were never recorded → null (treated as same-host,
-  // unverifiable liveness, mtime-age fallback).
-  return { pid: lockHolderPid(trimmed), hostname: null, startTime: null, ts: null };
-}
-
-/**
- * Finding 1 (HIGH) — future/implausible `ts` deadlock. Derive the lock AGE (ms) from the body's own
- * `ts` when that ts is TRUSTWORTHY, else fall back to the file `mtime`. A `ts` is distrusted when it is
- * in the FUTURE (now - ts < 0 — a planted body or a clock-skewed/back-stepped writer) or implausibly
- * far in the future (small forward skew is tolerated, but a `ts` more than the deadman ahead of now is
- * nonsense). A trusted future `ts` would keep `age = now - ts <= LOCK_STALE_MS` forever, so the lock
- * would never become stale/deadman/steal-eligible → permanent block. Falling back to `mtime` keeps
- * stale/deadman recovery working (a future mtime is far less likely, and the deadman still bounds it).
- * A null `ts` (legacy/garbage/no-ts body) also uses the `mtime` age.
- */
-function lockAgeMs(ts: number | null, mtimeMs: number): number {
-  if (ts !== null) {
-    const age = Date.now() - ts;
-    // Trust the body ts ONLY when it is not in the future and not implausibly far ahead. A small
-    // forward clock skew (age slightly negative) is rejected too — any future ts is distrusted.
-    if (age >= 0 && age <= Number.MAX_SAFE_INTEGER) return age;
-  }
-  // MEDIUM finding: if mtime is ALSO in the future (planted lock, clock stepped backward after write),
-  // `Date.now() - mtimeMs` is negative → age <= LOCK_STALE_MS forever → permanent deadlock. A mtime
-  // MORE than LOCK_STALE_MS / 2 in the future is untrustworthy (planted or a significant clock step);
-  // return MAX_SAFE_INTEGER so the lock routes into the normal steal decision tree (verified-live
-  // same-host holders are still protected there — that check is age-independent). A small negative
-  // (sub-second jitter from filesystem timestamp precision) is clamped to 0 (treat as brand-new / fresh)
-  // rather than MAX_SAFE_INTEGER, so a lock written and immediately stat'd is never mis-stolen.
-  const mtimeAge = Date.now() - mtimeMs;
-  if (mtimeAge >= 0) return mtimeAge;
-  // mtimeAge is negative → mtime is in the future. Small jitter (within LOCK_STALE_MS / 2, i.e. 30s)
-  // → clamp to 0 (fresh, conservative). Large future (> 30s) → untrustworthy → MAX_SAFE_INTEGER.
-  return mtimeAge >= -(LOCK_STALE_MS / 2) ? 0 : Number.MAX_SAFE_INTEGER;
-}
-
-/** Is the parsed lock from THIS host? A null (legacy) hostname is treated as same-host. */
-function isSameHost(parsed: ParsedLock): boolean {
-  return parsed.hostname === null || parsed.hostname === os.hostname();
-}
-
-/**
- * Best-effort process start-time for `pid`, as an OPAQUE platform-specific string used ONLY for
- * equality comparison (never parsed as a date). The pair (pid, startTime) uniquely identifies a
- * process instance: even if a crashed holder's pid is REUSED by an unrelated process, the new
- * process's start-time differs, so a recorded start-time that no longer matches proves pid-reuse.
- *
- * Platform handling (all bounded — the shell-outs only run on the rare STEAL-decision path, never the
- * happy path):
- *   - Linux: read `/proc/<pid>/stat` field 22 (starttime, in clock ticks since boot). No shell-out.
- *     Field 2 (comm) may contain spaces/parens, so we split AFTER the last ')' to index reliably.
- *   - macOS/other POSIX: `ps -p <pid> -o lstart=` via the bounded execTool seam (process start
- *     wall-clock; stable for a given live process).
- *   - Windows: PowerShell `(Get-Process -Id <pid>).StartTime.Ticks` via the bounded execTool seam.
- * Returns null on ANY error / unobtainable value — a null observed start-time means liveness cannot
- * be VERIFIED (so the holder is treated as not-verified-live → steal-eligible past the deadman).
- */
-function getProcessStartTime(pid: number): string | null {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  try {
-    if (process.platform === 'linux') {
-      // Field 22 is `starttime`. comm (field 2) is wrapped in parens and may itself contain spaces
-      // and ')'; everything after the LAST ')' is space-delimited and stable to index.
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
-      const rparen = stat.lastIndexOf(')');
-      if (rparen === -1) return null;
-      const rest = stat.slice(rparen + 1).trim().split(/\s+/);
-      // After comm, fields are state(0) ppid(1) ... starttime is field 22 overall → index 19 of rest.
-      const starttime = rest[19];
-      return typeof starttime === 'string' && /^\d+$/.test(starttime) ? starttime : null;
-    }
-    if (process.platform === 'win32') {
-      const res = execTool(
-        'powershell',
-        ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.Ticks`],
-        { timeout: 5_000 },
-      );
-      if (res.exitCode !== 0 || res.error) return null;
-      const out = res.stdout.trim();
-      return /^\d+$/.test(out) ? out : null;
-    }
-    // macOS and other POSIX: ps lstart is the process's start wall-clock (stable per live process).
-    const res = execTool('ps', ['-p', String(pid), '-o', 'lstart='], { timeout: 5_000 });
-    if (res.exitCode !== 0 || res.error) return null;
-    const out = res.stdout.trim();
-    return out ? out : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * THIS process's start-time, captured ONCE at module load so we never re-shell on every lock write
- * (the happy path stamps it from this cached value). Best-effort — null if unobtainable here.
- */
-const _selfStartTime: string | null = getProcessStartTime(process.pid);
-
-/**
- * Serialize the lockfile body (finding 1): JSON carrying the owner token, pid, hostname, this
- * process's cached start-time, and a timestamp. startTime lets a later acquirer verify the recorded
- * holder is still the SAME process instance (defeats pid-reuse) without ever re-shelling here.
- */
-function lockFileBody(token: string): string {
-  return JSON.stringify({ token, pid: process.pid, hostname: os.hostname(), startTime: _selfStartTime, ts: Date.now() });
-}
-
-/**
- * Test seams (finding 1): the steal-decision path goes through these indirections so unit tests can
- * mock liveness + process start-time DETERMINISTICALLY (without depending on real OS pids beyond the
- * current process). The defaults are the real implementations. `_setLockProbes`/`_resetLockProbes`
- * are exported for tests ONLY — they are not part of the CLI surface.
- */
-const _lockProbes: {
-  isPidAlive: (pid: number) => boolean;
-  getProcessStartTime: (pid: number) => string | null;
-} = { isPidAlive: _realIsPidAlive, getProcessStartTime };
-
-/** Is `pid` a live process? `process.kill(pid, 0)` succeeds for a live (signalable) process. */
-function _realIsPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true; // signalable → alive
-  } catch (err) {
-    // EPERM means the process exists but we cannot signal it (still ALIVE). ESRCH means it's gone.
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-function isPidAlive(pid: number): boolean {
-  return _lockProbes.isPidAlive(pid);
-}
-
-/**
- * Finding 2 (HIGH): parse the lockfile body via the SHARED fd-based bounded reader. The body is
- * untrusted: a FIFO/device/symlink-to-device `.lock` (or a swapped/grown file) would block or read
- * unbounded under a path-`stat`+`readFileSync`; an oversized/garbage body is a memory DoS. The
- * shared reader (open → fstat → require regular file → size cap → read exactly size) returns null for
- * a non-regular/oversized/IO body (it throws → we swallow), routing the holder to the deadman policy
- * (no verifiable pid/host/startTime → steal only after the deadman). A normal small body is read and
- * parsed. Never throws.
- */
-function readParsedLockBounded(lockPath: string): ParsedLock {
-  const allNull: ParsedLock = { pid: null, hostname: null, startTime: null, ts: null };
-  try {
-    const body = ledgerMod.readSmallRegularFile(lockPath, LOCK_MAX_BODY_BYTES);
-    if (body === null) return allNull; // vanished/missing — cannot verify anything.
-    return parseLockBody(body);
-  } catch {
-    // Non-regular (FIFO/device/dir), oversized, or unreadable untrusted body → unparseable.
-    return allNull;
-  }
-}
-
-/**
- * Finding 1 (HIGH): the per-body IDENTITY used to confirm, immediately before the atomic rename-steal,
- * that the lock A decided to steal is STILL the same body instance (B did not replace it). Binds
- * (dev, ino) from a fresh stat AND the body's own `ts` (when JSON). A null on any field means we could
- * not read it (vanished/non-regular/oversized) — the caller treats that as "changed" and retries
- * rather than stealing. Never throws.
- */
-interface LockIdentity { dev: number | null; ino: number | null; ts: number | null; }
-function lockIdentity(lockPath: string): LockIdentity {
-  let dev: number | null = null;
-  let ino: number | null = null;
-  try {
-    const st = fs.statSync(lockPath);
-    dev = typeof st.dev === 'number' ? st.dev : null;
-    ino = typeof st.ino === 'number' ? st.ino : null;
-  } catch {
-    return { dev: null, ino: null, ts: null }; // vanished/unstatable — treat as changed.
-  }
-  // ts comes from the (bounded) body; null for a legacy/no-ts body — then only dev/ino gate the steal.
-  const ts = readParsedLockBounded(lockPath).ts;
-  return { dev, ino, ts };
-}
-
-/**
- * Two lock identities refer to the SAME body instance only when dev AND ino match AND the `ts` is
- * unchanged. A null dev/ino on EITHER side (unreadable/vanished) is treated as a CHANGE (fail-safe:
- * do not steal). A null `ts` on BOTH sides (legacy bodies) does not block the match — dev/ino carry it.
- *
- * Finding 3 (LOW): if the DECISION body (a) had a non-null JSON `ts`, the recheck body (b) MUST carry
- * the SAME non-null `ts`. A recheck `ts` that is now null/absent (the body was rewritten to no-ts or
- * garbage on the same inode) is NOT the same instance — treating it as "same" would contradict the
- * "ts re-confirmed before steal" invariant and let A steal a body it can no longer identify. So a
- * disappearing ts (a.ts !== null && b.ts === null) is a CHANGE → do not steal, retry.
- */
-function sameLockInstance(a: LockIdentity, b: LockIdentity): boolean {
-  if (a.dev === null || a.ino === null || b.dev === null || b.ino === null) return false;
-  if (a.dev !== b.dev || a.ino !== b.ino) return false;
-  // If the decision body recorded a ts, it must STILL be present AND unchanged on recheck. A fresh
-  // replacement body carries a fresh ts (mismatch); a no-ts/garbage rewrite drops it (now null) —
-  // either way the body changed under us → not the same instance.
-  if (a.ts !== null && a.ts !== b.ts) return false;
-  return true;
-}
-
-/**
- * Is the recorded SAME-host holder VERIFIED-LIVE (finding 1, process-start-time)? True ONLY when ALL
- * hold: the pid signals alive AND the lock recorded a non-null start-time AND the pid's CURRENT
- * observed start-time matches that recorded value. Any failure — dead pid, no recorded start-time,
- * unobtainable current start-time, or a MISMATCH (= pid-reuse: the pid is alive but belongs to a
- * different process instance now) — means NOT verified-live, so the holder may be stolen. This is the
- * crux that defeats pid-reuse WITHOUT ever stealing a genuinely-live holder.
- */
-function holderVerifiedLive(parsed: ParsedLock): boolean {
-  if (parsed.pid === null) return false;
-  if (!isPidAlive(parsed.pid)) return false;
-  if (parsed.startTime === null) return false;
-  const observed = _lockProbes.getProcessStartTime(parsed.pid);
-  if (observed === null) return false;
-  return observed === parsed.startTime;
-}
-
-/**
- * Acquire an exclusive capability-mutation lock (a single lockfile created with O_EXCL), stamping
- * a JSON body that records a unique owner token, our PID, our HOSTNAME, our process START-TIME, and a
- * timestamp. Returns a LockHandle on success, or null if another LIVE operation holds it.
- *
- * Steal protocol (finding 1 — process-start-time liveness; never deadlocks AND never steals a
- * verified-live SAME-host holder). The age is bound to the BODY instance A acts on — `age = now -
- * body.ts` for a JSON body (a fresh replacement body carries a fresh ts), falling back to `now -
- * mtime` for a legacy/no-`ts` body — and the (dev, ino, ts) identity is re-confirmed immediately
- * before the rename so A can never steal a fresh lock B swapped in mid-decision (lock-steal TOCTOU):
- *   - age <= LOCK_STALE_MS                         → FRESH: never stolen (genuinely held → blocked).
- *   - age >  LOCK_STALE_MS:
- *       · SAME host: compute live = pid alive AND recorded startTime present AND observed
- *         startTime === recorded startTime. If VERIFIED-LIVE → NEVER steal (blocked) — even past the
- *         deadman; a provably-live holder is sacrosanct. If NOT verified-live (pid dead, start-time
- *         mismatch = pid-reuse, or start-time unobtainable) → STEAL (fast local recovery).
- *       · DIFFERENT host, or no parseable pid (legacy/oversized/garbage body) → liveness cannot be
- *         verified at all → steal ONLY after age > LOCK_DEADMAN_MS (the deadman fallback). Under the
- *         deadman such a lock is left in place (blocked).
- *
- * Why this is the convergent design: an age-only rule lost-updates a live holder; a pid-liveness rule
- * deadlocks forever on pid-reuse (a reused pid looks alive); a deadman rule can steal a live holder
- * before the deadman. The (pid, start-time) pair uniquely identifies a process INSTANCE, so a reused
- * pid is detected as a start-time MISMATCH and stolen, while a verified-live holder is never stolen.
- *
- * The steal itself is atomic (rename-then-recreate, so only ONE racing process can rename the
- * inode), and the whole thing is a BOUNDED iterative loop (CONC-2/DOS-1) — no unbounded recursion.
+ * Acquire the capability-mutation lock (the single `.gsd/capabilities/.lock` under runtimeDir),
+ * delegating the hardened steal/liveness/deadman protocol to the shared lock primitive. The lockfile
+ * path is the SAME as before extraction, so all existing #1462 lock tests (which key on a `.lock`
+ * suffix and call lifecycle.acquireLock(runtimeDir)) keep passing unchanged.
  */
 function acquireLock(runtimeDir: string): LockHandle | null {
   const root = capabilitiesRoot(runtimeDir);
-  try { fs.mkdirSync(root, { recursive: true }); } catch { /* best-effort */ }
-  const lockPath = path.join(root, '.lock');
-
-  for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt++) {
-    const token = newLockToken();
-    try {
-      const fd = fs.openSync(lockPath, 'wx'); // exclusive create — fails if held
-      // Finding 3 (LOW): once the exclusive create SUCCEEDS, a writeSync/closeSync failure must NOT
-      // leave the empty `.lock` behind — an orphan body self-blocks every later acquirer until the
-      // deadman. On any write/close error, best-effort unlink the file we just created and return null.
-      // Finding 2 (MEDIUM): use fs.writeFileSync(fd, body) — its internal write-all loop flushes the
-      // WHOLE buffer (no short-write), unlike a bare fs.writeSync(fd, …) which may write fewer bytes
-      // and leave a malformed body whose token releaseLock can never match (orphan until the deadman).
-      // Mirrors the writeLedger short-write fix.
-      try {
-        fs.writeFileSync(fd, lockFileBody(token));
-      } catch (writeErr) {
-        try { fs.closeSync(fd); } catch { /* best-effort */ }
-        try { fs.unlinkSync(lockPath); } catch { /* best-effort — no orphan */ }
-        throw writeErr;
-      }
-      try {
-        fs.closeSync(fd);
-      } catch (closeErr) {
-        try { fs.unlinkSync(lockPath); } catch { /* best-effort — no orphan */ }
-        throw closeErr;
-      }
-      // Finding 4 (LOW): capture the lock inode's (dev, ino) so releaseLock can confirm, immediately
-      // before rmSync, that the path still holds OUR inode (not a successor's) — minimizing the
-      // check-then-unlink window. Best-effort: a null dev/ino just falls back to the token check.
-      let dev: number | null = null;
-      let ino: number | null = null;
-      try {
-        const lst = fs.statSync(lockPath);
-        dev = typeof lst.dev === 'number' ? lst.dev : null;
-        ino = typeof lst.ino === 'number' ? lst.ino : null;
-      } catch { /* best-effort — release falls back to the token check alone */ }
-      return { path: lockPath, token, dev, ino };
-    } catch (err) {
-      // EEXIST → held (fall through to the steal decision). Any other error here is either the
-      // create failing for a real reason OR a write/close failure we already cleaned up → bail out.
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null;
-    }
-    // Held — decide whether to steal.
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(lockPath);
-    } catch {
-      // Lock vanished between open and stat — retry the create immediately.
-      continue;
-    }
-
-    // Finding 1 (HIGH) — bind the age decision to the SAME body instance A acts on. Parse the
-    // (bounded) body ONCE; derive age from the body's own `ts` (now - ts) for a JSON body so a FRESH
-    // replacement body (fresh ts) is correctly seen as fresh even if the file `mtime` is stale-old.
-    // A legacy/garbage/no-`ts` body — AND a FUTURE/implausible `ts` (see lockAgeMs) — falls back to
-    // the file `mtime` age so a planted/clock-skewed future ts can never deadlock the lock forever.
-    const parsed = readParsedLockBounded(lockPath);
-    const age = lockAgeMs(parsed.ts, st.mtimeMs);
-    if (age <= LOCK_STALE_MS) return null; // genuinely held (fresh) — blocked.
-
-    // Capture the identity (dev/ino + body ts) of the EXACT body the steal decision is made against,
-    // so we can confirm it is UNCHANGED immediately before the rename-steal (finding 1).
-    const decisionIdentity: LockIdentity = {
-      dev: typeof st.dev === 'number' ? st.dev : null,
-      ino: typeof st.ino === 'number' ? st.ino : null,
-      ts: parsed.ts,
-    };
-
-    if (isSameHost(parsed) && parsed.pid !== null) {
-      // SAME host with a parseable pid → we CAN verify liveness via the (pid, start-time) pair.
-      // A VERIFIED-LIVE holder is NEVER stolen — even past the deadman. Otherwise (dead pid,
-      // start-time mismatch = pid-reuse, or start-time unobtainable) → steal (fast local recovery).
-      if (holderVerifiedLive(parsed)) return null; // provably-live same-host holder — blocked.
-      // else fall through to the atomic steal.
-    } else {
-      // DIFFERENT host, or no parseable pid (legacy / oversized / garbage body) → liveness cannot be
-      // verified locally. Only the deadman can reclaim it; under the deadman, leave it (blocked).
-      if (age <= LOCK_DEADMAN_MS) return null;
-      // else (age > deadman) → fall through to the atomic steal.
-    }
-
-    // Finding 1 (HIGH): re-stat + re-read the body IMMEDIATELY before the rename and confirm it is the
-    // SAME instance (dev/ino unchanged AND, for a JSON body, ts unchanged). If B stole+recreated a
-    // FRESH lock between A's decision and now, the identity differs → do NOT steal B's fresh lock;
-    // RETRY the bounded loop instead. The rename itself remains the atomic single-winner.
-    if (!sameLockInstance(decisionIdentity, lockIdentity(lockPath))) {
-      if (attempt + 1 < LOCK_MAX_ATTEMPTS) lockBackoff();
-      continue; // the body changed under us — re-evaluate from scratch rather than steal a replacement.
-    }
-
-    // Steal atomically (only one racer can rename the inode).
-    const stolen = `${lockPath}.stale-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    try { fs.renameSync(lockPath, stolen); } catch { return null; } // another process won the steal
-    try { fs.rmSync(stolen, { force: true }); } catch { /* best-effort */ }
-    // Loop and retry the create (bounded — no recursion, CONC-2). Brief backoff to de-sync racers.
-    if (attempt + 1 < LOCK_MAX_ATTEMPTS) lockBackoff();
-  }
-  return null; // attempt budget exhausted (pathological contention) — never throws/recurses.
+  try { fs.mkdirSync(root, { recursive: true }); } catch { /* best-effort — lockMod also mkdirs */ }
+  return lockMod.acquireLock(path.join(root, '.lock'));
 }
 
-/**
- * Release a lock only if it still carries our owner token (PRIMARY discriminator) — and, as a best-
- * effort SECONDARY check, if its inode still matches the (dev, ino) we captured at acquire (finding 4),
- * so the common path never deletes a lock that was stale-stolen out from under us.
- *
- * The TOKEN re-check is what actually protects a successor: a real successor wrote a DIFFERENT owner
- * token, so we read a non-matching token and refuse to delete — this holds on every filesystem. The
- * dev/ino recheck is only a best-effort secondary guard: it may be DEFEATED by inode reuse on some
- * filesystems (e.g. Linux ext4/overlay reusing the freed inode after a successor's unlink+recreate at
- * the same path), so correctness does NOT depend on it. We keep it as harmless extra hardening (it can
- * catch a same-token reuse edge), but the token check is the load-bearing invariant.
- *
- * Residual (finding 4 — minimized, honestly stated): a check-then-unlink window remains between the
- * final token+inode recheck and the rmSync. This is the IRREDUCIBLE final-instruction window of any
- * path-based lock without native OS advisory locking (flock), which GSD avoids (no native deps). The
- * token+inode recheck shrinks the window to that last instruction: a successor must replace BOTH the
- * token and the inode within it to be wrongly deleted, and that is only REACHABLE when a holder is
- * BOTH stale (>LOCK_STALE_MS) AND still alive to call release — a live process frozen >60s mid sub-
- * second fs critical section (a crashed holder never calls release; a normal holder finishes in ms).
- * A rename-claim variant was tried but merely moves the same window (the restore step can clobber a
- * third acquirer — Codex R6). This lock is same-user, same-machine DEFENSE-IN-DEPTH; it is NOT the
- * trust barrier (that is consent + integrity + reversibility, see the trust-model doc), and the
- * residual crosses no privilege boundary — the same disposition accepted for safeRmUnder's parent TOCTOU.
- */
+/** Release a capability-mutation lock (shared primitive — token + inode owner-safe). */
 function releaseLock(handle: LockHandle | null): void {
-  if (!handle) return;
-  try {
-    // Finding 2 (HIGH): the lock body is untrusted — read it via the shared fd-based bounded reader
-    // (regular-file + size cap). A FIFO/device/oversized/non-regular body at handle.path cannot be
-    // ours (our writes are tiny regular-file JSON), so it is simply not released by us (left for the
-    // deadman / its real owner) — and a FIFO can never block release. Null means gone/non-regular →
-    // nothing of ours to release.
-    let body: string | null;
-    try {
-      body = ledgerMod.readSmallRegularFile(handle.path, LOCK_MAX_BODY_BYTES);
-    } catch {
-      return; // non-regular / oversized / unreadable → not ours; do not read or delete.
-    }
-    if (body === null) return; // gone / missing — nothing of ours to release.
-    // The body is now JSON `{ token, pid, hostname, startTime, ts }` (finding 1); release only if the
-    // recorded token is still OURS. A legacy plain-token body (whole body === token) is also honored
-    // so an in-flight handle written by an older build can still be released.
-    if (lockBodyToken(body) !== handle.token && body !== handle.token) return; // not our token (PRIMARY).
-    // Finding 4 (LOW): best-effort SECONDARY guard — re-stat the path IMMEDIATELY before rmSync and, if
-    // we captured an inode at acquire, confirm it is STILL ours (the dev/ino captured at acquire). A
-    // successor recreated at the same path MAY have a different inode → then do NOT delete it. This is
-    // only a window-minimizer, NOT the correctness invariant: inode reuse on some filesystems (Linux
-    // ext4/overlay after a successor's unlink+recreate) can make the inode match again, so the TOKEN
-    // check above is the load-bearing protection. When we captured no inode (best-effort null), the
-    // token check alone gated the delete.
-    if (handle.dev !== null && handle.ino !== null) {
-      let cur: fs.Stats;
-      try {
-        cur = fs.statSync(handle.path);
-      } catch {
-        return; // vanished/unstatable between read and rmSync → nothing of ours to release.
-      }
-      if (cur.dev !== handle.dev || cur.ino !== handle.ino) return; // successor inode — not ours.
-    }
-    fs.rmSync(handle.path, { force: true });
-  } catch { /* already gone / stale-stolen / unreadable — nothing of ours to release */ }
-}
-
-/** Extract the owner token from a lockfile body (JSON `token` field), or null if not JSON/absent. */
-function lockBodyToken(body: string): string | null {
-  const trimmed = body.trim();
-  if (!trimmed.startsWith('{')) return null;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const t = (parsed as Record<string, unknown>)['token'];
-      return typeof t === 'string' ? t : null;
-    }
-  } catch { /* not JSON */ }
-  return null;
+  lockMod.releaseLock(handle);
 }
 
 function readManifest(dir: string): Record<string, unknown> | null {
@@ -1109,6 +647,91 @@ function checkSharedFileCount(sharedFiles: string[] | undefined): string | null 
   return null;
 }
 
+/**
+ * #1459: should this operation bind a user consent record? Only a PROJECT-scope op with a consent
+ * store configured. GLOBAL scope is under the user's own home and is trusted without a record. A
+ * caller that supplies a consentStoreDir but omits scope is treated as PROJECT (bind unless told
+ * otherwise) — the conservative default that closes the trust gap.
+ */
+function shouldBindConsent(opts: LifecycleOptions): boolean {
+  if (!opts.consentStoreDir) return false;
+  const scope = opts.scope ?? 'project';
+  return scope === 'project';
+}
+
+/**
+ * #1459: a non-fatal capability-consent diagnostic on stderr. The lifecycle lib does not own a logger,
+ * but a consent-binding skip/failure must be OBSERVABLE to the caller (IC-05/WIN-2, IC-07) — a silent
+ * skip leaves a project cap inactive with no explanation. Best-effort: never throws (stderr can fail).
+ */
+function warnConsent(message: string): void {
+  try { process.stderr.write(`capability consent: ${message}\n`); } catch { /* best-effort */ }
+}
+
+/**
+ * #1459 IC-07: a PROJECT-scope op that did NOT supply a consentStoreDir cannot bind a consent record,
+ * so the freshly-installed/upgraded project cap will be DISCOVERED-BUT-INACTIVE at load. That used to
+ * be a SILENT skip. Emit a stderr warning so the caller knows consent binding was skipped (and why the
+ * cap is inactive). Only fires for project scope with NO consent store — GLOBAL scope is trusted and
+ * intentionally records nothing.
+ */
+function warnIfConsentSkipped(opts: LifecycleOptions, id: string): void {
+  const scope = opts.scope ?? 'project';
+  if (scope === 'project' && !opts.consentStoreDir) {
+    warnConsent(
+      `project-scope install of "${id}" did not supply a consent store (consentStoreDir); ` +
+      `consent binding was SKIPPED, so this capability will be DISCOVERED-BUT-INACTIVE until consented.`,
+    );
+  }
+}
+
+/**
+ * Record a project-scope user consent for `id` AFTER its ledger commit (#1459). The consent is bound
+ * to the RECOMPUTED full-bundle content hash of the INSTALLED bundle (capDir) — the security binding
+ * (CB-1/CB-2) — plus `integrity` + `disclosureSignature` (kept for the disclosure/re-consent UX). The
+ * loader recomputes `bundleContentHash(capDir)` at load and re-activates exactly this bundle on THIS
+ * machine; a forged/cloned project ledger without this record (or whose on-disk bundle differs from
+ * the consented content) stays inactive.
+ *
+ * The content hash MUST be computed from the bundle as it now lives on disk (capDir(runtimeDir, id)),
+ * NOT the staged dir — the loader hashes the installed capDir, so the two must agree.
+ *
+ * Best-effort: a consent-store write failure must not turn a successful install/upgrade into a
+ * failure (the bundle is already committed) — it is surfaced as a warning, not a throw.
+ */
+function bindProjectConsent(opts: LifecycleOptions, id: string, integrity: string, manifest: Record<string, unknown>): void {
+  // #1459 IC-07: a project-scope op WITHOUT a consent store cannot bind — warn (then nothing to do).
+  if (!shouldBindConsent(opts)) {
+    warnIfConsentSkipped(opts, id);
+    return;
+  }
+  try {
+    consentMod.recordProjectConsent({
+      gsdHome: opts.consentStoreDir,
+      // #1459 IC-01/CB-4: bind the record's projectRoot through the SINGLE canonical helper so the
+      // RECORD key matches the loader's LOOKUP key (consentProjectRoot) and `trust revoke`. The bundle
+      // hash is still taken over the ACTUAL on-disk install location (capDir(opts.runtimeDir, id)).
+      projectRoot: projectRootMod.consentProjectRoot(opts.runtimeDir),
+      id,
+      integrity,
+      disclosureSignature: trustMod.signatureForManifest(manifest),
+      contentHash: consentMod.bundleContentHash(capDir(opts.runtimeDir, id)),
+    });
+  } catch (err) {
+    // #1459 IC-05/WIN-2: a consent-store write failure (read-only/UNC/NFS store) must NOT turn an
+    // otherwise-successful install/upgrade into a failure — the bundle is already committed. Surface a
+    // non-fatal warning (naming the store path so the operator can fix permissions and re-consent via
+    // `gsd capability trust`), and let the op SUCCEED. The cap is simply inactive until consent writes.
+    const storePath = (() => {
+      try { return consentMod.consentStorePath(opts.consentStoreDir); } catch { return String(opts.consentStoreDir); }
+    })();
+    warnConsent(
+      `could not write the consent record for "${id}" to "${storePath}": ${(err as Error).message}. ` +
+      `The install succeeded but this capability stays INACTIVE until consent can be recorded.`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
@@ -1282,6 +905,11 @@ async function installCapability(spec: string, opts: LifecycleOptions): Promise<
         sharedEdits,
       });
       committed = true;
+      // #1459: a CONSENTED project install (no consent needed for declarative; granted for
+      // executable) records a user consent in the user-owned consent store AFTER the ledger commit,
+      // bound to integrity + disclosure signature. Without this record the loader leaves the project
+      // overlay inactive — closing the repo-plantable-ledger bypass. Global scope records nothing.
+      bindProjectConsent(opts, resolved.id, resolved.integrity ?? '', manifest);
     } catch (err) {
       // Swap/commit failed; the intent remains for reconcile to roll back.
       return { status: 'blocked', id: resolved.id, blockReasons: [(err as Error).message] };
@@ -1453,6 +1081,9 @@ async function upgradeCapability(spec: string, opts: LifecycleOptions): Promise<
         sharedEdits,
       });
       committed = true;
+      // #1459: re-record the project consent for the UPGRADED bundle (new integrity + signature) so
+      // the loader re-activates exactly the new version on THIS machine. Global scope records nothing.
+      bindProjectConsent(opts, resolved.id, resolved.integrity ?? '', newManifest);
     } catch (err) {
       // Swap/commit failed mid-flight; the intent remains in the ledger so reconcile can recover.
       return { status: 'blocked', id: resolved.id, blockReasons: [(err as Error).message] };
@@ -1481,6 +1112,16 @@ interface RemoveResult {
   removedFiles?: string[];
   dataPreserved?: boolean;
   blockReasons?: string[];
+  /**
+   * #1459 finding 3 (round 6): true when the files/ledger were removed but the project-scope consent
+   * record could NOT be revoked (e.g. the consent-store lock could not be acquired — revokeProjectConsent
+   * THROWS rather than doing an unlocked delete). The removal is still `removed` (the bundle is gone), but
+   * a STALE consent record remains that a byte-identical re-drop + forged ledger could reactivate against,
+   * so the caller must report a NON-CLEAN removal and tell the user to clear it (`gsd capability trust revoke`).
+   */
+  consentRevokeFailed?: boolean;
+  /** Human-readable detail naming the stale consent record when consentRevokeFailed is true. */
+  consentRevokeWarning?: string;
 }
 
 /**
@@ -1562,7 +1203,37 @@ function removeCapability(id: string, opts: LifecycleOptions): RemoveResult {
       };
     }
 
-    return { status: 'removed', id, strippedEdits, removedFiles, dataPreserved: !removeData };
+    // #1459: a PROJECT-scope removal fully REVOKES the user consent record so a later repo-dropped
+    // bundle of the same id cannot silently re-activate against a stale consent. The ledger removal has
+    // already succeeded, so a revoke failure must NOT fail the removal — but it MUST NOT be silently
+    // swallowed either (#1459 finding 3, round 6): revokeProjectConsent now THROWS on a consent-lock
+    // failure (round 3) rather than doing an unlocked delete, and swallowing that throw would report a
+    // clean `removed` while leaving a STALE consent record a byte-identical re-drop + forged ledger could
+    // reactivate against (the same stale-redrop class the reconcile path closes). Surface it instead: a
+    // stderr warning naming the record AND a flag on the result so the CLI reports a non-clean removal.
+    let consentRevokeFailed = false;
+    let consentRevokeWarning: string | undefined;
+    if (shouldBindConsent(opts)) {
+      try {
+        // #1459 IC-01/CB-4: revoke under the SAME canonical root the record was written under
+        // (consentProjectRoot), so a removal actually clears the record the install bound.
+        consentMod.revokeProjectConsent({ gsdHome: opts.consentStoreDir, projectRoot: projectRootMod.consentProjectRoot(runtimeDir), id });
+      } catch (err) {
+        consentRevokeFailed = true;
+        consentRevokeWarning =
+          `removed capability "${id}" but could NOT revoke its project consent record: ${(err as Error).message}. ` +
+          `The consent record is now STALE — a byte-identical re-drop of this bundle could reactivate against it. ` +
+          `Clear it manually: gsd capability trust revoke ${id}`;
+        warnConsent(consentRevokeWarning);
+      }
+    }
+
+    const result: RemoveResult = { status: 'removed', id, strippedEdits, removedFiles, dataPreserved: !removeData };
+    if (consentRevokeFailed) {
+      result.consentRevokeFailed = true;
+      result.consentRevokeWarning = consentRevokeWarning;
+    }
+    return result;
   } finally {
     releaseLock(lock);
   }
@@ -1610,10 +1281,28 @@ function backupNameMatchesId(name: unknown, id: string): name is string {
  *
  * The post-recovery state is always fully-old or fully-new — never a half-state.
  */
-function reconcileCapabilities(opts: { runtimeDir: string }): ReconcileReport {
+function reconcileCapabilities(opts: { runtimeDir: string; scope?: 'global' | 'project'; consentStoreDir?: string }): ReconcileReport {
   const { runtimeDir } = opts;
   const report: ReconcileReport = { rolledBack: [], rolledForward: [], orphansRemoved: [], ledger: null, warnings: [] };
   const root = capabilitiesRoot(runtimeDir);
+
+  // #1459 IC-03: when a rollback DELETES a committed/half-committed project-scope ledger entry whose
+  // bundle dir is gone, the user consent record bound to that (projectRoot, id) is now stale. Revoke it
+  // so a later re-dropped BYTE-IDENTICAL bundle of the same id (whose recomputed content hash would
+  // still match the stale record) cannot silently re-activate without a fresh user decision. The
+  // content-hash binding already deactivates a DIFFERENT re-drop; revoking on rollback closes the
+  // identical-re-drop gap. Best-effort + only when a project consent store is configured.
+  const revokeStaleConsent = (id: string): void => {
+    if (!opts.consentStoreDir) return;
+    if ((opts.scope ?? 'project') !== 'project') return;
+    try {
+      consentMod.revokeProjectConsent({
+        gsdHome: opts.consentStoreDir,
+        projectRoot: projectRootMod.consentProjectRoot(runtimeDir),
+        id,
+      });
+    } catch { /* best-effort — a consent-store IO error must never abort crash recovery */ }
+  };
 
   // Finding 2 (HIGH): READ-ONLY corruption preflight BEFORE acquireLock. acquireLock creates
   // .gsd/capabilities and a .lock file; doing it before detecting corruption pollutes the scope
@@ -1697,6 +1386,7 @@ function reconcileCapabilities(opts: { runtimeDir: string }): ReconcileReport {
             if (!safeRmUnder(runtimeDir, path.relative(runtimeDir, finalDir))) continue;
             delete workingLedger.entries[id]; // DOS-2: in-memory drop; single write at end of step 1.
             ledgerDirty = true;
+            revokeStaleConsent(id); // #1459 IC-03: drop the now-stale consent so an identical re-drop stays inactive.
             report.rolledBack.push(id);
             continue;
           }
@@ -1737,6 +1427,7 @@ function reconcileCapabilities(opts: { runtimeDir: string }): ReconcileReport {
             stripCapabilitySharedEdits({ runtimeDir, capId: id, sharedEdits: candidateFiles.map((file) => ({ file, marker: id })) });
             delete workingLedger.entries[id]; // DOS-2: in-memory drop.
             ledgerDirty = true;
+            revokeStaleConsent(id); // #1459 IC-03: both backup + live gone → uninstall self-heal also revokes consent.
             report.rolledBack.push(id);
             continue;
           }
@@ -1856,17 +1547,13 @@ export = {
   stripCapabilitySharedEdits,
   CAP_MARKER,
   // Exported for cross-process-lock unit tests (CONC-1/CONC-2/finding-1). Not part of the public CLI
-  // surface. `_setLockProbes`/`_resetLockProbes` let tests inject deterministic isPidAlive /
-  // getProcessStartTime so the start-time liveness branches are exercised without real OS pids.
+  // surface. #1459 finding 4: the lock primitive now lives in the shared capability-lock module; these
+  // re-export it (acquireLock here still takes a runtimeDir and computes the `.gsd/capabilities/.lock`
+  // path) and the test seams (`_setLockProbes`/`_resetLockProbes`/`getProcessStartTime`) forward to the
+  // shared module so the existing #1462 lock tests drive the SAME probe state the primitive reads.
   acquireLock,
   releaseLock,
-  getProcessStartTime,
-  _setLockProbes(probes: Partial<{ isPidAlive: (pid: number) => boolean; getProcessStartTime: (pid: number) => string | null }>): void {
-    if (typeof probes.isPidAlive === 'function') _lockProbes.isPidAlive = probes.isPidAlive;
-    if (typeof probes.getProcessStartTime === 'function') _lockProbes.getProcessStartTime = probes.getProcessStartTime;
-  },
-  _resetLockProbes(): void {
-    _lockProbes.isPidAlive = _realIsPidAlive;
-    _lockProbes.getProcessStartTime = getProcessStartTime;
-  },
+  getProcessStartTime: lockMod.getProcessStartTime,
+  _setLockProbes: lockMod._setLockProbes,
+  _resetLockProbes: lockMod._resetLockProbes,
 };

@@ -1769,3 +1769,44 @@ describe('ADR-1244 D2: overlay-aware registry wiring in capability-state', () =>
     }
   });
 });
+
+// ─── #1459 IC-04: capability-state threads the consent home (GSD_HOME) to loadRegistry ───
+
+describe('#1459 IC-04: capability-state threads gsdHome to the overlay loader', () => {
+  const { mock } = require('node:test');
+  const { resolveCapabilityRuntimeState } = require('../gsd-core/bin/lib/capability-state.cjs');
+  // The SAME cached loader module instance capability-state requires internally — spy its loadRegistry.
+  const loader = require('../gsd-core/bin/lib/capability-loader.cjs');
+
+  test('resolveCapabilityRuntimeState passes gsdHome=process.env.GSD_HOME to EVERY overlay-aware loadRegistry call', () => {
+    // revert-fails: if ANY consumer reached on this path (capability-state itself, or the federated
+    // config-loader it calls via loadConfig) called loadRegistry({ includeInstalled, cwd }) WITHOUT
+    // gsdHome (the pre-IC-04 form), that call's captured options.gsdHome would be undefined while
+    // process.env.GSD_HOME is set, so the per-call strictEqual below fails. The loader's behavioral
+    // env-fallback would still resolve the right home, masking the regression — only this
+    // explicit-threading spy pins the contract that every consumer forwards the home it sees. We assert
+    // EVERY includeInstalled call (not just the last) so reverting any single consumer's threading fails.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-ic04-'));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-ic04-cwd-'));
+    const prev = process.env.GSD_HOME;
+    const calls = [];
+    const spy = mock.method(loader, 'loadRegistry', function (opts) {
+      calls.push(opts || {});
+      return realRegistry; // a valid registry shape; we only assert on the call options.
+    });
+    try {
+      process.env.GSD_HOME = home;
+      resolveCapabilityRuntimeState(cwd, null);
+      const overlayCalls = calls.filter((o) => o.includeInstalled === true);
+      assert.ok(overlayCalls.length > 0, 'at least one overlay-aware loadRegistry call was made on this path');
+      for (const o of overlayCalls) {
+        assert.strictEqual(o.gsdHome, home, 'every overlay-aware loadRegistry call threads gsdHome = process.env.GSD_HOME (IC-04)');
+      }
+    } finally {
+      spy.mock.restore();
+      if (prev === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = prev;
+      cleanup(home);
+      cleanup(cwd);
+    }
+  });
+});

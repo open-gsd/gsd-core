@@ -496,7 +496,9 @@ function cmdLoopRenderHooks(
   // capabilities are visible to loop rendering exactly like first-party ones.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { loadRegistry } = require('./capability-loader.cjs') as { loadRegistry: (opts?: Record<string, unknown>) => Record<string, unknown> };
-  const registry = loadRegistry({ includeInstalled: true, cwd });
+  // #1459 IC-04: thread the consent home (process.env.GSD_HOME) EXPLICITLY so a consented project cap's
+  // loop surfaces (steps/gates/contributions) render here at the SAME home that gated its activation.
+  const registry = loadRegistry({ includeInstalled: true, cwd, gsdHome: process.env['GSD_HOME'] });
   const capabilityStatesById = new Map<string, { enabled?: boolean; active: boolean }>();
   for (const cap of state.capabilities || []) {
     capabilityStatesById.set(cap.id, cap);

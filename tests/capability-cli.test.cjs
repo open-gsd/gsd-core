@@ -327,7 +327,7 @@ describe('capability (unknown)', () => {
   test('an unknown subcommand lists the full available set', () => {
     const r = runGsdTools(['capability', 'bogus'], makeCwd());
     assert.equal(r.success, false);
-    assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, disable, enable, state, set/);
+    assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, trust, disable, enable, state, set/);
   });
 });
 
@@ -754,5 +754,264 @@ describe('capability install (UX-2: reconcile warnings surfaced on stderr)', () 
     // the report was captured and emitted, not discarded in a bare try/catch.
     assert.match(`${r.error}\n${r.output}`, /capability reconcile:/i,
       'the pre-op reconcile warning must be surfaced on stderr with its prefix (UX-2)');
+  });
+});
+
+// ─── #1459: user-owned consent store (trust list/revoke; inactive marking) ────
+
+describe('capability consent store (#1459)', () => {
+  const consentMod = require('../gsd-core/bin/lib/capability-consent.cjs');
+
+  /** A project cwd that is its OWN project root (.planning) — project scope runtimeDir === cwd. */
+  function projectCwd() {
+    const cwd = tmpDir('cap-cli-proj-');
+    fs.mkdirSync(path.join(cwd, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), '{}');
+    return cwd;
+  }
+
+  test('project install lands the consent record under GSD_HOME, NOT under the project cwd', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('proj-consent-cap');
+    const r = runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    // Consent store is under the GSD_HOME-sandboxed home, not in the project repo.
+    assert.ok(fs.existsSync(consentMod.consentStorePath(home)), 'consent store under GSD_HOME');
+    assert.ok(!fs.existsSync(path.join(cwd, '.gsd', 'consent.json')), 'NOT written under the project cwd');
+    const store = consentMod.readConsentStore(home);
+    assert.equal(Object.keys(store.records).length, 1, 'one consent record written');
+  });
+
+  test('a consented project overlay shows status:active in `capability list`', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('proj-active-cap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    const row = parse(r.output).find((x) => x.id === 'proj-active-cap');
+    assert.ok(row, 'consented project cap is listed');
+    assert.equal(row.status, 'active', 'consented project overlay is active');
+  });
+
+  test('a planted project ledger with NO consent shows status:inactive in `capability list`', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    // Plant a committed-looking project ledger + bundle WITHOUT going through install (no consent).
+    const capId = 'planted-cap';
+    const dir = path.join(cwd, '.gsd', 'capabilities', capId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'capability.json'), JSON.stringify({
+      id: capId, role: 'feature', version: '1.0.0', title: capId, description: 'd', tier: 'standard',
+      requires: [], runtimeCompat: { supported: ['*'], unsupported: [] }, skills: [], agents: [],
+      hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    }));
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), JSON.stringify({
+      version: '1', updatedAt: '2026-01-01T00:00:00Z',
+      entries: { [capId]: { id: capId, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
+    }));
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    const row = parse(r.output).find((x) => x.id === capId);
+    assert.ok(row, 'planted cap is still LISTED (discovered)');
+    assert.equal(row.status, 'inactive', 'a planted, unconsented project cap is marked inactive');
+    assert.match(String(row.reason || ''), /consent/i, 'the inactive reason mentions consent');
+  });
+
+  test('IC-02: `capability list` marks inactive via the STRUCTURAL kind discriminant (not the reason prose)', () => {
+    // revert-fails: if gsd-tools `list` filtered on /consent/i.test(reason) (the old prose match) AND
+    // the loader's inactive warning omitted `kind`, this still passes by accident. To make it
+    // anti-vacuous we (a) assert the loader emits the STRUCTURAL kind:'unconsented' (the discriminant
+    // the filter must key on) and (b) assert the list marks the row inactive. Reverting the filter to
+    // the prose match leaves (b) passing only because the prose still says "consent" — but reverting
+    // the loader's `kind` tag makes (a) FAIL, and a future reason-prose change would break a
+    // prose-matching filter while leaving (a) intact. The two together pin the kind path.
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const capId = 'kind-inactive-cap';
+    const dir = path.join(cwd, '.gsd', 'capabilities', capId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'capability.json'), JSON.stringify({
+      id: capId, role: 'feature', version: '1.0.0', title: capId, description: 'd', tier: 'standard',
+      requires: [], runtimeCompat: { supported: ['*'], unsupported: [] }, skills: [], agents: [],
+      hooks: [], config: {}, steps: [], contributions: [], gates: [],
+    }));
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), JSON.stringify({
+      version: '1', updatedAt: '2026-01-01T00:00:00Z',
+      entries: { [capId]: { id: capId, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
+    }));
+    // (a) The loader's overlay warning carries the structural discriminant kind:'unconsented'.
+    const loader = require('../gsd-core/bin/lib/capability-loader.cjs');
+    const savedHome = process.env.GSD_HOME;
+    let reg;
+    try {
+      process.env.GSD_HOME = home;
+      reg = loader.loadRegistry({ includeInstalled: true, cwd, gsdHome: home });
+    } finally {
+      if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+    }
+    const warn = (reg._overlay && reg._overlay.warnings || []).find((w) => w.id === capId);
+    assert.ok(warn, 'loader records a discovered-but-inactive warning for the unconsented cap');
+    assert.equal(warn.kind, 'unconsented', 'the warning carries the structural kind discriminant');
+    // (b) The CLI list marks the row inactive (via the kind-keyed filter).
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    const row = parse(r.output).find((x) => x.id === capId);
+    assert.ok(row && row.status === 'inactive', 'list marks the unconsented cap inactive via kind');
+  });
+
+  test('IC-09: `capability trust list` exposes disclosureSignature + contentHash so operators can diff', () => {
+    // revert-fails: drop disclosureSignature/contentHash from the trust-list row projection and these
+    // field assertions fail. Operators need the stored binding to diff against the current bundle.
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('trust-fields-cap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    const r = runGsdTools(['capability', 'trust', 'list', '--json'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    const row = parse(r.output).find((x) => x.id === 'trust-fields-cap');
+    assert.ok(row, 'consent record listed');
+    assert.ok(Object.prototype.hasOwnProperty.call(row, 'disclosureSignature'), 'disclosureSignature exposed');
+    assert.ok(typeof row.contentHash === 'string' && /^sha512-/.test(row.contentHash), 'contentHash exposed (the security binding)');
+  });
+
+  test('capability trust list shows the consent record after a project install', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('trust-list-cap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    const r = runGsdTools(['capability', 'trust', 'list', '--json'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    const rows = parse(r.output);
+    assert.ok(Array.isArray(rows) && rows.some((x) => x.id === 'trust-list-cap' && x.scope === 'project'), 'consent record listed');
+  });
+
+  test('capability trust revoke <id> removes the consent record (cap then lists inactive)', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('trust-revoke-cap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    // Revoke.
+    const rev = runGsdTools(['capability', 'trust', 'revoke', 'trust-revoke-cap', '--raw'], cwd, scopeEnv(home));
+    assert.equal(rev.success, true, `${rev.error}\n${rev.output}`);
+    assert.equal(consentMod.readConsentStore(home).records && Object.keys(consentMod.readConsentStore(home).records).length, 0, 'record removed');
+    // The cap (bundle + ledger still present) now lists inactive.
+    const list = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    const row = parse(list.output).find((x) => x.id === 'trust-revoke-cap');
+    assert.ok(row && row.status === 'inactive', 'after revoke the cap is inactive');
+  });
+
+  test('finding 3: `trust revoke` with the consent-store lock HELD exits non-zero with a CLEAN message (not a raw stack)', () => {
+    // revert-fails: without the CLI try/catch around revokeProjectConsent, the round-3 throw-on-no-lock
+    // propagates to runMain, which prints a generic SDK/stack failure. The two assertions below — exit
+    // non-zero AND a clean, actionable consent-lock message (no "at <fn> (<file>:<line>)" stack frame) —
+    // FAIL when the throw is unhandled. The fix wraps it in error(...)/SDK_FAIL_FAST.
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('trust-locked-cap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true, 'install (records consent)');
+    // Plant a FRESH, well-formed consent-store lock owned by THIS test process. A fresh lock (ts ≈ now,
+    // age <= LOCK_STALE_MS) is NEVER stolen by the shared lock primitive, so the subprocess's bounded
+    // waitForFresh budget exhausts and acquireConsentLock returns null → revokeProjectConsent throws.
+    const lockPath = consentMod.consentLockPath(home);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const os = require('node:os');
+    fs.writeFileSync(lockPath, JSON.stringify({ token: 'test-holder', pid: process.pid, hostname: os.hostname(), startTime: null, ts: Date.now() }), { flag: 'wx' });
+    try {
+      const rev = runGsdTools(['capability', 'trust', 'revoke', 'trust-locked-cap', '--raw'], cwd, scopeEnv(home));
+      assert.equal(rev.success, false, 'a lock-held revoke exits non-zero');
+      const combined = `${rev.error}\n${rev.output}`;
+      assert.match(combined, /consent-store lock|consent store lock|another capability operation/i, 'clean, actionable lock message');
+      assert.doesNotMatch(combined, /\bat \S+ \(.*:\d+:\d+\)/, 'no raw V8 stack frame leaked to the user');
+    } finally {
+      try { fs.unlinkSync(lockPath); } catch { /* best-effort */ }
+    }
+  });
+
+  test('convergence-2: `capability list` with a FIFO project capability.json does not hang; the entry is omitted, exit clean', { skip: process.platform === 'win32' }, () => {
+    // revert-fails: with the raw fs.readFileSync(path,'utf8') in the gsd-tools `list` metadata read,
+    // reading the FIFO capability.json BLOCKS forever (no writer) → `capability list` hangs and the test
+    // times out (runGsdTools never returns). The bounded reader (readSmallRegularFile) fstat-rejects the
+    // FIFO BEFORE reading, so the list omits that entry and exits cleanly.
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const capId = 'fifo-list-cap';
+    const dir = path.join(cwd, '.gsd', 'capabilities', capId);
+    fs.mkdirSync(dir, { recursive: true });
+    const { execFileSync } = require('node:child_process');
+    execFileSync('mkfifo', [path.join(dir, 'capability.json')]);
+    // A committed project ledger so the list iterates this entry (the FIFO is on the metadata-read path).
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), JSON.stringify({
+      version: '1', updatedAt: '2026-01-01T00:00:00Z',
+      entries: { [capId]: { id: capId, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
+    }));
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `list must exit cleanly (not hang) on a FIFO manifest: ${r.error}\n${r.output}`);
+    const rows = parse(r.output);
+    // The entry is LISTED (the ledger knows it) but with no metadata (null role/tier/title) since the
+    // FIFO manifest could not be read; the key point is no hang and a clean exit.
+    const row = rows.find((x) => x.id === capId);
+    if (row) {
+      assert.equal(row.role, null, 'FIFO manifest unreadable → no role metadata (omitted/marked)');
+      assert.equal(row.title, null, 'FIFO manifest unreadable → no title metadata');
+    }
+  });
+
+  test('convergence-2b: `capability list` with an OVERSIZED project capability.json does not OOM; entry omitted, exit clean', () => {
+    // revert-fails: a raw readFileSync reads the whole oversized manifest into memory; the bounded reader
+    // refuses a file past the cap so the metadata is dropped. The CONTROL (small valid manifest) proves
+    // the same shape lists with metadata, so the dropped metadata is attributable to SIZE alone.
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const ctrlCwd = projectCwd();
+    const mkManifest = (id, extra) => JSON.stringify({
+      id, role: 'feature', version: '1.0.0', title: id, description: 'd', tier: 'standard',
+      requires: [], runtimeCompat: { supported: ['*'], unsupported: [] }, skills: [], agents: [],
+      hooks: [], config: {}, steps: [], contributions: [], gates: [], ...extra,
+    });
+    const ledgerFor = (id) => JSON.stringify({
+      version: '1', updatedAt: '2026-01-01T00:00:00Z',
+      entries: { [id]: { id, version: '1.0.0', source: 's', integrity: '', files: [], sharedEdits: [] } },
+    });
+    // CONTROL: a small valid manifest lists WITH metadata.
+    const ctrlDir = path.join(ctrlCwd, '.gsd', 'capabilities', 'small-list-cap');
+    fs.mkdirSync(ctrlDir, { recursive: true });
+    fs.writeFileSync(path.join(ctrlDir, 'capability.json'), mkManifest('small-list-cap'));
+    fs.writeFileSync(path.join(ctrlCwd, '.gsd-capabilities.json'), ledgerFor('small-list-cap'));
+    const ctrl = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], ctrlCwd, scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(ctrl.success, true, `${ctrl.error}\n${ctrl.output}`);
+    const ctrlRow = parse(ctrl.output).find((x) => x.id === 'small-list-cap');
+    assert.ok(ctrlRow && ctrlRow.role === 'feature' && ctrlRow.title === 'small-list-cap', 'CONTROL: a small manifest lists with metadata');
+    // SUBJECT: an oversized manifest (>8 MiB) — bounded reader refuses; metadata dropped, no OOM.
+    const capId = 'oversized-list-cap';
+    const dir = path.join(cwd, '.gsd', 'capabilities', capId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'capability.json'), mkManifest(capId, { description: 'x'.repeat(9 * 1024 * 1024) }));
+    fs.writeFileSync(path.join(cwd, '.gsd-capabilities.json'), ledgerFor(capId));
+    const r = runGsdTools(['capability', 'list', '--json', '--scope', 'project'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `list must exit cleanly (not OOM) on an oversized manifest: ${r.error}\n${r.output}`);
+    const row = parse(r.output).find((x) => x.id === capId);
+    if (row) {
+      assert.equal(row.role, null, 'oversized manifest refused → no role metadata');
+      assert.equal(row.title, null, 'oversized manifest refused → no title metadata');
+    }
+  });
+
+  test('capability remove (project scope) revokes the consent record', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = projectCwd();
+    const src = writeCapSource('proj-remove-cap');
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'project', '--raw'], cwd, scopeEnv(home)).success, true);
+    assert.equal(Object.keys(consentMod.readConsentStore(home).records).length, 1, 'consent present after install');
+    const r = runGsdTools(['capability', 'remove', 'proj-remove-cap', '--scope', 'project', '--raw'], cwd, scopeEnv(home));
+    assert.equal(r.success, true, `${r.error}\n${r.output}`);
+    assert.equal(Object.keys(consentMod.readConsentStore(home).records).length, 0, 'remove revokes the consent record');
+  });
+
+  test('an unknown trust subcommand errors with guidance', () => {
+    const r = runGsdTools(['capability', 'trust', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /trust/i);
   });
 });

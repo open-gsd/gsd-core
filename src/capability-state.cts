@@ -483,7 +483,10 @@ function resolveCapabilityRuntimeState(
   // reflected in installed/surfaced state exactly like first-party capabilities.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { loadRegistry } = require('./capability-loader.cjs') as { loadRegistry: (opts?: Record<string, unknown>) => Record<string, unknown> };
-  const registry = loadRegistry({ includeInstalled: true, cwd });
+  // #1459 IC-04: thread the consent home (process.env.GSD_HOME) EXPLICITLY so the overlay's global root
+  // and the project-scope consent lookup resolve to the SAME user-owned home this consumer sees — a
+  // legitimately-consented project cap then reports ACTIVE here (not falsely inactive at the wrong home).
+  const registry = loadRegistry({ includeInstalled: true, cwd, gsdHome: process.env['GSD_HOME'] });
 
   // ── Resolve installed skills (from install profile) ──────────────────────────
   // Distinguish "no profile marker → default full" (legitimate) from a thrown

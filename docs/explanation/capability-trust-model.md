@@ -149,9 +149,18 @@ consent window is install, not first use.
 
 GSD presents a pre-install summary that names every executable surface the
 capability declares (hooks, MCP servers, command modules), their kinds (`step`,
-`contribution`, `gate`), and the loop extension points they register into.
-Declining aborts the install cleanly. Accepting records the consent in the
-ledger.
+`contribution`, `gate`), and the loop extension points they register into. For
+each MCP server the summary also shows the `env` it would be spawned with (each
+key and its — truncated — value) and the `cwd` it would run in, because an
+environment variable can change *what* a command does (for example
+`NODE_OPTIONS=--require /tmp/evil.js`) without touching the command or its
+arguments. Declining aborts the install cleanly. Accepting records the consent
+in the user-owned consent store (see "The project-scope trust boundary"), bound
+to the bundle's integrity and a *disclosure signature* over the executable set
+(hooks, command modules, and each MCP server's command, argv, env, and cwd). The
+signature is a stable, key-order-independent encoding, so any later add or change
+to a surface — including an env or cwd change — deactivates the capability until
+the user re-consents, while a harmless key reorder does not.
 
 For non-executable surfaces (skills, agents, workflow files), the disclosure
 note explains what they do but consent is lighter — they do not execute code.
@@ -234,29 +243,43 @@ with the consent prompt as the default barrier and lockdown one config key away.
 A capability may declare a **command family** (`commands: [{ family, module,
 router }]`); `gsd-tools <family>` dispatches it by `require()`-ing the router.
 This is the one place a third-party capability's own code executes, so it is
-gated twice. **Consent:** a third-party family is dispatchable only if its
-capability has a **committed ledger entry** — i.e. you installed it through the
-lifecycle and consented. A bundle merely present on disk with no install record
-still contributes its declarative surfaces but is **not** command-dispatchable.
-**Confinement:** the router module loads only from the capability's own install
-root (bare-`.cjs` basename, `realpath`-confined, rejecting `..` traversal and
-symlink escape); a first-party command can never be shadowed by a third-party one.
+gated twice. **Consent:** a third-party family is dispatchable only if the
+capability is *active* under the activation gate below — for a project-scoped
+capability that means a **user consent record on this machine**, not merely a
+ledger entry. A bundle merely present on disk (or a project ledger that marks it
+committed) but with no on-this-machine consent record is **not** activated at
+all: no declarative surfaces, no command dispatch. **Confinement:** the router
+module loads only from the capability's own install root (bare-`.cjs` basename,
+`realpath`-confined, rejecting `..` traversal and symlink escape); a first-party
+command can never be shadowed by a third-party one.
 
 #### The project-scope trust boundary
 
 Capabilities install **globally** (`$GSD_HOME/.gsd/capabilities/`) or
-**project-scoped** (`<projectRoot>/.gsd/capabilities/`). The consent record is
-the ledger — and a project-scope ledger lives **inside the repository**. A repo
-you check out can therefore ship a capability bundle *and* a ledger that marks
-it committed; running `gsd-tools <its-family>` in that repo executes its code.
-This is the same boundary that already applies to a repo's build scripts or a
-project-scoped capability's hooks, and it is **narrower** — a command never fires
-on its own; you have to type it. GSD cannot cryptographically distinguish a
-genuine project-local install from a forged project ledger, so: a **global**
-install's consent record lives outside any repo and is trustworthy; a
-**project-scoped** capability is only as trustworthy as the repository it ships
-in. Review repos before running `gsd` commands in them, and prefer global
-installs for capabilities you want to trust across projects.
+**project-scoped** (`<projectRoot>/.gsd/capabilities/`). The authoritative
+consent signal is **not** the in-repo ledger but a **user-owned consent store**
+that lives **outside any repository**, at
+`${GSD_HOME||homedir()}/.gsd/consent.json`. Each project-scope consent record is
+keyed by `(realpath(projectRoot), capability id)` and binds the bundle's
+`integrity` and its disclosure signature; GSD writes one only when *you* install
+or upgrade that project-scoped capability through the lifecycle on this machine,
+and removes it when you uninstall.
+
+Before activating a project-scoped overlay — for **both** its declarative loop
+surfaces (steps, gates, contributions, federated config) **and** its command
+dispatch — the loader requires a matching record in this store. With no match the
+capability is *discovered but inactive*: it shows up in `gsd capability list`
+with `status: inactive` and a reason, but contributes nothing and runs nothing.
+
+This closes the previous bypass: a repo you check out could ship a capability
+bundle *and* a project ledger that marked it committed, and that alone used to
+activate it. Now a forged or cloned project ledger activates **nothing** until
+you consent on this machine — and because the consent binds the integrity and
+the disclosure signature, tampering with the bundle (including changing an MCP
+server's `env` or `cwd`) deactivates it until you re-consent. A **global**
+install (under your own home) is trusted without a per-project record, as before.
+You can audit and revoke project consents with `gsd capability trust list` and
+`gsd capability trust revoke <id>`.
 
 ---
 

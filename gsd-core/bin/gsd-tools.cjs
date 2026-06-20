@@ -1503,14 +1503,31 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           return '0.0.0';
         }
       };
+      // #1459: the USER-OWNED consent home (GSD_HOME||homedir()) where project-scope consent records
+      // live — OUTSIDE any repo. SAME rule as the loader/consent-store path resolution so a record
+      // written here is the record the loader checks.
+      const capConsentHome = () => {
+        const osMod = require('node:os');
+        return process.env.GSD_HOME || osMod.homedir();
+      };
+      // #1459: realpath(cwd) — the canonical PROJECT ROOT used to bind/lookup a project consent
+      // record (the consent store realpaths it too, so loader + CLI agree). Best-effort: cwd if the
+      // path cannot be realpath'd (e.g. it does not exist yet).
+      const capProjectRoot = () => {
+        try { return fs.realpathSync(cwd); } catch { return cwd; }
+      };
       // UX-2: run the best-effort pre-op crash-recovery sweep AND surface any warnings it reports
       // (e.g. a corrupt-present ledger, or a rollback that could not complete) on stderr. The previous
       // bare `try { reconcile } catch {}` discarded the report entirely, so corruption detected during
       // reconcile was invisible. We never abort on a reconcile warning here — the mutating op that
       // follows runs its own fail-closed checks — but the warning must be OBSERVABLE.
-      const capRunReconcile = (runtimeDir, lifecycle) => {
+      // #1459 IC-03: pass scope + the user-owned consent home so a rollback that DELETES a committed/
+      // half-committed PROJECT-scope entry whose bundle dir is gone also REVOKES the now-stale consent
+      // record (an identical re-drop then stays inactive until re-consented). Global scope / no store →
+      // reconcile revokes nothing.
+      const capRunReconcile = (runtimeDir, lifecycle, scope) => {
         try {
-          const report = lifecycle.reconcileCapabilities({ runtimeDir });
+          const report = lifecycle.reconcileCapabilities({ runtimeDir, scope, consentStoreDir: capConsentHome() });
           if (report && Array.isArray(report.warnings)) {
             for (const w of report.warnings) {
               try { process.stderr.write(`capability reconcile: ${w}\n`); } catch { /* best-effort */ }
@@ -1629,7 +1646,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             ERROR_REASON ? ERROR_REASON.USAGE : undefined,
           );
         }
-        capRunReconcile(runtimeDir, lifecycle); // UX-2: surface reconcile warnings on stderr
+        capRunReconcile(runtimeDir, lifecycle, scope); // UX-2: surface reconcile warnings on stderr
         const res = await lifecycle.installCapability(spec, {
           runtimeDir,
           hostVersion: capHostVersion(),
@@ -1637,6 +1654,10 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           integrity: capFlagValue('--integrity'),
           sharedFiles: installSharedFiles,
           strictKnownRegistries: capReadStrict(),
+          // #1459: bind a user consent record for a CONSENTED project install (under the user-owned
+          // consent home, NOT in the repo). The lifecycle records nothing for global scope.
+          scope,
+          consentStoreDir: capConsentHome(),
         });
         if (res.status === 'installed') {
           output({
@@ -1695,7 +1716,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             ERROR_REASON ? ERROR_REASON.USAGE : undefined,
           );
         }
-        capRunReconcile(runtimeDir, lifecycle); // UX-2: surface reconcile warnings on stderr
+        capRunReconcile(runtimeDir, lifecycle, scope); // UX-2: surface reconcile warnings on stderr
         // readLedgerStrict: returns null when MISSING (no installs yet), throws CorruptLedgerError
         // when the ledger FILE EXISTS but is unparseable. Using the strict variant ensures a
         // corrupt-but-present ledger fails closed rather than silently reporting not_installed (<id>)
@@ -1719,6 +1740,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             sharedFiles: updateSharedFiles, // finding 4: parsed once, count-checked before reconcile
             strictKnownRegistries: capReadStrict(),
             expectedId: capId,
+            // #1459: re-record the project consent for the upgraded bundle (new integrity/signature).
+            scope,
+            consentStoreDir: capConsentHome(),
           });
           // UX-6: normalize absent fields to explicit null so a not_installed/blocked row serializes
           // them as null rather than omitting them (JSON.stringify drops undefined keys), giving a
@@ -1785,7 +1809,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         const { scope, runtimeDir } = capResolveScope(capFlagValue('--scope'));
         const lifecycle = require('./lib/capability-lifecycle.cjs');
         const ledgerMod = require('./lib/capability-ledger.cjs');
-        capRunReconcile(runtimeDir, lifecycle); // UX-2: surface reconcile warnings on stderr
+        capRunReconcile(runtimeDir, lifecycle, scope); // UX-2: surface reconcile warnings on stderr
         // Ledger first: an installed overlay is removable even if its id shadows a first-party name.
         // Only when the id is NOT an installed overlay do we reject a first-party id (vs. a typo).
         // Use readLedgerStrict so a corrupt-but-present ledger surfaces corruption here rather than
@@ -1803,8 +1827,21 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             error(`"${id}" is a first-party capability and cannot be removed here; use the product uninstaller (gsd --uninstall)`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
           }
         }
-        const res = lifecycle.removeCapability(id, { runtimeDir, removeData: capHasFlag('--purge-data') });
+        const res = lifecycle.removeCapability(id, {
+          runtimeDir,
+          removeData: capHasFlag('--purge-data'),
+          // #1459: a project-scope removal revokes the user consent record so a later repo-dropped
+          // bundle of the same id cannot silently re-activate against a stale consent.
+          scope,
+          consentStoreDir: capConsentHome(),
+        });
         if (res.status === 'removed') {
+          // #1459 finding 3: a project removal whose consent revoke FAILED (e.g. the consent-store lock
+          // could not be acquired) is a NON-CLEAN removal — the bundle/ledger are gone but a STALE consent
+          // record remains. Surface it on stderr + in the JSON so the user knows to clear it.
+          if (res.consentRevokeFailed) {
+            process.stderr.write(`warning: ${res.consentRevokeWarning || `consent record for "${id}" could not be revoked; clear it with: gsd capability trust revoke ${id}`}\n`);
+          }
           output({
             status: 'removed',
             id,
@@ -1812,6 +1849,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             removedFiles: res.removedFiles,
             strippedEdits: res.strippedEdits,
             dataPreserved: res.dataPreserved,
+            consentRevokeFailed: res.consentRevokeFailed || undefined,
+            consentRevokeWarning: res.consentRevokeWarning || undefined,
           }, raw);
         } else if (res.status === 'not_installed') {
           error(`capability "${id}" is not installed in ${scope} scope`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
@@ -1835,6 +1874,22 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         // First-party capabilities are always included (they have no scope concept).
         const base = loader.loadRegistry();
         const fp = (base && base.capabilities) || {};
+        // #1459: consult the composed overlay's warnings so a DISCOVERED-BUT-INACTIVE project overlay
+        // (a bundle whose project ledger looks committed but has no user consent record on THIS
+        // machine) is marked status:'inactive' with a reason, instead of silently appearing active.
+        // loadRegistry is non-throwing; a failure here just leaves rows un-annotated.
+        const inactiveById = {};
+        try {
+          const composed = loader.loadRegistry({ includeInstalled: true, cwd });
+          const overlayWarnings = (composed && composed._overlay && composed._overlay.warnings) || [];
+          for (const w of overlayWarnings) {
+            // #1459 IC-02: classify by the STRUCTURAL discriminant `kind`, not by matching the
+            // human-readable reason prose (which is free to change without breaking this filter).
+            if (w && typeof w.id === 'string' && w.kind === 'unconsented') {
+              inactiveById[`${w.scope} ${w.id}`] = w.reason;
+            }
+          }
+        } catch { /* best-effort — list still works without the inactive annotation */ }
         for (const capId of Object.keys(fp)) {
           const cap = fp[capId] || {};
           rows.push({
@@ -1868,11 +1923,23 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             const entry = ledger.entries[capId];
             let manifest = {};
             try {
-              manifest = JSON.parse(fs.readFileSync(path.join(runtimeDir, '.gsd', 'capabilities', capId, 'capability.json'), 'utf8'));
+              // #1459 CONVERGENCE finding 2: read the (project-plantable) capability.json via the SHARED
+              // bounded fd reader (open → fstat → require regular file → size cap → read exactly size), NOT
+              // a raw fs.readFileSync which BLOCKS forever on a repo-planted FIFO/device manifest and reads
+              // an oversized manifest unbounded into memory (OOM). 8 MiB is wildly more than any real
+              // declarative capability.json. A null (genuinely missing) or a bounded-reader throw
+              // (non-regular/oversized/IO) → leave manifest = {} so the entry is LISTED but with no metadata
+              // (null role/tier/title) rather than hanging the list — `capability list` still exits cleanly.
+              const raw = ledgerMod.readSmallRegularFile(path.join(runtimeDir, '.gsd', 'capabilities', capId, 'capability.json'), 8 * 1024 * 1024);
+              manifest = raw === null ? {} : JSON.parse(raw);
             } catch { manifest = {}; }
             let status = 'active';
+            let reason = null;
             const range = manifest.engines && manifest.engines.gsd;
             if (typeof range === 'string' && range && !semver.semverSatisfies(host, range)) status = 'incompatible';
+            // #1459: a project overlay with no user consent record is DISCOVERED-BUT-INACTIVE.
+            const inactiveReason = inactiveById[`${sc} ${capId}`];
+            if (inactiveReason) { status = 'inactive'; reason = inactiveReason; }
             rows.push({
               id: capId,
               role: manifest.role || null,
@@ -1881,6 +1948,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
               source: entry.source || null,
               scope: sc,
               status,
+              reason,
               title: manifest.title || null,
             });
           }
@@ -1900,9 +1968,65 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           { enabled: capSubcommand === 'enable', runtime: capFlagValue('--runtime'), scope: capFlagValue('--scope') },
           raw,
         );
+      } else if (capSubcommand === 'trust') {
+        // capability trust list [--scope project] [--json]
+        // capability trust revoke <id> [--project <path>]
+        // The user-owned consent store (#1459) gates PROJECT-scope third-party capability activation.
+        const consentMod = require('./lib/capability-consent.cjs');
+        const trustSub = args[2];
+        if (trustSub === 'list') {
+          // --scope is accepted for symmetry; only 'project' records exist today.
+          const listScope = capFlagValue('--scope');
+          if (listScope && listScope !== 'project') {
+            error(`Invalid --scope "${listScope}" for trust list: only "project" consent records exist`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          }
+          const store = consentMod.readConsentStore(capConsentHome());
+          const rows = Object.keys(store.records).map((k) => {
+            const r = store.records[k];
+            // #1459 IC-09: surface disclosureSignature + contentHash so an operator can diff the STORED
+            // binding against the current bundle (e.g. `gsd capability list` showing inactive after a
+            // tamper) and understand why a consented cap deactivated. The contentHash is THE security
+            // binding the loader checks; disclosureSignature is the executable-surface re-consent key.
+            return {
+              id: r.id, scope: r.scope, projectRoot: r.projectRoot,
+              integrity: r.integrity, disclosureSignature: r.disclosureSignature, contentHash: r.contentHash,
+              consentedAt: r.consentedAt,
+            };
+          });
+          output(rows, raw || capHasFlag('--json'));
+        } else if (trustSub === 'revoke') {
+          const id = args[3];
+          if (!id || id.startsWith('--')) {
+            error('Missing <id> for: capability trust revoke <id>', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          }
+          // --project pins the project root whose consent is revoked; defaults to realpath(cwd).
+          const projFlag = capFlagValue('--project');
+          let projectRoot;
+          try { projectRoot = projFlag ? fs.realpathSync(path.resolve(projFlag)) : capProjectRoot(); }
+          catch { projectRoot = projFlag ? path.resolve(projFlag) : cwd; }
+          // #1459 finding 3: revokeProjectConsent THROWS when the consent-store lock cannot be acquired
+          // (round-3: never do an unlocked read-modify-write). Catch it and emit a CLEAN, actionable
+          // error rather than letting runMain surface a raw SDK/stack failure. The lifecycle treats a
+          // consent-write failure as non-fatal, so a clean exit-1 here is the right contract.
+          try {
+            consentMod.revokeProjectConsent({ gsdHome: capConsentHome(), projectRoot, id });
+          } catch (err) {
+            error(
+              `capability trust revoke blocked: ${err && err.message ? err.message : String(err)} ` +
+              `(could not acquire the consent-store lock; another capability operation may be in progress — retry)`,
+              ERROR_REASON ? ERROR_REASON.SDK_FAIL_FAST : undefined,
+            );
+          }
+          output({ status: 'revoked', id, projectRoot, scope: 'project' }, raw);
+        } else {
+          error(
+            `Unknown capability trust subcommand: ${trustSub}. Available: list, revoke`,
+            ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+          );
+        }
       } else {
         error(
-          `Unknown capability subcommand: ${capSubcommand}. Available: install, update, remove, list, disable, enable, state, set`,
+          `Unknown capability subcommand: ${capSubcommand}. Available: install, update, remove, list, trust, disable, enable, state, set`,
           ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }
