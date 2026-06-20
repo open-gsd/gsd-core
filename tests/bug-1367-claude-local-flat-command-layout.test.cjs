@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product #1367
 // Installed command `.md` files — their on-disk path determines the slash-command
 // namespace registered by Claude Code. Asserting the layout (flat vs. subdirectory)
 // IS a behavioral test of the deploy contract, not source-grep theater.
