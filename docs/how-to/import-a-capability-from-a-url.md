@@ -169,6 +169,20 @@ The output shows each installed capability, its version, scope, and enabled stat
 
 ---
 
+## A worked example: projects-sync
+
+[`projects-sync`](https://github.com/The-Artificer-of-Ciphers-LLC/projects-sync-capability) is a reference third-party capability — it mirrors a project's `.planning/ROADMAP.md` to GitHub Issues, Milestones, and Projects v2. Install it the same way as any URL spec:
+
+```bash
+gsd capability install https://github.com/The-Artificer-of-Ciphers-LLC/projects-sync-capability.git#v0.1.0 --scope project
+gsd-tools config-set projects-sync.enabled true   # opt-in, default off
+gsd-tools projects-sync status                     # dry run
+```
+
+It is a `role: feature` capability that registers an `execute:pre` step and a `ship:post` contribution (both `onError: skip`) and contributes the `projects-sync` command family — a concrete model for the manifest shape, hook registration, and command-router conventions described in [Develop a capability](./develop-a-capability.md).
+
+---
+
 ## Next steps
 
 - [Version and update a capability](./version-a-capability.md) — check for updates with `gsd capability outdated` and apply them with `gsd capability update`.
