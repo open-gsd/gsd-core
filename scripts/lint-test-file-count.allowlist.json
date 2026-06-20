@@ -175,6 +175,14 @@
         "external-job-waiting.test.cjs"
       ],
       "issue": "#1165"
+    },
+    "docs": {
+      "files": [
+        "docs-parity-live-registry.test.cjs",
+        "docs-update.test.cjs",
+        "fix-1464-docs-manifest-validation.test.cjs"
+      ],
+      "issue": "1496"
     }
   }
 }
