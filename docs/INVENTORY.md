@@ -301,6 +301,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 |-----------|------|
 | `agent-contracts.md` | Formal interface between orchestrators and agents. |
 | `context-budget.md` | Context window budget allocation rules. |
+| `execute-phase-context-guard.md` | Context exhaustion guard step for `execute-phase` wave loop — `workflow.context_guard_mode` dispatch table (warn/auto/off) and POOR-tier pause-work trigger (#1452). |
 | `continuation-format.md` | Session continuation/resume format. |
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |

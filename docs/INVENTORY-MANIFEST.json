@@ -214,6 +214,7 @@
       "edge-probe.md",
       "execute-mvp-tdd.md",
       "execute-phase-between-wave-reset.md",
+      "execute-phase-context-guard.md",
       "execute-phase-wave-guard.md",
       "executor-examples.md",
       "gate-prompts.md",

@@ -493,6 +493,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
 @~/.claude/gsd-core/references/execute-phase-wave-guard.md
 
+@~/.claude/gsd-core/references/execute-phase-context-guard.md
+
 1. **Intra-wave files_modified overlap check (BEFORE spawning):**
 
    Before spawning any agents for this wave, inspect the `files_modified` list of all plans
