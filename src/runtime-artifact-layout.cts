@@ -86,11 +86,23 @@ function loadInstallExports(runtimeConfigDir?: string): InstallExports {
   }
 }
 
-/** Cache after first successful load. */
-let _installExports: InstallExports | null = null;
+/**
+ * Cache after first successful load, keyed on runtimeConfigDir. The derived
+ * install.js path depends on the configDir (marker-aware in a deployed layout
+ * vs. walk-up in the repo), so a single module-level singleton would let a
+ * no-arg warm-up call (legacy relative path) poison every later
+ * getInstallExports(configDir) call. Keying on the arg keeps each layout's
+ * resolution independent. The empty string stands in for the no-arg case.
+ */
+const _installExportsByConfigDir = new Map<string, InstallExports>();
 function getInstallExports(runtimeConfigDir?: string): InstallExports {
-  if (!_installExports) _installExports = loadInstallExports(runtimeConfigDir);
-  return _installExports;
+  const key = runtimeConfigDir ?? '';
+  let exports = _installExportsByConfigDir.get(key);
+  if (!exports) {
+    exports = loadInstallExports(runtimeConfigDir);
+    _installExportsByConfigDir.set(key, exports);
+  }
+  return exports;
 }
 
 // ---------------------------------------------------------------------------
