@@ -324,10 +324,79 @@ describe('capability disable / enable', () => {
 // ─── unknown subcommand ───────────────────────────────────────────────────────
 
 describe('capability (unknown)', () => {
-  test('an unknown subcommand lists the full available set', () => {
+  test('an unknown subcommand lists the full available set (incl. outdated)', () => {
     const r = runGsdTools(['capability', 'bogus'], makeCwd());
     assert.equal(r.success, false);
-    assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, trust, disable, enable, state, set/);
+    assert.match(`${r.error}\n${r.output}`, /install, update, remove, list, outdated, trust, disable, enable, state, set/);
+  });
+});
+
+// ─── outdated (#1463) ───────────────────────────────────────────────────────
+
+describe('capability outdated', () => {
+  test('empty ledger → --json empty array; default table shows the empty marker', () => {
+    const home = tmpDir('cap-cli-home-');
+    const json = runGsdTools(['capability', 'outdated', '--scope', 'global', '--json'], makeCwd(), scopeEnv(home));
+    assert.equal(json.success, true, `outdated --json failed: ${json.error || json.output}`);
+    assert.deepEqual(parse(json.output), []);
+    const table = runGsdTools(['capability', 'outdated', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(table.success, true, `outdated table failed: ${table.error || table.output}`);
+    assert.match(table.output, /no installed overlay capabilities/i);
+  });
+
+  test('local source whose path now declares a newer version → status outdated (records shape)', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('outcap', { version: '1.0.0' });
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    // Bump the recorded LOCAL source to a newer version — the peek re-reads it.
+    const cap = JSON.parse(fs.readFileSync(path.join(src, 'capability.json'), 'utf8'));
+    cap.version = '2.0.0';
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+
+    const r = runGsdTools(['capability', 'outdated', '--scope', 'global', '--json'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `outdated failed: ${r.error || r.output}`);
+    const rows = parse(r.output);
+    const row = rows.find((x) => x.id === 'outcap');
+    assert.ok(row, 'installed capability reported by outdated');
+    // revert-fails: with the comparison inverted this would be 'current', not 'outdated'.
+    assert.equal(row.status, 'outdated');
+    assert.equal(row.current, '1.0.0');
+    assert.equal(row.latest, '2.0.0');
+    assert.equal(row.sourceKind, 'local');
+    assert.equal(row.scope, 'global');
+  });
+
+  test('local source at the same version → status current; default emits a table with the row', () => {
+    const home = tmpDir('cap-cli-home-');
+    const src = writeCapSource('samecap', { version: '1.0.0' });
+    assert.equal(runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], makeCwd(), scopeEnv(home)).success, true);
+    const r = runGsdTools(['capability', 'outdated', '--scope', 'global'], makeCwd(), scopeEnv(home));
+    assert.equal(r.success, true, `outdated failed: ${r.error || r.output}`);
+    // Table form: header columns + the capability row with status current.
+    assert.match(r.output, /ID\s+Source\s+Current\s+Latest\s+Status/);
+    assert.match(r.output, /samecap\s+local\s+1\.0\.0\s+1\.0\.0\s+current/);
+  });
+
+  test('tarball source → status manual (not auto-detectable)', () => {
+    // Plant a project-scope ledger entry with a tarball source directly (install would need network).
+    const cwd = makeCwd();
+    const ledgerMod = require('../gsd-core/bin/lib/capability-ledger.cjs');
+    ledgerMod.recordInstall(cwd, {
+      id: 'tarcap', version: '1.0.0', source: 'https://host/path/cap-1.0.0.tgz',
+      integrity: '', files: ['.gsd/capabilities/tarcap'], sharedEdits: [],
+    });
+    const r = runGsdTools(['capability', 'outdated', '--scope', 'project', '--json'], cwd, { GSD_WORKSTREAM: '', GSD_PROJECT: '' });
+    assert.equal(r.success, true, `outdated failed: ${r.error || r.output}`);
+    const row = parse(r.output).find((x) => x.id === 'tarcap');
+    assert.ok(row, 'tarball capability reported');
+    assert.equal(row.status, 'manual');
+    assert.equal(row.latest, null);
+  });
+
+  test('invalid --scope is rejected', () => {
+    const r = runGsdTools(['capability', 'outdated', '--scope', 'bogus'], makeCwd(), scopeEnv(tmpDir('cap-cli-home-')));
+    assert.equal(r.success, false);
+    assert.match(`${r.error}\n${r.output}`, /Invalid --scope/i);
   });
 });
 

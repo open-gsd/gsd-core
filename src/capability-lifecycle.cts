@@ -30,6 +30,12 @@ const sourceMod = require('./capability-source.cjs') as {
     opts?: Record<string, unknown>,
   ) => Promise<{ id: string; version: string; stagedDir: string; integrity: string | null; source: string }>;
   parseSpec: (spec: string) => { kind: string; raw: string; target: string; ref?: string };
+  // #1463 D6 "Update available?" per-source latest-version peek. NEVER throws — returns a status the
+  // `outdated` aggregation maps onto a record. The exec seam mirrors the resolver's execOverrides.
+  peekLatestVersion: (
+    source: string,
+    opts?: { execOverrides?: Record<string, unknown> },
+  ) => { status: 'ok' | 'pinned' | 'manual' | 'unsupported' | 'unknown'; version: string | null; reason?: string };
 };
 const ledgerMod = require('./capability-ledger.cjs') as {
   readLedger: (runtimeDir: string) => LedgerFile | null;
@@ -79,6 +85,11 @@ const lockMod = require('./capability-lock.cjs') as {
 };
 const { platformWriteSync } = require('./shell-command-projection.cjs') as {
   platformWriteSync: (filePath: string, content: string) => void;
+};
+// #1463: numeric major.minor.patch comparison for the outdated check (the SAME compare the resolver
+// and capability list use). -1 (a<b), 0 (equal), 1 (a>b).
+const semverMod = require('./semver-compare.cjs') as {
+  compareSemverCore: (a: unknown, b: unknown) => -1 | 0 | 1;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -1627,6 +1638,101 @@ function reconcileCapabilities(opts: { runtimeDir: string; scope?: 'global' | 'p
 }
 
 // ---------------------------------------------------------------------------
+// outdatedCapabilities (ADR-1244 D6 "Update available?"; #1463)
+// ---------------------------------------------------------------------------
+
+/** One row of the `outdated` report: the installed capability vs. its source's latest version. */
+interface OutdatedRecord {
+  id: string;
+  /** Source kind discriminant (git | npm | local | tarball | registry | unknown). */
+  sourceKind: string;
+  /** Installed version (from the ledger entry). */
+  current: string | null;
+  /** Latest available version at the source, or null when not resolvable. */
+  latest: string | null;
+  /**
+   * outdated (latest > current) | current (latest <= current) | pinned (recorded source pinned to an
+   * immutable/explicit ref or exact version — update will not move it) | manual (tarball) | unknown
+   * (peek failed/unsupported).
+   */
+  status: 'outdated' | 'current' | 'pinned' | 'manual' | 'unknown';
+}
+
+/**
+ * #1463 (ADR-1244 D6): for every installed overlay in `runtimeDir`'s ledger, peek its recorded source
+ * for the latest available version and classify it. This is a LIGHT remote read per entry (the source
+ * module's metadata-only peek); it NEVER throws on a single bad entry — that entry is reported with
+ * status 'unknown'. Status rules:
+ *   - peek 'ok'      → compare latest vs current (compareSemverCore): latest > current ⇒ 'outdated', else 'current'.
+ *   - peek 'pinned'  → 'pinned'   (#1463: source pinned to an immutable/explicit git ref or exact npm
+ *                      version — `update` re-resolves the SAME ref/version, so it is NEVER outdated; the
+ *                      peek's optional `version` is informational only).
+ *   - peek 'manual'  → 'manual'   (tarball: not auto-detectable per D6).
+ *   - peek 'unsupported'/'unknown' → 'unknown' (registry unimplemented, or the peek failed/timed out).
+ *
+ * An empty/missing ledger yields an empty array (non-throwing — readLedger returns null on a missing or
+ * corrupt-present ledger; the `outdated` report is read-only and degrades to "nothing to report").
+ *
+ * @param opts.runtimeDir   the scope root holding `.gsd-capabilities.json`.
+ * @param opts.execOverrides threaded to the source peek (test seam — mock git ls-remote / npm view).
+ */
+function outdatedCapabilities(opts: {
+  runtimeDir: string;
+  execOverrides?: Record<string, unknown>;
+}): OutdatedRecord[] {
+  const { runtimeDir, execOverrides } = opts;
+  const records: OutdatedRecord[] = [];
+  const ledger = ledgerMod.readLedger(runtimeDir);
+  if (!ledger || !ledger.entries) return records;
+
+  for (const id of Object.keys(ledger.entries)) {
+    const entry = ledger.entries[id];
+    // Defensive: a hostile/partial ledger entry must never crash the sweep — report it 'unknown'.
+    const current = entry && typeof entry.version === 'string' ? entry.version : null;
+    const source = entry && typeof entry.source === 'string' ? entry.source : '';
+
+    let sourceKind = 'unknown';
+    try {
+      sourceKind = sourceMod.parseSpec(source).kind;
+    } catch { /* unparseable source — leave kind 'unknown' */ }
+
+    let peek: { status: string; version: string | null };
+    try {
+      peek = sourceMod.peekLatestVersion(source, execOverrides ? { execOverrides } : undefined);
+    } catch (err) {
+      // peekLatestVersion is contractually non-throwing, but belt-and-suspenders: a single bad entry
+      // must never abort the whole report.
+      records.push({ id, sourceKind, current, latest: null, status: 'unknown' });
+      void err;
+      continue;
+    }
+
+    let status: OutdatedRecord['status'];
+    let latest: string | null = peek.version;
+    if (peek.status === 'pinned') {
+      // #1463: the recorded source is pinned (immutable/explicit git ref or exact npm version). `update`
+      // re-resolves the SAME ref/version, so it can never be outdated. `latest` carries the peek's
+      // informational version when one is known (exact-pinned npm), else null (a pinned git ref is not
+      // peeked for a tag).
+      status = 'pinned';
+    } else if (peek.status === 'manual') {
+      status = 'manual';
+    } else if (peek.status === 'ok' && peek.version && current) {
+      status = semverMod.compareSemverCore(peek.version, current) > 0 ? 'outdated' : 'current';
+    } else if (peek.status === 'ok' && peek.version && !current) {
+      // We have a latest but no recorded current — cannot compare; treat as unknown (no false 'outdated').
+      status = 'unknown';
+    } else {
+      // unsupported / unknown / ok-but-empty → unknown.
+      status = 'unknown';
+      latest = peek.version ?? null;
+    }
+    records.push({ id, sourceKind, current, latest, status });
+  }
+  return records;
+}
+
+// ---------------------------------------------------------------------------
 // Exports
 // ---------------------------------------------------------------------------
 
@@ -1635,6 +1741,7 @@ export = {
   upgradeCapability,
   removeCapability,
   reconcileCapabilities,
+  outdatedCapabilities,
   applyCapabilitySharedEdits,
   stripCapabilitySharedEdits,
   // #1460 CONF-2: exported so the ancestor-symlink confinement is locked in by a regression test.

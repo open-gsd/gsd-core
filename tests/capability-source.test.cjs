@@ -30,12 +30,26 @@ const {
   parseSpec,
   _setCapabilitySourceHttpGet,
   _setHttpsGetImpl,
+  peekLatestVersion,
+  pickHighestSemverTag,
+  splitNpmSpec,
+  pickHighestNpmVersion,
   MAX_RESPONSE_BYTES,
   MANIFEST_MAX_BYTES,
   MAX_STAGED_BUNDLE_BYTES,
   MAX_STAGED_BUNDLE_ENTRIES,
 } = capSource;
 const { EventEmitter } = require('node:events');
+const fc = require('fast-check');
+
+/** Build a `git ls-remote --tags` style stdout line for a tag. */
+function lsRemoteLine(tag) {
+  return `0000000000000000000000000000000000000000\trefs/tags/${tag}`;
+}
+/** A SpawnResult-shaped success. */
+function spawnOk(stdout) {
+  return { exitCode: 0, stdout, stderr: '', signal: null, error: null };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1408,5 +1422,407 @@ describe('#1461 finding 2 — tar header-size parse removed; NAME/TYPE guards re
     });
     assert.strictEqual(result.id, 'tarsize-removed-cap', 'a huge-declared-size tar with safe names/types now extracts');
     assert.ok(fs.existsSync(result.stagedDir), 'staged dir exists after extraction');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1463: pickHighestSemverTag — pure highest-stable-semver-tag parser
+// ---------------------------------------------------------------------------
+
+describe('#1463 pickHighestSemverTag (git ls-remote --tags parser)', () => {
+  test('BOUNDARY: picks the NUMERIC max across v1.1.0/v1.2.0/v1.10.0 + junk (1.10.0, not 1.2.0)', () => {
+    // revert-fails: a lexical (string) compare would pick "1.2.0" > "1.10.0"; the numeric compare
+    // (compareSemverCore) must pick 1.10.0. Junk + a non-semver tag must be ignored.
+    const out = [
+      lsRemoteLine('v1.1.0'),
+      lsRemoteLine('v1.2.0'),
+      lsRemoteLine('v1.10.0'),
+      lsRemoteLine('not-a-version'),
+      lsRemoteLine('release-candidate'),
+    ].join('\n');
+    assert.strictEqual(pickHighestSemverTag(out), '1.10.0');
+  });
+
+  test('ignores ^{} peeled-annotation entries (same tag, not a distinct version)', () => {
+    const out = [
+      lsRemoteLine('v2.0.0'),
+      lsRemoteLine('v2.0.0^{}'),
+      lsRemoteLine('v1.5.0'),
+    ].join('\n');
+    assert.strictEqual(pickHighestSemverTag(out), '2.0.0');
+  });
+
+  test('ignores prerelease/non-triplet tags; bare (no-v) triplets accepted', () => {
+    const out = [
+      lsRemoteLine('v1.0.0-rc.1'),
+      lsRemoteLine('1.4.2'),
+      lsRemoteLine('v2'),
+      lsRemoteLine('v1.0'),
+    ].join('\n');
+    assert.strictEqual(pickHighestSemverTag(out), '1.4.2');
+  });
+
+  test('no parseable semver tags → null', () => {
+    assert.strictEqual(pickHighestSemverTag('0000\trefs/heads/main\n0000\trefs/tags/latest'), null);
+    assert.strictEqual(pickHighestSemverTag(''), null);
+  });
+
+  test('PROPERTY (fc): result is the numeric max of the injected stable triplets, ignoring junk', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.tuple(fc.nat(50), fc.nat(50), fc.nat(50)), { minLength: 1, maxLength: 12 }),
+        (triplets) => {
+          const tags = triplets.map(([a, b, c]) => `v${a}.${b}.${c}`);
+          // Interleave non-semver junk that must be ignored.
+          const lines = [];
+          for (const t of tags) {
+            lines.push(lsRemoteLine(t));
+            lines.push(lsRemoteLine('junk-' + t));        // non-triplet → ignored
+            lines.push(lsRemoteLine(`${t}-rc.1`));         // prerelease → ignored
+          }
+          const got = pickHighestSemverTag(lines.join('\n'));
+          // Expected max computed numerically (not lexically).
+          const expected = triplets
+            .slice()
+            .sort((x, y) => (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2]))
+            .pop();
+          return got === `${expected[0]}.${expected[1]}.${expected[2]}`;
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1463: peekLatestVersion — per-source latest-version peek (ADR-1244 D6)
+// ---------------------------------------------------------------------------
+
+describe('#1463 peekLatestVersion (D6 per-source matrix)', () => {
+  test('git: highest remote tag returned as latest (status ok)', () => {
+    const fakeGit = (args) => {
+      assert.ok(args.includes('ls-remote'), 'must use ls-remote (metadata only — no clone)');
+      assert.ok(!args.includes('clone'), 'must NOT clone for a peek');
+      return spawnOk([lsRemoteLine('v1.0.0'), lsRemoteLine('v1.3.0'), lsRemoteLine('v1.10.0')].join('\n'));
+    };
+    const r = peekLatestVersion('https://github.com/org/repo.git', { execOverrides: { git: fakeGit } });
+    assert.deepStrictEqual(r, { status: 'ok', version: '1.10.0' });
+  });
+
+  test('git: ls-remote non-zero exit → status unknown (DEGRADE, no throw)', () => {
+    const fakeGit = () => ({ exitCode: 128, stdout: '', stderr: 'fatal', signal: null, error: null });
+    const r = peekLatestVersion('https://github.com/org/repo.git', { execOverrides: { git: fakeGit } });
+    assert.strictEqual(r.status, 'unknown');
+    assert.strictEqual(r.version, null);
+  });
+
+  test('git: ls-remote timeout (signal set) → status unknown', () => {
+    // revert-fails: without the timeout→unknown branch, a killed peek (signal) would not degrade.
+    const fakeGit = () => ({ exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: null });
+    const r = peekLatestVersion('https://github.com/org/repo.git', { execOverrides: { git: fakeGit } });
+    assert.strictEqual(r.status, 'unknown');
+  });
+
+  test('git: bounded timeout is passed to execGit (≤30s)', () => {
+    let seenTimeout;
+    const fakeGit = (_args, o) => { seenTimeout = o && o.timeout; return spawnOk(lsRemoteLine('v1.0.0')); };
+    peekLatestVersion('https://github.com/org/repo.git', { execOverrides: { git: fakeGit } });
+    assert.ok(typeof seenTimeout === 'number' && seenTimeout <= 30_000, `git peek must be bounded ≤30s (got ${seenTimeout})`);
+  });
+
+  test('git: source pinned to a commit SHA (#sha:…) → status pinned, NEVER outdated (update stays on the ref)', () => {
+    // A `#sha:<commit>` pin is immutable: re-resolving the recorded source checks out the SAME commit,
+    // so a newer remote tag is irrelevant. revert-fails: without the parsed.ref pinned check the peek
+    // returns the highest tag with status 'ok', which outdatedCapabilities renders 'outdated' — this
+    // assert (status 'pinned') then fails.
+    const fakeGit = () => spawnOk([lsRemoteLine('v1.0.0'), lsRemoteLine('v9.9.9')].join('\n'));
+    const r = peekLatestVersion('https://github.com/org/repo.git#sha:abcdef1234567890abcdef1234567890abcdef12', { execOverrides: { git: fakeGit } });
+    assert.strictEqual(r.status, 'pinned');
+  });
+
+  test('git: source pinned to an explicit tag (#tag:…) → status pinned', () => {
+    const fakeGit = () => spawnOk([lsRemoteLine('v1.0.0'), lsRemoteLine('v2.0.0')].join('\n'));
+    const r = peekLatestVersion('https://github.com/org/repo.git#tag:v1.0.0', { execOverrides: { git: fakeGit } });
+    assert.strictEqual(r.status, 'pinned');
+  });
+
+  test('git: bare ref (#<ref>) resolving to a TAG (refs/tags/…) → status pinned (immutable tag)', () => {
+    // #1463 Fix 2 (R Medium): a bare `#<ref>` is ambiguous (tag OR branch). We classify it with a
+    // bounded `git ls-remote <url> <ref>`. When the remote resolves it under refs/tags/ it is an
+    // immutable tag → pinned. The ls-remote query is the SAME safe seam (argv + `--`).
+    const fakeGit = (args) => {
+      assert.ok(args.includes('ls-remote'), 'classification must use ls-remote (metadata only)');
+      assert.ok(args.includes('--'), 'argv must terminate options with `--`');
+      assert.ok(args.includes('release-1'), 'the bare ref is passed to ls-remote for classification');
+      // ls-remote <url> <ref> prints the matching ref line(s).
+      return spawnOk('1111111111111111111111111111111111111111\trefs/tags/release-1');
+    };
+    const r = peekLatestVersion('https://github.com/org/repo.git#release-1', { execOverrides: { git: fakeGit } });
+    assert.strictEqual(r.status, 'pinned');
+  });
+
+  test('git: bare ref (#main) resolving to a BRANCH (refs/heads/…) → NEVER pinned (mutable; no installed sha ⇒ unknown)', () => {
+    // #1463 Fix 2 (R Medium) — THE bug: `repo.git#main` is a MUTABLE branch (`update` re-clones and
+    // checks out the ref, so it can move). The OLD isGitRefPinned reported ANY non-empty parsed.ref as
+    // 'pinned', so this asserted 'pinned' and was WRONG. The ledger records NO installed commit sha for
+    // git sources (integrity is null), so a moved branch HEAD cannot be compared → DEGRADE to 'unknown'.
+    // revert-fails: with the old blanket isGitRefPinned this returns 'pinned' and the !== 'pinned'
+    // assert below fails (and the === 'unknown' assert fails too).
+    const fakeGit = (args) => {
+      assert.ok(args.includes('ls-remote'), 'classification must use ls-remote');
+      return spawnOk('2222222222222222222222222222222222222222\trefs/heads/main');
+    };
+    const r = peekLatestVersion('https://github.com/org/repo.git#main', { execOverrides: { git: fakeGit } });
+    assert.notStrictEqual(r.status, 'pinned', 'a mutable branch ref must NEVER be reported pinned');
+    assert.strictEqual(r.status, 'unknown', 'no installed sha recorded ⇒ cannot compare branch HEAD ⇒ unknown');
+  });
+
+  test('git: bare ref classification — ls-remote error/timeout → status unknown (DEGRADE, never pinned/crash)', () => {
+    const errGit = () => ({ exitCode: 128, stdout: '', stderr: 'fatal', signal: null, error: null });
+    const r1 = peekLatestVersion('https://github.com/org/repo.git#main', { execOverrides: { git: errGit } });
+    assert.notStrictEqual(r1.status, 'pinned');
+    assert.strictEqual(r1.status, 'unknown');
+    const killGit = () => ({ exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: null });
+    const r2 = peekLatestVersion('https://github.com/org/repo.git#main', { execOverrides: { git: killGit } });
+    assert.strictEqual(r2.status, 'unknown');
+  });
+
+  test('git: bare ref classification — unresolvable/empty ls-remote output → status unknown (never pinned)', () => {
+    const fakeGit = () => spawnOk('');
+    const r = peekLatestVersion('https://github.com/org/repo.git#mystery-ref', { execOverrides: { git: fakeGit } });
+    assert.notStrictEqual(r.status, 'pinned');
+    assert.strictEqual(r.status, 'unknown');
+  });
+
+  test('git: bare ref classification — ls-remote returns BOTH refs/tags/<r> AND refs/heads/<r> (true ambiguity) → status unknown (NOT pinned)', () => {
+    // #1463 accuracy fix: when ls-remote resolves a bare ref under BOTH refs/tags/ AND refs/heads/
+    // the ref is genuinely ambiguous (a tag and a branch share the same name). The classifier must
+    // NOT prefer the tag and report 'pinned' — the mutable branch reading means the ref could move.
+    // The safe fallback is 'unknown'.
+    // revert-fails: a classifier that scans lines and picks the FIRST refs/tags/ hit (or any tag-wins
+    // strategy) would return 'pinned' here, making the notStrictEqual('pinned') assert below fail.
+    const ambiguousRef = 'release-1';
+    const fakeGit = (args) => {
+      assert.ok(args.includes('ls-remote'), 'must use ls-remote for bare-ref classification');
+      assert.ok(args.includes(ambiguousRef), 'the bare ref must be passed to ls-remote');
+      // ls-remote output: same name exists as BOTH a tag and a branch head.
+      return spawnOk(
+        `1111111111111111111111111111111111111111\trefs/tags/${ambiguousRef}\n` +
+        `2222222222222222222222222222222222222222\trefs/heads/${ambiguousRef}\n`,
+      );
+    };
+    const r = peekLatestVersion(`https://github.com/org/repo.git#${ambiguousRef}`, { execOverrides: { git: fakeGit } });
+    assert.notStrictEqual(r.status, 'pinned', 'ambiguous tag+branch ref must NEVER be reported pinned');
+    assert.strictEqual(r.status, 'unknown', 'ambiguous ref degrades to unknown (safe fallback)');
+  });
+
+  test('git: bare ref classification — bounded timeout (≤30s) passed to the ls-remote classify call', () => {
+    let seenTimeout;
+    const fakeGit = (_args, o) => { seenTimeout = o && o.timeout; return spawnOk('33\trefs/heads/main'); };
+    peekLatestVersion('https://github.com/org/repo.git#main', { execOverrides: { git: fakeGit } });
+    assert.ok(typeof seenTimeout === 'number' && seenTimeout <= 30_000, `classify peek must be bounded ≤30s (got ${seenTimeout})`);
+  });
+
+  test('git: UNPINNED source (no #ref, tracks default branch) → highest tag with status ok (NOT pinned)', () => {
+    // revert-fails-guard for over-pinning: an unpinned source must STILL peek and resolve a version.
+    const fakeGit = () => spawnOk([lsRemoteLine('v1.0.0'), lsRemoteLine('v1.4.0')].join('\n'));
+    const r = peekLatestVersion('https://github.com/org/repo.git', { execOverrides: { git: fakeGit } });
+    assert.deepStrictEqual(r, { status: 'ok', version: '1.4.0' });
+  });
+
+  test('npm: RANGE spec — npm view prints EVERY matching version (real multi-line output) → highest matching is chosen', () => {
+    // npm's REAL behaviour for `npm view <pkg>@<range> version`: when the range matches multiple
+    // versions it prints one annotated line PER matching version, e.g.
+    //   @org/gsd-cap-foo@1.0.0 '1.0.0'
+    //   @org/gsd-cap-foo@1.3.0 '1.3.0'
+    //   @org/gsd-cap-foo@1.10.0 '1.10.0'
+    // (NOT a single bare token). The peek must parse ALL tokens and pick the HIGHEST numerically.
+    // revert-fails: the old single-token NPM_VERSION_RE.test(stdout.trim()) parse sees multi-line
+    // output as non-semver and DEGRADES to status 'unknown' — this assert then fails.
+    const multiLine = [
+      "@org/gsd-cap-foo@1.0.0 '1.0.0'",
+      "@org/gsd-cap-foo@1.3.0 '1.3.0'",
+      "@org/gsd-cap-foo@1.10.0 '1.10.0'",
+    ].join('\n') + '\n';
+    const fakeNpm = (args, o) => {
+      assert.ok(args.includes('view'), 'must use npm view');
+      assert.ok(typeof o.timeout === 'number' && o.timeout <= 60_000, 'npm peek must be bounded ≤60s');
+      // Invocation shape is unchanged: ['view','--',<target>,'version'] with the range still on target.
+      assert.deepStrictEqual(args, ['view', '--', '@org/gsd-cap-foo@^1', 'version']);
+      return spawnOk(multiLine);
+    };
+    const r = peekLatestVersion('npm:@org/gsd-cap-foo@^1', { execOverrides: { npm: fakeNpm } });
+    // 1.10.0 must beat 1.3.0 numerically (not lexically), and it satisfies ^1.
+    assert.deepStrictEqual(r, { status: 'ok', version: '1.10.0' });
+  });
+
+  test('npm: RANGE spec — highest MATCHING version is bounded by the range (out-of-range versions ignored)', () => {
+    // ^1 must NOT pick a 2.x even if npm happened to print one; the chosen version must satisfy the range.
+    const multiLine = [
+      "@org/cap@1.4.0 '1.4.0'",
+      "@org/cap@1.9.0 '1.9.0'",
+      "@org/cap@2.0.0 '2.0.0'",
+    ].join('\n') + '\n';
+    const r = peekLatestVersion('npm:@org/cap@^1', { execOverrides: { npm: () => spawnOk(multiLine) } });
+    assert.deepStrictEqual(r, { status: 'ok', version: '1.9.0' });
+  });
+
+  test('npm: RANGE spec — installed < highest matching ⇒ caller sees newer; installed == highest ⇒ same', () => {
+    // Two ledgers: the peek itself only resolves the highest-matching version; the outdated/current
+    // decision lives in outdatedCapabilities. Here we lock the peek's resolution (the input to that).
+    const multiLine = [
+      "@org/cap@1.2.0 '1.2.0'",
+      "@org/cap@1.5.0 '1.5.0'",
+    ].join('\n') + '\n';
+    const r = peekLatestVersion('npm:@org/cap@^1', { execOverrides: { npm: () => spawnOk(multiLine) } });
+    assert.strictEqual(r.version, '1.5.0', 'highest matching is the version update would install');
+  });
+
+  test('npm: NO-version spec (tracks latest) — single bare latest line → status ok', () => {
+    const fakeNpm = (args) => {
+      // No version on the spec ⇒ target is just the bare name; npm view prints a single latest token.
+      assert.deepStrictEqual(args, ['view', '--', '@org/gsd-cap-foo', 'version']);
+      return spawnOk('2.4.1\n');
+    };
+    const r = peekLatestVersion('npm:@org/gsd-cap-foo', { execOverrides: { npm: fakeNpm } });
+    assert.deepStrictEqual(r, { status: 'ok', version: '2.4.1' });
+  });
+
+  test('npm: EXACT-pinned spec (@1.2.3) → status pinned (update re-resolves to the SAME version, never outdated)', () => {
+    // revert-fails: without the exact-pin → 'pinned' branch, the npm peek would run npm view and
+    // compare, so a pinned source could be reported outdated; this assert requires status 'pinned'.
+    let called = false;
+    const fakeNpm = () => { called = true; return spawnOk('9.9.9\n'); };
+    const r = peekLatestVersion('npm:@org/gsd-cap-foo@1.2.3', { execOverrides: { npm: fakeNpm } });
+    assert.strictEqual(r.status, 'pinned');
+    assert.strictEqual(r.version, '1.2.3', 'pinned reports the pinned exact version');
+    assert.strictEqual(called, false, 'an exact-pinned npm source needs no remote peek (update will not move it)');
+  });
+
+  test('npm: npm view error/timeout → status unknown (no crash)', () => {
+    const r1 = peekLatestVersion('npm:@org/cap@^1', { execOverrides: { npm: () => ({ exitCode: 1, stdout: '', stderr: 'E404', signal: null, error: null }) } });
+    assert.strictEqual(r1.status, 'unknown');
+    const r2 = peekLatestVersion('npm:@org/cap@^1', { execOverrides: { npm: () => ({ exitCode: null, stdout: '', stderr: '', signal: 'SIGTERM', error: null }) } });
+    assert.strictEqual(r2.status, 'unknown');
+  });
+
+  test('npm: non-semver output → status unknown (untrusted output)', () => {
+    const r = peekLatestVersion('npm:@org/cap@^1', { execOverrides: { npm: () => spawnOk('not a version\n') } });
+    assert.strictEqual(r.status, 'unknown');
+  });
+
+  test('local: re-reads capability.json version (status ok)', () => {
+    const dir = makeLocalCap(featureCap('local-peek', { version: '3.1.0' }));
+    try {
+      const r = peekLatestVersion(dir);
+      assert.deepStrictEqual(r, { status: 'ok', version: '3.1.0' });
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('local: missing path → status unknown (no throw)', () => {
+    const r = peekLatestVersion('/no/such/path/that/exists');
+    assert.strictEqual(r.status, 'unknown');
+  });
+
+  test('tarball: not auto-detectable → status manual (no version)', () => {
+    const r = peekLatestVersion('https://host/path/cap-1.0.0.tgz');
+    assert.strictEqual(r.status, 'manual');
+    assert.strictEqual(r.version, null);
+  });
+
+  test('registry: unimplemented → status unsupported', () => {
+    const r = peekLatestVersion('my-cap@gsd-registry');
+    assert.strictEqual(r.status, 'unsupported');
+    assert.strictEqual(r.version, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1463: pure npm-spec / npm-view parsers (splitNpmSpec, pickHighestNpmVersion)
+// ---------------------------------------------------------------------------
+
+describe('#1463 splitNpmSpec (name vs version-selector)', () => {
+  test('scoped package with exact version → split at the LAST @ (not the scope @)', () => {
+    assert.deepStrictEqual(splitNpmSpec('@org/pkg@1.2.3'), { name: '@org/pkg', selector: '1.2.3' });
+  });
+  test('scoped package with range → selector is the range', () => {
+    assert.deepStrictEqual(splitNpmSpec('@org/pkg@^1'), { name: '@org/pkg', selector: '^1' });
+  });
+  test('scoped package, no version → empty selector (tracks latest)', () => {
+    assert.deepStrictEqual(splitNpmSpec('@org/pkg'), { name: '@org/pkg', selector: '' });
+  });
+  test('unscoped package with version → split at the single @', () => {
+    assert.deepStrictEqual(splitNpmSpec('pkg@2.0.0'), { name: 'pkg', selector: '2.0.0' });
+  });
+  test('unscoped package, no version → empty selector', () => {
+    assert.deepStrictEqual(splitNpmSpec('pkg'), { name: 'pkg', selector: '' });
+  });
+});
+
+describe('#1463 pickHighestNpmVersion (robust multi-line range parse)', () => {
+  test('multi-line annotated range output → highest matching (numeric, not lexical)', () => {
+    const out = ["@org/pkg@1.2.0 '1.2.0'", "@org/pkg@1.10.0 '1.10.0'", "@org/pkg@1.3.0 '1.3.0'"].join('\n');
+    assert.strictEqual(pickHighestNpmVersion(out, '^1'), '1.10.0');
+  });
+  test('range bound is honored — out-of-range versions ignored', () => {
+    const out = ["@org/pkg@1.9.0 '1.9.0'", "@org/pkg@2.0.0 '2.0.0'"].join('\n');
+    assert.strictEqual(pickHighestNpmVersion(out, '^1'), '1.9.0');
+  });
+  test('empty selector = no constraint → overall max', () => {
+    const out = ["@org/pkg@1.9.0 '1.9.0'", "@org/pkg@2.4.0 '2.4.0'"].join('\n');
+    assert.strictEqual(pickHighestNpmVersion(out, ''), '2.4.0');
+  });
+  test('single bare token (latest dist-tag) parses', () => {
+    assert.strictEqual(pickHighestNpmVersion('2.4.1\n', ''), '2.4.1');
+  });
+  test('garbage / no version tokens → null (DEGRADE)', () => {
+    assert.strictEqual(pickHighestNpmVersion('not a version\n', ''), null);
+    assert.strictEqual(pickHighestNpmVersion('', '^1'), null);
+  });
+  test('no token satisfies the range → null', () => {
+    const out = ["@org/pkg@2.0.0 '2.0.0'", "@org/pkg@3.0.0 '3.0.0'"].join('\n');
+    assert.strictEqual(pickHighestNpmVersion(out, '^1'), null);
+  });
+
+  test('package NAME contains a version-like substring → resolves the RESOLVED version, not the name token', () => {
+    // #1463 Fix 1 (R Medium): npm view (range) prints `<name>@<version> '<version>'`. When the package
+    // NAME itself contains an `x.y.z`-shaped substring (`@scope/cap-1.2.3`), the version must come from
+    // its CANONICAL position (the quoted token / the token after the LAST `@`), NOT any token on the line.
+    // revert-fails: the old any-token regex matches `1.2.3` from the NAME first and returns it (the
+    // highest token that satisfies ^1 is `1.5.0`, but `1.2.3` < `1.5.0`, so a name-poisoned parse could
+    // also wrongly surface `1.2.3` as a candidate). With both lines present the CORRECT answer is 1.5.0.
+    const out = [
+      "@scope/cap-1.2.3@1.0.0 '1.0.0'",
+      "@scope/cap-1.2.3@1.5.0 '1.5.0'",
+    ].join('\n');
+    assert.strictEqual(pickHighestNpmVersion(out, '^1'), '1.5.0');
+  });
+
+  test('single name-poisoned line → resolves the resolved version (not the name substring)', () => {
+    // revert-fails: with one line `@scope/cap-1.2.3@1.0.0 '1.0.0'` and range `^1.0.0`, the any-token
+    // regex picks `1.2.3` (the FIRST/HIGHEST satisfying token, from the NAME); the canonical parse must
+    // return `1.0.0` (the resolved version). 1.2.3 !== 1.0.0 so the assert flips on revert.
+    const out = "@scope/cap-1.2.3@1.0.0 '1.0.0'";
+    assert.strictEqual(pickHighestNpmVersion(out, '^1.0.0'), '1.0.0');
+  });
+
+  test('property: with no range constraint, picks the numeric max of the printed versions', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.tuple(fc.nat(40), fc.nat(40), fc.nat(40)), { minLength: 1, maxLength: 12 }),
+        (triplets) => {
+          const lines = triplets.map(([a, b, c]) => `@org/pkg@${a}.${b}.${c} '${a}.${b}.${c}'`);
+          const got = pickHighestNpmVersion(lines.join('\n'), '');
+          const expected = triplets
+            .slice()
+            .sort((x, y) => (x[0] - y[0]) || (x[1] - y[1]) || (x[2] - y[2]))
+            .pop();
+          return got === `${expected[0]}.${expected[1]}.${expected[2]}`;
+        },
+      ),
+      { numRuns: 200 },
+    );
   });
 });

@@ -3133,3 +3133,179 @@ test('IC-05/WIN-2: a consent-store write failure leaves the install status:insta
   assert.match(buf, /could not write the consent record/i, 'the warning explains the write failure');
   assert.match(buf, new RegExp(home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the warning names the consent store path');
 });
+
+// ---------------------------------------------------------------------------
+// #1463: outdatedCapabilities (ADR-1244 D6 "Update available?")
+// ---------------------------------------------------------------------------
+
+/** Plant a ledger entry with a given source string and installed version. */
+function plantEntry(dir, id, version, source) {
+  ledgerMod.recordInstall(dir, {
+    id, version, source, integrity: '',
+    files: [`.gsd/capabilities/${id}`], sharedEdits: [],
+  });
+}
+/** A git ls-remote --tags line for a tag. */
+function lsLine(tag) {
+  return `0000000000000000000000000000000000000000\trefs/tags/${tag}`;
+}
+
+test('#1463 outdated: empty ledger → empty records (no throw)', () => {
+  const dir = runtime();
+  assert.deepStrictEqual(lifecycle.outdatedCapabilities({ runtimeDir: dir }), []);
+});
+
+test('#1463 outdated: git source with a newer tag → status outdated; latest reported', () => {
+  const dir = runtime();
+  plantEntry(dir, 'gitcap', '1.0.0', 'https://github.com/org/repo.git');
+  const fakeGit = () => ({ exitCode: 0, stdout: [lsLine('v1.0.0'), lsLine('v1.2.0')].join('\n'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  // revert-fails: an inverted comparison would report 'current' here.
+  assert.strictEqual(rec.status, 'outdated');
+  assert.strictEqual(rec.latest, '1.2.0');
+  assert.strictEqual(rec.current, '1.0.0');
+  assert.strictEqual(rec.sourceKind, 'git');
+});
+
+test('#1463 outdated: git installed == latest → current', () => {
+  const dir = runtime();
+  plantEntry(dir, 'gitcap', '1.2.0', 'https://github.com/org/repo.git');
+  const fakeGit = () => ({ exitCode: 0, stdout: lsLine('v1.2.0'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  assert.strictEqual(rec.status, 'current');
+});
+
+test('#1463 outdated: git installed > latest → current (not outdated)', () => {
+  const dir = runtime();
+  plantEntry(dir, 'gitcap', '2.0.0', 'https://github.com/org/repo.git');
+  const fakeGit = () => ({ exitCode: 0, stdout: lsLine('v1.5.0'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  assert.strictEqual(rec.status, 'current');
+});
+
+test('#1463 outdated: npm newer → outdated; npm peek error → unknown, other caps still reported', () => {
+  const dir = runtime();
+  plantEntry(dir, 'npmgood', '1.0.0', 'npm:@org/good@^1');
+  plantEntry(dir, 'npmbad', '1.0.0', 'npm:@org/bad@^1');
+  // revert-fails: without timeout/error→unknown handling, the failing peek crashes the whole verb and
+  // npmgood would never be reported.
+  // #1463: the good peek returns npm's REAL multi-line range output (one line per matching version); the
+  // highest version satisfying `^1` is 1.9.0 (a 2.x would be OUT of range and must NOT be chosen).
+  const fakeNpm = (args) => {
+    const pkg = args[args.indexOf('view') + 2]; // ['view','--',<pkg>,'version']
+    if (pkg === '@org/good@^1') {
+      const out = ["@org/good@1.4.0 '1.4.0'", "@org/good@1.9.0 '1.9.0'"].join('\n') + '\n';
+      return { exitCode: 0, stdout: out, stderr: '', signal: null, error: null };
+    }
+    return { exitCode: 1, stdout: '', stderr: 'E404', signal: null, error: null };
+  };
+  const recs = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { npm: fakeNpm } });
+  const byId = Object.fromEntries(recs.map((r) => [r.id, r]));
+  assert.strictEqual(byId.npmgood.status, 'outdated');
+  assert.strictEqual(byId.npmgood.latest, '1.9.0', 'highest version satisfying the recorded ^1 range');
+  assert.strictEqual(byId.npmbad.status, 'unknown', 'a failing peek degrades that row only');
+  assert.strictEqual(recs.length, 2, 'both capabilities are still reported');
+});
+
+test('#1463 outdated: tarball → manual; registry → unknown', () => {
+  const dir = runtime();
+  plantEntry(dir, 'tarcap', '1.0.0', 'https://host/path/cap-1.0.0.tgz');
+  plantEntry(dir, 'regcap', '1.0.0', 'my-cap@gsd-registry');
+  const recs = lifecycle.outdatedCapabilities({ runtimeDir: dir });
+  const byId = Object.fromEntries(recs.map((r) => [r.id, r]));
+  assert.strictEqual(byId.tarcap.status, 'manual');
+  assert.strictEqual(byId.regcap.status, 'unknown');
+});
+
+test('#1463 outdated: local newer/equal → outdated/current (re-read of recorded path)', () => {
+  const dir = runtime();
+  const srcNew = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-out-localnew-'));
+  const srcSame = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-out-localsame-'));
+  cleanups.push(srcNew, srcSame);
+  fs.writeFileSync(path.join(srcNew, 'capability.json'), JSON.stringify(declarativeCap('locnew', '2.0.0')));
+  fs.writeFileSync(path.join(srcSame, 'capability.json'), JSON.stringify(declarativeCap('locsame', '1.0.0')));
+  plantEntry(dir, 'locnew', '1.0.0', srcNew);
+  plantEntry(dir, 'locsame', '1.0.0', srcSame);
+  const recs = lifecycle.outdatedCapabilities({ runtimeDir: dir });
+  const byId = Object.fromEntries(recs.map((r) => [r.id, r]));
+  assert.strictEqual(byId.locnew.status, 'outdated');
+  assert.strictEqual(byId.locnew.latest, '2.0.0');
+  assert.strictEqual(byId.locsame.status, 'current');
+});
+
+test('#1463 outdated: git source pinned to a commit SHA is NEVER outdated even with a newer remote tag → status pinned', () => {
+  const dir = runtime();
+  // A `#sha:<commit>`-pinned source: `update` re-resolves to the SAME commit, so a newer tag at the
+  // remote is irrelevant. revert-fails: without the parsed.ref pinned check, peek returns the highest
+  // tag 'ok' and outdatedCapabilities compares 9.9.9 > 1.0.0 ⇒ 'outdated', failing this 'pinned' assert.
+  plantEntry(dir, 'pinnedsha', '1.0.0', 'https://github.com/org/repo.git#sha:abcdef1234567890abcdef1234567890abcdef12');
+  const fakeGit = () => ({ exitCode: 0, stdout: [lsLine('v1.0.0'), lsLine('v9.9.9')].join('\n'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  assert.strictEqual(rec.status, 'pinned');
+  assert.strictEqual(rec.sourceKind, 'git');
+});
+
+test('#1463 outdated: git source pinned to an explicit tag → status pinned (not outdated)', () => {
+  const dir = runtime();
+  plantEntry(dir, 'pinnedtag', '1.0.0', 'https://github.com/org/repo.git#tag:v1.0.0');
+  const fakeGit = () => ({ exitCode: 0, stdout: [lsLine('v1.0.0'), lsLine('v2.0.0')].join('\n'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  assert.strictEqual(rec.status, 'pinned');
+});
+
+test('#1463 outdated: UNPINNED git source (no #ref) with a newer tag → still outdated', () => {
+  const dir = runtime();
+  plantEntry(dir, 'unpinned', '1.0.0', 'https://github.com/org/repo.git');
+  const fakeGit = () => ({ exitCode: 0, stdout: [lsLine('v1.0.0'), lsLine('v1.5.0')].join('\n'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  assert.strictEqual(rec.status, 'outdated');
+  assert.strictEqual(rec.latest, '1.5.0');
+});
+
+test('#1463 outdated: UNPINNED git source at latest → current', () => {
+  const dir = runtime();
+  plantEntry(dir, 'unpinnedcur', '1.5.0', 'https://github.com/org/repo.git');
+  const fakeGit = () => ({ exitCode: 0, stdout: lsLine('v1.5.0'), stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { git: fakeGit } });
+  assert.strictEqual(rec.status, 'current');
+});
+
+test('#1463 outdated: npm RANGE source picks highest matching (real multi-line output) → outdated when installed below it', () => {
+  const dir = runtime();
+  plantEntry(dir, 'npmrange', '1.0.0', 'npm:@org/cap@^1');
+  // npm's REAL range output: one annotated line per matching version (not a single bare token).
+  // revert-fails: the old single-token parse degrades this to 'unknown', so the 'outdated' assert fails.
+  const multiLine = ["@org/cap@1.2.0 '1.2.0'", "@org/cap@1.10.0 '1.10.0'"].join('\n') + '\n';
+  const fakeNpm = () => ({ exitCode: 0, stdout: multiLine, stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { npm: fakeNpm } });
+  assert.strictEqual(rec.status, 'outdated');
+  assert.strictEqual(rec.latest, '1.10.0', 'highest matching version (numeric, not lexical) is what update installs');
+});
+
+test('#1463 outdated: npm RANGE source installed == highest matching → current', () => {
+  const dir = runtime();
+  plantEntry(dir, 'npmrangecur', '1.10.0', 'npm:@org/cap@^1');
+  const multiLine = ["@org/cap@1.2.0 '1.2.0'", "@org/cap@1.10.0 '1.10.0'"].join('\n') + '\n';
+  const fakeNpm = () => ({ exitCode: 0, stdout: multiLine, stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { npm: fakeNpm } });
+  assert.strictEqual(rec.status, 'current');
+});
+
+test('#1463 outdated: npm NO-version source (tracks latest) → outdated/current via single latest', () => {
+  const dir = runtime();
+  plantEntry(dir, 'npmlatest', '1.0.0', 'npm:@org/cap');
+  const fakeNpm = () => ({ exitCode: 0, stdout: '2.0.0\n', stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { npm: fakeNpm } });
+  assert.strictEqual(rec.status, 'outdated');
+  assert.strictEqual(rec.latest, '2.0.0');
+});
+
+test('#1463 outdated: npm EXACT-pinned source (@1.2.3) → status pinned (update will not move it)', () => {
+  const dir = runtime();
+  plantEntry(dir, 'npmpinned', '1.2.3', 'npm:@org/cap@1.2.3');
+  // revert-fails: without the exact-pin → 'pinned' branch, peek runs npm view and the row classifies
+  // by comparison; a registry that advertised 9.9.9 would render it 'outdated', failing this assert.
+  const fakeNpm = () => ({ exitCode: 0, stdout: '9.9.9\n', stderr: '', signal: null, error: null });
+  const [rec] = lifecycle.outdatedCapabilities({ runtimeDir: dir, execOverrides: { npm: fakeNpm } });
+  assert.strictEqual(rec.status, 'pinned');
+});

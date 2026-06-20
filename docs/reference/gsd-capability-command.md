@@ -1,13 +1,12 @@
 # `gsd capability` Command Reference
 
-> **Slash form:** `gsd:capability` (surfaced as a slash command on slash-command runtimes)
 > **CLI form:** `gsd capability`
 > **Canonical ADR:** [ADR-1244](../adr/1244-capability-ecosystem.md)
 > **See also:** [Capability Manifest Reference](capability-manifest.md) · [How to develop a capability](../how-to/develop-a-capability.md) · [The capability trust model](../explanation/capability-trust-model.md)
 
 The `capability` family manages the installation, upgrade, removal, and inspection of GSD capabilities — both first-party (shipped) and third-party overlays. A row for this command also appears in [docs/COMMANDS.md](../COMMANDS.md) (that file is not edited here).
 
-**Implemented in 1.6.0:** `install`, `update`, `remove`, `list`, `trust`, `disable`, `enable` (plus the pre-existing `state` and `set` introspection/activation subcommands). **Planned (not yet implemented):** `outdated` — see [Planned subcommands](#planned-subcommands).
+**Implemented:** `install`, `update`, `remove`, `list`, `outdated`, `trust`, `disable`, `enable` (plus the pre-existing `state` and `set` introspection/activation subcommands).
 
 ---
 
@@ -196,6 +195,72 @@ The `reason` field is `null` for active/incompatible rows and carries a short ex
 
 ---
 
+### `outdated`
+
+**Synopsis**
+
+```
+gsd capability outdated [--json] [--scope global|project]
+```
+
+**Flags**
+
+| Flag | Description |
+|---|---|
+| `--json` | Emit the records array as JSON (machine output). When omitted, a human-readable table is printed instead (columns: `ID`, `Source`, `Current`, `Latest`, `Status`). |
+| `--scope` | Read only the given scope's ledger (`global` or `project`). When omitted, both scopes are swept (mirroring `list`). |
+
+**Behaviour**
+
+For every installed overlay capability in the chosen scope(s), `outdated` performs a **light remote peek** of the capability's **recorded source** (the `source` stored in its ledger entry at install time) to learn the latest version that re-resolving that source would install, then compares it (numeric `major.minor.patch`) with the installed version. It is a metadata-only read — it never re-clones, re-packs, or re-extracts a bundle. A failing, timed-out, or unsupported peek **degrades** that row to `status: unknown`; it never crashes the command, and a single bad entry never suppresses the others.
+
+A capability is reported `outdated` **only if** re-resolving its recorded source (exactly what `update` does) would fetch a **newer** version than the one installed. A source pinned to an **immutable** ref — a git `#sha:<commit>` or `#tag:<tag>` fragment, or an **exact** npm version (`npm:@org/pkg@1.2.3`) — is never `outdated`: `update` re-resolves to the same commit/tag/version, so the row is reported `status: pinned` instead.
+
+A **bare** git ref fragment (`…repo.git#<ref>`) is **ambiguous** — it may name an immutable tag or a **mutable branch**. `outdated` resolves it at the remote with a bounded `git ls-remote <url> <ref>` (the same safe argv-only seam, no shell): a ref that resolves under `refs/tags/` is an immutable tag → `status: pinned`; a ref that resolves under `refs/heads/` is a **mutable branch** (`update` re-clones and checks out the branch HEAD, which can move) and is therefore **never** reported `pinned`. Because the ledger does not record the commit a git source was installed at, a moved branch HEAD cannot be compared against the installed commit, so a branch-tracked source degrades to `status: unknown`. An unresolvable / ambiguous / errored / timed-out classification also degrades to `unknown`.
+
+The per-source "update available?" matrix (ADR-1244 D6):
+
+| Source kind | Latest-version peek | Bound |
+|---|---|---|
+| git, **unpinned** (`https://…/repo.git`, tracks default branch) | `git ls-remote --tags` → highest **stable** semver tag (`v`-prefix and `^{}` peeled entries handled; prerelease/junk tags ignored) | ≤ 30s |
+| git, **pinned** (`…repo.git#sha:…` / `#tag:…`) | immutable ref → `status: pinned` (no peek; `update` will not move it) | — |
+| git, **bare ref** (`…repo.git#<ref>`) | `git ls-remote <url> <ref>` classifies the ref: `refs/tags/…` → `status: pinned` (immutable tag); `refs/heads/…` → **mutable branch**, never `pinned` (no installed commit recorded to compare against → `status: unknown`); unresolvable/ambiguous → `status: unknown` | ≤ 30s |
+| npm **range** (`npm:@org/pkg@^1`) | `npm view <pkg>@<range> version` → **highest version matching the recorded range** (npm prints one line per match; the numeric max satisfying the range is what `update` installs) | ≤ 60s |
+| npm **latest** (`npm:@org/pkg`, no version) | `npm view <pkg> version` → the single `latest` dist-tag version | ≤ 60s |
+| npm **exact** (`npm:@org/pkg@1.2.3`) | pinned exact version → `status: pinned` (no peek; `update` re-installs the same version) | — |
+| local (`./path` or absolute) | re-read of `capability.json` at the recorded path | — |
+| tarball (`https://…/cap-x.y.z.tgz`) | **not auto-detectable** — one immutable URL → `status: manual` | — |
+| registry (`<name>@<registry>`) | registry adapter not yet implemented → `status: unknown` | — |
+
+**Output shape** (`--json`)
+
+```json
+[
+  {
+    "id": "string",
+    "sourceKind": "git | npm | local | tarball | registry | unknown",
+    "current": "semver | null",
+    "latest": "semver | null",
+    "status": "outdated | current | pinned | manual | unknown",
+    "scope": "global | project"
+  }
+]
+```
+
+`status` values:
+
+| Value | Meaning |
+|---|---|
+| `outdated` | Re-resolving the recorded source would fetch a newer version than the installed one (for an npm range, the latest version **matching the recorded range**). Run `gsd capability update <id>` to upgrade. |
+| `current` | The installed version is the latest the recorded source would resolve to (or newer). |
+| `pinned` | The recorded source is pinned to an **immutable** ref (git `#sha:`/`#tag:`, or a bare git `#<ref>` that resolves to a tag) or an exact npm version; `update` re-resolves to the same commit/tag/version, so it can never be `outdated`. A bare git ref that resolves to a **mutable branch** is never `pinned`. |
+| `manual` | The source (a bare tarball URL) cannot be auto-checked; re-install from a new URL to upgrade. |
+| `unknown` | The peek failed (network error / timeout / non-zero exit / unparseable output), the source kind is not auto-checkable (registry), or the source tracks a mutable git branch whose installed commit was not recorded (so a moved branch HEAD cannot be compared). |
+
+An empty (or missing) ledger reports nothing: `--json` emits `[]`; the table notes that there are no installed overlay capabilities.
+
+---
+
 ### `trust`
 
 Manage the **user-owned consent store** (#1459) that gates project-scope third-party capability activation. The store lives at `${GSD_HOME||homedir()}/.gsd/consent.json` — **outside any repository** — and records, per `(realpath(projectRoot), capability id)`, the bundle integrity and disclosure signature you consented to **on this machine**. A project-scope overlay is inactive until such a record exists (so a forged or cloned in-repo project ledger activates nothing on its own); installing a project-scope capability through the lifecycle writes the record, and removing it revokes the record.
@@ -224,16 +289,6 @@ gsd capability trust revoke <id> [--project <path>]
 `--scope` is accepted for symmetry; only `project` records exist today.
 
 **`trust revoke <id>`** deletes the consent record for `<id>` at the project root. `--project <path>` pins the project root whose consent is revoked (defaults to `realpath(cwd)`). After revoking, the capability — even if its bundle and project ledger remain on disk — lists as `status: inactive` and contributes nothing until you re-consent. `remove` already revokes consent as part of an uninstall; `trust revoke` is the way to withdraw consent **without** uninstalling the bundle.
-
----
-
-## Planned subcommands
-
-These appear in ADR-1244's command surface but are **not implemented in 1.6.0**. They are documented here so the surface is explicit; invoking them returns the unknown-subcommand error listing the available set.
-
-| Subcommand | Intended behaviour |
-|---|---|
-| `outdated` | Query each installed overlay's source and report those with a newer version available (`--json` for machine output). Until it ships, `update --all` re-resolves every recorded source and reports what changed. |
 
 ---
 

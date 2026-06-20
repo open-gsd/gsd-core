@@ -1968,6 +1968,40 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           { enabled: capSubcommand === 'enable', runtime: capFlagValue('--runtime'), scope: capFlagValue('--scope') },
           raw,
         );
+      } else if (capSubcommand === 'outdated') {
+        // capability outdated [--json] [--scope global|project] — ADR-1244 D6 "Update available?".
+        // For each installed overlay in the chosen scope(s), LIGHT-PEEK its recorded source for the
+        // latest available version and report whether a newer one exists. This never re-clones/re-packs;
+        // a failing/unsupported peek DEGRADES that row to status 'unknown' (the verb never crashes).
+        const lifecycle = require('./lib/capability-lifecycle.cjs');
+        const outdatedScopeArg = capFlagValue('--scope');
+        if (outdatedScopeArg && outdatedScopeArg !== 'global' && outdatedScopeArg !== 'project') {
+          error(`Invalid --scope "${outdatedScopeArg}": must be "global" or "project"`, ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+        }
+        // Honor --scope (read only that scope's ledger); default sweeps both, mirroring `list`.
+        const outdatedScopes = outdatedScopeArg ? [outdatedScopeArg] : ['global', 'project'];
+        const records = [];
+        for (const sc of outdatedScopes) {
+          const { runtimeDir } = capResolveScope(sc);
+          // outdatedCapabilities is read-only + non-throwing (returns [] on a missing/corrupt ledger).
+          const scRecords = lifecycle.outdatedCapabilities({ runtimeDir });
+          for (const r of scRecords) records.push({ ...r, scope: sc });
+        }
+        const asJson = raw || capHasFlag('--json');
+        if (asJson) {
+          output(records, false); // machine output: the records array (JSON).
+        } else {
+          // Human-readable table: ID | Source | Current | Latest | Status.
+          const headers = ['ID', 'Source', 'Current', 'Latest', 'Status'];
+          const cell = (v) => (v === null || v === undefined ? '-' : String(v));
+          const tableRows = records.map((r) => [cell(r.id), cell(r.sourceKind), cell(r.current), cell(r.latest), cell(r.status)]);
+          const widths = headers.map((h, i) => Math.max(h.length, ...tableRows.map((row) => row[i].length), 0));
+          const fmt = (row) => row.map((c, i) => c.padEnd(widths[i])).join('  ').replace(/\s+$/, '');
+          const lines = [fmt(headers), widths.map((w) => '-'.repeat(w)).join('  ').replace(/\s+$/, '')];
+          for (const row of tableRows) lines.push(fmt(row));
+          if (tableRows.length === 0) lines.push('(no installed overlay capabilities)');
+          output(records, true, lines.join('\n') + '\n');
+        }
       } else if (capSubcommand === 'trust') {
         // capability trust list [--scope project] [--json]
         // capability trust revoke <id> [--project <path>]
@@ -2026,7 +2060,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         }
       } else {
         error(
-          `Unknown capability subcommand: ${capSubcommand}. Available: install, update, remove, list, trust, disable, enable, state, set`,
+          `Unknown capability subcommand: ${capSubcommand}. Available: install, update, remove, list, outdated, trust, disable, enable, state, set`,
           ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
         );
       }

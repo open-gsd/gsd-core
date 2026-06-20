@@ -40,8 +40,6 @@ gsd capability install https://example.com/releases/gsd-cap-example-1.0.0.tgz
 gsd capability install ./path/to/capability
 ```
 
-You can also use the slash command form inside a supported runtime (surfaced as `gsd:capability install <spec>` — without the leading `/` in the command palette).
-
 ---
 
 ## Read the pre-install summary

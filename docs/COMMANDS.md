@@ -1117,7 +1117,7 @@ Toggle which skills are surfaced — apply a profile, list, or disable a cluster
 
 ### `gsd capability`
 
-Manage GSD capabilities — first-party (shipped) and third-party overlays. CLI form `gsd capability <subcommand>` (slash form `gsd:capability` on slash-command runtimes). See the [`gsd capability` command reference](reference/gsd-capability-command.md) for the full contract, source-spec forms, and install layout.
+Manage GSD capabilities — first-party (shipped) and third-party overlays. CLI form `gsd capability <subcommand>`. See the [`gsd capability` command reference](reference/gsd-capability-command.md) for the full contract, source-spec forms, and install layout.
 
 | Subcommand | Description |
 |------------|-------------|
@@ -1125,6 +1125,7 @@ Manage GSD capabilities — first-party (shipped) and third-party overlays. CLI 
 | `update [<id> \| --all] [--scope …] [--yes]` | Re-resolve a capability's recorded source and upgrade it (atomic stage-then-swap) |
 | `remove <id> [--purge-data] [--scope …]` | Remove an installed overlay capability's files + marker-isolated shared edits (first-party cannot be removed here) |
 | `list [--json]` | List first-party + installed overlay capabilities as a JSON array |
+| `outdated [--json] [--scope …]` | Light-peek each installed overlay's recorded source and report which have a newer version available (per-source matrix; npm ranges resolve the highest matching version; `pinned` for immutable/explicit git refs or exact npm versions; `manual`/`unknown` for sources that can't be auto-checked) |
 | `disable <id>` / `enable <id>` | Toggle a capability's activation state (same as `capability set <id> --off`/`--on`) |
 | `state` / `set <id> …` | Inspect resolved capability state / set activation + per-hook gates |
 
@@ -1133,6 +1134,7 @@ gsd capability list --json                           # All capabilities as JSON
 gsd capability install ./my-cap --scope project      # Install a local capability into the project
 gsd capability install npm:@org/gsd-cap-x@^1 --yes   # Install from npm, granting executable-surface consent
 gsd capability update my-cap                          # Upgrade from its recorded source
+gsd capability outdated --json                         # Which installed overlays have a newer version?
 gsd capability disable my-cap                         # Turn it off without removing it
 gsd capability remove my-cap                          # Remove the overlay capability
 ```
