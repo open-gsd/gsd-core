@@ -491,6 +491,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
 **For each wave:**
 
+@~/.claude/gsd-core/references/execute-phase-wave-guard.md
+
 1. **Intra-wave files_modified overlap check (BEFORE spawning):**
 
    Before spawning any agents for this wave, inspect the `files_modified` list of all plans
@@ -1038,12 +1040,8 @@ increases monotonically across waves. `{status}` is `complete` (success),
    **Step 7.3 — `class == "unknown-failure"`:**
    Report failed plan and ask Continue/Stop; continuing may cascade into dependent plan failures.
 
-7b. **Pre-wave dependency check (waves 2+ only):**
-    Before wave N+1, run `gsd-tools.cjs query verify.key-links {phase_dir}/{plan}-PLAN.md` for each upcoming plan.
-    If any PRIOR-wave artifact link fails, present:
-    - `## Cross-Plan Wiring Gap` with plan/link/from/pattern rows
-    - Options: investigate+fix before continue, or continue with cascade risk
-    Skip key-links that reference files in the CURRENT (upcoming) wave.
+@~/.claude/gsd-core/references/execute-phase-between-wave-reset.md
+
 8. **Execute checkpoint plans between waves** — see `<checkpoint_handling>`.
 9. **Proceed to next wave.**
 </step>
