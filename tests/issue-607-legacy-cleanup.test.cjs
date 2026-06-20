@@ -225,7 +225,7 @@ describe('issue-607 legacy-cleanup: planLegacyCleanup', () => {
 
   // ── #1453 stale skill path in ~/.agents/skills/gsd-* ──────────────────────
 
-  test('#1453: flags a SKILL.md whose content contains a get-shit-done path reference with reason stale-get-shit-done-path', () => {
+  test('#1453: flags a SKILL.md whose content contains a get-shit-done path reference with reason stale-get-shit-done-path', () => { // gsd-allow-legacy-name
     // Simulate a stale ~/.agents/skills/gsd-docs-update/SKILL.md left by an
     // older GSD install that embedded the pre-rename runtime path.
     const staleSkillFile = path.join(configDir, 'skills', 'gsd-docs-update', 'SKILL.md');
@@ -273,7 +273,7 @@ describe('issue-607 legacy-cleanup: planLegacyCleanup', () => {
   });
 
   test('#1453: flags SKILL.md with stale path but preserves SKILL.md in the same dir without stale path', () => {
-    // Two skill dirs: one stale (get-shit-done ref), one fresh (gsd-core ref).
+    // Two skill dirs: one stale (get-shit-done ref), one fresh (gsd-core ref). // gsd-allow-legacy-name
     const staleSkill = path.join(configDir, 'skills', 'gsd-docs-update', 'SKILL.md');
     const freshSkill = path.join(configDir, 'skills', 'gsd-help', 'SKILL.md');
     writeFile(staleSkill, '@$HOME/.codex/' + 'get-shit-done' + '/workflows/docs-update.md\n'); // gsd-allow-legacy-name
@@ -291,7 +291,7 @@ describe('issue-607 legacy-cleanup: planLegacyCleanup', () => {
 
   test('#1453: regression — after upgrade to gsd-core 1.5.0, stale ~/.agents/skills/gsd-docs-update/SKILL.md is removed', () => {
     // Simulate the exact scenario from issue #1453:
-    // ~/.agents/skills/gsd-docs-update/SKILL.md references the old get-shit-done runtime.
+    // ~/.agents/skills/gsd-docs-update/SKILL.md references the old get-shit-done runtime. // gsd-allow-legacy-name
     // The upgrade installs correctly to ~/.codex/skills/ but leaves the stale
     // ~/.agents/skills/ copy which Codex can still discover.
     const agentsDir   = path.join(homeDir, '.agents');

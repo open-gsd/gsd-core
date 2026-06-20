@@ -42,7 +42,7 @@ const GSD_MANAGED_SUBTREES = ['hooks', 'commands'];
  * runtime config subdirectory. Assembled from parts to avoid self-flagging.
  *
  * Old installs wrote skill bodies that embed the path to the GSD runtime
- * directory — e.g. `@$HOME/.codex/get-shit-done/workflows/plan.md`. After
+ * directory — e.g. `@$HOME/.codex/get-shit-done/workflows/plan.md`. After // gsd-allow-legacy-name
  * the rename to `gsd-core/` (#604), those embedded paths are stale and the
  * skill file must be removed so the runtime does not pick up the wrong copy.
  *
@@ -142,7 +142,7 @@ function fileContainsOldPackageSignal(absPath, fsMod) {
 
 /**
  * Return true if the file at `absPath` contains the legacy skill path signal
- * (`get-shit-done` as a path component inside an @-import or similar reference).
+ * (`get-shit-done` as a path component inside an @-import or similar reference). // gsd-allow-legacy-name
  * Skips unreadable files (returns false on any error).
  *
  * @param {string} absPath
@@ -168,7 +168,7 @@ function fileContainsLegacySkillPathSignal(absPath, fsMod) {
  *   - 'content-references-old-package': a code file whose content contains
  *     the old package name signal (hooks/ and commands/ subtrees only).
  *   - 'stale-get-shit-done-path': a skill markdown file whose content contains
- *     a path reference to the pre-rename `get-shit-done/` runtime directory
+ *     a path reference to the pre-rename `get-shit-done/` runtime directory // gsd-allow-legacy-name
  *     (skills/ subtree, gsd-* directories only). Issue #1453.
  *   - 'legacy-shared-cache': the old package's shared update-check cache file.
  *
@@ -213,11 +213,11 @@ function planLegacyCleanup(configDirs, opts = {}) {
       }
     }
 
-    // #1453: Scan skills/gsd-* directories for stale get-shit-done path references.
+    // #1453: Scan skills/gsd-* directories for stale get-shit-done path references. // gsd-allow-legacy-name
     //
     // Background: older GSD installs wrote SKILL.md files that embedded a path to
     // the GSD runtime config directory, e.g.:
-    //   @$HOME/.codex/get-shit-done/workflows/docs-update.md
+    //   @$HOME/.codex/get-shit-done/workflows/docs-update.md // gsd-allow-legacy-name
     //
     // After the rename to gsd-core/ (#604), the correct path is:
     //   @$HOME/.codex/gsd-core/workflows/docs-update.md
