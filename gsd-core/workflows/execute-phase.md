@@ -491,6 +491,40 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
 **For each wave:**
 
+0.5. **Inter-wave worktree base re-check (wave N+1 guard — #1369):**
+
+   After Wave N merges and tracking commits advance orchestrator HEAD, Claude Code's
+   `isolation="worktree"` still forks new worktrees from `origin/HEAD` (the "fresh" base),
+   not the live HEAD. This means Wave N+1 worktrees would be created from the stale
+   pre-Wave-N base, causing the `worktree_branch_check` guard inside each executor to halt
+   immediately with a base-mismatch fatal.
+
+   **Run this check at the start of every wave when `USE_WORKTREES != "false"` and
+   `RUNTIME = "claude"`**, including Wave 1 (where it mirrors the initialize-step check):
+
+   ```bash
+   if [ "$RUNTIME" = "claude" ] && [ "${USE_WORKTREES:-true}" != "false" ]; then
+     _WAVE_DEGRADE=$(gsd_run query worktree.base-check --pick shouldDegrade 2>/dev/null || true)
+     if [ "$_WAVE_DEGRADE" = "true" ]; then
+       _WAVE_DEGRADE_MSG=$(gsd_run query worktree.base-check --pick message 2>/dev/null || true)
+       [ -n "$_WAVE_DEGRADE_MSG" ] && printf '%s\n' "$_WAVE_DEGRADE_MSG" >&2
+       echo "⚠ [#1369] Worktree fork base diverged from orchestrator HEAD (wave merges advanced HEAD past origin/HEAD). Auto-degrading to sequential mode for this wave to avoid base-mismatch halts." >&2
+       USE_WORKTREES=false
+     fi
+   fi
+   ```
+
+   If `shouldDegrade` is `true`, override `USE_WORKTREES=false` for **this wave only** —
+   all plans in this wave execute sequentially on the main working tree. Later waves re-run
+   this check and may re-enable worktree isolation if `origin/HEAD` is updated (e.g. via
+   `git fetch` or `worktree.baseRef:"head"` config).
+
+   **To avoid this degrade across all waves:** set `worktree.baseRef:"head"` in
+   `.claude/settings.local.json` (or run `gsd-tools worktree set-baseref`). This tells
+   Claude Code to fork from the live HEAD instead of `origin/HEAD`, so each wave's new
+   worktrees always start from the correct post-merge base. See #683 for the base-ref
+   configuration detail.
+
 1. **Intra-wave files_modified overlap check (BEFORE spawning):**
 
    Before spawning any agents for this wave, inspect the `files_modified` list of all plans
@@ -1044,6 +1078,44 @@ increases monotonically across waves. `{status}` is `complete` (success),
     - `## Cross-Plan Wiring Gap` with plan/link/from/pattern rows
     - Options: investigate+fix before continue, or continue with cascade risk
     Skip key-links that reference files in the CURRENT (upcoming) wave.
+
+7c. **Between-wave manifest reset and worktree base refresh (waves 2+ only — #1369):**
+
+   **REQUIRED before each wave transition when `USE_WORKTREES != "false"` and `RUNTIME = "claude"`.**
+
+   Wave N's `WAVE_WORKTREE_MANIFEST` was consumed by `worktree.cleanup-wave` in step 5.5. It must be
+   unset so wave N+1's step 3 creates a fresh manifest for the new wave's worktrees. Without this,
+   the wave N+1 manifest guard (step 5.5, #3384) blocks on the stale/empty consumed file.
+
+   After wave N merges and tracking commits, the orchestrator HEAD has advanced past the commit the
+   Claude Code harness may have cached as the worktree fork base at session start. New worktrees
+   spawned for wave N+1 could fork from the stale pre-wave-N HEAD, causing every executor to trip the
+   `worktree_branch_check` FATAL guard immediately (symptom: `HEAD is <old-sha>, expected <new-sha>`).
+
+   ```bash
+   # Unset per-wave manifest so wave N+1 creates a fresh one (#3384, #1369).
+   unset WAVE_WORKTREE_MANIFEST
+
+   # Between-wave base refresh (#1369): after wave N merges and tracking commits, HEAD has
+   # advanced. Re-assert worktree.baseRef:"head" (idempotent — no-op if already set) so the
+   # Claude Code harness re-reads the live HEAD on the next Agent(isolation="worktree") call
+   # rather than using a cached session-start commit as the fork base.
+   if [ "$RUNTIME" = "claude" ] && [ "$USE_WORKTREES" != "false" ]; then
+     gsd_run query worktree.set-baseref 2>/dev/null || true
+
+     # Safety re-check: evaluate degradation AFTER the wave N commits. If HEAD has diverged
+     # from origin/HEAD and baseRef is NOT "head", degrade remaining waves to sequential to
+     # avoid the base-mismatch FATAL in executor agents.
+     _BETWEEN_DEGRADE=$(gsd_run query worktree.base-check --pick shouldDegrade 2>/dev/null || echo "false")
+     if [ "$_BETWEEN_DEGRADE" = "true" ]; then
+       _DEGRADE_MSG=$(gsd_run query worktree.base-check --pick message 2>/dev/null || true)
+       [ -n "$_DEGRADE_MSG" ] && printf '%s\n' "$_DEGRADE_MSG" >&2
+       printf 'Degrading to sequential mode for remaining waves: HEAD advanced past worktree fork base after wave %s merge (#1369).\n' "${N}" >&2
+       USE_WORKTREES=false
+     fi
+   fi
+   ```
+
 8. **Execute checkpoint plans between waves** — see `<checkpoint_handling>`.
 9. **Proceed to next wave.**
 </step>
