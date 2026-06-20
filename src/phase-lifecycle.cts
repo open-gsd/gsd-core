@@ -54,10 +54,16 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
     );
     if (progressTableMatch) {
       const tableText = progressTableMatch[0];
-      // Count data rows (rows starting with pipe then a phase number)
-      const dataRowPattern = /^\|\s*\d+/gm;
-      const dataRows = tableText.match(dataRowPattern);
-      totalPhases = dataRows ? dataRows.length : null;
+      // Count data rows (rows starting with pipe then a phase number),
+      // excluding 999.x backlog phases. Mirrors init.cts /^999(?:\.|$)/ filter.
+      const dataRowPattern = /^\|\s*(\d+[^|]*)\|/gm;
+      let dataRowCount = 0;
+      let drm: RegExpExecArray | null;
+      while ((drm = dataRowPattern.exec(tableText)) !== null) {
+        if (/^999\b/.test(drm[1].trim())) continue;
+        dataRowCount++;
+      }
+      totalPhases = dataRowCount > 0 ? dataRowCount : null;
     }
 
     // Sum plan counts from M/N columns in progress table

@@ -171,8 +171,10 @@ export function shouldPreserveExistingProgress(existingProgress: unknown, derive
     return false;
   const existing = existingProgress as ProgressRecord;
   const derived = derivedProgress as ProgressRecord;
-  return (existingProgressExceedsDerived(existing, derived, 'total_phases') ||
-    existingProgressExceedsDerived(existing, derived, 'completed_phases') ||
+  // total_phases is intentionally excluded from the ratchet: it must always
+  // take the freshly derived value so it can correct downward (#1446).
+  // Only completed_phases, total_plans, and completed_plans keep ratchet behaviour.
+  return (existingProgressExceedsDerived(existing, derived, 'completed_phases') ||
     existingProgressExceedsDerived(existing, derived, 'total_plans') ||
     existingProgressExceedsDerived(existing, derived, 'completed_plans'));
 }

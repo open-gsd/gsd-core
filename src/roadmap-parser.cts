@@ -408,7 +408,8 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     for (const h of tokenizeHeadings(roadmap)) {
       if (h.level < 2 || h.level > 4) continue;
       const pm = phaseHeadingPattern.exec(h.text);
-      if (pm) milestonePhaseNums.add(pm[1]);
+      // Exclude 999.x backlog phases from milestone phase set. Mirrors init.cts filter.
+      if (pm && !/^999\b/.test(pm[1])) milestonePhaseNums.add(pm[1]);
     }
   } catch { /* intentionally empty */ }
 
