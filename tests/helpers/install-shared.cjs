@@ -154,11 +154,19 @@ function manifestSkillSet(manifest) {
       const seg = key.split('/')[1].replace(/^gsd-/, '').replace(/\.md$/, '');
       out.add(seg);
     } else if (key.startsWith('command/')) {
+      // OpenCode/Kilo: command/gsd-<cmd>.md
       const file = key.split('/')[1];
       out.add(file.replace(/^gsd-/, '').replace(/\.md$/, ''));
     } else if (key.startsWith('commands/gsd/')) {
+      // Gemini: commands/gsd/<cmd>.toml (nested, colon-namespaced)
       const file = key.split('/')[2];
       out.add(file.replace(/\.(md|toml)$/, ''));
+    } else if (key.startsWith('commands/') && key.split('/').length === 2) {
+      // Claude local (#1367 fix): flat commands/gsd-<cmd>.md
+      const file = key.split('/')[1];
+      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+        out.add(file.replace(/^gsd-/, '').replace(/\.md$/, ''));
+      }
     }
   }
   return out;
@@ -194,6 +202,15 @@ function collectSkillBasenamesOnDisk(configDir) {
     for (const file of fs.readdirSync(commandsGsdDir)) {
       if (file.endsWith('.md') || file.endsWith('.toml')) {
         out.add(file.replace(/\.(md|toml)$/, ''));
+      }
+    }
+  }
+  // Claude local (#1367 fix): flat gsd-*.md files at commands/ level
+  const flatCommandsDir = path.join(configDir, 'commands');
+  if (fs.existsSync(flatCommandsDir)) {
+    for (const file of fs.readdirSync(flatCommandsDir)) {
+      if (file.startsWith('gsd-') && file.endsWith('.md')) {
+        out.add(file.replace(/^gsd-/, '').replace(/\.md$/, ''));
       }
     }
   }

@@ -239,7 +239,7 @@ const capabilities = {
         "local": [
           {
             "kind": "commands",
-            "destSubpath": "commands/gsd",
+            "destSubpath": "commands",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
@@ -2739,7 +2739,7 @@ const runtimes = {
         "local": [
           {
             "kind": "commands",
-            "destSubpath": "commands/gsd",
+            "destSubpath": "commands",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,

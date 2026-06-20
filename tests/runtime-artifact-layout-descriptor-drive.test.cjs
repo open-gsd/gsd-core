@@ -51,8 +51,8 @@ const GOLDEN = {
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
   ],
   'claude/local': [
-    { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' },
-    { kind: 'agents',   destSubpath: 'agents',       prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' }, // #1367: flat gsd-<cmd>.md
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── cursor ───────────────────────────────────────────────────────────────────

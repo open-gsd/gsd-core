@@ -29,7 +29,8 @@ function tmpDir(prefix) {
 function createFixtureRuntime() {
   const base = createTempDir('gsd-surface-apply-');
   const runtimeConfigDir = base;
-  const commandsDir = path.join(runtimeConfigDir, 'commands', 'gsd');
+  // #1367: claude local uses flat commands/ (not commands/gsd/) — commandsDir is commands/.
+  const commandsDir = path.join(runtimeConfigDir, 'commands');
   const agentsDir = path.join(runtimeConfigDir, 'agents');
   fs.mkdirSync(commandsDir, { recursive: true });
   fs.mkdirSync(agentsDir, { recursive: true });
@@ -59,6 +60,7 @@ function readFrontmatterDescription(markdown) {
 
 describe('applySurface', () => {
   test('core profile: only core skills appear in commandsDir', (t) => {
+    // #1367: claude local uses flat gsd-<stem>.md files at commands/ (not commands/gsd/<stem>.md).
     const { base, runtimeConfigDir, commandsDir } = createFixtureRuntime();
     t.after(() => cleanup(base));
     writeActiveProfile(runtimeConfigDir, 'core');
@@ -72,11 +74,14 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     const resolved = applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const files = fs.readdirSync(commandsDir).filter(f => f.endsWith('.md'));
+    // After #1367: files are gsd-<stem>.md (not bare stem.md). Strip the gsd- prefix
+    // to check against the REAL_COMMANDS_DIR (which still uses bare names).
+    const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
     for (const file of files) {
-      assert.ok(fs.existsSync(path.join(REAL_COMMANDS_DIR, file)), `unexpected file: ${file}`);
+      const bareName = file.slice('gsd-'.length); // gsd-help.md → help.md
+      assert.ok(fs.existsSync(path.join(REAL_COMMANDS_DIR, bareName)), `unexpected file: ${file} (no source: ${bareName})`);
     }
-    const expectedCore = [...resolved.skills].map(stem => `${stem}.md`).sort();
+    const expectedCore = [...resolved.skills].map(stem => `gsd-${stem}.md`).sort();
     assert.deepStrictEqual(
       [...files].sort(),
       expectedCore,
@@ -98,7 +103,8 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const afterStandard = new Set(fs.readdirSync(commandsDir).filter(f => f.endsWith('.md')));
+    // #1367: files are gsd-<stem>.md in flat commands/
+    const afterStandard = new Set(fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md')));
 
     writeSurface(runtimeConfigDir, {
       baseProfile: 'core',
@@ -108,11 +114,11 @@ describe('applySurface', () => {
     });
     const resolvedCore = applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const afterCore = new Set(fs.readdirSync(commandsDir).filter(f => f.endsWith('.md')));
+    const afterCore = new Set(fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md')));
 
     assert.ok(afterCore.size <= afterStandard.size, 'core should have fewer or equal files than standard');
 
-    const expectedCore = [...resolvedCore.skills].map(stem => `${stem}.md`).sort();
+    const expectedCore = [...resolvedCore.skills].map(stem => `gsd-${stem}.md`).sort();
     assert.deepStrictEqual(
       [...afterCore].sort(),
       expectedCore,
@@ -120,8 +126,9 @@ describe('applySurface', () => {
     );
 
     for (const file of afterCore) {
+      const bareName = file.slice('gsd-'.length);
       assert.ok(
-        fs.existsSync(path.join(REAL_COMMANDS_DIR, file)),
+        fs.existsSync(path.join(REAL_COMMANDS_DIR, bareName)),
         `file in commandsDir not a real skill: ${file}`
       );
     }
@@ -161,13 +168,14 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
+    // #1367: flat gsd-<stem>.md files at commands/ (not commands/gsd/<stem>.md)
     assert.ok(
-      fs.existsSync(path.join(commandsDir, 'help.md')),
-      'help.md should be copied from install source'
+      fs.existsSync(path.join(commandsDir, 'gsd-help.md')),
+      'gsd-help.md should be copied from install source (#1367: flat hyphen layout)'
     );
     assert.ok(
-      fs.existsSync(path.join(commandsDir, 'new-project.md')),
-      'new-project.md should be copied from install source'
+      fs.existsSync(path.join(commandsDir, 'gsd-new-project.md')),
+      'gsd-new-project.md should be copied from install source (#1367: flat hyphen layout)'
     );
   });
 
@@ -231,11 +239,12 @@ describe('applySurface', () => {
     const layout = resolveRuntimeArtifactLayout('claude', runtimeConfigDir, 'local');
     applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
 
-    const commandsDir = path.join(runtimeConfigDir, 'commands', 'gsd');
-    assert.ok(fs.existsSync(commandsDir), 'commands/gsd dir should be created even if initially absent');
-    const files = fs.readdirSync(commandsDir).filter(f => f.endsWith('.md'));
-    assert.ok(files.length > 0, 'commands/gsd should contain staged skill files');
-    assert.ok(files.includes('help.md'), 'help.md should be present after applySurface on missing dest');
+    // #1367: claude local uses flat commands/ (not commands/gsd/)
+    const commandsDir = path.join(runtimeConfigDir, 'commands');
+    assert.ok(fs.existsSync(commandsDir), 'commands/ dir should be created even if initially absent');
+    const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(files.length > 0, 'commands/ should contain staged skill files (gsd-*.md)');
+    assert.ok(files.includes('gsd-help.md'), 'gsd-help.md should be present after applySurface on missing dest');
   });
 
   test('Hermes profile shrink: stale GSD skill dirs are removed; user skills preserved', (t) => {

@@ -37,7 +37,7 @@ describe('resolveRuntimeArtifactLayout — claude local', () => {
     assert.strictEqual(layout.configDir, FAKE_DIR);
     assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands/gsd');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'commands'); // #1367: flat gsd-<cmd>.md layout
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
     assert.strictEqual(layout.kinds[1].kind, 'agents');
