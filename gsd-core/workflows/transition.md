@@ -77,8 +77,12 @@ cat .planning/config.json 2>/dev/null || true
 **Check for verification debt in this phase:**
 
 ```bash
-VERIFY_JSON=$(gsd_run query verification.status .planning/phases/XX-current 2>/dev/null || true)
-VERIFY_STATUS=$(printf '%s' "$VERIFY_JSON" | jq -r '.status//empty')
+# Read frontmatter status directly via awk — the runtime launcher is not yet
+# defined at this step, so avoid any runtime tool calls here.
+# awk extracts only the status: field between the two --- fences to avoid
+# false positives from historical body text (e.g. previous_status: gaps_found).
+VERIFY_STATUS=$(awk 'NR==1&&/^---$/{in_fm=1;next}in_fm&&/^---$/{exit}in_fm&&/^status: /{print $2}' \
+  .planning/phases/XX-current/*-VERIFICATION.md 2>/dev/null | head -1)
 ```
 
 **If VERIFY_STATUS is not `passed`:**
@@ -87,7 +91,6 @@ Stop before confirming:
 
 ```
 Verification incomplete: ${VERIFY_STATUS:-missing}
-Next: $(printf '%s' "$VERIFY_JSON" | jq -r '.next_action//empty')
 
 Resolve before transition. Review: `/gsd:audit-uat`
 ```
