@@ -56,6 +56,9 @@ import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
+import verificationMod = require('./verification.cjs');
+const { findStaleVerificationSummary, readVerificationStatus } = verificationMod;
 
 const { planningDir, withPlanningLock } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
@@ -1389,8 +1392,27 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   let requirementsUpdated = false;
 
   const warnings: string[] = [];
+  const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
+  const verificationStatus = readVerificationStatus(phaseFullDir);
+  if (verificationStatus.status !== 'passed') {
+    const nextStep = verificationStatus.next_command
+      ? ` Next: ${verificationStatus.next_command}`
+      : '';
+    error(
+      `Phase ${phaseNum} verification is incomplete: ${verificationStatus.next_action}${nextStep}`,
+      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
+    );
+  }
+  const staleVerification = findStaleVerificationSummary(phaseFullDir);
+  if (staleVerification) {
+    error(
+      `Phase ${phaseNum} verification is stale: ${staleVerification.verificationFile} is older than ` +
+        `${staleVerification.summaryFile}. Re-run /gsd:verify-work ${phaseNum}.`,
+      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
+    );
+  }
+
   try {
-    const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
     const phaseFiles = fs.readdirSync(phaseFullDir);
 
     for (const file of phaseFiles.filter((f) => f.includes('-UAT') && f.endsWith('.md'))) {

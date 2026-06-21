@@ -109,3 +109,48 @@ describe('autonomous --converge flag (#711)', () => {
     assert.match(howTo, /\/gsd-autonomous --only 4 --converge/, 'how-to should show single-phase converge usage');
   });
 });
+
+describe('autonomous verification deferral contract', () => {
+  test('workflow records explicit deferred states instead of silently advancing (#1525)', () => {
+    const workflow = read(WORKFLOW_PATH);
+
+    assert.match(workflow, /verification_deferred_human/);
+    assert.match(workflow, /verification_deferred_gaps/);
+    assert.match(workflow, /Deferred Verification/);
+    assert.match(workflow, /gsd:verify-work \$\{PHASE_NUM\}/);
+    assert.match(workflow, /gsd:plan-phase \$\{PHASE_NUM\} --gaps/);
+    assert.match(
+      workflow,
+      /\| \$\{PHASE_NUM\} \| verification_deferred_human \| \/gsd:verify-work \$\{PHASE_NUM\} \|/,
+      'human deferral must persist the exact deferred STATE row',
+    );
+    assert.match(
+      workflow,
+      /\| \$\{PHASE_NUM\} \| verification_deferred_gaps \| \/gsd:plan-phase \$\{PHASE_NUM\} --gaps \|/,
+      'gap deferral must persist the exact deferred STATE row',
+    );
+    assert.doesNotMatch(
+      workflow,
+      /Human validation deferred` and proceed to iterate step/,
+      'human-needed deferral must not silently proceed to the next phase',
+    );
+    assert.doesNotMatch(
+      workflow,
+      /Gaps deferred` and proceed to iterate step/,
+      'gap deferral must not silently proceed to the next phase',
+    );
+  });
+
+  test('workflow runs normal transition post-processing after passed verification (#1526)', () => {
+    const workflow = read(WORKFLOW_PATH);
+    const passedIdx = workflow.indexOf('**If `passed`:**');
+    const transitionIdx = workflow.indexOf('transition.md', passedIdx);
+    const iterateIdx = workflow.indexOf('Proceed to iterate step', passedIdx);
+
+    assert.ok(transitionIdx > passedIdx, 'passed verification must invoke transition.md');
+    assert.ok(
+      transitionIdx < iterateIdx,
+      'normal transition post-processing must run before autonomous iterates',
+    );
+  });
+});

@@ -38,6 +38,17 @@ const { cleanup, runGsdTools } = require('./helpers.cjs');
 const phaseModule = require('../gsd-core/bin/lib/phase.cjs');
 const { cmdPhaseComplete } = phaseModule;
 
+function writePassedVerificationFile(phaseDir, phase = '01') {
+  fs.writeFileSync(path.join(phaseDir, `${phase}-VERIFICATION.md`), [
+    '---',
+    'status: passed',
+    '---',
+    '',
+    '# Verification',
+    '',
+  ].join('\n'));
+}
+
 // ── Fixture builder ──────────────────────────────────────────────────────────
 
 /**
@@ -120,6 +131,7 @@ function createFixture(prefix = 'gsd-4-regression-') {
   fs.mkdirSync(phase01Dir, { recursive: true });
   fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
   fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+  writePassedVerificationFile(phase01Dir);
 
   // Phase 02 directory (needed for "next phase" detection)
   fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
@@ -443,6 +455,7 @@ function create4ColFixture(existingDate, alreadyComplete = true) {
   fs.mkdirSync(phase01Dir, { recursive: true });
   fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
   fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+  writePassedVerificationFile(phase01Dir);
 
   fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
 
@@ -506,6 +519,7 @@ function create5ColFixture(existingDate, alreadyComplete = true) {
   fs.mkdirSync(phase01Dir, { recursive: true });
   fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
   fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+  writePassedVerificationFile(phase01Dir);
 
   fs.mkdirSync(path.join(phasesDir, '02-api'), { recursive: true });
 
@@ -823,34 +837,26 @@ describe('issue #1159 (Defect A): VERIFICATION.md historical metadata must not t
   );
 
   test(
-    '#1159-A-2 (boundary): status:gaps_found in frontmatter → DOES emit "has unresolved gaps" warning',
+    '#1159-A-2 (boundary): status:gaps_found in frontmatter → blocks phase completion',
     () => {
       tmpDir = createVerificationFixture('gaps_found');
-      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
-      const parsed = JSON.parse(output);
-      const warnings = parsed.warnings || [];
-      const gapWarnings = warnings.filter((w) => /unresolved gaps/i.test(w));
-      assert.ok(
-        gapWarnings.length > 0,
-        `#1159-A-2 FAILED: expected a gap warning when frontmatter status=gaps_found but got none.\n` +
-        `Warnings: ${JSON.stringify(warnings)}`,
-      );
+      const result = runGsdTools(['--json-errors', 'phase', 'complete', '1'], tmpDir);
+      assert.equal(result.success, false, 'gaps_found verification must block phase completion');
+      const parsed = JSON.parse(result.error);
+      assert.equal(parsed.reason, 'phase_verification_incomplete');
+      assert.match(parsed.message, /Gaps found/i);
     },
   );
 
   test(
-    '#1159-A-3 (boundary): status:human_needed in frontmatter → DOES emit "needs human verification" warning',
+    '#1159-A-3 (boundary): status:human_needed in frontmatter → blocks phase completion',
     () => {
       tmpDir = createVerificationFixture('human_needed');
-      const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
-      const parsed = JSON.parse(output);
-      const warnings = parsed.warnings || [];
-      const humanWarnings = warnings.filter((w) => /human verification/i.test(w));
-      assert.ok(
-        humanWarnings.length > 0,
-        `#1159-A-3 FAILED: expected human-verification warning when frontmatter status=human_needed.\n` +
-        `Warnings: ${JSON.stringify(warnings)}`,
-      );
+      const result = runGsdTools(['--json-errors', 'phase', 'complete', '1'], tmpDir);
+      assert.equal(result.success, false, 'human_needed verification must block phase completion');
+      const parsed = JSON.parse(result.error);
+      assert.equal(parsed.reason, 'phase_verification_incomplete');
+      assert.match(parsed.message, /Human verification required/i);
     },
   );
 });
@@ -939,6 +945,7 @@ function createDeferredReqFixture({ includeMissingActive = false } = {}) {
 
   fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\nDo the work.\n');
   fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\nDone.\n');
+  writePassedVerificationFile(phase01Dir);
 
   return tmpDir;
 }
@@ -1075,6 +1082,7 @@ describe('issue #1159 (Defect B): deferred/future requirement IDs must not trigg
 
       fs.writeFileSync(path.join(phase01Dir, '01-01-PLAN.md'), '# Plan 1\n');
       fs.writeFileSync(path.join(phase01Dir, '01-01-SUMMARY.md'), '# Summary 1\n');
+      writePassedVerificationFile(phase01Dir);
 
       const { output } = runGsdTools(['phase', 'complete', '1'], tmpDir);
       const parsed = JSON.parse(output);

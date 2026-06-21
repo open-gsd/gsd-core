@@ -143,13 +143,9 @@ Full review: {path to UI-REVIEW.md}
 
 ## ▶ Next
 
-`/clear` then one of:
+`/clear` then:
 
-- `/gsd:verify-work {N}` — UAT testing
-- `/gsd:plan-phase {N+1}` — plan next phase
-
-- `/gsd:verify-work {N}` — UAT testing
-- `/gsd:plan-phase {N+1}` — plan next phase
+- `/gsd:verify-work {N}` — UAT testing before phase completion
 
 ───────────────────────────────────────────────────────────────
 ```

@@ -91,6 +91,10 @@ function setupFixture(tmpDir, opts = {}) {
     path.join(phaseDir, `${paddedId}-01-SUMMARY.md`),
     '---\nstatus: complete\n---\n# Summary\nDone.'
   );
+  fs.writeFileSync(
+    path.join(phaseDir, `${paddedId}-VERIFICATION.md`),
+    '---\nstatus: passed\nscore: "1/1"\n---\n# Verification\nPassed.\n'
+  );
 
   const extra = extraPhases
     .map((p) => `- [ ] **Phase ${p.id}: ${p.name}**`)

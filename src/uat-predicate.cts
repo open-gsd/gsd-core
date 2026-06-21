@@ -52,10 +52,8 @@ const BLOCKING_UAT_FM_STATUSES = new Set([
 // UAT file frontmatter `result` values that indicate failure
 const BLOCKING_UAT_FM_RESULTS = new Set(['pending', 'blocked', 'failed']);
 
-// VERIFICATION file frontmatter `status` values that indicate passing
-const PASSING_VERIFICATION_STATUSES = new Set([
-  'complete', 'verified', 'passed', 'human_passed',
-]);
+// Canonical VERIFICATION frontmatter `status` value that indicates passing.
+const PASSING_VERIFICATION_STATUSES = new Set(['passed']);
 
 // VERIFICATION file frontmatter `status` values that explicitly block
 const BLOCKING_VERIFICATION_FM_STATUSES = new Set([

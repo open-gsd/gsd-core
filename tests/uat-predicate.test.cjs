@@ -531,19 +531,32 @@ describe('evaluateUatPassed — VERIFICATION files', () => {
     assert.strictEqual(report.passed, true);
   });
 
-  test('VERIFICATION status complete satisfies --require-verification', () => {
+  test('VERIFICATION status complete does NOT satisfy --require-verification', () => {
     writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
     writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: complete\n---\n\nAll good.');
     const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
-    assert.strictEqual(report.passed, true);
+    assert.strictEqual(report.passed, false);
     assert.strictEqual(report.policy.require_verification, true);
+    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
   });
 
-  test('VERIFICATION status verified satisfies --require-verification', () => {
+  test('VERIFICATION status verified does NOT satisfy --require-verification', () => {
     writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
     writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: verified\n---\n\nAll good.');
     const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
-    assert.strictEqual(report.passed, true);
+    assert.strictEqual(report.passed, false);
+    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
+  });
+
+  test('VERIFICATION status human_passed does NOT satisfy --require-verification', () => {
+    writeFile(tmpDir, 'phase-UAT.md', makePassingUat(1));
+    writeFile(tmpDir, 'phase-VERIFICATION.md', '---\nstatus: human_passed\n---\n\nAll good.');
+    const report = evaluateUatPassed(tmpDir, { policy: { requireVerification: true } });
+    assert.strictEqual(report.passed, false);
+    assert.ok(report.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(report.blockers)}`);
   });
 });
 

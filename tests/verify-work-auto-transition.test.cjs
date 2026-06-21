@@ -78,6 +78,23 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
     );
   });
 
+  test('auto-transition is gated by UAT plus canonical verification predicate', () => {
+    const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
+    const predicateIdx = content.indexOf('phase uat-passed');
+    const requireVerificationIdx = content.indexOf('--require-verification');
+    const transitionIdx = content.indexOf('transition.md');
+
+    assert.ok(predicateIdx !== -1, 'verify-work.md must call phase uat-passed before transition');
+    assert.ok(
+      requireVerificationIdx > predicateIdx,
+      'verify-work.md must require canonical verification in the UAT predicate'
+    );
+    assert.ok(
+      predicateIdx < transitionIdx,
+      'UAT-plus-verification predicate must run before transition.md'
+    );
+  });
+
   test('transition is NOT suggested when security enforcement is enabled and no SECURITY.md exists', () => {
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
     // The workflow should suggest /gsd-secure-phase when security is enabled but no file exists

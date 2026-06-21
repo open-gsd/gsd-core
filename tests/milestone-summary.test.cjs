@@ -405,6 +405,14 @@ describe('complete-milestone workflow has pre-close audit gate (#2158)', () => {
       completeMilestoneContent.includes('sanitiz') || completeMilestoneContent.includes('SECURITY'),
     );
   });
+
+  test('complete-milestone distinguishes verified and override closeout (#1527)', () => {
+    assert.match(completeMilestoneContent, /all_phases_verified/);
+    assert.match(completeMilestoneContent, /closeout_type/);
+    assert.match(completeMilestoneContent, /verified_closeout/);
+    assert.match(completeMilestoneContent, /override_closeout/);
+    assert.match(completeMilestoneContent, /Known verification overrides/);
+  });
 });
 
 describe('verify-work workflow has phase artifact check (#2157)', () => {

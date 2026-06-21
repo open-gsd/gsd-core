@@ -27,8 +27,13 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const SDK = path.join(ROOT, 'sdk');
+const AUDIT_TIMEOUT_MS = 180_000;
+const TEST_TIMEOUT_MS = AUDIT_TIMEOUT_MS + 30_000;
 
 function auditProductionVulns(cwd) {
+  if (!fs.existsSync(path.join(cwd, 'package.json'))) {
+    return null; // signal "skip" to caller
+  }
   if (!fs.existsSync(path.join(cwd, 'node_modules'))) {
     return null; // signal "skip" to caller
   }
@@ -46,7 +51,7 @@ function auditProductionVulns(cwd) {
           cwd,
           encoding: 'utf-8',
           stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: 60_000,
+          timeout: AUDIT_TIMEOUT_MS,
           shell: isWindows,
         }
       );
@@ -76,10 +81,10 @@ function auditProductionVulns(cwd) {
 }
 
 describe('#3588: npm audit --omit=dev reports zero advisories', () => {
-  test('root workspace production tree has no advisories', { timeout: 90_000 }, (t) => {
+  test('root workspace production tree has no advisories', { timeout: TEST_TIMEOUT_MS }, (t) => {
     const vulns = auditProductionVulns(ROOT);
     if (vulns === null) {
-      t.skip('node_modules/ not present — run `npm install` before this test');
+      t.skip('auditable npm package not present or node_modules/ missing');
       return;
     }
     assert.strictEqual(vulns.critical, 0, `expected 0 critical; got ${vulns.critical}`);
@@ -91,10 +96,10 @@ describe('#3588: npm audit --omit=dev reports zero advisories', () => {
     assert.strictEqual(vulns.low, 0, `expected 0 low; got ${vulns.low}`);
   });
 
-  test('sdk/ production tree has no advisories', { timeout: 90_000 }, (t) => {
+  test('sdk/ production tree has no advisories', { timeout: TEST_TIMEOUT_MS }, (t) => {
     const vulns = auditProductionVulns(SDK);
     if (vulns === null) {
-      t.skip('sdk/node_modules/ not present — run `npm ci` inside sdk/ before this test');
+      t.skip('sdk/ is not an auditable npm package or sdk/node_modules/ is missing');
       return;
     }
     assert.strictEqual(vulns.critical, 0, `expected 0 critical; got ${vulns.critical}`);

@@ -207,6 +207,18 @@ describe('phase uat-passed — --require-verification flag', () => {
     assert.strictEqual(out.passed, true);
     assert.strictEqual(out.policy.require_verification, true);
   });
+
+  test('--require-verification with non-canonical complete verification → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: complete\n---\n\nLegacy OK.');
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+    assert.ok(out.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(out.blockers)}`);
+  });
 });
 
 // ─── Error cases ──────────────────────────────────────────────────────────────

@@ -61,6 +61,10 @@ describe('bug #2769: phase complete ticks REQUIREMENTS.md across header variants
         path.join(phasesDir, '01-1-SUMMARY.md'),
         ['---', 'status: complete', '---', '# Summary', 'Done.'].join('\n'),
       );
+      fs.writeFileSync(
+        path.join(phasesDir, '01-VERIFICATION.md'),
+        ['---', 'status: passed', 'score: "1/1"', '---', '# Verification', 'Passed.'].join('\n'),
+      );
 
       const roadmap = [
         '# Roadmap',

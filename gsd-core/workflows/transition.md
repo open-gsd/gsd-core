@@ -87,16 +87,17 @@ done
 
 **If OUTSTANDING is not empty:**
 
-Append to the completion confirmation message (regardless of mode):
+Stop before confirming:
 
 ```
-Outstanding verification items in this phase:
+Outstanding verification items in phase:
 {list filenames}
 
-These will carry forward as debt. Review: `/gsd:audit-uat`
+Resolve before transition. Review: `/gsd:audit-uat`
 ```
 
-This does NOT block transition — it ensures the user sees the debt before confirming.
+This blocks transition; `gsd-tools.cjs query phase.complete` fail-closes
+unless canonical `*-VERIFICATION.md` frontmatter `status` is `passed`.
 
 **If all plans complete:**
 

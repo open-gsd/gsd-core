@@ -14,6 +14,13 @@ const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
+function writePassedVerification(tmpDir, phaseDirName, paddedPhase) {
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'phases', phaseDirName, `${paddedPhase}-VERIFICATION.md`),
+    ['---', 'status: passed', '---', '', '# Verification', ''].join('\n'),
+  );
+}
+
 describe('state-snapshot command', () => {
   let tmpDir;
 
@@ -1927,6 +1934,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.writeFileSync(path.join(phaseDir, '03-02-PLAN.md'), '# Plan 2\n');
     fs.writeFileSync(path.join(phaseDir, '03-01-SUMMARY.md'), '# Summary 1\n');
     fs.writeFileSync(path.join(phaseDir, '03-02-SUMMARY.md'), '# Summary 2\n');
+    writePassedVerification(tmpDir, '03-api', '03');
 
     // Also need ROADMAP.md for phase complete
     fs.writeFileSync(
@@ -1977,6 +1985,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '04-01-PLAN.md'), '# Plan 1\n');
     fs.writeFileSync(path.join(phaseDir, '04-01-SUMMARY.md'), '# Summary 1\n');
+    writePassedVerification(tmpDir, '04-ui', '04');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -2018,6 +2027,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '05-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '05-final', '05');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -2079,6 +2089,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.writeFileSync(path.join(phaseDir, '06-02-PLAN.md'), '# Plan 2\n');
     fs.writeFileSync(path.join(phaseDir, '06-01-SUMMARY.md'), '# Summary\n');
     fs.writeFileSync(path.join(phaseDir, '06-02-SUMMARY.md'), '# Summary 2\n');
+    writePassedVerification(tmpDir, '06-lock', '06');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),

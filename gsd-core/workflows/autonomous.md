@@ -477,15 +477,13 @@ Skill(skill="gsd-code-review", args="${PHASE_NUM} --fix --auto")
 
 **3d. Post-Execution Routing**
 
-**If `INTERACTIVE` is set:** Wait for the execute agent to complete before reading verification results.
-
-After execute-phase returns (or the execute agent completes), read the verification result:
+Wait for execute completion when interactive, then read verification:
 
 ```bash
 VERIFY_STATUS=$(grep "^status:" "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
 ```
 
-Where `PHASE_DIR` comes from the `init phase-op` call already made in step 3a. If the variable is not in scope, re-fetch:
+Use `PHASE_DIR` from step 3a; if absent, re-fetch:
 
 ```bash
 PHASE_STATE=$(gsd_run query init.phase-op ${PHASE_NUM})
@@ -493,9 +491,7 @@ PHASE_STATE=$(gsd_run query init.phase-op ${PHASE_NUM})
 
 Parse `phase_dir` from the JSON.
 
-**If VERIFY_STATUS is empty** (no VERIFICATION.md or no status field):
-
-Go to handle_blocker: "Execute phase ${PHASE_NUM} did not produce verification results."
+If `VERIFY_STATUS` is empty, go to handle_blocker: "Execute phase ${PHASE_NUM} did not produce verification results."
 
 **If `passed`:**
 
@@ -504,31 +500,43 @@ Display:
 Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed
 ```
 
+Run transition before iterating:
+
+```text
+@~/.claude/gsd-core/workflows/transition.md
+```
+
 Proceed to iterate step.
 
 **If `human_needed`:**
 
-Read the human_verification section from VERIFICATION.md to get the count and items requiring manual testing.
-
-
-**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
-Display the items, then ask user via AskUserQuestion:
+Read `human_verification` items. In text mode (`--text` or init `text_mode=true`), replace AskUserQuestion with a numbered list and typed choice. Otherwise display items and ask:
 - **question:** "Phase ${PHASE_NUM} has items needing manual verification. Validate now or continue to next phase?"
 - **options:** "Validate now" / "Continue without validation"
 
-On **"Validate now"**: Present the specific items from VERIFICATION.md's human_verification section. After user reviews, ask:
+On **"Validate now"**: Present items, then ask:
 - **question:** "Validation result?"
 - **options:** "All good — continue" / "Found issues"
 
-On "All good — continue": Display `Phase ${PHASE_NUM} ✅ Human validation passed` and proceed to iterate step.
+On "All good — continue": set VERIFICATION frontmatter `status: passed`, display `Phase ${PHASE_NUM} ✅ Human validation passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then iterate.
 
 On "Found issues": Go to handle_blocker with the user's reported issues as the description.
 
-On **"Continue without validation"**: Display `Phase ${PHASE_NUM} ⏭ Human validation deferred` and proceed to iterate step.
+On **"Continue without validation"**: record an explicit deferred state and stop autonomous mode:
+
+```markdown
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| ${PHASE_NUM} | verification_deferred_human | /gsd:verify-work ${PHASE_NUM} |
+```
+
+Append/update this STATE.md section, display `Phase ${PHASE_NUM} ⏭ verification_deferred_human — resume with /gsd:verify-work ${PHASE_NUM}`, then handle_blocker: "Human verification deferred for phase ${PHASE_NUM}."
 
 **If `gaps_found`:**
 
-Read gap summary from VERIFICATION.md (score and missing items). Display:
+Read gap score/items from VERIFICATION.md. Display:
 ```
 ⚠ Phase ${PHASE_NUM}: ${PHASE_NAME} — Gaps Found
 Score: {N}/{M} must-haves verified
@@ -538,13 +546,13 @@ Ask user via AskUserQuestion:
 - **question:** "Gaps found in phase ${PHASE_NUM}. How to proceed?"
 - **options:** "Run gap closure" / "Continue without fixing" / "Stop autonomous mode"
 
-On **"Run gap closure"**: Execute gap closure cycle (limit: 1 attempt):
+On **"Run gap closure"**: one gap-closure attempt:
 
 ```
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM} --gaps")
 ```
 
-Verify gap plans were created — re-run `init phase-op ${PHASE_NUM}` and check `has_plans`. If no new gap plans → go to handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
+Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
 
 Re-execute:
 ```
@@ -556,24 +564,34 @@ Re-read verification status:
 VERIFY_STATUS=$(grep "^status:" "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
 ```
 
-If `passed` or `human_needed`: Route normally (continue or ask user as above).
+If `passed` or `human_needed`: route normally.
 
 If still `gaps_found` after this retry: Display "Gaps persist after closure attempt." and ask via AskUserQuestion:
 - **question:** "Gap closure did not fully resolve issues. How to proceed?"
 - **options:** "Continue anyway" / "Stop autonomous mode"
 
-On "Continue anyway": Proceed to iterate step.
+On "Continue anyway": record `verification_deferred_gaps` using the table below, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 On "Stop autonomous mode": Go to handle_blocker.
 
-This limits gap closure to 1 automatic retry to prevent infinite loops.
+This limits gap closure to 1 retry.
 
-On **"Continue without fixing"**: Display `Phase ${PHASE_NUM} ⏭ Gaps deferred` and proceed to iterate step.
+On **"Continue without fixing"**: record an explicit deferred state and stop autonomous mode:
+
+```markdown
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| ${PHASE_NUM} | verification_deferred_gaps | /gsd:plan-phase ${PHASE_NUM} --gaps |
+```
+
+Append/update this STATE.md section, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 
 On **"Stop autonomous mode"**: Go to handle_blocker with "User stopped — gaps remain in phase ${PHASE_NUM}".
 
 **3d.5. UI Review (Frontend Phases)**
 
-> Run after any successful execution routing (passed, human_needed accepted, or gaps deferred/accepted) — before proceeding to the iterate step.
+> Run only after `passed` or human verification was updated to `passed`.
 
 Resolve the active post-verification hooks and the UI-SPEC gate:
 

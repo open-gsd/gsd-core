@@ -97,6 +97,11 @@ interface FsLike {
   readFileSync(filePath: string, encoding: 'utf-8'): string;
 }
 
+interface StaleVerificationInfo {
+  verificationFile: string;
+  summaryFile: string;
+}
+
 /**
  * Build a 'missing' result from the routing table.
  * Used for two early-return paths: no *-VERIFICATION.md file found, and
@@ -121,6 +126,28 @@ interface VerificationStatusResult {
   status: string;
   next_action: string;
   next_command: string;
+}
+
+function findStaleVerificationSummary(phaseDir: string): StaleVerificationInfo | null {
+  const phaseFiles = fs.readdirSync(phaseDir);
+  const verificationFile = phaseFiles.filter((f) => f.endsWith('-VERIFICATION.md')).sort()[0];
+  if (!verificationFile) return null;
+
+  const verificationMtimeMs = fs.statSync(path.join(phaseDir, verificationFile)).mtimeMs;
+  let newestStaleSummary: { summaryFile: string; mtimeMs: number } | null = null;
+  for (const summaryFile of phaseFiles.filter((f) => f.endsWith('-SUMMARY.md')).sort()) {
+    const summaryMtimeMs = fs.statSync(path.join(phaseDir, summaryFile)).mtimeMs;
+    if (summaryMtimeMs <= verificationMtimeMs) continue;
+    if (!newestStaleSummary || summaryMtimeMs > newestStaleSummary.mtimeMs) {
+      newestStaleSummary = { summaryFile, mtimeMs: summaryMtimeMs };
+    }
+  }
+
+  if (!newestStaleSummary) return null;
+  return {
+    verificationFile,
+    summaryFile: newestStaleSummary.summaryFile,
+  };
 }
 
 /**
@@ -232,6 +259,7 @@ function cmdVerificationStatus(cwd: string, phaseDirArg: string | undefined, raw
 export = {
   VERIFIER_STATUSES,
   VERIFICATION_ROUTING_TABLE,
+  findStaleVerificationSummary,
   readVerificationStatus,
   cmdVerificationStatus,
 };
