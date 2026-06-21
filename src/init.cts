@@ -76,7 +76,7 @@ const {
 
 const { determinePhaseStatus } = commandsMod;
 const { extractFrontmatter } = frontmatterMod;
-const { findStaleVerificationSummary, readVerificationStatus } = verificationMod;
+const { readVerificationStatus } = verificationMod;
 const { evaluateUatPassed } = uatPredicateMod;
 
 // Unused but imported for structural parity
@@ -142,12 +142,8 @@ function buildPhaseCompletionProjection(
   const verificationStatus = implementationComplete
     ? readVerificationStatus(phaseFullDir)
     : { status: 'not_required', next_action: '', next_command: '' };
-  const verificationIsStale =
-    verificationStatus.status === 'passed' && findStaleVerificationSummary(phaseFullDir) !== null;
-  const projectedVerificationStatus = verificationIsStale ? 'stale' : verificationStatus.status;
-  const projectedVerificationAction = verificationIsStale
-    ? 'Verification is stale. Re-run verify-work before transition.'
-    : verificationStatus.next_action;
+  const projectedVerificationStatus = verificationStatus.status;
+  const projectedVerificationAction = verificationStatus.next_action;
   const verificationPassed = projectedVerificationStatus === 'passed';
   const phaseComplete = implementationComplete && verificationPassed;
 

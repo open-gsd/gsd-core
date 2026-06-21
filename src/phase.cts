@@ -1393,6 +1393,14 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
   const warnings: string[] = [];
   const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
+  const staleVerification = findStaleVerificationSummary(phaseFullDir);
+  if (staleVerification) {
+    error(
+      `Phase ${phaseNum} verification is stale: ${staleVerification.verificationFile} is older than ` +
+        `${staleVerification.summaryFile}. Re-run /gsd:verify-work ${phaseNum}.`,
+      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
+    );
+  }
   const verificationStatus = readVerificationStatus(phaseFullDir);
   if (verificationStatus.status !== 'passed') {
     const nextStep = verificationStatus.next_command
@@ -1400,14 +1408,6 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       : '';
     error(
       `Phase ${phaseNum} verification is incomplete: ${verificationStatus.next_action}${nextStep}`,
-      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
-    );
-  }
-  const staleVerification = findStaleVerificationSummary(phaseFullDir);
-  if (staleVerification) {
-    error(
-      `Phase ${phaseNum} verification is stale: ${staleVerification.verificationFile} is older than ` +
-        `${staleVerification.summaryFile}. Re-run /gsd:verify-work ${phaseNum}.`,
       ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
     );
   }

@@ -93,6 +93,22 @@ This returns all phases with implementation and verification projection. Use thi
 - `all_phases_verified`: all milestone phases have `phase_complete === true` and `verification_status === 'passed'`.
 - `progress_percent` should be 100%.
 
+Compute readiness from `INIT_MANAGER`, not from roadmap counts:
+
+```bash
+ALL_PHASES_VERIFIED=$(printf '%s' "$INIT_MANAGER" | jq -r '[
+  .phases[] | select(.backlog != true)
+  | (.phase_complete == true and .verification_status == "passed")
+] | all')
+```
+
+If not all_phases_verified, verified_closeout must not proceed. Set `closeout_type=override_closeout`, show each phase whose `phase_complete !== true` or `verification_status !== 'passed'`, and require an explicit user choice:
+1. **Proceed anyway** — record verification overrides in MILESTONES.md/STATE.md
+2. **Run verification first** — `/gsd:verify-work {phase}` or `/gsd:execute-phase {phase}`
+3. **Abort** — return to development
+
+Only set `closeout_type=verified_closeout` when `ALL_PHASES_VERIFIED` is `true`.
+
 **Requirements completion check (REQUIRED before presenting):**
 
 Parse REQUIREMENTS.md traceability table:

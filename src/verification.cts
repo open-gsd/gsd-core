@@ -24,6 +24,8 @@ import io = require('./io.cjs');
 import phaseId = require('./phase-id.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-scan.cjs is an export= CommonJS module
+import scanPhasePlans = require('./plan-scan.cjs');
 
 const { output, error } = io;
 const { extractPhaseToken } = phaseId;
@@ -72,6 +74,11 @@ const VERIFICATION_ROUTING_TABLE: Record<string, VerificationRoute> = {
   human_needed: {
     status: 'human_needed',
     next_action: "Human verification required. Complete the manual tests in the phase's *-UAT.md, then re-run the verify step until status is passed.",
+    next_command: '',
+  },
+  stale: {
+    status: 'stale',
+    next_action: 'Verification is stale. Re-run verify-work before transition.',
     next_command: '',
   },
   // INTERNAL SENTINEL: constructed when no *-VERIFICATION.md file exists or when
@@ -135,7 +142,8 @@ function findStaleVerificationSummary(phaseDir: string): StaleVerificationInfo |
 
   const verificationMtimeMs = fs.statSync(path.join(phaseDir, verificationFile)).mtimeMs;
   let newestStaleSummary: { summaryFile: string; mtimeMs: number } | null = null;
-  for (const summaryFile of phaseFiles.filter((f) => f.endsWith('-SUMMARY.md')).sort()) {
+  const summaryFiles = (scanPhasePlans(phaseDir) as { summaryFiles: string[] }).summaryFiles;
+  for (const summaryFile of summaryFiles.sort()) {
     const summaryMtimeMs = fs.statSync(path.join(phaseDir, summaryFile)).mtimeMs;
     if (summaryMtimeMs <= verificationMtimeMs) continue;
     if (!newestStaleSummary || summaryMtimeMs > newestStaleSummary.mtimeMs) {
@@ -213,9 +221,24 @@ function readVerificationStatus(
     return missingResult();
   }
 
+  const staleVerification = findStaleVerificationSummary(phaseDir);
+  if (staleVerification) {
+    const entry = VERIFICATION_ROUTING_TABLE['stale'];
+    return {
+      status: entry.status,
+      next_action: entry.next_action,
+      next_command: `/gsd:verify-work ${phaseNumber}`,
+    };
+  }
+
   // 3. Route — exclude internal sentinels from raw-file lookup (they are
   // constructed internally above, never written by the verifier).
-  if (rawStatus in VERIFICATION_ROUTING_TABLE && rawStatus !== 'missing' && rawStatus !== 'unknown') {
+  if (
+    rawStatus in VERIFICATION_ROUTING_TABLE &&
+    rawStatus !== 'missing' &&
+    rawStatus !== 'unknown' &&
+    rawStatus !== 'stale'
+  ) {
     const entry = VERIFICATION_ROUTING_TABLE[rawStatus];
     // gaps_found: build the phase-specific command here rather than in the table.
     const next_command =

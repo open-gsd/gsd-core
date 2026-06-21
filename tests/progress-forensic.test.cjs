@@ -160,6 +160,10 @@ describe('#1107: progress routing consults verification.status before reporting 
       workflow.includes('verification_status'),
       'progress workflow must track a verification_status value for routing'
     );
+    assert.ok(
+      workflow.includes('stale verification'),
+      'progress workflow must document that verification.status projects stale verification'
+    );
   });
 
   test('routing table has gaps_found and human_needed rows BEFORE the generic complete row', () => {
