@@ -2444,6 +2444,11 @@ function rewriteStagedSkillBodies(stagedDir, opts) {
  * attribution from opts, then delegates to applyRuntimeContentRewritesForCommandsInPlace
  * (single copy+rewrite owner).
  *
+ * @internal — symmetric companion to rewriteStagedSkillBodies; retained as the deep-seam
+ * API for command bodies. No production caller today (install rewrites commands via
+ * copyWithPathReplacement → applyRuntimeContentRewritesForCommandsInPlace). Kept for
+ * API symmetry + test coverage.
+ *
  * @returns {string} path to the temp dir (caller is responsible for cleanup)
  */
 function rewriteStagedCommandBodies(stagedDir, opts) {

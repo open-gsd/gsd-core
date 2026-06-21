@@ -68,6 +68,29 @@ describe('_computePathPrefix', () => {
     });
     assert.equal(prefix, '/opt/custom-cursor/');
   });
+
+  test('isWindowsHost tripwire — Windows paths collapse to $HOME/ same as POSIX (no-op today)', () => {
+    // Documents CURRENT behavior: isWindowsHost is accepted but not branched on.
+    // Both win32=true and win32=false return '$HOME/.cursor/' for a home-relative target.
+    // If a future Windows-specific branch is added, this tripwire fails and forces
+    // an explicit decision about what to return on Windows.
+    const withWindows = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: true,
+      resolvedTarget: 'C:/Users/matte/.cursor',
+      homeDir: 'C:/Users/matte',
+    });
+    const withoutWindows = conversion._computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: 'C:/Users/matte/.cursor',
+      homeDir: 'C:/Users/matte',
+    });
+    assert.equal(withWindows, '$HOME/.cursor/');
+    assert.strictEqual(withWindows, withoutWindows);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -228,6 +251,52 @@ describe('rewriteStagedCommandBodies', () => {
       scope: 'global',
     });
     assert.equal(result, '/nonexistent/dir', 'should return input path unchanged for missing dir');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Error-path: applyRuntimeContentRewritesForCommandsInPlace must rm the tempDir
+// on any exception and NOT leave an orphaned gsd-cmd-rewrites-* directory.
+// ---------------------------------------------------------------------------
+
+describe('applyRuntimeContentRewritesForCommandsInPlace — error-path tempDir cleanup', () => {
+  test('rmSync is called on the tempDir when readFileSync throws (deterministic monkeypatch)', () => {
+    // Asserting the injected error propagates proves the throw happens AFTER the tempDir is
+    // created (the function creates tempDir, then reads .md), so the catch's rmSync cleanup
+    // is genuinely exercised — deterministic on every platform/uid.
+    const stagedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-error-path-'));
+    fs.writeFileSync(path.join(stagedDir, 'x.md'), '# test\n');
+
+    const before = new Set(
+      fs.readdirSync(os.tmpdir()).filter(n => n.startsWith('gsd-cmd-rewrites-'))
+    );
+
+    const origReadFileSync = fs.readFileSync;
+    let leaked = [];
+    try {
+      fs.readFileSync = () => { throw new Error('injected read failure'); };
+
+      assert.throws(
+        () => conversion.applyRuntimeContentRewritesForCommandsInPlace(stagedDir, 'cursor', '/tmp/x/', false),
+        /injected read failure/,
+      );
+
+      // Restore before any further fs use so the snapshot read is trustworthy.
+      fs.readFileSync = origReadFileSync;
+
+      const after = fs.readdirSync(os.tmpdir()).filter(n => n.startsWith('gsd-cmd-rewrites-'));
+      leaked = after.filter(n => !before.has(n));
+      assert.deepStrictEqual(leaked, [], `tempDir not cleaned up on error: ${leaked.join(',')}`);
+    } finally {
+      // Idempotent restore — guard against early-throw paths above.
+      fs.readFileSync = origReadFileSync;
+      // Clean up the staged dir created for this test.
+      cleanup(stagedDir);
+      // Clean up any genuinely leaked gsd-cmd-rewrites-* dirs so the runner stays clean.
+      for (const n of leaked) {
+        cleanup(path.join(os.tmpdir(), n));
+      }
+    }
   });
 });
 
