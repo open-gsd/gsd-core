@@ -527,7 +527,32 @@ If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check fro
 
 If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
-Check the shared UAT-plus-verification completion predicate before transition:
+If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate:
+
+```bash
+PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
+VERIFICATION_FILE=$(ls "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1)
+VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null)
+VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status // empty' 2>/dev/null || echo "")
+PHASE_VERIFICATION_STATUS=$(printf '%s' "$INIT" | jq -r '.phase_completion.verification_status // empty' 2>/dev/null || echo "")
+if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
+  gsd_run query frontmatter.set "$VERIFICATION_FILE" status passed
+fi
+```
+
+If `PHASE_VERIFICATION_STATUS` is `stale`, stop before phase advancement and present:
+
+```
+All UAT tests passed, but phase advancement is blocked until canonical verification is fresh.
+
+Blocking completion:
+verification is stale
+
+- `/gsd:execute-phase {phase}` — regenerate execution verification
+- `/gsd:verify-work {phase}` — resume UAT if blockers remain
+```
+
+Otherwise, check the shared UAT-plus-verification completion predicate before transition:
 
 ```bash
 PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)

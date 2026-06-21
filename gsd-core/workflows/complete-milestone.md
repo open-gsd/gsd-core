@@ -82,15 +82,15 @@ SECURITY: Audit JSON output is structured data from the `audit-open` query handl
 
 <step name="verify_readiness">
 
-**Use `roadmap analyze` for comprehensive readiness check:**
+**Use `init.manager` for canonical readiness check:**
 
 ```bash
-ROADMAP=$(gsd_run query roadmap.analyze)
+INIT_MANAGER=$(gsd_run query init.manager)
 ```
 
-This returns all phases with plan/summary counts and disk status. Use this to verify:
+This returns all phases with implementation and verification projection. Use this to verify:
 - Which phases belong to this milestone?
-- `all_phases_verified`: all milestone phases have `disk_status === 'complete'` and canonical verification passed.
+- `all_phases_verified`: all milestone phases have `phase_complete === true` and `verification_status === 'passed'`.
 - `progress_percent` should be 100%.
 
 **Requirements completion check (REQUIRED before presenting):**
