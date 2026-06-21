@@ -477,36 +477,21 @@ Skill(skill="gsd-code-review", args="${PHASE_NUM} --fix --auto")
 
 **3d. Post-Execution Routing**
 
-Wait for execute completion when interactive, then read verification:
+After execute, read canonical verification:
 
 ```bash
-VERIFY_STATUS=$(grep "^status:" "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" 2>/dev/null | jq -r '.status//empty')
 ```
 
-Use `PHASE_DIR` from step 3a; if absent, re-fetch:
+If `PHASE_DIR` is absent, re-fetch `init.phase-op ${PHASE_NUM}` and parse `phase_dir`.
 
-```bash
-PHASE_STATE=$(gsd_run query init.phase-op ${PHASE_NUM})
-```
-
-Parse `phase_dir` from the JSON.
-
-If `VERIFY_STATUS` is empty, go to handle_blocker: "Execute phase ${PHASE_NUM} did not produce verification results."
+If `VERIFY_STATUS` is empty, handle_blocker: "No verification results for phase ${PHASE_NUM}."
 
 **If `passed`:**
 
-Display:
-```
-Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed
-```
+Display `Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then Proceed to iterate step.
 
-Run transition before iterating:
-
-```text
-@~/.claude/gsd-core/workflows/transition.md
-```
-
-Proceed to iterate step.
+**If `stale`:** handle_blocker: "Stale verification for phase ${PHASE_NUM}."
 
 **If `human_needed`:**
 
@@ -561,10 +546,12 @@ Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
 
 Re-read verification status:
 ```bash
-VERIFY_STATUS=$(grep "^status:" "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" 2>/dev/null | jq -r '.status//empty')
 ```
 
 If `passed` or `human_needed`: route normally.
+
+If `stale`: handle_blocker: "Stale verification for phase ${PHASE_NUM}."
 
 If still `gaps_found` after this retry: Display "Gaps persist after closure attempt." and ask via AskUserQuestion:
 - **question:** "Gap closure did not fully resolve issues. How to proceed?"

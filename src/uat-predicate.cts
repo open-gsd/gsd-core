@@ -19,6 +19,9 @@ const { extractFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { stripFencedCode } = markdownSectionizer;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verification = require('./verification.cjs');
+const { readVerificationStatus } = verification;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -307,8 +310,13 @@ function evaluateUatPassed(
   }
 
   // ── Policy: requireVerification ───────────────────────────────────────────
-  if (requireVerification && !hasPassingVerification) {
-    blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
+  if (requireVerification) {
+    const verificationStatus = readVerificationStatus(phaseFullDir).status;
+    if (verificationStatus === 'stale') {
+      blockers.push('policy: verification status=stale');
+    } else if (verificationStatus !== 'passed' || !hasPassingVerification) {
+      blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
+    }
   }
 
   // ── Determine no_uat_artifacts and passed ─────────────────────────────────

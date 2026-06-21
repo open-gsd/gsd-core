@@ -154,6 +154,33 @@ describe('autonomous verification deferral contract', () => {
     );
   });
 
+  test('workflow reads canonical verification status before human-needed promotion (#1522)', () => {
+    const workflow = read(WORKFLOW_PATH);
+    const waitIdx = workflow.indexOf('After execute, read canonical verification');
+    const humanNeededIdx = workflow.indexOf('**If `human_needed`:**', waitIdx);
+    const promoteIdx = workflow.indexOf('set VERIFICATION frontmatter `status: passed`', humanNeededIdx);
+    const section = workflow.slice(waitIdx, humanNeededIdx);
+
+    assert.ok(waitIdx !== -1, 'workflow must document the post-execution verification read');
+    assert.ok(humanNeededIdx > waitIdx, 'human_needed branch must follow verification status read');
+    assert.ok(promoteIdx > humanNeededIdx, 'human_needed branch must contain the promotion action');
+    assert.match(
+      section,
+      /VERIFY_STATUS=\$\(gsd_run query verification\.status "\$\{PHASE_DIR\}" 2>\/dev\/null \| jq -r '\.status\/\/empty'\)/,
+      'autonomous must route human validation through canonical verification.status',
+    );
+    assert.match(
+      section,
+      /jq -r '\.status\/\/empty'/,
+      'autonomous must parse the projected canonical status value',
+    );
+    assert.doesNotMatch(
+      section,
+      /grep "\^status:"/,
+      'autonomous must not route stale human_needed reports from raw frontmatter',
+    );
+  });
+
   test('workflow discovers incomplete phases from canonical verification projection (#1522)', () => {
     const workflow = read(WORKFLOW_PATH);
     const discoverStart = workflow.indexOf('<step name="discover_phases">');
