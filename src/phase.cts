@@ -1393,16 +1393,6 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
   const warnings: string[] = [];
   const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
-  const verificationStatus = readVerificationStatus(phaseFullDir);
-  if (verificationStatus.status !== 'passed') {
-    const nextStep = verificationStatus.next_command
-      ? ` Next: ${verificationStatus.next_command}`
-      : '';
-    error(
-      `Phase ${phaseNum} verification is incomplete: ${verificationStatus.next_action}${nextStep}`,
-      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
-    );
-  }
 
   try {
     const phaseFiles = fs.readdirSync(phaseFullDir);
@@ -1438,7 +1428,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   let nextPhaseName: string | null = null;
   let isLastPhase = true;
 
-  withPlanningLock(cwd, () => {
+  const verificationBlocked = withPlanningLock(cwd, () => {
+    const verificationStatus = readVerificationStatus(phaseFullDir);
+    if (verificationStatus.status !== 'passed') {
+      return verificationStatus;
+    }
+
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];
       let roadmapContent: string | null = null;
@@ -1785,7 +1780,18 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     } else {
       runPhaseCompleteTransaction();
     }
+    return null;
   });
+
+  if (verificationBlocked) {
+    const nextStep = verificationBlocked.next_command
+      ? ` Next: ${verificationBlocked.next_command}`
+      : '';
+    error(
+      `Phase ${phaseNum} verification is incomplete: ${verificationBlocked.next_action}${nextStep}`,
+      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
+    );
+  }
 
   let autoPruned = false;
   try {
