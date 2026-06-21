@@ -536,7 +536,7 @@ VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null
 VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status // empty' 2>/dev/null || echo "")
 PHASE_VERIFICATION_STATUS=$(printf '%s' "$INIT" | jq -r '.phase_completion.verification_status // empty' 2>/dev/null || echo "")
 if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
-  gsd_run query frontmatter.set "$VERIFICATION_FILE" status passed
+  gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed
 fi
 ```
 

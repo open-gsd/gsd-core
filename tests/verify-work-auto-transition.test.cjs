@@ -99,7 +99,7 @@ describe('verify-work.md — auto-transition after UAT passes with 0 issues', ()
     const content = fs.readFileSync(VERIFY_WORK, 'utf-8');
     const statusIdx = content.indexOf('VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR"');
     const humanNeededIdx = content.indexOf('if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then');
-    const setPassedIdx = content.indexOf('gsd_run query frontmatter.set "$VERIFICATION_FILE" status passed');
+    const setPassedIdx = content.indexOf('gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed');
     const predicateIdx = content.indexOf('PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)');
 
     assert.ok(statusIdx !== -1, 'verify-work.md must inspect canonical verification status');
