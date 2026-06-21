@@ -426,6 +426,10 @@ describe('complete-milestone workflow has pre-close audit gate (#2158)', () => {
     const readinessStep = extractStep(completeMilestoneContent, 'verify_readiness');
 
     assert.match(readinessStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.ok(
+      readinessStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
+      'complete-milestone readiness must dereference large init.manager payloads before jq',
+    );
     assert.match(readinessStep, /select\(\(\.number \| tostring \| test\("\^999/);
     assert.match(readinessStep, /\| not\)\)/);
     assert.match(readinessStep, /phase_complete === true/);

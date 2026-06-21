@@ -124,17 +124,18 @@ Run phase discovery:
 
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
+if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
 ```
 
 Parse the JSON `phases` array.
 
 **Filter to incomplete phases:** Keep `phase_complete !== true`, including implemented phases with `verification_status !== "passed"`.
 
-**Apply `--from N` filter:** If `FROM_PHASE` was provided, additionally filter out phases where `number < FROM_PHASE` (use numeric comparison — handles decimal phases like "5.1").
+**Apply `--from N`:** If set, filter out phases where `number < FROM_PHASE` (numeric compare; handles "5.1").
 
-**Apply `--to N` filter:** If `TO_PHASE` was provided, additionally filter out phases where `number > TO_PHASE` (use numeric comparison). This limits execution to phases up through the target phase.
+**Apply `--to N`:** If set, filter out phases where `number > TO_PHASE` (numeric compare).
 
-**Apply `--only N` filter:** If `ONLY_PHASE` was provided, additionally filter OUT phases where `number != ONLY_PHASE`. This means the phase list will contain exactly one phase (or zero if already complete).
+**Apply `--only N`:** If set, filter out phases where `number != ONLY_PHASE`.
 
 **If `TO_PHASE` is set and no phases remain** (all phases up to N are already completed):
 
@@ -637,12 +638,13 @@ Read and execute: `$HOME/.claude/gsd-core/references/autonomous-smart-discuss.md
  Resume with: /gsd:autonomous --from ${next_incomplete_phase}
 ```
 
-Proceed directly to lifecycle step (which handles partial completion — skips audit/complete/cleanup since not all phases are done). Exit cleanly.
+Proceed to lifecycle step (partial completion skips audit/complete/cleanup). Exit cleanly.
 
-**Otherwise:** After each phase, re-read manager projection for inserted phases and verification freshness:
+**Otherwise:** After each phase, re-read manager projection:
 
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
+if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
 ```
 
 Re-filter incomplete phases using the same logic as discover_phases:

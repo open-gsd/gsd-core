@@ -86,6 +86,7 @@ SECURITY: Audit JSON output is structured data from the `audit-open` query handl
 
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
+if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
 ```
 
 This returns all phases with implementation and verification projection. Use this to verify:
