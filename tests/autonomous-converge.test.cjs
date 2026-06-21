@@ -153,4 +153,24 @@ describe('autonomous verification deferral contract', () => {
       'normal transition post-processing must run before autonomous iterates',
     );
   });
+
+  test('workflow discovers incomplete phases from canonical verification projection (#1522)', () => {
+    const workflow = read(WORKFLOW_PATH);
+    const discoverStart = workflow.indexOf('<step name="discover_phases">');
+    const discoverEnd = workflow.indexOf('</step>', discoverStart);
+    const iterateStart = workflow.indexOf('<step name="iterate">');
+    const iterateEnd = workflow.indexOf('</step>', iterateStart);
+    const discoverStep = workflow.slice(discoverStart, discoverEnd);
+    const iterateStep = workflow.slice(iterateStart, iterateEnd);
+
+    assert.match(discoverStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.match(discoverStep, /phase_complete !== true/);
+    assert.match(discoverStep, /verification_status !== "passed"/);
+    assert.doesNotMatch(discoverStep, /ROADMAP=\$\(gsd_run query roadmap\.analyze\)/);
+    assert.doesNotMatch(discoverStep, /disk_status !== "complete"/);
+
+    assert.match(iterateStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.match(iterateStep, /phase_complete !== true/);
+    assert.match(iterateStep, /verification_status !== "passed"/);
+  });
 });

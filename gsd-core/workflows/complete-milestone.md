@@ -97,7 +97,7 @@ Compute readiness from `INIT_MANAGER`, not from roadmap counts:
 
 ```bash
 ALL_PHASES_VERIFIED=$(printf '%s' "$INIT_MANAGER" | jq -r '[
-  .phases[] | select(.backlog != true)
+  .phases[] | select((.number | tostring | test("^999(\\.|$)") | not))
   | (.phase_complete == true and .verification_status == "passed")
 ] | all')
 ```

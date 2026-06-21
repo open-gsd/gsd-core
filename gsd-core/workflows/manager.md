@@ -229,9 +229,10 @@ When the user selects a compound option, behavior depends on the runtime — the
 
 Inline verification:
 
-```
-Skill(skill="gsd-verify-work", args="{PHASE_NUM}")
-```
+For each verification recommendation, dispatch by the recommended action's `command`:
+- If `command` contains `execute-phase`, run `Skill(skill="gsd-execute-phase", args="{PHASE_NUM} {manager_flags.execute}")`.
+- If `command` contains `verify-work`, run `Skill(skill="gsd-verify-work", args="{PHASE_NUM}")`.
+- If `command` is missing or unrecognized, stop and show the recommendation row instead of guessing.
 
 Inline discuss:
 

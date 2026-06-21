@@ -426,6 +426,8 @@ describe('complete-milestone workflow has pre-close audit gate (#2158)', () => {
     const readinessStep = extractStep(completeMilestoneContent, 'verify_readiness');
 
     assert.match(readinessStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.match(readinessStep, /select\(\(\.number \| tostring \| test\("\^999/);
+    assert.match(readinessStep, /\| not\)\)/);
     assert.match(readinessStep, /phase_complete === true/);
     assert.match(readinessStep, /verification_status === 'passed'/);
     assert.match(readinessStep, /If not all_phases_verified/);

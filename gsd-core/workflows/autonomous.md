@@ -123,12 +123,12 @@ If `PLAN_STRATEGY` is `converge`, display: `Planning: Plan-review convergence en
 Run phase discovery:
 
 ```bash
-ROADMAP=$(gsd_run query roadmap.analyze)
+INIT_MANAGER=$(gsd_run query init.manager)
 ```
 
 Parse the JSON `phases` array.
 
-**Filter to incomplete phases:** Keep only phases where `disk_status !== "complete"` OR `roadmap_complete === false`.
+**Filter to incomplete phases:** Keep `phase_complete !== true`, including implemented phases with `verification_status !== "passed"`.
 
 **Apply `--from N` filter:** If `FROM_PHASE` was provided, additionally filter out phases where `number < FROM_PHASE` (use numeric comparison — handles decimal phases like "5.1").
 
@@ -652,14 +652,14 @@ Read and execute: `$HOME/.claude/gsd-core/references/autonomous-smart-discuss.md
 
 Proceed directly to lifecycle step (which handles partial completion — skips audit/complete/cleanup since not all phases are done). Exit cleanly.
 
-**Otherwise:** After each phase completes, re-read ROADMAP.md to catch phases inserted mid-execution (decimal phases like 5.1):
+**Otherwise:** After each phase, re-read manager projection for inserted phases and verification freshness:
 
 ```bash
-ROADMAP=$(gsd_run query roadmap.analyze)
+INIT_MANAGER=$(gsd_run query init.manager)
 ```
 
 Re-filter incomplete phases using the same logic as discover_phases:
-- Keep phases where `disk_status !== "complete"` OR `roadmap_complete === false`
+- Keep phases where `phase_complete !== true` or `verification_status !== "passed"`
 - Apply `--from N` filter if originally provided
 - Apply `--to N` filter if originally provided
 - Sort by number ascending

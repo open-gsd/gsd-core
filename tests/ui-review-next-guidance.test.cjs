@@ -32,14 +32,19 @@ describe('ui-review next guidance', () => {
 });
 
 describe('manager verify dispatch', () => {
-  test('dispatches verify recommendations through verify-work (#1523)', () => {
+  test('dispatches verify recommendations through their command field (#1523)', () => {
     const content = fs.readFileSync(MANAGER, 'utf-8');
     const compoundBlock = content.slice(
       content.indexOf('### Compound Action'),
       content.indexOf('### Discuss Phase N'),
     );
 
-    assert.match(compoundBlock, /Skill\(skill="gsd-verify-work", args="\{PHASE_NUM\}"\)/);
-    assert.match(compoundBlock, /run verification actions/i);
+    assert.match(compoundBlock, /recommended action's `command`/);
+    assert.match(compoundBlock, /gsd-execute-phase/);
+    assert.match(compoundBlock, /gsd-verify-work/);
+    assert.doesNotMatch(
+      compoundBlock,
+      /Inline verification:\s*```[\s\S]*Skill\(skill="gsd-verify-work", args="\{PHASE_NUM\}"\)/,
+    );
   });
 });
