@@ -6698,6 +6698,7 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
 // reference-identical to the conversion module (consistent with the walkers above).
 // All call sites are below this line → no TDZ hazard.
 const _applyRuntimeRewrites = runtimeArtifactConversion._applyRuntimeRewrites;
+const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaudeRuntimeDefaults;
 
 /**
  * Copy a staged directory's contents into destDir.
@@ -7288,6 +7289,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
       }
       content = processAttribution(content, getCommitAttribution(runtime));
+
+      // #1521: stamp the workflow runtime-resolution block so every non-Claude
+      // install resolves its own runtime identity and defaults use_worktrees=false.
+      // copyWithPathReplacement is the emit path for gsd-core/workflows/*.md;
+      // _applyRuntimeRewrites is NOT invoked here, so this is what makes the fix
+      // live in real installs (it is a no-op for files without those lines).
+      if (runtime !== 'claude') {
+        content = _stampNonClaudeRuntimeDefaults(content, runtime);
+      }
 
       // #3683 — normalize /gsd:<cmd> → /gsd-<cmd> in any body passing through
       // copyWithPathReplacement for runtimes that register commands under the

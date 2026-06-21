@@ -66,17 +66,19 @@ test('codex emit defaults workflow.use_worktrees to false', () => {
   );
 });
 
-test('non-codex runtime (cursor) does NOT rewrite the runtime default — stamping is codex-scoped', () => {
+test('claude runtime does NOT rewrite the runtime default — stamping is non-claude-scoped (#1521 inversion)', () => {
+  // #1521 generalizes stamping to ALL non-Claude runtimes. The negative case
+  // (no stamping) is now the 'claude' runtime, not other non-Claude runtimes.
   const line =
     'RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")\n';
-  const out = conversion._applyRuntimeRewrites(line, 'cursor', '/home/u/.cursor/', true, undefined);
+  const out = conversion._applyRuntimeRewrites(line, 'claude', '$HOME/.claude/', true, undefined);
   assert.ok(
     out.includes('--default claude --raw'),
-    `Expected cursor output to preserve '--default claude --raw'; got:\n${out}`,
+    `Expected claude output to preserve '--default claude --raw'; got:\n${out}`,
   );
   assert.ok(
     !out.includes('--default codex'),
-    `Expected cursor output NOT to contain '--default codex'; got:\n${out}`,
+    `Expected claude output NOT to contain '--default codex'; got:\n${out}`,
   );
 });
 
@@ -107,14 +109,17 @@ test('regression: every edited workflow gets codex-stamped (source↔engine pari
 // Property tests (RULESET.TESTS.property-based-testing)
 // ---------------------------------------------------------------------------
 
-test('property: runtime stamping applies iff runtime is codex (#1515)', () => {
-  const RUNTIMES = ['claude','codex','cursor','cline','windsurf','augment','trae','qwen','hermes','gemini','opencode','kilo','copilot','antigravity','codebuddy'];
+test('property: runtime stamping applies for ALL non-claude runtimes; only claude leaves --default claude unchanged (#1521)', () => {
+  // #1521: generalised from codex-only to all non-claude runtimes.
+  // Use the canonical list from the conversion module to avoid hand-rolled array drift.
+  const { NON_CLAUDE_RUNTIMES } = conversion;
+  const RUNTIMES = ['claude', ...NON_CLAUDE_RUNTIMES];
   const line = 'RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")\n';
   fc.assert(fc.property(fc.constantFrom(...RUNTIMES), (rt) => {
     const out = conversion._applyRuntimeRewrites(line, rt, `$HOME/.${rt}/`, true, undefined);
-    return rt === 'codex'
-      ? out.includes('--default codex --raw') && !out.includes('--default claude')
-      : out.includes('--default claude --raw') && !out.includes('--default codex');
+    return rt === 'claude'
+      ? out.includes('--default claude --raw') && !out.includes('--default codex')
+      : out.includes(`--default ${rt} --raw`) && !out.includes('--default claude');
   }));
 });
 
