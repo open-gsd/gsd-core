@@ -224,8 +224,8 @@ Go to exit step.
 
 When the user selects a compound option, behavior depends on the runtime — the Plan Phase N / Execute Phase N handlers below resolve it via `gsd_run query config-get runtime`:
 
-- **On Claude Code:** a backgrounded agent cannot nest the pipeline's subagents, so run the chosen plan/execute step(s) **inline** via their handlers below (in order), then run verification actions, then run the inline discuss. There is no overlap.
-- **On other runtimes:** **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below — then run verification actions, then run the inline discuss; the background agents continue while you verify/discuss.
+- **On Codex:** **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below — then run verification actions, then run the inline discuss; the background agents continue while you verify/discuss.
+- **On Claude Code or any other non-Codex runtime:** run the chosen plan/execute step(s) **inline** via their handlers below (in order), then run verification actions, then run the inline discuss. There is no overlap.
 
 Inline verification:
 

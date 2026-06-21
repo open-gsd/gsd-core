@@ -374,6 +374,42 @@ describe('init manager', () => {
     assert.match(output.recommended_actions[0].command, /verify-work 1/);
   });
 
+  test('checked unpadded roadmap token does not satisfy padded unverified dependency', () => {
+    writeState(tmpDir);
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '## Progress',
+      '',
+      '- [x] **Phase 1: Foundation**',
+      '- [ ] **Phase 02: Followup**',
+      '',
+      '### Phase 01: Foundation',
+      '',
+      '**Goal:** Build foundation',
+      '',
+      '### Phase 02: Followup',
+      '',
+      '**Goal:** Build followup',
+      '**Depends on:** Phase 1',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const phase1 = output.phases.find(p => p.number === '01');
+    const phase2 = output.phases.find(p => p.number === '02');
+
+    assert.ok(phase1, 'Phase 01 should be in the output');
+    assert.strictEqual(phase1.phase_complete, false, 'Phase 01 is unverified and must not be complete');
+    assert.ok(phase2, 'Phase 02 should be in the output');
+    assert.strictEqual(phase2.deps_satisfied, false, 'Phase 02 dependency must wait for canonical Phase 01 verification');
+  });
+
   test('WAITING.json detected when present', () => {
     writeState(tmpDir);
     writeRoadmap(tmpDir, [{ number: '1', name: 'Test' }]);

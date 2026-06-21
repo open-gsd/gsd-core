@@ -1469,26 +1469,44 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     }
   }
 
+  function normalizePhaseNumber(value: string): string {
+    return value
+      .split('.')
+      .map((part) => {
+        const match = /^(\d+)([A-Z]?)$/i.exec(part);
+        if (!match) return part;
+        return `${Number(match[1])}${match[2].toUpperCase()}`;
+      })
+      .join('.');
+  }
+
   const completedNums = new Set(
-    phases.filter((p) => p['phase_complete'] === true).map((p) => p['number'] as string),
+    phases
+      .filter((p) => p['phase_complete'] === true)
+      .map((p) => normalizePhaseNumber(p['number'] as string)),
   );
-  const phaseMap = new Map(phases.map((p) => [p['number'] as string, p]));
+  const phaseMap = new Map(phases.map((p) => [normalizePhaseNumber(p['number'] as string), p]));
 
   const _allCompletedPattern = /-\s*\[x\]\s*.*Phase\s+(\d+[A-Z]?(?:\.\d+)*)[:\s]/gi;
   let _allMatch: RegExpExecArray | null;
   while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
-    const phase = phaseMap.get(_allMatch[1]);
+    const phaseNum = normalizePhaseNumber(_allMatch[1]);
+    const phase = phaseMap.get(phaseNum);
     if (!phase || phase['phase_complete'] === true) {
-      completedNums.add(_allMatch[1]);
+      completedNums.add(phaseNum);
     }
   }
 
   function reaches(from: string, to: string, visited = new Set<string>()): boolean {
-    if (visited.has(from)) return false;
-    visited.add(from);
-    const p = phaseMap.get(from);
+    const normalizedFrom = normalizePhaseNumber(from);
+    const normalizedTo = normalizePhaseNumber(to);
+    if (visited.has(normalizedFrom)) return false;
+    visited.add(normalizedFrom);
+    const p = phaseMap.get(normalizedFrom);
     if (!p || !p['dep_phases'] || (p['dep_phases'] as string[]).length === 0) return false;
-    if ((p['dep_phases'] as string[]).includes(to)) return true;
+    if ((p['dep_phases'] as string[]).some((dep) => normalizePhaseNumber(dep) === normalizedTo)) {
+      return true;
+    }
     return (p['dep_phases'] as string[]).some((dep) => reaches(dep, to, visited));
   }
 
@@ -1503,8 +1521,8 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     ) {
       phase['deps_satisfied'] = true;
     } else {
-      const depNums = (phase['depends_on'] as string).match(/\d+(?:\.\d+)*/g) || [];
-      phase['deps_satisfied'] = depNums.every((n) => completedNums.has(n));
+      const depNums = (phase['depends_on'] as string).match(/\d+[A-Z]?(?:\.\d+)*/gi) || [];
+      phase['deps_satisfied'] = depNums.every((n) => completedNums.has(normalizePhaseNumber(n)));
       phase['dep_phases'] = depNums;
     }
   }
