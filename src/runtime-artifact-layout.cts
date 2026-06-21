@@ -34,39 +34,10 @@ const conversionExports = runtimeArtifactConversion as Record<string, unknown> &
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
 
-// ---------------------------------------------------------------------------
-// Lazy installer exports (avoids GSD_TEST_MODE env mutation at module load)
-// ---------------------------------------------------------------------------
-
-interface InstallExports {
-  computePathPrefix: (opts: { isGlobal: boolean; isOpencode: boolean; isWindowsHost: boolean; resolvedTarget: string; homeDir: string }) => string;
-  applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string) => void;
-  [converterName: string]: unknown;
-}
-
-/**
- * Load bin/install.js exports in a test-safe way.
- * Sets GSD_TEST_MODE only for the duration of the require() call and only if
- * it was not already set, restoring the original value in a finally block so
- * the module-level environment is never permanently mutated.
- */
-function loadInstallExports(): InstallExports {
-  const savedTestMode = process.env['GSD_TEST_MODE'];
-  if (savedTestMode === undefined) process.env['GSD_TEST_MODE'] = '1';
-  try {
-    return _require('../../../bin/install.js') as InstallExports;
-  } finally {
-    if (savedTestMode === undefined) delete process.env['GSD_TEST_MODE'];
-    else process.env['GSD_TEST_MODE'] = savedTestMode;
-  }
-}
-
-/** Cache after first successful load. */
-let _installExports: InstallExports | null = null;
-function getInstallExports(): InstallExports {
-  if (!_installExports) _installExports = loadInstallExports();
-  return _installExports;
-}
+// loadInstallExports / getInstallExports / InstallExports removed in ADR-1508
+// / #1511 Phase 2 — removed this module's upward dependency on bin/install.js
+// (the getInstallExports relay). surface.cts now calls
+// runtimeArtifactConversion.rewriteStagedSkillBodies directly.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -494,4 +465,5 @@ function resolveRuntimeArtifactLayoutFromRegistry(
   return { runtime, configDir, scope, kinds };
 }
 
-export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, getInstallExports };
+// getInstallExports removed in ADR-1508 / #1511 Phase 2 (last upward .cts→install.js dep).
+export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot };
