@@ -131,7 +131,8 @@ describe('rewriteStagedSkillBodies', () => {
       const result = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
       // cursor rewrites ~/.claude/ → pathPrefix
       // configDir is a tmpdir, not under /home/u, so prefix = resolvedTarget + '/'
-      const resolvedTarget = path.resolve(configDir);
+      // Mirror the engine's backslash→slash normalization so the assertion holds on Windows.
+      const resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
       assert.ok(result.includes(`${resolvedTarget}/skills/foo`), `Should replace ~/.claude/skills/ with ${resolvedTarget}/skills/`);
       // cursor also rewrites ~/.cursor/ → pathPrefix
       assert.ok(result.includes(`${resolvedTarget}/skills/bar`), `Should replace ~/.cursor/skills/ with ${resolvedTarget}/skills/`);
@@ -142,8 +143,10 @@ describe('rewriteStagedSkillBodies', () => {
   });
 
   test('with injected homedir: global under home uses $HOME prefix', () => {
-    const HOME = '/home/testuser';
-    const configDir = `${HOME}/.cursor`;
+    // Real absolute path so Windows path.resolve does not re-root a POSIX literal onto a drive.
+    // The dir need not exist — the engine only string-processes it.
+    const HOME = path.resolve(os.tmpdir(), 'gsd-1511-fake-home');
+    const configDir = path.join(HOME, '.cursor');
     const stagedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-staged-'));
     try {
       const skillDir = path.join(stagedDir, 'gsd-help');
@@ -155,7 +158,7 @@ describe('rewriteStagedSkillBodies', () => {
         configDir,
         scope: 'global',
         homedir: () => HOME,
-        platform: 'linux',
+        platform: process.platform,
       });
 
       const result = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
@@ -205,7 +208,7 @@ describe('rewriteStagedCommandBodies', () => {
       const source = fs.readFileSync(path.join(stagedDir, 'help.md'), 'utf8');
       assert.ok(source.includes('~/.claude/skills/'), 'source file must not be mutated');
       // configDir is /tmp/... (not under /home/u), so prefix = resolvedTarget + '/'
-      const resolvedTarget = path.resolve(configDir);
+      const resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
       assert.ok(result.includes(`${resolvedTarget}/skills/`), 'output should have cursor path rewrite applied');
       // ~/.cursor/ also rewrites to prefix
       assert.ok(!result.includes('~/.cursor/'), 'output should have ~/.cursor/ replaced too');
