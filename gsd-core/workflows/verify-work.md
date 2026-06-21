@@ -548,8 +548,7 @@ All UAT tests passed, but phase advancement is blocked until canonical verificat
 Blocking completion:
 verification is stale
 
-- `/gsd:execute-phase {phase}` — regenerate execution verification
-- `/gsd:verify-work {phase}` — resume UAT if blockers remain
+- `/gsd:verify-work {phase}` — re-run verification against the latest summaries
 ```
 
 Otherwise, check the shared UAT-plus-verification completion predicate before transition:

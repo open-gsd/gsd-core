@@ -97,7 +97,7 @@ unless canonical verification status is `passed` (via `verification.status`,
 including stale when summaries are newer than *-VERIFICATION.md even if
 frontmatter `status` is `passed`).
 
-**If all plans complete:**
+**If all plans complete AND VERIFY_STATUS is `passed`:**
 
 <if mode="yolo">
 
