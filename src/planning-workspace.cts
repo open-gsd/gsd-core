@@ -165,6 +165,12 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
   if (clock === undefined) clock = realClock;
   const lockPath = path.join(planningDir(cwd), '.lock');
   const lockTimeout = 10000; // 10 seconds
+  // Deadman ceiling (audit M1 / R4-FIX) — set ABOVE lockTimeout so a holder that reads
+  // as alive but is actually a pid-reuse alias (the .lock body has no startTime, so
+  // liveness alone cannot detect reuse) is still recovered once its lock ages past this
+  // absolute ceiling. Without it, a false-alive holder would make withPlanningLock throw
+  // on every call with no self-heal. Mirrors acquireStateLock's deadmanCeilingMs.
+  const deadmanCeilingMs = 60000;
   const start = clock.now();
 
   // Ensure .planning/ exists
@@ -212,9 +218,17 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
         // A verified-live holder is waited on — never force-stolen — because nuking
         // a slow-but-live writer's lock corrupts the .planning/ critical section.
         try {
-          if (!_planningHolderVerifiedLive(lockPath)) {
+          let stealable = !_planningHolderVerifiedLive(lockPath);
+          if (!stealable) {
+            // Verified-live, but recover anyway once the lock crosses the absolute
+            // deadman ceiling — defeats a pid-reuse false-alive that would otherwise
+            // block forever (R4-FIX; mtime age is from lock creation, not this call).
+            const age = clock.now() - fs.statSync(lockPath).mtimeMs;
+            stealable = age > deadmanCeilingMs;
+          }
+          if (stealable) {
             fs.unlinkSync(lockPath);
-            continue; // dead/garbage holder — retry immediately to grab the freed lock
+            continue; // dead/garbage/expired holder — retry immediately to grab the freed lock
           }
         } catch { continue; }
 

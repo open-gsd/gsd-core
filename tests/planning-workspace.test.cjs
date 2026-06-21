@@ -289,4 +289,26 @@ describe('withPlanningLock PID-liveness staleness + EEXIST safety (audit M1+M2)'
     assert.ok(caught, 'helper must surface a failure rather than silently force-stealing a live lock');
     assert.notStrictEqual(caught.code, 'EEXIST', 'a raw EEXIST must never escape the lock helper (M2)');
   });
+
+  test('R4-FIX: false-alive pid-reuse holder aged past the deadman ceiling IS stolen (self-heal)', () => {
+    const reusedPid = 7373;
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: reusedPid,
+      cwd: tmpDir,
+      acquired: new Date().toISOString(),
+    }));
+
+    // Probe says the recorded pid is ALIVE — simulating pid-reuse: the original holder
+    // crashed but its pid was recycled by an unrelated live process. The .lock body has
+    // no startTime, so liveness alone cannot distinguish this from a genuine live holder.
+    planningWorkspaceDirect._setLockProbes({ isPidAlive: (pid) => pid === reusedPid });
+
+    // Lock mtime ≈ now (real); seed the fake clock ABOVE the 60 000 ms deadman ceiling so
+    // age = clock.now() - mtimeMs ≫ ceiling → the lock must be recovered despite "alive".
+    // Without the ceiling, withPlanningLock would throw on every call with no self-heal.
+    const clock = makeFakeClock(Date.now() + 120000);
+    const result = withPlanningLock(tmpDir, () => 'self-healed', clock);
+    assert.strictEqual(result, 'self-healed', 'a false-alive lock past the deadman ceiling must be stolen (no infinite block)');
+    assert.ok(!fs.existsSync(lockPath), 'lock must be released after the critical section completes');
+  });
 });
