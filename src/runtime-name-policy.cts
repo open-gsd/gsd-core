@@ -88,3 +88,32 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
   }
   return null;
 }
+
+/**
+ * Map a canonical runtime id to its on-disk local config directory name
+ * (e.g. `cursor` -> `.cursor`, `windsurf` -> `.devin`). Unknown/empty inputs
+ * fall back to `.claude`.
+ *
+ * Pure runtime-identity projection. Relocated from `bin/install.js` per
+ * ADR-1508 (epic #1507, #1510 Phase 1) so the Runtime Artifact Conversion
+ * Module's rewrite engine can consume it without importing the installer.
+ * `bin/install.js` re-exports this same function for back-compat.
+ */
+export function getDirName(runtime: string): string {
+  if (runtime === 'copilot') return '.github';
+  if (runtime === 'opencode') return '.opencode';
+  if (runtime === 'gemini') return '.gemini';
+  if (runtime === 'kilo') return '.kilo';
+  if (runtime === 'codex') return '.codex';
+  if (runtime === 'antigravity') return '.agents';
+  if (runtime === 'cursor') return '.cursor';
+  if (runtime === 'windsurf') return '.devin';
+  if (runtime === 'augment') return '.augment';
+  if (runtime === 'trae') return '.trae';
+  if (runtime === 'qwen') return '.qwen';
+  if (runtime === 'hermes') return '.hermes';
+  if (runtime === 'kimi') return '.kimi-code';
+  if (runtime === 'codebuddy') return '.codebuddy';
+  if (runtime === 'cline') return '.cline';
+  return '.claude';
+}
