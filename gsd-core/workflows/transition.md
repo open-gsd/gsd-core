@@ -77,21 +77,17 @@ cat .planning/config.json 2>/dev/null || true
 **Check for verification debt in this phase:**
 
 ```bash
-# Count outstanding items in current phase
-OUTSTANDING=""
-for f in .planning/phases/XX-current/*-UAT.md .planning/phases/XX-current/*-VERIFICATION.md; do
-  [ -f "$f" ] || continue
-  grep -q "result: pending\|result: blocked\|status: partial\|status: human_needed\|status: diagnosed" "$f" && OUTSTANDING="$OUTSTANDING\n$(basename $f)"
-done
+VERIFY_JSON=$(gsd_run query verification.status .planning/phases/XX-current 2>/dev/null || true)
+VERIFY_STATUS=$(printf '%s' "$VERIFY_JSON" | jq -r '.status//empty')
 ```
 
-**If OUTSTANDING is not empty:**
+**If VERIFY_STATUS is not `passed`:**
 
 Stop before confirming:
 
 ```
-Outstanding verification items in phase:
-{list filenames}
+Verification incomplete: ${VERIFY_STATUS:-missing}
+Next: $(printf '%s' "$VERIFY_JSON" | jq -r '.next_action//empty')
 
 Resolve before transition. Review: `/gsd:audit-uat`
 ```

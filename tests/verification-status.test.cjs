@@ -338,6 +338,26 @@ describe('verification-status', () => {
     }
   });
 
+  test('gaps_found verification older than a summary still returns gaps_found (not stale)', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-651-parent-'));
+    const dir = path.join(baseDir, '01-stale-gaps');
+    fs.mkdirSync(dir);
+    try {
+      const verificationPath = path.join(dir, '01-VERIFICATION.md');
+      const summaryPath = path.join(dir, '01-01-SUMMARY.md');
+      writeVerificationMd(dir, '01-VERIFICATION.md', 'gaps_found');
+      fs.writeFileSync(summaryPath, '# Summary');
+      setMtime(verificationPath, '2026-01-01T00:00:00.000Z');
+      setMtime(summaryPath, '2026-01-01T00:01:00.000Z');
+
+      const result = readVerificationStatus(dir);
+      assert.equal(result.status, 'gaps_found');
+      assert.equal(result.next_command, '/gsd:plan-phase 01 --gaps');
+    } finally {
+      cleanup(baseDir);
+    }
+  });
+
   test('human_needed verification older than nested plans/SUMMARY-NN.md returns stale', () => {
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-651-parent-'));
     const dir = path.join(baseDir, '01-stale-human-nested');

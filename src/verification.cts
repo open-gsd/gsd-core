@@ -221,6 +221,17 @@ function readVerificationStatus(
     return missingResult();
   }
 
+  // gaps_found takes priority over stale — gap closure is the correct next
+  // step regardless of whether summaries are newer than the verification file.
+  if (rawStatus === 'gaps_found') {
+    const entry = VERIFICATION_ROUTING_TABLE['gaps_found'];
+    return {
+      status: entry.status,
+      next_action: entry.next_action,
+      next_command: `/gsd:plan-phase ${phaseNumber} --gaps`,
+    };
+  }
+
   const staleVerification = findStaleVerificationSummary(phaseDir);
   if (staleVerification) {
     const entry = VERIFICATION_ROUTING_TABLE['stale'];
@@ -237,18 +248,14 @@ function readVerificationStatus(
     rawStatus in VERIFICATION_ROUTING_TABLE &&
     rawStatus !== 'missing' &&
     rawStatus !== 'unknown' &&
-    rawStatus !== 'stale'
+    rawStatus !== 'stale' &&
+    rawStatus !== 'gaps_found'
   ) {
     const entry = VERIFICATION_ROUTING_TABLE[rawStatus];
-    // gaps_found: build the phase-specific command here rather than in the table.
-    const next_command =
-      rawStatus === 'gaps_found'
-        ? `/gsd:plan-phase ${phaseNumber} --gaps`
-        : entry.next_command;
     return {
       status: entry.status,
       next_action: entry.next_action,
-      next_command,
+      next_command: entry.next_command,
     };
   }
 

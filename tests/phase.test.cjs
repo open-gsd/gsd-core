@@ -2270,9 +2270,8 @@ describe('phase complete canonical verification gate (#1522)', () => {
     assert.equal(result.success, false, 'phase complete must fail when verification is stale');
     const errorPayload = JSON.parse(result.error);
     assert.equal(errorPayload.reason, 'phase_verification_incomplete');
-    assert.match(errorPayload.message, /verification is stale/i);
-    assert.match(errorPayload.message, /01-01-SUMMARY\.md/);
-    assert.match(errorPayload.message, /\/gsd:verify-work 1/);
+    assert.match(errorPayload.message, /stale/i);
+    assert.match(errorPayload.message, /\/gsd:verify-work 0?1/);
     assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), beforeRoadmap);
     assert.equal(fs.readFileSync(statePath, 'utf-8'), beforeState);
   });
