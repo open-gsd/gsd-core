@@ -33,6 +33,11 @@ const {
   getGlobalConfigDir,
   getGlobalSkillsBase,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
+// getDirName (runtime -> local config dir name) is relocated out of this
+// installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
+// conversion module's rewrite engine can consume it without importing
+// bin/install.js. Re-exported below for back-compat consumers/tests.
+const { getDirName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
@@ -461,25 +466,8 @@ Then re-run: npx ${pkg.name}@latest
   }
 }
 
-// Helper to get directory name for a runtime (used for local/project installs)
-function getDirName(runtime) {
-  if (runtime === 'copilot') return '.github';
-  if (runtime === 'opencode') return '.opencode';
-  if (runtime === 'gemini') return '.gemini';
-  if (runtime === 'kilo') return '.kilo';
-  if (runtime === 'codex') return '.codex';
-  if (runtime === 'antigravity') return '.agents';
-  if (runtime === 'cursor') return '.cursor';
-  if (runtime === 'windsurf') return '.devin';
-  if (runtime === 'augment') return '.augment';
-  if (runtime === 'trae') return '.trae';
-  if (runtime === 'qwen') return '.qwen';
-  if (runtime === 'hermes') return '.hermes';
-  if (runtime === 'kimi') return '.kimi-code';
-  if (runtime === 'codebuddy') return '.codebuddy';
-  if (runtime === 'cline') return '.cline';
-  return '.claude';
-}
+// getDirName (runtime -> local config dir name) now lives in
+// runtime-name-policy.cjs (ADR-1508 / #1510 Phase 1); imported + re-exported.
 
 /**
  * Get the config directory path relative to home directory for a runtime
@@ -643,6 +631,11 @@ const referencesHook = hooksSurface.referencesHook;
 // applySettingsJsonHooks: mutates settings.hooks.* in place with all GSD-managed
 // hook registrations for settings.json-surface runtimes (ADR-857 phase 5f-1b).
 const applySettingsJsonHooks = hooksSurface.applySettingsJsonHooks;
+// processAttribution: pure Co-Authored-By content transform, relocated to the
+// conversion module (ADR-1508 / #1510 Phase 1). Bound here so install.js
+// callers continue to work and there is a single implementation. (All call
+// sites are below this line, so the const binding has no TDZ hazard.)
+const processAttribution = runtimeArtifactConversion.processAttribution;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
   return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
@@ -1417,24 +1410,9 @@ function getCommitAttribution(runtime) {
   return result;
 }
 
-/**
- * Process Co-Authored-By lines based on attribution setting
- * @param {string} content - File content to process
- * @param {null|undefined|string} attribution - null=remove, undefined=keep, string=replace
- * @returns {string} Processed content
- */
-function processAttribution(content, attribution) {
-  if (attribution === null) {
-    // Remove Co-Authored-By lines and the preceding blank line
-    return content.replace(/(\r?\n){2}Co-Authored-By:.*$/gim, '');
-  }
-  if (attribution === undefined) {
-    return content;
-  }
-  // Replace with custom attribution (escape $ to prevent backreference injection)
-  const safeAttribution = attribution.replace(/\$/g, '$$$$');
-  return content.replace(/Co-Authored-By:.*$/gim, `Co-Authored-By: ${safeAttribution}`);
-}
+// processAttribution (pure Co-Authored-By content transform) relocated to
+// runtime-artifact-conversion.cjs (ADR-1508 / #1510 Phase 1); bound above.
+// getCommitAttribution stays here — it is impure install-time config I/O.
 
 /**
  * Convert Claude Code frontmatter to opencode format

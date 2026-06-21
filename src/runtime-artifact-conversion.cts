@@ -2095,7 +2095,36 @@ function convertClaudeCommandToKiloSkill(content, skillName) {
 }
 
 
+/**
+ * Apply Co-Authored-By attribution policy to file content.
+ *   - null      -> remove the Co-Authored-By line and its preceding blank line
+ *   - undefined -> leave content unchanged
+ *   - string    -> replace the value ($ escaped to block backreference injection)
+ *
+ * Pure content transform, relocated from bin/install.js per ADR-1508
+ * (epic #1507, #1510 Phase 1). NOTE: getCommitAttribution stays in the
+ * installer — it is impure install-time config I/O (reads runtime
+ * settings.json, uses the install-time config-dir + cache), not a content
+ * transform, so it does not belong behind this content-conversion seam.
+ */
+function processAttribution(
+  content: string,
+  attribution: string | null | undefined,
+): string {
+  if (attribution === null) {
+    // Remove Co-Authored-By lines and the preceding blank line
+    return content.replace(/(\r?\n){2}Co-Authored-By:.*$/gim, '');
+  }
+  if (attribution === undefined) {
+    return content;
+  }
+  // Replace with custom attribution (escape $ to prevent backreference injection)
+  const safeAttribution = attribution.replace(/\$/g, '$$$$');
+  return content.replace(/Co-Authored-By:.*$/gim, `Co-Authored-By: ${safeAttribution}`);
+}
+
 export = {
+  processAttribution,
   yamlIdentifier,
   yamlQuote,
   toSingleLine,
