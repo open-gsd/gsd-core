@@ -91,8 +91,8 @@ Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelizat
 Read runtime/worktree config and fail closed before any executor dispatch:
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
-USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees 2>/dev/null || echo "true")
+RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
+USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 EXECUTOR_STALL_INTERVAL_MINUTES=$(gsd_run query config-get executor.stall_detect_interval_minutes 2>/dev/null || echo "5")
 EXECUTOR_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get executor.stall_threshold_minutes 2>/dev/null || echo "10")
 

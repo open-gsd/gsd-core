@@ -247,7 +247,7 @@ After discuss completes, loop back to dashboard step.
 Planning runs autonomously. **First resolve the runtime.** On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so it cannot spawn the plan-checker the pipeline relies on — backgrounding it there silently turns `workflow.plan_check` into a self-check. So run plan **inline** on Claude Code, and **background** it only on runtimes where a backgrounded agent can still nest subagents.
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 ```
 
 **If `RUNTIME` is `claude` (Claude Code):** Run plan inline so the plan-checker and quality gates actually run — do NOT wrap it in `Agent(run_in_background=true, …)`:
@@ -301,7 +301,7 @@ Loop back to dashboard step.
 Execution runs autonomously. **First resolve the runtime.** On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so it cannot spawn the per-plan worktree-isolated executors or the verifier — backgrounding it there silently disables `workflow.use_worktrees` isolation and `workflow.verifier`. So run execute **inline** on Claude Code, and **background** it only on runtimes where a backgrounded agent can still nest subagents.
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 ```
 
 **If `RUNTIME` is `claude` (Claude Code):** Run execute inline so worktree isolation and the verifier actually run — do NOT wrap it in `Agent(run_in_background=true, …)`:

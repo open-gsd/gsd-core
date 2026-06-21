@@ -360,7 +360,7 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 **If `INTERACTIVE` is set:** Background dispatch is only safe where a backgrounded agent can still spawn subagents. On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so the plan-checker never runs and `workflow.plan_check` silently degrades to a self-check. Resolve the runtime first:
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 ```
 
 - **On Claude Code (`RUNTIME` is `claude`):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
@@ -422,7 +422,7 @@ Verify plan produced output — re-run `init phase-op` and check `has_plans`. If
 **If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Background dispatch is only safe where a backgrounded agent can still spawn subagents. On Claude Code a backgrounded agent has no `Agent`/`Task` tool, so the per-plan worktree-isolated executors and the verifier never run (`workflow.use_worktrees` and `workflow.verifier` silently degrade). Resolve the runtime first:
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
+RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
 ```
 
 - **On Claude Code (`RUNTIME` is `claude`):** Run execute **inline** (do NOT background) so worktree isolation and verification run:

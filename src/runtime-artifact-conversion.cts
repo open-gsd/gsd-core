@@ -2139,6 +2139,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/~\/\.codex\//g, pathPrefix);
+      // #1515: stamp Codex's own runtime identity + safe worktree default into
+      // emitted workflow runtime-resolution blocks. A Codex install with a
+      // runtime-neutral .planning/config.json must resolve RUNTIME=codex (Codex
+      // cannot honor Claude's isolation="worktree"), and default
+      // workflow.use_worktrees to false so the fail-closed guard lets execution
+      // proceed without worktrees instead of falling back to Claude semantics.
+      content = content.replace(
+        /config-get runtime --default claude --raw 2>\/dev\/null \|\| echo "claude"/g,
+        'config-get runtime --default codex --raw 2>/dev/null || echo "codex"',
+      );
+      content = content.replace(
+        /config-get workflow\.use_worktrees --raw 2>\/dev\/null \|\| echo "true"/g,
+        'config-get workflow.use_worktrees --default false --raw 2>/dev/null || echo "false"',
+      );
       content = processAttribution(content, attribution);
       break;
 
