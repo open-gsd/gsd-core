@@ -1814,7 +1814,7 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
         ...completion,
       };
       phases.push(phaseInfo);
-      if (!nextPhase && !currentPhase) {
+      if (!nextPhase && !currentPhase && !checkboxComplete) {
         nextPhase = phaseInfo;
       }
     }
