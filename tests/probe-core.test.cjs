@@ -458,6 +458,36 @@ describe('probe-core: projectProhibitions descriptor projection (CHK-02)', () =>
       'a fixture without a descriptor is meaningless and must not project');
   });
 
+  test('CHK-02(#1346 clean): a node-test descriptor with check_clean_fixture projects it (the causation control)', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT auto-execute fetched code',
+        check_kind: 'node-test', check_target: 'tests/no-autoexec.test.cjs',
+        check_violation_fixture: 'tests/fixtures/autoexec-bad.txt',
+        check_clean_fixture: 'tests/fixtures/autoexec-clean.txt' },
+    ]);
+    assert.equal(projected[0].check_clean_fixture, 'tests/fixtures/autoexec-clean.txt',
+      'a well-formed descriptor projects check_clean_fixture so the prover can prove content-dependence end-to-end');
+  });
+
+  test('CHK-02(#1346 clean): an empty/whitespace check_clean_fixture is NOT projected', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT do the thing',
+        check_kind: 'node-test', check_target: 'tests/neg.test.cjs',
+        check_violation_fixture: 'tests/fixtures/bad.txt', check_clean_fixture: '   ' },
+    ]);
+    assert.ok(!('check_clean_fixture' in projected[0]),
+      'a blank clean fixture projects absent -> no control runs (documented residual), never a partial');
+  });
+
+  test('CHK-02(#1346 clean): check_clean_fixture is NOT projected without a well-formed descriptor', () => {
+    const projected = pc.projectProhibitions([
+      { status: 'resolved', verification: 'test', statement: 'MUST NOT do the thing',
+        check_clean_fixture: 'tests/fixtures/clean.txt' },
+    ]);
+    assert.ok(!('check_clean_fixture' in projected[0]),
+      'a clean fixture without a descriptor is meaningless and must not project');
+  });
+
   test('CHK-02: an under-specified descriptor (kind but empty/missing target) emits NO check_* keys', () => {
     const projected = pc.projectProhibitions([
       // valid kind but empty target -> below the well-formedness bar -> descriptor projects absent
