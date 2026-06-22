@@ -157,6 +157,14 @@ Provide structured feedback on plan quality, completeness, and risks.
 
 ## Review Instructions
 
+**Verify against source — do not review the plan text in isolation.** You are running inside the project's git working tree (the current directory). The plans reference real files, migrations, routes, and tests that exist in this repo now.
+1. Open the referenced files and check each claim against the actual code.
+2. For every strength or concern, cite concrete `path/to/file:line` evidence plus the mechanism.
+3. When a plan asserts a mechanism works (a guard, a query filter, a test that exercises a path), trace whether it actually does what is claimed — do not take the plan's word for it.
+4. If you cannot read the repo (no file access), say so and downgrade that finding to an open question rather than asserting it.
+
+Findings citing `file:line` evidence are weighted far more heavily than impressionistic ones; a review that only restates the plan's own claims has low value.
+
 Analyze each plan and provide:
 
 1. **Summary** — One-paragraph assessment
@@ -273,7 +281,7 @@ fi
 
 **CodeRabbit:**
 
-Note: CodeRabbit reviews the current git diff/working tree — it does not accept a prompt or model flag. It may take up to 5 minutes. Use `timeout: 360000` on the Bash tool call.
+Note: CodeRabbit reviews the current git diff/working tree — it does not accept a prompt or model flag. It may take up to 5 minutes. Use `timeout: 360000` on the Bash tool call. The source-grounding requirement in the build_prompt Review Instructions applies only to the prompt-fed reviewers above; CodeRabbit is a diff-only reviewer and never receives it. Treat its output as a diff observation, not a grounded plan-level verdict.
 
 ```bash
 coderabbit review --prompt-only 2>/dev/null > /tmp/gsd-review-coderabbit-{phase}.md
@@ -714,7 +722,7 @@ trimmed_reviewers:        # only present if at least one reviewer was trimmed
 
 ## Consensus Summary
 
-{synthesize common concerns across all reviewers}
+{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers.}
 
 ### Agreed Strengths
 {strengths mentioned by 2+ reviewers}

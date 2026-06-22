@@ -1,6 +1,6 @@
 {
   "name": "gsd-core",
-  "version": "1.5.1-dev.0",
+  "version": "1.6.0-rc.1",
   "description": "GSD Core — a meta-prompting, context engineering, and spec-driven development system for AI coding agents. Loads gsd's operating context into every Gemini CLI session.",
   "contextFileName": "GEMINI.md"
 }

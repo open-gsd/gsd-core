@@ -59,6 +59,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [1016-runtime-capability-descriptor.md](1016-runtime-capability-descriptor.md) | Runtime Capability Descriptor | Proposed |
 | [1235-descriptor-driven-agent-conversion-migration.md](1235-descriptor-driven-agent-conversion-migration.md) | Migrate agent conversion to the descriptor-driven install path (parity + per-runtime cutover) | Proposed |
 | [1411-resolution-provenance.md](1411-resolution-provenance.md) | Resolution must report provenance, not fall open silently | Accepted |
+| [1508-runtime-artifact-conversion-module.md](1508-runtime-artifact-conversion-module.md) | Runtime Artifact Conversion Module owns per-runtime content rewriting | Accepted |
 
 ## Seam map
 

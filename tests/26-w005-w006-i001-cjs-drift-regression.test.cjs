@@ -103,6 +103,9 @@ describe('Drift item W005 — phaseDirNameRe: 999.X-name dirs must not trigger W
     assert.ok(re.test('01-setup'), 'should accept 01-setup');
     assert.ok(re.test('999-longphase'), 'should accept 999-longphase (3-digit prefix)');
     assert.ok(re.test('999.1-foo'), 'should accept 999.1-foo (sub-phase)');
+    assert.ok(re.test('MANIFOLD-999.1-foo'), 'should accept long project-code prefixes');
+    assert.ok(re.test('APP1-999.1-foo'), 'should accept numeric characters in project-code prefixes');
+    assert.ok(re.test('APP_1-999.1-foo'), 'should accept underscore characters in project-code prefixes');
     assert.ok(!re.test('1-shortname'), 'should reject single-digit prefix');
   });
 });
@@ -192,6 +195,9 @@ describe('Drift item W006-archived — MILESTONE_ARCHIVE_DIR_RE and PHASE_TOKEN_
     assert.strictEqual(re.exec('03B-feature')?.[1], '03B');
     assert.strictEqual(re.exec('999.1-foo')?.[1], '999.1');
     assert.strictEqual(re.exec('CK-64-auth')?.[1], '64');
+    assert.strictEqual(re.exec('MANIFOLD-64-auth')?.[1], '64');
+    assert.strictEqual(re.exec('APP1-64-auth')?.[1], '64');
+    assert.strictEqual(re.exec('APP_1-64-auth')?.[1], '64');
   });
 });
 

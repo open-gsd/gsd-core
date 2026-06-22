@@ -250,6 +250,52 @@ describe('roadmap-parser: getRoadmapPhaseInternal', () => {
     assert.strictEqual(result.goal, 'Set up infrastructure');
   });
 
+  test('finds drifted project-code-prefixed headings by bare number (#1455)', () => {
+    writeRoadmap(tmpDir, [
+      '## v1.0: Current',
+      '### Phase MANIFOLD-117: Prefixed Heading',
+      '**Goal:** Recover from roadmapper heading drift',
+    ].join('\n'));
+
+    const result = getRoadmapPhaseInternal(tmpDir, '117');
+    assert.ok(result !== null, 'bare number lookup should tolerate a prefixed heading');
+    assert.strictEqual(result.found, true);
+    assert.strictEqual(result.phase_number, '117');
+    assert.strictEqual(result.phase_name, 'Prefixed Heading');
+    assert.strictEqual(result.goal, 'Recover from roadmapper heading drift');
+  });
+
+  test('finds drifted project-code-prefixed headings by prefixed query (#1455)', () => {
+    writeRoadmap(tmpDir, [
+      '## v1.0: Current',
+      '### Phase MANIFOLD-117: Prefixed Heading',
+      '**Goal:** Exact prefixed lookup works on init resolver',
+    ].join('\n'));
+
+    const result = getRoadmapPhaseInternal(tmpDir, 'MANIFOLD-117');
+    assert.ok(result !== null, 'prefixed lookup should resolve the matching prefixed heading');
+    assert.strictEqual(result.found, true);
+    assert.strictEqual(result.phase_number, 'MANIFOLD-117');
+    assert.strictEqual(result.phase_name, 'Prefixed Heading');
+    assert.strictEqual(result.goal, 'Exact prefixed lookup works on init resolver');
+  });
+
+  test('prefers canonical bare heading before prefixed drift fallback (#1455)', () => {
+    writeRoadmap(tmpDir, [
+      '## v1.0: Current',
+      '### Phase MANIFOLD-117: Prefixed Heading',
+      '**Goal:** Drift fallback',
+      '',
+      '### Phase 117: Bare Heading',
+      '**Goal:** Canonical bare',
+    ].join('\n'));
+
+    const result = getRoadmapPhaseInternal(tmpDir, '117');
+    assert.ok(result !== null, 'bare lookup should resolve');
+    assert.strictEqual(result.phase_name, 'Bare Heading');
+    assert.strictEqual(result.goal, 'Canonical bare');
+  });
+
   test('returns null for missing phase number', () => {
     writeRoadmap(tmpDir, '### Phase 1: Foo\n**Goal:** bar\n');
     const result = getRoadmapPhaseInternal(tmpDir, '99');

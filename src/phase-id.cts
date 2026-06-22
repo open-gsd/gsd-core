@@ -16,10 +16,27 @@ function escapeRegex(value: unknown): string {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// project_code values start with an uppercase letter (e.g. PROJ, APP_CODE);
+// leading underscores are not valid project codes per .planning/config.json.
+const PROJECT_CODE_PREFIX_STRIP_RE = /^[A-Z][A-Z0-9_]*-(?=\d)/;
+const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z][A-Z0-9_]*-(?=\d)/i;
+const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z][A-Z0-9_]*)-(\d.*)/i;
+const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
+
+function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
+  const input = String(value);
+  const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
+  return input.replace(re, '');
+}
+
+function hasProjectCodePrefix(value: unknown): boolean {
+  return PROJECT_CODE_PREFIX_STRIP_RE_I.test(String(value));
+}
+
 function normalizePhaseName(phase: unknown): string {
   const str = String(phase);
   // Strip optional project_code prefix (e.g., 'CK-01' → '01')
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/, '');
+  const stripped = stripProjectCodePrefix(str, false);
   // Milestone-prefixed phase IDs: M-NN or M-N-N (deep decomposition).
   const milestoneMatch = stripped.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
   if (milestoneMatch) {
@@ -42,8 +59,7 @@ function normalizePhaseName(phase: unknown): string {
 }
 
 function getMilestoneFromPhaseId(phaseId: unknown): string | null {
-  const str = String(phaseId);
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const stripped = stripProjectCodePrefix(phaseId);
   const m = stripped.match(/^0*(\d+)-\d/);
   if (!m) return null;
   const major = parseInt(m[1], 10);
@@ -52,8 +68,7 @@ function getMilestoneFromPhaseId(phaseId: unknown): string | null {
 }
 
 function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | undefined, projectCode: string | null | undefined): string | null {
-  const str = String(phaseId);
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const stripped = stripProjectCodePrefix(phaseId);
   const m = stripped.match(/^0*(\d+)-(0*(\d+(?:-\d+)*))$/);
   if (!m) return null;
   const milestone = String(parseInt(m[1], 10)).padStart(2, '0');
@@ -72,7 +87,7 @@ function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | und
  * prose regardless of zero-padding on either side.
  */
 function phaseMarkdownRegexSource(phaseNum: unknown): string {
-  const stripped = String(phaseNum).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const stripped = stripProjectCodePrefix(phaseNum);
 
   // Milestone-prefixed IDs: M-NN or M-N-N (deep).
   const milestoneSegments = stripped.match(/^(\d+)((?:-\d+)*)([A-Z]?(?:\.\d+)*)$/i);
@@ -104,14 +119,14 @@ function phaseMarkdownRegexSource(phaseNum: unknown): string {
  */
 function phaseMarkdownRegexSourceExact(phaseNum: unknown): string | null {
   const raw = String(phaseNum);
-  if (!/^[A-Z]{1,6}-(?=\d)/i.test(raw)) return null;
+  if (!hasProjectCodePrefix(raw)) return null;
   return escapeRegex(raw);
 }
 
 function comparePhaseNum(a: unknown, b: unknown): number {
   // Strip optional project_code prefix before comparing
-  const sa = String(a).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const sb = String(b).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const sa = stripProjectCodePrefix(a);
+  const sb = stripProjectCodePrefix(b);
 
   const milestoneA = sa.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
   const milestoneB = sb.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
@@ -162,7 +177,7 @@ function comparePhaseNum(a: unknown, b: unknown): number {
  * Extract the phase token from a directory name.
  */
 function extractPhaseToken(dirName: string): string {
-  const codePrefixMatch = dirName.match(/^([A-Z]{1,6})-(\d.*)/i);
+  const codePrefixMatch = dirName.match(PROJECT_CODE_PREFIX_CAPTURE_RE_I);
   let prefix = '';
   let rest = dirName;
   if (codePrefixMatch) {
@@ -194,7 +209,7 @@ function extractPhaseToken(dirName: string): string {
 function phaseTokenMatches(dirName: string, normalized: string): boolean {
   const token = extractPhaseToken(dirName);
   if (token.toUpperCase() === normalized.toUpperCase()) return true;
-  const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const stripped = stripProjectCodePrefix(dirName);
   if (stripped !== dirName) {
     const strippedToken = extractPhaseToken(stripped);
     if (strippedToken.toUpperCase() === normalized.toUpperCase()) return true;
@@ -204,6 +219,8 @@ function phaseTokenMatches(dirName: string, normalized: string): boolean {
 
 export = {
   escapeRegex,
+  OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,
   getPhaseDirFromPhaseId,
