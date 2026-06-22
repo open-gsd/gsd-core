@@ -108,6 +108,15 @@ describe('evaluatePrTitle — rejected titles', () => {
     assert.equal(r.reason, 'missing-issue-ref');
   });
 
+  // Boundary: a scope with a `#` but zero digits. `/#\d+/` requires at least
+  // one digit, so `(#)` is not an issue ref — pin it so a future regex tweak
+  // can't silently start accepting linkless titles.
+  test('scope with a hash but no digits -> missing-issue-ref', () => {
+    const r = evaluatePrTitle({ title: 'fix(#): no digits after the hash' });
+    assert.equal(r.valid, false);
+    assert.equal(r.reason, 'missing-issue-ref');
+  });
+
   test('leading tag before the type -> bad-prefix (defeats bucketing)', () => {
     const r = evaluatePrTitle({ title: '[security] fix(#1534): the doubly-broken case' });
     assert.equal(r.valid, false);
