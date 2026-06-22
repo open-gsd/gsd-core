@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (#1520)
 // Workflow .md text IS what the runtime loads and the agent executes, so
 // asserting on its shell invocations tests the deployed contract directly.
 //
