@@ -109,17 +109,11 @@ Score 5 components (ok / partial / missing):
 </step>
 
 <step name="calculate_scores">
-```
-coverage_score  = covered_count / total_dimensions × 100
-infra_score     = (tooling + dataset + cicd + guardrails + tracing) / 5 × 100
-overall_score   = (coverage_score × 0.6) + (infra_score × 0.4)
-```
+Do NOT compute scores by hand. Call the deterministic verb with your audited inputs:
 
-Verdict:
-- 80-100: **PRODUCTION READY** — deploy with monitoring
-- 60-79: **NEEDS WORK** — address CRITICAL gaps before production
-- 40-59: **SIGNIFICANT GAPS** — do not deploy
-- 0-39: **NOT IMPLEMENTED** — review AI-SPEC.md and implement
+`gsd_run query eval.score --covered <covered_count> --total <total_dimensions> --infra <tooling>,<dataset>,<cicd>,<guardrails>,<tracing>`
+
+where each infra component is `ok`, `partial`, or `missing` (from the audit_infrastructure step). Parse the JSON result — it returns `coverage_score`, `infra_score`, `overall_score`, and `verdict` (PRODUCTION READY / NEEDS WORK / SIGNIFICANT GAPS / NOT IMPLEMENTED). Use those values verbatim in EVAL-REVIEW.md; never recompute or override them.
 </step>
 
 <step name="write_eval_review">
