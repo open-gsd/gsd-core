@@ -66,4 +66,12 @@ function createRuntimeArtifactInstallPlan(args) {
     }
     return { ok: true, plan: { items, cleanupDirs } };
 }
-module.exports = { createRuntimeArtifactInstallPlan };
+function createRuntimeArtifactUninstallPlan(layout) {
+    return {
+        items: layout.kinds.map((kind) => ({
+            kind: kind.kind,
+            destDir: path.join(layout.configDir, kind.destSubpath),
+        })),
+    };
+}
+module.exports = { createRuntimeArtifactInstallPlan, createRuntimeArtifactUninstallPlan };

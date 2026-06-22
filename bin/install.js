@@ -365,6 +365,7 @@ const {
 } = require(path.join(_gsdLibDir, 'runtime-artifact-layout.cjs'));
 const {
   createRuntimeArtifactInstallPlan,
+  createRuntimeArtifactUninstallPlan,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-install-plan.cjs'));
 const {
   planLegacyCleanup,
@@ -7189,9 +7190,14 @@ function uninstallRuntimeArtifacts(runtime, configDir, scope) {
   const savedLegacyArtifacts = _runLegacyUninstallCleanup(runtime, configDir, scope);
 
   const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope);
-  for (const kind of layout.kinds) {
-    const dest = path.join(layout.configDir, kind.destSubpath);
-    _removeGsdEntries(dest, kind);
+  const plan = createRuntimeArtifactUninstallPlan(layout);
+  const kindsByName = new Map(layout.kinds.map((kind) => [kind.kind, kind]));
+  for (const item of plan.items) {
+    const kind = kindsByName.get(item.kind);
+    if (!kind) {
+      throw new Error(`Runtime artifact uninstall plan referenced unknown kind: ${item.kind}`);
+    }
+    _removeGsdEntries(item.destDir, kind);
   }
 
   // Hermes: after removing gsd-* skill dirs from skills/gsd/, also remove

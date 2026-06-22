@@ -47,18 +47,25 @@ const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
 function loadFreshInstallerWithInstallPlanStub(stub) {
+  return loadFreshInstallerWithPlanStubs({ installStub: stub });
+}
+
+function loadFreshInstallerWithPlanStubs({ installStub, uninstallStub }) {
   const installPath = require.resolve('../bin/install.js');
   const planPath = require.resolve('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
   const planModule = require(planPath);
-  const original = planModule.createRuntimeArtifactInstallPlan;
-  planModule.createRuntimeArtifactInstallPlan = stub;
+  const originalInstall = planModule.createRuntimeArtifactInstallPlan;
+  const originalUninstall = planModule.createRuntimeArtifactUninstallPlan;
+  if (installStub) planModule.createRuntimeArtifactInstallPlan = installStub;
+  if (uninstallStub) planModule.createRuntimeArtifactUninstallPlan = uninstallStub;
   delete require.cache[installPath];
   const installer = require('../bin/install.js');
 
   return {
     installer,
     restore() {
-      planModule.createRuntimeArtifactInstallPlan = original;
+      planModule.createRuntimeArtifactInstallPlan = originalInstall;
+      planModule.createRuntimeArtifactUninstallPlan = originalUninstall;
       delete require.cache[installPath];
     },
   };
@@ -400,6 +407,39 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
 });
 
 // ─── Section 7: uninstallRuntimeArtifacts — all runtimes ─────────────────────
+
+describe('uninstallRuntimeArtifacts — consumes Runtime Artifact Uninstall Plan Module', () => {
+  test('removes returned plan destinations with layout kind metadata', (t) => {
+    const configDir = createTempDir('gsd-uninstall-plan-adapter-');
+    t.after(() => cleanup(configDir));
+
+    const commandsDir = path.join(configDir, 'custom-commands');
+    fs.mkdirSync(commandsDir, { recursive: true });
+    fs.writeFileSync(path.join(commandsDir, 'gsd-help.md'), '# remove\n');
+    fs.writeFileSync(path.join(commandsDir, 'user-custom.md'), '# keep\n');
+
+    let planLayout;
+    const { installer, restore } = loadFreshInstallerWithPlanStubs({
+      uninstallStub(layout) {
+        planLayout = layout;
+        return {
+          items: [
+            { kind: 'commands', destDir: commandsDir },
+          ],
+        };
+      },
+    });
+    t.after(restore);
+
+    installer.uninstallRuntimeArtifacts('gemini', configDir, 'global');
+
+    assert.strictEqual(planLayout.runtime, 'gemini');
+    assert.strictEqual(planLayout.configDir, configDir);
+    assert.strictEqual(planLayout.scope, 'global');
+    assert.ok(!fs.existsSync(path.join(commandsDir, 'gsd-help.md')));
+    assert.ok(fs.existsSync(path.join(commandsDir, 'user-custom.md')));
+  });
+});
 
 describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves foreign', () => {
   for (const runtime of ALL_RUNTIMES_LAYOUT) {
