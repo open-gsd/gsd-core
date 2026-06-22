@@ -44,10 +44,14 @@ jobs:
       # Phase-1: set to 'true' to warn only. Shipped enforcing.
       WARN_ONLY: 'false'
     steps:
-      - name: Checkout base branch (trusted policy source)
+      # Check out the PR (default merge ref) so the shared matcher under review is
+      # present — the validator module may be added/changed by this very PR, so basing
+      # the check on the target branch can't see it. The title check is a pure-string
+      # regex with no secrets (fork pull_request runs read-only), so running the PR's
+      # own matcher is safe and self-consistent.
+      - name: Checkout the PR
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-          ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
 
       - name: Validate PR title
