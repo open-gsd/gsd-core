@@ -631,7 +631,7 @@ async function main() {
   // discovery; previously it was a partial subset that didn't include
   // phase / roadmap / milestone / progress / etc.
   const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
-    'Commands: agent, agent-skills, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, ' +
+    'Commands: agent, agent-skills, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
     'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, ' +
     'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
@@ -956,6 +956,13 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       const filesIndex = args.indexOf('--files');
       const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
       commands.cmdCommitToSubrepo(cwd, message, files, raw);
+      break;
+    }
+
+    case 'pr-subrepo': {
+      const message = args[1];
+      const { repo, branch } = parseNamedArgs(args, ['repo', 'branch']);
+      commands.cmdPrSubrepo(cwd, repo, branch, message, raw);
       break;
     }
 
@@ -2128,6 +2135,8 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       const worktreeSafety = require('./lib/worktree-safety.cjs');
       if (subcommand === 'cleanup-wave') {
         worktreeSafety.cmdWorktreeCleanupWave(cwd, args.slice(2));
+      } else if (subcommand === 'record-agent') {
+        worktreeSafety.cmdWorktreeRecordAgent(cwd, args.slice(2));
       } else if (subcommand === 'reap-orphans') {
         worktreeSafety.cmdWorktreeReapOrphans(cwd);
       } else if (subcommand === 'base-check') {
@@ -2135,7 +2144,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else if (subcommand === 'set-baseref') {
         require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
       } else {
-        error('Unknown worktree subcommand. Available: cleanup-wave, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
       break;
     }

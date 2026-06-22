@@ -46,7 +46,97 @@ const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const MANIFEST = loadSkillsManifest(REAL_COMMANDS_DIR);
 const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
+function loadFreshInstallerWithInstallPlanStub(stub) {
+  return loadFreshInstallerWithPlanStubs({ installStub: stub });
+}
+
+function loadFreshInstallerWithPlanStubs({ installStub, uninstallStub }) {
+  const installPath = require.resolve('../bin/install.js');
+  const planPath = require.resolve('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
+  const planModule = require(planPath);
+  const originalInstall = planModule.createRuntimeArtifactInstallPlan;
+  const originalUninstall = planModule.createRuntimeArtifactUninstallPlan;
+  if (installStub) planModule.createRuntimeArtifactInstallPlan = installStub;
+  if (uninstallStub) planModule.createRuntimeArtifactUninstallPlan = uninstallStub;
+  delete require.cache[installPath];
+  const installer = require('../bin/install.js');
+
+  return {
+    installer,
+    restore() {
+      planModule.createRuntimeArtifactInstallPlan = originalInstall;
+      planModule.createRuntimeArtifactUninstallPlan = originalUninstall;
+      delete require.cache[installPath];
+    },
+  };
+}
+
 // ─── Section 6: installRuntimeArtifacts — parameterised layout loop ──────────
+
+describe('installRuntimeArtifacts — consumes Runtime Artifact Install Plan Module', () => {
+  test('executes returned copy items and cleanup obligations', (t) => {
+    const configDir = createTempDir('gsd-install-plan-adapter-');
+    const sourceDir = createTempDir('gsd-install-plan-source-');
+    const cleanupDir = createTempDir('gsd-install-plan-cleanup-');
+    t.after(() => {
+      cleanup(configDir);
+      cleanup(sourceDir);
+      cleanup(cleanupDir);
+    });
+
+    fs.writeFileSync(path.join(sourceDir, 'proof.md'), '# proof\n');
+    fs.writeFileSync(path.join(cleanupDir, 'temp.md'), '# cleanup\n');
+    let planArgs;
+    const { installer, restore } = loadFreshInstallerWithInstallPlanStub((args) => {
+      planArgs = args;
+      return {
+        ok: true,
+        plan: {
+          cleanupDirs: [cleanupDir],
+          items: [
+            { kind: 'commands', sourceDir, destDir: path.join(configDir, 'commands', 'gsd') },
+          ],
+        },
+      };
+    });
+    t.after(restore);
+
+    installer.installRuntimeArtifacts('gemini', configDir, 'global', RESOLVED_CORE);
+
+    assert.strictEqual(planArgs.layout.runtime, 'gemini');
+    assert.strictEqual(planArgs.layout.configDir, configDir);
+    assert.strictEqual(planArgs.layout.scope, 'global');
+    assert.strictEqual(planArgs.resolvedProfile, RESOLVED_CORE);
+    assert.strictEqual(planArgs.resolveAttribution('gemini'), undefined);
+    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd', 'proof.md')));
+    assert.ok(!fs.existsSync(cleanupDir), 'returned cleanup dir must be removed after copy');
+  });
+
+  test('cleans returned obligations when planning fails', (t) => {
+    const configDir = createTempDir('gsd-install-plan-fail-');
+    const cleanupDir = createTempDir('gsd-install-plan-fail-cleanup-');
+    t.after(() => {
+      cleanup(configDir);
+      cleanup(cleanupDir);
+    });
+
+    fs.writeFileSync(path.join(cleanupDir, 'temp.md'), '# cleanup\n');
+    const { installer, restore } = loadFreshInstallerWithInstallPlanStub(() => ({
+      ok: false,
+      kind: 'rewrite_failed',
+      failedKind: 'commands',
+      message: 'planned failure',
+      cleanupDirs: [cleanupDir],
+    }));
+    t.after(restore);
+
+    assert.throws(
+      () => installer.installRuntimeArtifacts('gemini', configDir, 'global', RESOLVED_CORE),
+      /planned failure/,
+    );
+    assert.ok(!fs.existsSync(cleanupDir), 'failure cleanup dir must be removed');
+  });
+});
 
 const SKILLS_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'codex', 'copilot', 'antigravity',
@@ -317,6 +407,39 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
 });
 
 // ─── Section 7: uninstallRuntimeArtifacts — all runtimes ─────────────────────
+
+describe('uninstallRuntimeArtifacts — consumes Runtime Artifact Uninstall Plan Module', () => {
+  test('removes returned plan destinations with layout kind metadata', (t) => {
+    const configDir = createTempDir('gsd-uninstall-plan-adapter-');
+    t.after(() => cleanup(configDir));
+
+    const commandsDir = path.join(configDir, 'custom-commands');
+    fs.mkdirSync(commandsDir, { recursive: true });
+    fs.writeFileSync(path.join(commandsDir, 'gsd-help.md'), '# remove\n');
+    fs.writeFileSync(path.join(commandsDir, 'user-custom.md'), '# keep\n');
+
+    let planLayout;
+    const { installer, restore } = loadFreshInstallerWithPlanStubs({
+      uninstallStub(layout) {
+        planLayout = layout;
+        return {
+          items: [
+            { kind: 'commands', destDir: commandsDir },
+          ],
+        };
+      },
+    });
+    t.after(restore);
+
+    installer.uninstallRuntimeArtifacts('gemini', configDir, 'global');
+
+    assert.strictEqual(planLayout.runtime, 'gemini');
+    assert.strictEqual(planLayout.configDir, configDir);
+    assert.strictEqual(planLayout.scope, 'global');
+    assert.ok(!fs.existsSync(path.join(commandsDir, 'gsd-help.md')));
+    assert.ok(fs.existsSync(path.join(commandsDir, 'user-custom.md')));
+  });
+});
 
 describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves foreign', () => {
   for (const runtime of ALL_RUNTIMES_LAYOUT) {

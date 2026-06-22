@@ -193,8 +193,15 @@ describe('ADR-857 Phase 6 capstone conformance (#1139)', () => {
     // extract to capabilities. Frozen pre-phase-6 sizes (LF bytes); the files must
     // drop strictly below these. This also defeats double-run gaming — declaring a
     // hook while leaving the inline block keeps the file from shrinking -> red.
+    //
+    // #1298: the execute-phase.md ceiling was raised from 93166 to accommodate
+    // wiring the mandatory `worktree record-agent` writer verb into the per-agent
+    // wave-manifest append. That verb is privileged host machinery (ADR-857
+    // Decision #1) — NOT the optional-feature inline logic this budget ratchets
+    // toward capabilities — so its footprint legitimately raises the host-loop
+    // ceiling rather than signalling an un-extracted optional feature.
     const { lfByteCount } = require('../scripts/workflow-size.cjs');
-    const PRE_PHASE6 = { 'plan-phase.md': 94519, 'execute-phase.md': 93166 };
+    const PRE_PHASE6 = { 'plan-phase.md': 94519, 'execute-phase.md': 93600 };
     const notShrunk = [];
     for (const [file, frozen] of Object.entries(PRE_PHASE6)) {
       const now = lfByteCount(path.join(ROOT, 'gsd-core', 'workflows', file));
