@@ -1620,3 +1620,127 @@ describe('agent-skills — Resolution Provenance (#1415)', () => {
     assert.strictEqual(r.ir.value.skills_count, 0, 'value.skills_count must be 0 when unconfigured');
   });
 });
+
+describe('#1400 regression: plain agent-skills output survives pipe/file stdout', () => {
+  // The plain (non---json) path previously did process.stdout.write(block)
+  // immediately followed by process.exit(0). When stdout is a pipe or file
+  // (how workflows consume it via `$(gsd_run query agent-skills <type>)`)
+  // rather than a TTY, process.exit() tears the process down before Node
+  // flushes the async stdout buffer — on Windows that reliably truncates the
+  // write to 0 bytes, so every ${AGENT_SKILLS_*} substitution expands empty.
+  // The fix routes the plain path through the same synchronous-flush output()
+  // helper the --json branch uses. These tests capture stdout via a real file
+  // descriptor (not a TTY) and assert the block arrives intact.
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const skillDir = path.join(tmpDir, 'skills', 'test-skill');
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test Skill\n');
+    writeConfig(tmpDir, {
+      agent_skills: {
+        'gsd-executor': ['skills/test-skill'],
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Run the plain path with stdout redirected to a real file descriptor
+  // (the truncation-prone case), then read the file back.
+  function runPlainToFile(agentType) {
+    const outPath = path.join(tmpDir, 'agent-skills.out');
+    const fd = fs.openSync(outPath, 'w');
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [TOOLS_PATH, 'query', 'agent-skills', agentType],
+        {
+          cwd: tmpDir,
+          env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir },
+          stdio: ['ignore', fd, 'pipe'],
+        },
+      );
+      return { status: result.status, contents: fs.readFileSync(outPath, 'utf-8') };
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  test('writes the full block to a redirected file (non-empty, not truncated)', () => {
+    const { status, contents } = runPlainToFile('gsd-executor');
+    assert.strictEqual(status, 0, 'command must exit 0');
+    assert.ok(contents.length > 0, 'redirected file must not be empty (exit-before-flush truncation)');
+    assert.ok(contents.includes('<agent_skills>'), `file must contain opening tag, got: ${JSON.stringify(contents)}`);
+    assert.ok(contents.includes('</agent_skills>'), 'file must contain closing tag');
+    assert.ok(contents.includes('skills/test-skill/SKILL.md'), 'file must contain the configured skill path');
+  });
+
+  test('plain file output equals the --json .block content byte-for-byte', () => {
+    const { contents } = runPlainToFile('gsd-executor');
+    const jsonResult = runAgentSkillsJson(['agent-skills', 'gsd-executor'], tmpDir, {
+      HOME: tmpDir,
+      USERPROFILE: tmpDir,
+    });
+    assert.ok(jsonResult.success, `--json command failed: ${jsonResult.error}`);
+    assert.strictEqual(
+      contents,
+      jsonResult.ir.block,
+      'plain stdout block must match the --json .block exactly',
+    );
+    assert.ok(contents.length > 0, 'block must be non-empty for a configured agent');
+  });
+
+  // RULESET.TESTS.boundary-coverage — at/over the OS pipe-buffer limit.
+  // The earlier tests use a ~95-byte block; this one drives a payload well past
+  // the ~64 KB pipe buffer through a pipe. The pre-fix `process.stdout.write +
+  // process.exit(0)` emitted only the first ~64 KB before the process tore down;
+  // writeAllSync's offset loop instead writes every byte synchronously, however
+  // the OS chooses to chunk a write that large. (This is an integration check on
+  // the boundary, not a forced-partial-write unit test — depending on the host,
+  // a single writeSync may still drain the whole buffer.)
+  test('writes a >64 KB block through a pipe without truncation (pipe-buffer boundary)', () => {
+    const PIPE_BUFFER = 64 * 1024;
+    // Each resolved skill adds one `- @<path>/SKILL.md` line. Keep each path
+    // component short (Windows MAX_PATH safety) and use many skills to clear the
+    // pipe buffer comfortably (~80 KB).
+    const filler = 'p'.repeat(60);
+    const skillPaths = [];
+    for (let i = 0; i < 900; i++) {
+      const rel = path.join('skills', `skill-${String(i).padStart(4, '0')}-${filler}`);
+      fs.mkdirSync(path.join(tmpDir, rel), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, rel, 'SKILL.md'), '# s\n');
+      skillPaths.push(rel.split(path.sep).join('/')); // POSIX form for config
+    }
+    writeConfig(tmpDir, { agent_skills: { 'gsd-executor': skillPaths } });
+
+    // stdout to a pipe (the truncation-prone case the bug is about), captured
+    // by spawnSync — proves writeAllSync drained every byte before exit.
+    const result = spawnSync(
+      process.execPath,
+      [TOOLS_PATH, 'query', 'agent-skills', 'gsd-executor'],
+      {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+        maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, ...TEST_ENV_BASE, HOME: tmpDir, USERPROFILE: tmpDir },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const out = result.stdout || '';
+    assert.strictEqual(result.status, 0, `command must exit 0; stderr=${result.stderr}`);
+    assert.ok(
+      Buffer.byteLength(out, 'utf-8') > PIPE_BUFFER,
+      `block must exceed the ${PIPE_BUFFER}-byte pipe buffer to exercise partial writes (got ${Buffer.byteLength(out, 'utf-8')} bytes)`,
+    );
+    // No head/tail truncation, and both the first and last configured skills
+    // present — a partial-write bug would drop the tail (or everything).
+    assert.ok(out.trim().startsWith('<agent_skills>'), 'block must start with the opening tag');
+    assert.ok(out.trim().endsWith('</agent_skills>'), 'block must end with the closing tag (no tail truncation)');
+    assert.ok(out.includes(`- @${skillPaths[0]}/SKILL.md`), 'first skill ref must be present');
+    assert.ok(out.includes(`- @${skillPaths[skillPaths.length - 1]}/SKILL.md`), 'last skill ref must be present');
+  });
+});

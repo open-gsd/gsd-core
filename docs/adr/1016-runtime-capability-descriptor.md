@@ -1,6 +1,6 @@
 # ADR-1016: Runtime Capability Descriptor
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-06-10
 - **Issue:** [#1016](https://github.com/open-gsd/gsd-core/issues/1016)
 - **Epic:** [#857](https://github.com/open-gsd/gsd-core/issues/857) (Capability system) — rollout phase 5

@@ -548,12 +548,16 @@ function stageSkillsForRuntimeAsSkills(
  *
  * @param srcAgentsDir    source agents directory (e.g. agents/)
  * @param resolvedProfile profile filter from resolveProfile()
- * @param converter       (content: string) → string  pure per-file converter
+ * @param converter       (content: string, isGlobal?: boolean) → string per-file
+ *                        converter; scope-aware converters (copilot/antigravity)
+ *                        read isGlobal, single-arg converters ignore it (#1173)
+ * @param isGlobal        install scope passed through to the converter
  */
 function stageAgentsForRuntimeWithConverter(
   srcAgentsDir: string,
   resolvedProfile: ResolvedProfile,
-  converter: (content: string) => string,
+  converter: (content: string, isGlobal?: boolean) => string,
+  isGlobal = false,
 ): string {
   if (!fs.existsSync(srcAgentsDir)) return srcAgentsDir;
 
@@ -571,7 +575,7 @@ function stageAgentsForRuntimeWithConverter(
         }
       }
       const content = fs.readFileSync(path.join(srcAgentsDir, entry.name), 'utf8');
-      const converted = converter(content);
+      const converted = converter(content, isGlobal);
       fs.writeFileSync(path.join(stageDir, entry.name), converted, 'utf8');
     }
   } catch (err) {

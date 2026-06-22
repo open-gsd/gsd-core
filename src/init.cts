@@ -2104,10 +2104,14 @@ function cmdAgentSkills(
     return;
   }
 
-  if (block) {
-    process.stdout.write(block);
-  }
-  process.exit(0);
+  // #1400: emit the raw block via the synchronous-flush output() helper (the same
+  // one the --json branch uses) rather than process.stdout.write + process.exit(0).
+  // When stdout is a pipe/file (how workflows consume this via command
+  // substitution) the async stdout buffer is torn down by process.exit() before
+  // it drains — on Windows this reliably truncates the write to 0 bytes, so every
+  // ${AGENT_SKILLS_*} substitution expands empty. output() writes every byte with
+  // writeAllSync and returns, letting the event loop drain naturally.
+  output(block || '', true, block || '');
 }
 
 interface SkillEntry {
