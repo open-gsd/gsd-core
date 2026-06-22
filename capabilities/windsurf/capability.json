@@ -1,7 +1,7 @@
 {
   "id": "windsurf",
   "role": "runtime",
-  "version": "1.6.0-rc.1",
+  "version": "1.6.0-rc.2",
   "title": "Windsurf",
   "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
   "tier": "core",
