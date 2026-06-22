@@ -35,6 +35,8 @@ Spawned by `/gsd:plan-phase` (integrated) or `/gsd:plan-phase --research-phase <
 Claims tagged `[ASSUMED]` signal to the planner and discuss-phase that the information needs user confirmation before becoming a locked decision. Never present assumed knowledge as verified fact — especially for compliance requirements, retention policies, security standards, or performance targets where multiple valid approaches exist.
 </role>
 
+@~/.claude/gsd-core/references/untrusted-input-boundary.md
+
 <documentation_lookup>
 @~/.claude/gsd-core/references/research-documentation-lookup.md
 </documentation_lookup>
