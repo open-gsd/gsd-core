@@ -98,6 +98,71 @@ test('platformWriteSync recovers when renameSync fails (EXDEV cross-device fallb
   assert.deepEqual(orphanTmpFiles(dir), [], 'tmp file must be cleaned up after rename failure');
 });
 
+// ─── #1540: transient Windows lock (EPERM/EBUSY/EACCES) is RETRIED, never
+//            fallen back to a non-atomic truncating write ───────────────────
+
+test('platformWriteSync retries a transient EPERM rename and publishes atomically (#1540)', (t) => {
+  const dir = mkScratch('eperm-transient');
+  t.after(() => cleanup(dir));
+  const file = path.join(dir, 'STATE.md');
+
+  // A reader briefly holds the target open → rename throws EPERM once, then clears.
+  let renameCalls = 0;
+  const originalRename = fs.renameSync;
+  const renameMock = mock.method(fs, 'renameSync', (src, dest) => {
+    renameCalls++;
+    if (renameCalls === 1) {
+      const err = new Error('EPERM: a reader holds the target open');
+      err.code = 'EPERM';
+      throw err;
+    }
+    return originalRename.call(fs, src, dest);
+  });
+  t.after(() => renameMock.mock.restore());
+
+  platformWriteSync(file, 'published\n');
+
+  assert.equal(renameCalls, 2, 'rename retried after a transient EPERM (not a single-shot non-atomic fallback)');
+  assert.equal(fs.statSync(file).isFile(), true);
+  assert.ok(fs.statSync(file).size > 0, 'target published, not truncated');
+  assert.deepEqual(orphanTmpFiles(dir), [], 'atomic publish leaves no tmp orphan');
+});
+
+test('platformWriteSync surfaces a PERSISTENT EPERM instead of truncating a concurrent reader (#1540)', (t) => {
+  const dir = mkScratch('eperm-persistent');
+  t.after(() => cleanup(dir));
+  const file = path.join(dir, 'STATE.md');
+  // A reader is mid-read on `file` with known content. The old blanket fallback
+  // would non-atomically writeFileSync over it — truncating the reader. The fix
+  // must surface the error and leave the existing file byte-for-byte intact.
+  fs.writeFileSync(file, 'OLD CONTENT A READER IS MID-READ ON\n');
+  const sizeBefore = fs.statSync(file).size;
+
+  let renameCalls = 0;
+  const renameMock = mock.method(fs, 'renameSync', () => {
+    renameCalls++;
+    const err = new Error('EPERM: reader holds the target open');
+    err.code = 'EPERM';
+    throw err;
+  });
+  t.after(() => renameMock.mock.restore());
+
+  let caught;
+  try {
+    platformWriteSync(file, 'NEW CONTENT\n');
+  } catch (err) {
+    caught = err;
+  }
+
+  assert.ok(caught, 'a persistent rename lock must surface as an error, not a silent truncating write');
+  assert.equal(caught.code, 'EPERM');
+  assert.equal(renameCalls, 3, 'rename retried up to the bounded limit before surfacing');
+  // Negative proof: the concurrent reader's file was NOT truncated/overwritten.
+  assert.equal(fs.statSync(file).size, sizeBefore, 'target left intact — no non-atomic write happened');
+  assert.equal(fs.readFileSync(file, 'utf-8'), 'OLD CONTENT A READER IS MID-READ ON\n');
+  assert.deepEqual(orphanTmpFiles(dir), [], 'tmp cleaned up after surfacing the error');
+});
+
 // ─── Tmp write failure → falls back to direct write ─────────────────────────
 
 test('platformWriteSync falls back when initial tmp writeFileSync fails (ENOSPC)', (t) => {
@@ -383,13 +448,12 @@ test('platformWriteSync survives a concurrent collision on the same target path'
 
   // First write completes normally.
   platformWriteSync(file, '{"writer":"first"}\n');
-  // Second write: inject a transient rename failure on the first
-  // attempt, then succeed via fallback. Capture the real renameSync
-  // BEFORE installing the mock so subsequent calls (defensive — the
-  // fallback path bypasses rename, so the second call shouldn't fire)
-  // delegate to the real implementation. The previous form referenced
-  // a non-existent `fs.renameSync.wrapped` property — that branch
-  // would silently no-op instead of delegating.
+  // Second write: inject a transient EBUSY on the first rename attempt,
+  // then succeed on the bounded retry (#1540). Capture the real renameSync
+  // BEFORE installing the mock so the retry attempt delegates to the real
+  // implementation. The previous form referenced a non-existent
+  // `fs.renameSync.wrapped` property — that branch would silently no-op
+  // instead of delegating.
   let renameCalls = 0;
   const originalRename = fs.renameSync;
   const renameMock = mock.method(fs, 'renameSync', (src, dest) => {
@@ -405,7 +469,7 @@ test('platformWriteSync survives a concurrent collision on the same target path'
 
   platformWriteSync(file, '{"writer":"second"}\n');
 
-  // The fallback path wrote 'second' content directly.
+  // The bounded retry re-published the 'second' content atomically.
   const final = fs.readFileSync(file, 'utf-8');
   // Must be valid JSON — never a half-merged corruption.
   assert.doesNotThrow(() => JSON.parse(final), 'file must remain parseable after the contested write');
