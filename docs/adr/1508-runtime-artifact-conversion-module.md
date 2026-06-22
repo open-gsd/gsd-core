@@ -1,0 +1,79 @@
+# Runtime Artifact Conversion Module owns per-runtime content rewriting
+
+- **Status:** Accepted
+- **Date:** 2026-06-20
+- **Issue:** #1508
+- **Epic:** #1507
+- **Implementation:** Phase 1 (helper relocation, no behavior change) → Phase 2 (engine move + relay deletion)
+
+The **Runtime Surface Module** (`src/surface.cts` → `surface.cjs`) re-materializes a resolved skill surface to disk via `applySurface`. For `skills` kinds it must rewrite staged `SKILL.md` bodies so their `@`-ref paths point at the install target (`pathPrefix`) instead of the converter's default `~/.claude` paths (#813). To do that it reaches **up** into the 12,289-line hand-authored `bin/install.js` via `getInstallExports()` (`src/runtime-artifact-layout.cts:53-69`) — a lazy `require('../../../bin/install.js')` guarded by a save/set/restore of `GSD_TEST_MODE` — to borrow `computePathPrefix` and `applyRuntimeContentRewritesInPlace`.
+
+This is the **last upward dependency from the `.cts` source tree into the hand-authored installer**. It forces an env-var dance at a test seam, and it leaks: `applySurface` (and `bin/install.js`'s own three call sites) each re-derive the same five path-prefix inputs (`scope→isGlobal`, `runtime==='opencode'`, `process.platform`, normalized `resolvedTarget`, normalized `homeDir`) before calling `computePathPrefix`. The prefix-derivation knowledge is duplicated across `surface.cts` and `install.js`.
+
+`CONTEXT.md` already names the **Runtime Artifact Conversion Module** (`src/runtime-artifact-conversion.cts`) as the `[Planned]` sibling of the Layout Module — placement vs. content. ADR-3660 *§Initial Scope* deferred exactly this consolidation: *"A future ADR may consolidate them into a Skill Conversion Module if a second consumer emerges."* `surface.cts` is that second consumer. This is that future ADR.
+
+## Decision
+
+- Promote the `[Planned]` **Runtime Artifact Conversion Module** (`src/runtime-artifact-conversion.cts`) to the single owner of per-runtime **content rewriting**: the per-runtime converters (already relocated as ADR-3660's "first slice", #1099), **plus** the rewrite engine `_applyRuntimeRewrites`, the staged-content walkers, path-prefix derivation, and commit attribution. The **Runtime Artifact Layout Module** keeps owning **placement** only. **Exception:** opencode and kilo path-prefix rewriting remains a deliberate `bin/install.js`-owned pre-conversion step (see `applyOpencodeFamilyPathPrefix`); this is intentional per #784 and is not a violation of the single-owner rule.
+- **Public seam** — two deep calls; the caller passes only what it has, the module derives the rest:
+  - `rewriteStagedSkillBodies(stagedDir, { runtime, configDir, scope }, env?)` — in-place walk (skills / kimi-agents).
+  - `rewriteStagedCommandBodies(stagedDir, { runtime, configDir, scope }, env?) → tempDir` — copy-to-temp (commands).
+  - The module internally derives `isGlobal`/`isOpencode`/`isWindowsHost`/`resolvedTarget`/`homeDir` and the path prefix. `env = { homedir = os.homedir, platform = process.platform } = {}` is an injected test seam (the clock-seam analog, `RULESET.TESTS.clock-seam`).
+- `computePathPrefix` becomes **private** to the module, exported as `_computePathPrefix` for direct unit + `fast-check` property tests (`RULESET.TESTS.property-based-testing`). The hand-reimplemented copy in `tests/path-replacement.test.cjs` is deleted so the **real** function is what's tested (it is effectively untested today).
+- **Dependency direction:** `bin/install.js` and `runtime-artifact-layout.cts` import the conversion module; the conversion module imports **nothing upward** (not `install.js`, not `layout`) — only deeper leaves.
+- `getDirName(runtime)` relocates to `src/runtime-name-policy.cts` (a clean `fs`/`path`-only leaf), so the conversion module can consume it **without** dragging in `capability-registry.cjs` (which `runtime-homes.cjs` requires). `processAttribution` / `getCommitAttribution` move **into** the conversion module (attribution is content transformation).
+- The duplicate `convertClaudeToAugmentMarkdown` (verified **byte-identical** in `install.js:2584` and `conversion.cts:976`) collapses to the conversion-module copy; `install.js`'s local copy is deleted (it already re-exports `...runtimeArtifactConversion`).
+- `getInstallExports` / `loadInstallExports` / the `InstallExports` interface **and the `GSD_TEST_MODE` require of `bin/install.js`** are deleted from `runtime-artifact-layout.cts`. `surface.cts` (the sole consumer) calls the conversion module's deep functions directly — removing the last upward `.cts → install.js` dependency.
+
+## Initial Scope
+
+### Phase 1 — helper relocation (no behavior change)
+1. Move `getDirName` → `runtime-name-policy.cts`; re-point its 13 `install.js` call sites.
+2. Move `processAttribution` + `getCommitAttribution` → `conversion.cts`; re-point their 21 `install.js` call sites.
+3. Delete `install.js`'s local `convertClaudeToAugmentMarkdown` (copies confirmed byte-identical); rely on the conversion-module copy via the existing `...runtimeArtifactConversion` export spread. Add a **characterization test** snapshotting current augment skills-rewrite output as insurance — it should pass unchanged.
+4. No public-interface change; `install.js` and `surface.cts` behavior unchanged.
+
+### Phase 2 — engine move + deepen + delete relay
+1. Move `_applyRuntimeRewrites`, `applyRuntimeContentRewritesInPlace`, `applyRuntimeContentRewritesForCommandsInPlace`, and `computePathPrefix` into `conversion.cts`.
+2. Expose `rewriteStagedSkillBodies` / `rewriteStagedCommandBodies`; privatize `computePathPrefix` (`_computePathPrefix` for tests).
+3. `surface.cts:applySurface` and `install.js`'s three internal sites (`7261`/`7276`, `9475`) call the deep functions; delete the per-site prefix derivation.
+4. Delete `getInstallExports` / `loadInstallExports` / `InstallExports` + the `GSD_TEST_MODE` `bin/install.js` require from `runtime-artifact-layout.cts`.
+5. Tests: `fast-check` property test for the rewrite engine (`$HOME`-collapse invariant; path-rewrite idempotency), direct `_computePathPrefix` unit tests, delete the `path-replacement.test.cjs` reimplementation, and a `DEFECT.GENERATIVE-FIX` parity guard ensuring no second converter copy reappears.
+
+### These phases should NOT
+- Bundle ADR-3660 **Phase 2** (install/uninstall `layout.kinds` loop collapse, ~250 lines, separate issue #3664).
+- Relocate `getConfigDirFromHome` or other general install helpers the rewrite engine does not need.
+
+## Migration Inventory
+
+### New files
+- `docs/adr/1508-runtime-artifact-conversion-module.md` (this ADR) + README index row.
+- `CONTEXT.md` glossary: flip **Runtime Artifact Conversion Module** `[Planned]` → shipped, and update the Runtime Artifact Layout Module entry (the `getInstallExports` seam sentence is removed). *(lands with Phase 2)*
+
+### Phase 1 modified
+- `src/runtime-name-policy.cts` — `+getDirName`.
+- `src/runtime-artifact-conversion.cts` — `+processAttribution`, `+getCommitAttribution`.
+- `bin/install.js` — re-point 13 (`getDirName`) + 21 (attribution) call sites; delete local `convertClaudeToAugmentMarkdown`.
+- tests — augment characterization test.
+
+### Phase 2 modified
+- `src/runtime-artifact-conversion.cts` — `+_applyRuntimeRewrites`, `+`both walkers, `+computePathPrefix` (private) + deep seam.
+- `src/surface.cts` — deep-call cutover; drop the `getInstallExports` import + prefix math.
+- `src/runtime-artifact-layout.cts` — delete `getInstallExports`/`loadInstallExports`/`InstallExports` + the `install.js` require.
+- `bin/install.js` — three sites call the deep functions; import them back from the conversion module.
+- tests — engine property test, `_computePathPrefix` unit tests, delete `path-replacement.test.cjs` reimplementation, parity guard.
+
+## Consequences
+
+- **+** `surface.cts` and `install.js` stop re-deriving the path prefix — one owner, leak dissolved at both sites.
+- **+** The `.cts` source tree no longer reaches into hand-authored `bin/install.js`; `runtime-artifact-layout.cts` no longer requires `install.js` or toggles `GSD_TEST_MODE`.
+- **+** `computePathPrefix` gains real unit + property coverage it lacks today.
+- **−** `bin/install.js` stays hand-authored JS; it now imports the rewrite engine back from the generated `conversion.cjs` — the same pattern it already uses for `hooksSurface` and `...runtimeArtifactConversion`. Only the moved functions become TypeScript; `install.js` itself is not converted.
+- **−** Two-phase sequence; CONTEXT.md glossary, ADR README index, and `lint:ci` (ADR-HEADER) updates required at merge.
+
+## Relationship to other ADRs and issues
+
+- **ADR-3660 (Runtime Artifact Layout Module):** resolves its *§Initial Scope* deferral ("A future ADR may consolidate them … if a second consumer emerges"). Layout owns placement; this module owns content. Independent of ADR-3660 **Phase 2** (#3664).
+- **ADR-457 (generated-CJS single source):** the moved engine is authored in `src/*.cts` and consumed as generated `bin/lib/*.cjs`, consistent with the single-source rule.
+- **ADR-1235 (descriptor-driven agent conversion):** complementary — both narrow `bin/install.js`'s ownership of conversion concerns.
+- **Epic #1507** tracks the phases. **Distinct from epic #1258** (cross-runtime skill mapping + plugin skill provision/consumption): #1258 Phase A documents the converter *transform-contract catalog*; this ADR decides *module ownership + dependency direction + engine relocation*. Continues **#1099** (closed first slice that created the module) and is a sibling of **#1173** (agent-converter wiring).

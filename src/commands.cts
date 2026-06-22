@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execGit, platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { requireSafePath, sanitizeForDisplay } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -193,6 +194,120 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
 
   const result = { count, todos };
   output(result, raw, count.toString());
+}
+
+/**
+ * List captured seeds from .planning/seeds/SEED-*.md for browsing/audit (#441).
+ *
+ * Unlike audit.scanSeeds (which returns only *unimplemented* seeds for the
+ * milestone surface), this lists seeds of every status with the richer fields a
+ * human audit needs (scope, trigger, planted date). An optional case-insensitive
+ * status filter narrows the set. Seed content is user-controlled, so every
+ * displayed field is passed through sanitizeForDisplay and each file path is
+ * validated with requireSafePath before reading. Read-only — never mutates.
+ */
+/**
+ * Derive the canonical `{ seed_id, slug }` from a seed filename stem and the
+ * frontmatter `id:` value. Pure (no I/O) so it can be property-tested directly.
+ *
+ * seed_id: frontmatter `id:` when it matches `SEED-NNN`, else the numeric prefix
+ * of the filename (`SEED-NNN-…`), else the whole stem. slug: the descriptive
+ * remainder after `SEED-NNN-`, else the stem with a leading `SEED-` stripped.
+ * `rawFmId` is `unknown` because frontmatter values are not guaranteed strings.
+ */
+function deriveSeedIdentity(stem: string, rawFmId: unknown): { seed_id: string; slug: string } {
+  const fmId = typeof rawFmId === 'string' ? rawFmId.trim() : '';
+  let seedId: string;
+  if (/^SEED-\d+$/i.test(fmId)) {
+    seedId = fmId;
+  } else {
+    const numMatch = stem.match(/^(SEED-\d+)/i);
+    seedId = numMatch ? numMatch[1] : stem;
+  }
+  const slugMatch = stem.match(/^SEED-\d+-(.+)$/i);
+  const slug = slugMatch ? slugMatch[1] : stem.replace(/^SEED-/i, '');
+  return { seed_id: seedId, slug };
+}
+
+function cmdListSeeds(cwd: string, statusFilter: string | undefined, raw: boolean): void {
+  const planDir = planningDir(cwd);
+  const seedsDir = path.join(planDir, 'seeds');
+  const wantStatus = statusFilter ? statusFilter.trim().toLowerCase() : null;
+
+  const seeds: Array<{
+    seed_id: string; slug: string; status: string; scope: string;
+    trigger_when: string; planted: string; title: string; path: string;
+  }> = [];
+  const summary: Record<string, number> = {};
+
+  // Frontmatter values are not guaranteed to be scalars: extractFrontmatter
+  // yields {} for a bare `key:` line and an array for `key: [a, b]`. Coerce every
+  // read to a string so one malformed seed cannot crash the whole audit list
+  // (`.toLowerCase()` on a non-string throws) or leak a raw object/array into the
+  // JSON contract. Mirrors the existing `typeof fm.id === 'string'` guard below.
+  const fmStr = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+  let files: fs.Dirent[];
+  try {
+    files = fs.readdirSync(seedsDir, { withFileTypes: true });
+  } catch {
+    // No seeds dir (or unreadable) — an empty, non-error result. The seed dir is
+    // created lazily by the first plant-seed, so absence is the normal zero case.
+    output({ count: 0, seeds: [], summary: {} }, raw, '0');
+    return;
+  }
+
+  for (const entry of files) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.startsWith('SEED-') || !entry.name.endsWith('.md')) continue;
+
+    let safeFilePath: string;
+    try {
+      safeFilePath = requireSafePath(path.join(seedsDir, entry.name), planDir, 'seed file', { allowAbsolute: true });
+    } catch {
+      continue;
+    }
+    const content = platformReadSync(safeFilePath);
+    if (content === null) continue;
+
+    const fm = extractFrontmatter(content) as Record<string, unknown>;
+    const status = (fmStr(fm.status) || 'dormant').toLowerCase().trim() || 'dormant';
+
+    // Match on the raw lowercased status (both sides already normalized);
+    // sanitizeForDisplay is for output, not comparison.
+    if (wantStatus && status !== wantStatus) continue;
+
+    // Canonical seed id is `SEED-NNN` (frontmatter `id:`, e.g. SEED-001). Fall
+    // back to the numeric prefix of the filename, then to the whole stem. The
+    // descriptive remainder of the filename (`SEED-NNN-<slug>.md`) is the slug.
+    const stem = path.basename(entry.name, '.md');
+    const { seed_id: seedId, slug } = deriveSeedIdentity(stem, fm.id);
+
+    let title = sanitizeForDisplay(fmStr(fm.title).slice(0, 100));
+    if (!title) {
+      const headingMatch = content.match(/^#\s*(.+)$/m);
+      if (headingMatch) title = sanitizeForDisplay(headingMatch[1].trim().slice(0, 100));
+    }
+
+    const safeStatus = sanitizeForDisplay(status);
+    summary[safeStatus] = (summary[safeStatus] || 0) + 1;
+
+    seeds.push({
+      seed_id: sanitizeForDisplay(seedId),
+      slug: sanitizeForDisplay(slug),
+      status: safeStatus,
+      scope: sanitizeForDisplay(fmStr(fm.scope) || 'unknown'),
+      trigger_when: sanitizeForDisplay(fmStr(fm.trigger_when)),
+      planted: sanitizeForDisplay(fmStr(fm.planted)),
+      title,
+      path: toPosixPath(path.relative(cwd, safeFilePath)),
+    });
+  }
+
+  // Stable order: by seed_id so output is deterministic across filesystems.
+  seeds.sort((a, b) => a.seed_id.localeCompare(b.seed_id));
+
+  output({ count: seeds.length, seeds, summary }, raw, seeds.length.toString());
 }
 
 function cmdVerifyPathExists(cwd: string, targetPath: string | undefined, raw: boolean): void {
@@ -727,6 +842,171 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
     unmatched: unmatched.length > 0 ? unmatched : undefined,
   };
   output(result, raw, Object.entries(repos).map(([r, v]) => `${r}:${v.hash || 'skip'}`).join(' '));
+}
+
+/**
+ * Prepare a sub-repo for a companion PR branch.
+ *
+ * Detects uncommitted changes, creates a new branch, stages every changed
+ * file explicitly (never git add -A per universal-anti-patterns.md:44), commits,
+ * and pushes with --set-upstream. Returns a structured result the workflow uses
+ * to call `gh pr create`.
+ *
+ * On a stage/commit failure (nothing committed yet), the branch is deleted and
+ * the caller is returned to the original HEAD so the repo is left clean. On a
+ * push failure, the commit already exists — the branch is left in place instead
+ * so the user's work is not lost; the error includes a retry instruction.
+ */
+function cmdPrSubrepo(
+  cwd: string,
+  repo: string | undefined,
+  branch: string | undefined,
+  commitMessage: string | undefined,
+  raw: boolean,
+): void {
+  if (!repo) {
+    error('--repo required');
+  }
+  if (!branch) {
+    error('--branch required');
+  }
+  if (!commitMessage || commitMessage.startsWith('--')) {
+    error('commit message required');
+  }
+  if ((branch as string).startsWith('-')) {
+    error(`Branch name must not start with '-': ${branch}`);
+  }
+
+  // 0. Security: validate repo path is contained within the workspace root.
+  //    Uses security.cjs validatePath (symlink-safe realpathSync + startsWith guard)
+  //    to reject ../escape, absolute paths, and symlink traversal.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
+  const { validatePath } = require('./security.cjs') as {
+    validatePath(filePath: string, baseDir: string): { safe: boolean; resolved: string; error?: string };
+  };
+  const pathCheck = validatePath(repo as string, cwd);
+  if (!pathCheck.safe) {
+    error(`Sub-repo path is unsafe: ${pathCheck.error}`);
+  }
+  const repoCwd = pathCheck.resolved;
+  if (!fs.existsSync(repoCwd)) {
+    error(`Sub-repo not found: ${repoCwd}`);
+  }
+
+  // 1. Collect changed files via porcelain status — explicit, never git add -A.
+  //    ?? (untracked) lines are excluded — only stage tracked modifications.
+  const statusResult = execGit(['-c', 'core.quotePath=false', 'status', '--porcelain'], { cwd: repoCwd });
+  if (statusResult.exitCode !== 0) {
+    error(`git status failed in ${repo}: ${statusResult.stderr}`);
+  }
+
+  // Parse porcelain output into two lists:
+  //   changedFiles — all affected paths (old + new for renames) → goes into result.files
+  //   filesToStage — paths to pass to git add (rename old-paths are already staged by
+  //                  the rename op and no longer exist in the worktree; only add new paths)
+  const changedFiles: string[] = [];
+  const filesToStage: string[] = [];
+  for (const line of statusResult.stdout.split('\n').filter(Boolean).filter(l => !l.startsWith('??'))) {
+    // execGit trims the entire stdout string, which may strip the leading X-status
+    // space from the first output line. Normalize before slicing.
+    const normalized = line.trimStart();
+    const file = normalized.slice(2).trim();
+    const arrowIdx = file.indexOf(' -> ');
+    if (arrowIdx !== -1) {
+      const oldPath = file.slice(0, arrowIdx).trim();
+      const newPath = file.slice(arrowIdx + 4).trim();
+      changedFiles.push(oldPath, newPath);
+      filesToStage.push(newPath); // old path already staged; worktree no longer has it
+    } else {
+      changedFiles.push(file);
+      filesToStage.push(file);
+    }
+  }
+
+  if (changedFiles.length === 0) {
+    output(
+      { ok: true, repo, branch, committed: false, reason: 'nothing_to_commit', files: [] },
+      raw,
+      'nothing_to_commit',
+    );
+    return;
+  }
+
+  // 2. Guard: refuse if branch already exists — checkout -b is non-idempotent
+  const branchCheck = execGit(['rev-parse', '--verify', branch as string], { cwd: repoCwd });
+  if (branchCheck.exitCode === 0) {
+    error(`Branch already exists in ${repo}: ${branch}. Delete it first or choose a unique name.`);
+  }
+
+  // Capture current HEAD before switching so rollback can return explicitly.
+  // git checkout - fails on a fresh single-branch repo with no prior HEAD.
+  const prevBranchResult = execGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoCwd });
+  const prevBranchName = prevBranchResult.exitCode === 0 ? prevBranchResult.stdout.trim() : null;
+
+  // 3. Create branch
+  const checkoutResult = execGit(['checkout', '-b', branch as string], { cwd: repoCwd });
+  if (checkoutResult.exitCode !== 0) {
+    error(`Failed to create branch ${branch} in ${repo}: ${checkoutResult.stderr}`);
+  }
+
+  // Helper: rollback the created branch and return to the previous HEAD.
+  const rollback = (): void => {
+    if (prevBranchName) {
+      execGit(['checkout', prevBranchName], { cwd: repoCwd });
+    }
+    execGit(['branch', '-D', branch as string], { cwd: repoCwd });
+  };
+
+  // 4. Stage explicit files (never git add -A per universal-anti-patterns.md:44)
+  for (const file of filesToStage) {
+    const addResult = execGit(['add', '--', file], { cwd: repoCwd });
+    if (addResult.exitCode !== 0) {
+      rollback();
+      error(`Failed to stage ${file} in ${repo}: ${addResult.stderr}`);
+    }
+  }
+
+  // 5. Commit
+  const commitResult = execGit(['commit', '-m', commitMessage as string], { cwd: repoCwd });
+  if (commitResult.exitCode !== 0) {
+    rollback();
+    error(`Failed to commit in ${repo}: ${commitResult.stderr}`);
+  }
+
+  // 6. Capture commit hash
+  const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd: repoCwd });
+  const commitHash = hashResult.exitCode === 0 ? hashResult.stdout.trim() : null;
+
+  // 7. Capture remote URL and derive GitHub owner/repo slug for gh pr create
+  const remoteResult = execGit(['remote', 'get-url', 'origin'], { cwd: repoCwd });
+  const remoteUrl = remoteResult.exitCode === 0 ? remoteResult.stdout.trim() : null;
+  let remoteSlug: string | null = null;
+  if (remoteUrl) {
+    const m = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
+    remoteSlug = m ? m[1] : null;
+  }
+
+  // 8. Push with --set-upstream so gh pr create can find the branch.
+  //    Network operation — use a longer timeout than the default 10 s.
+  //    Do NOT rollback on push failure — the commit already exists on the local branch.
+  //    Deleting the branch here would destroy the only ref holding the user's work.
+  //    Leave the branch in place so the user can retry the push.
+  const pushResult = execGit(['push', '--set-upstream', 'origin', branch as string], { cwd: repoCwd, timeout: 60_000 });
+  if (pushResult.exitCode !== 0) {
+    error(`Failed to push ${branch} in ${repo}: ${pushResult.stderr}\nBranch ${branch} was created locally — retry with: git -C ${repo} push --set-upstream origin ${branch}`);
+  }
+
+  const result = {
+    ok: true,
+    repo,
+    branch,
+    committed: true,
+    files: changedFiles,
+    commit_hash: commitHash,
+    remote_url: remoteUrl,
+    remote_slug: remoteSlug,
+  };
+  output(result, raw, `${repo}@${commitHash ?? 'unknown'}`);
 }
 
 function cmdSummaryExtract(cwd: string, summaryPath: string | undefined, fields: string[] | undefined, raw: boolean): void {
@@ -1413,6 +1693,8 @@ export = {
   cmdGenerateSlug,
   cmdCurrentTimestamp,
   cmdListTodos,
+  cmdListSeeds,
+  deriveSeedIdentity,
   cmdVerifyPathExists,
   cmdHistoryDigest,
   cmdResolveModel,
@@ -1421,6 +1703,7 @@ export = {
   cmdEffortSync,
   cmdCommit,
   cmdCommitToSubrepo,
+  cmdPrSubrepo,
   cmdSummaryExtract,
   cmdWebsearch,
   cmdProgressRender,
