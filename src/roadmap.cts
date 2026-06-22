@@ -426,8 +426,11 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   const totalSummaries = phases.reduce((sum, p) => sum + p.summary_count, 0);
   const completedPhases = phases.filter(p => p.disk_status === 'complete').length;
 
-  // Detect phases in summary list without detail sections (malformed ROADMAP)
-  const checklistPattern = /-\s*\[[ x]\]\s*\*\*Phase\s+(\d+[A-Z]?(?:\.\d+)*)/gi;
+  // Detect phases in summary list without detail sections (malformed ROADMAP).
+  // The char class must allow `-` (not just `.`) so dash-separated milestone-prefixed
+  // IDs (e.g. `1-01`) match the detail-heading scanner above; otherwise they truncate
+  // at the dash (`1-01` -> `1`) and every such phase reports a phantom missing detail.
+  const checklistPattern = /-\s*\[[ x]\]\s*\*\*Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)/gi;
   const checklistPhases = new Set<string>();
   let checklistMatch: RegExpExecArray | null;
   while ((checklistMatch = checklistPattern.exec(content)) !== null) {
