@@ -49,8 +49,10 @@ Out of scope (follow-up issues): ensemble/voting verification of executed code (
 4. **Docs** — update `docs/explanation/security-model.md` Layer 2 (and localized `docs/{ja-JP,ko-KR,pt-BR,zh-CN}/explanation/security-model.md`).
 
 **arXiv basis:**
-- [2506.05739](https://arxiv.org/abs/2506.05739) — Polymorphic Prompt Assembly (PPA): randomised delimiters + "treat enclosed text as data" reduce injection success ~98%.
-- [2507.15219](https://arxiv.org/abs/2507.15219) — PromptArmor: the model as its own injection guard / detection-before-use.
+- [2506.05739](https://arxiv.org/abs/2506.05739) (score 96) — Polymorphic Prompt Assembly (PPA): randomised delimiters + "treat enclosed text as data" reduce injection success ~98%.
+- [2507.15219](https://arxiv.org/abs/2507.15219) (score 95) — PromptArmor: the model as its own injection guard / detection-before-use (ingress scan).
+- [2504.20472](https://arxiv.org/abs/2504.20472) (score 96, added in re-verification) — Resilience-via-reference: tag the task, force the model to cite which instruction it follows, ignore output not tied to the tagged task — a second data/instruction-separation mechanism, layered with PPA.
+- [2503.00061](https://arxiv.org/abs/2503.00061) (score 95, added) — adaptive attacks break delimiter-only indirect-injection defences ⇒ justifies defense-in-depth (prompt isolation **and** ingress scan **and** opt-in blocking), not delimiters alone.
 
 **Acceptance:** WebFetch/WebSearch injection is detected; ingest agents carry nonce-isolated data blocks; `security.injection_blocking` blocks HIGH only when enabled; advisory behaviour unchanged by default.
 
@@ -63,9 +65,11 @@ Out of scope (follow-up issues): ensemble/voting verification of executed code (
 **Fix:** new shared reference `gsd-core/references/verdict-self-check.md`; `@`-include it and add one numbered self-check step immediately before the final verdict in `gsd-verifier`, `gsd-plan-checker`, and `gsd-code-reviewer`. The step: *if leaning PASS, name the single most likely reason this is a false PASS; if leaning FAIL/BLOCKER, name the strongest argument it is actually acceptable; adjust if warranted.*
 
 **arXiv basis:**
-- [2507.10124](https://arxiv.org/abs/2507.10124) — LLMs hide counter-arguments to their own conclusion in the first answer; an explicit prompt surfaces them.
-- [2507.02778](https://arxiv.org/abs/2507.02778) — Self-Correction Bench: the "self-correction blind spot"; models defend their own output.
-- [2506.16064](https://arxiv.org/abs/2506.16064) — self-critique → correction improves honesty/calibration.
+- [2503.06139](https://arxiv.org/abs/2503.06139) (score 98, added — now primary) — Goal-Reversal Prompting: asking for the *worst* option instead of the best forces critical analysis and cuts position bias — the most precise mechanic for a judge hunting its own false-PASS.
+- [2507.11662](https://arxiv.org/abs/2507.11662) (score 92, added) — Self-Grounded Verification: LLMs rationalise a bad idea (agreement bias); make the judge define the ideal rubric *blindly* before seeing the work so it can't retrofit a PASS.
+- [2507.10124](https://arxiv.org/abs/2507.10124) (score 98) — LLMs hide counter-arguments to their own conclusion in the first answer; an explicit prompt surfaces them.
+- [2507.02778](https://arxiv.org/abs/2507.02778) (score 96) — Self-Correction Bench: the "self-correction blind spot"; models defend their own output ("Wait" trigger ≈90% fix).
+- *Dropped in re-verification:* ~~2506.16064~~ — generic self-critique, not judge/verdict-specific; superseded by 2503.06139 + 2507.11662.
 
 **Acceptance:** all three gating critics contain the verdict-self-check include + step.
 
@@ -78,7 +82,8 @@ Out of scope (follow-up issues): ensemble/voting verification of executed code (
 **Fix:** insert an `<adversarial_stance>` block after `</role>` (`:25`), matching the verifier/code-reviewer format but with `ui-checker`'s native BLOCK/FLAG/PASS tiers (not BLOCKER/WARNING).
 
 **arXiv basis:**
-- [2505.23840](https://arxiv.org/abs/2505.23840) — measuring sycophancy in multi-turn dialogue; objective expert-role distancing as mitigation.
+- [2505.23840](https://arxiv.org/abs/2505.23840) (score 96) — measuring sycophancy in multi-turn dialogue; an objective third-person expert role is the most effective mitigation.
+- [2508.18234](https://arxiv.org/abs/2508.18234) (score 95, added) — personas collapse into "helpful-assistant" mode within 3-4 turns; an explicit behavioural-rules / prohibitions block makes the stance hold (the FORCE stance's go-soft list is exactly such a block).
 
 **Acceptance:** `gsd-ui-checker` contains an `<adversarial_stance>` block with a go-soft failure list and BLOCK/FLAG/PASS classification.
 
@@ -86,13 +91,16 @@ Out of scope (follow-up issues): ensemble/voting verification of executed code (
 
 ## Fix 4 — CoT-off / extraction discipline (#8)
 
-**Problem:** `gsd-doc-classifier` and `gsd-doc-synthesizer` are strict-format classification/extraction agents (JSON output, deterministic precedence) — exactly the category where verbose reasoning corrupts format and invents content — yet neither tells the model to apply rules directly without elaboration. (True CoT-off is unreachable on the Claude runtime, where `minimal` is clamped to `low`; the prompt directive is the realistic lever, and both agents are already `light`/`low` effort.)
+**Problem:** `gsd-doc-classifier` (classify ADR/PRD/SPEC + extract fields) and `gsd-doc-synthesizer` (deterministic per-type extraction/precedence) are **pattern-by-example / mechanical rule-application** tasks — the category where verbose reasoning adds noise, drifts off the constraints, and invents content — yet neither tells the model to apply rules directly. (True CoT-off is unreachable on the Claude runtime, where `minimal` is clamped to `low`; the prompt directive is the realistic lever, and both agents are already `light`/`low` effort.)
 
-**Fix:** add a directive after `</role>` in both: *classification/extraction is rule-application, not generation — do not infer, embellish, or add content absent from the source; apply the taxonomy/precedence rules directly and output only the required structure.*
+*Accuracy note from re-verification:* the fix is framed as **"apply classification/extraction rules directly; do not invent content"** — NOT "CoT hurts JSON". Per 2505.11423, CoT can actually *help* emit *valid complex JSON*, but *hurts simple mechanical constraints and pattern-by-example decisions*; the directive targets the decision/no-fabrication, not JSON well-formedness.
+
+**Fix:** add a directive after `</role>` in both: *classification/extraction is rule-application, not generation — apply the taxonomy/precedence rules directly to what the source actually contains; do not infer, embellish, or add content absent from the source; output only the required structure, marking absent fields as absent rather than guessing.*
 
 **arXiv basis:**
-- [2505.11423](https://arxiv.org/abs/2505.11423) — "when step-by-step breaks accuracy" (the distraction effect).
-- [2504.05081](https://arxiv.org/abs/2504.05081) — the CoT curse in in-context learning (reasoning pushes examples away, hurts extraction/classification).
+- [2504.05081](https://arxiv.org/abs/2504.05081) (score 95, primary) — the CoT curse in in-context learning: for pattern-from-examples tasks, **direct** prompting beats CoT; reasoning text is noise between the examples.
+- [2505.11423](https://arxiv.org/abs/2505.11423) (score 96) — "when step-by-step breaks accuracy": CoT degrades simple strict-instruction compliance (word limits, forbidden chars, formatting) via the distraction effect.
+- [2505.14810](https://arxiv.org/abs/2505.14810) (score 95, added) — as reasoning scales, models forget formatting/style instructions through "contextual distance" — mechanistic support for the format-drift risk without the JSON caveat.
 
 **Acceptance:** both agents contain the extraction-discipline directive.
 
@@ -111,9 +119,35 @@ Out of scope (follow-up issues): ensemble/voting verification of executed code (
 - `npm run build:lib` to compile `.cts` → `bin/lib/*.cjs`.
 
 **arXiv basis:**
-- [2510.15955](https://arxiv.org/abs/2510.15955) — JSON/aggregation processing in LLMs: delegate exact computation to code, not prose.
+- [2504.00406](https://arxiv.org/abs/2504.00406) (score 92, added — now primary) — VerifiAgent: for calculation tasks, write/execute code to compute and verify the result deterministically.
+- [2508.15754](https://arxiv.org/abs/2508.15754) (score 87, added) — Tool-Integrated Reasoning (PAL/TIR): "ask the model to add 15 numbers, it errs by the seventh; ask for code, flawless" (solve rate 12%→34%) — the canonical "LLMs can't do arithmetic, delegate to code" result.
+- [2510.15955](https://arxiv.org/abs/2510.15955) (score 88, supporting) — JSON/aggregation processing: code beats prose, +12% with a schema.
+- *Considered & rejected:* 2504.07646 — its abstract is about temporal QA, not code-dispatch; title/claim mismatch, not cited.
 
 **Acceptance:** `gsd-tools query eval.score --covered 3 --total 5 --infra ok,ok,partial,missing,ok` returns correct coverage/infra/overall + band; agent calls the verb; band boundaries (59/60/79/80) tested.
+
+---
+
+## "SoT > CoT" — verification outcome (no change to plan)
+
+Claim raised: *Skeleton-of-Thought (SoT) is better than Chain-of-Thought (CoT)* — should the plan add an SoT-based change?
+
+**Verdict (corpus-grounded): FALSE as a general claim; PARTIAL only under narrow conditions. No SoT fix added.**
+
+- The corpus's curated *best* papers contain **no** Skeleton-of-Thought paper. The two real SoT papers are low-scored ([2511.10201](https://arxiv.org/abs/2511.10201) score 58; [2510.18162](https://arxiv.org/abs/2510.18162) score 76) and both say SoT is **wrong** for math / deep-sequential / strict-format work (2511.10201: aggressive skeleton compression "fails 70% of math answers"; "better to use standard Chain-of-Thought").
+- The closest head-to-head, StyleBench ([2509.20868](https://arxiv.org/abs/2509.20868) score 87, where "SoT" = *Sketch*-of-Thought), shows **CoT winning GSM8K math** across model sizes. "SoT" is acronym-overloaded in the corpus (Skeleton / Sketch / Structure / Syzygy) — the claim partly rests on a name collision.
+- The *defensible* core — "skeleton/plan first, then expand; width over depth" — is real but the corpus attributes the measured wins to **Fractured-CoT ([2505.12992](https://arxiv.org/abs/2505.12992) score 96)** and **CoThink ([2505.22017](https://arxiv.org/abs/2505.22017) score 95)**, *not* to SoT. These are *token-efficiency* wins with preserved accuracy, not CoT-beating accuracy.
+- **GSD already implements this better at the workflow level:** roadmap→phases→plans→parallel waves *is* skeleton-first decomposition + parallel breadth, strictly more than a single-prompt SoT. SoT adds nothing structural.
+- Effect on our fixes: **Fix 4 (#8) is reinforced** (SoT's own papers say structured/skeleton reasoning is wrong for strict extraction). Nothing to add.
+
+**Deferred follow-up (not this PR):** at the *individual plan/wave-prompt* level, a two-stage "skeleton → expand" for synthesis/report-generating waves (CoThink 2505.22017: ~22% token savings, accuracy preserved) is a legitimate, corpus-backed enhancement — tracked for the #14/#20 follow-up, not added here (scope locked).
+
+## Citation provenance & data-integrity flags
+
+- All cited IDs were verified to exist as `articles/<id>.md` with real-arXiv-format IDs (month ≤ 12). Scores are the corpus curator scores.
+- **Excluded as non-real-arXiv:** any corpus ID with month > 12 (e.g. `2603.*`, `2604.*`, `2605.*`) exists locally but is a corpus-internal identifier that will not resolve on arxiv.org — never cited.
+- **2507.15219** local file has corrupted frontmatter (`id:"n"`); the citation is valid (content matches PromptArmor) but flagged.
+- Re-verification net changes: **+** 2504.20472, 2503.00061 (Fix 1); **+** 2503.06139, 2507.11662 (Fix 2), **−** 2506.16064; **+** 2508.18234 (Fix 3); **+** 2505.14810, reordered primary (Fix 4); **+** 2504.00406, 2508.15754, demoted 2510.15955, **rejected** 2504.07646 (Fix 5).
 
 ---
 
