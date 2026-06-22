@@ -50,6 +50,14 @@ function cmdEvalScore(_cwd: string, args: string[], raw: boolean): void {
     process.exitCode = 1;
     return;
   }
+  // Domain validation: this is a public CLI verb, so reject out-of-domain inputs
+  // rather than emit nonsense (covered>total -> coverage_score>100; negatives ->
+  // negative scores). Counts must be non-negative and covered cannot exceed total.
+  if (covered < 0 || total < 0 || covered > total) {
+    process.stderr.write('Invalid eval.score domain: require 0 <= covered <= total (both non-negative).\n');
+    process.exitCode = 1;
+    return;
+  }
   const result = computeEvalScore(covered, total, infra);
   process.stdout.write(raw ? JSON.stringify(result) : JSON.stringify(result, null, 2));
   process.stdout.write('\n');

@@ -696,6 +696,9 @@ async function main() {
     // .planning/ access needed, and resolving project root would break workflow
     // invocations that run before .planning/ exists (new-project Step 1).
     'project-instruction-file',
+    // #1579: eval.score is pure arithmetic (covered/total + infra weights); it
+    // needs no .planning/ access, so skip the findProjectRoot traversal.
+    'eval',
   ]);
   if (!SKIP_ROOT_RESOLUTION.has(command)) {
     cwd = findProjectRoot(cwd);

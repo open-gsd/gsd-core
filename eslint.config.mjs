@@ -133,6 +133,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/verify-command-router.cjs',
       'gsd-core/bin/lib/verification.cjs',
       'gsd-core/bin/lib/verification-command-router.cjs',
+      'gsd-core/bin/lib/eval.cjs',
+      'gsd-core/bin/lib/eval-command-router.cjs',
       'gsd-core/bin/lib/init-command-router.cjs',
       'gsd-core/bin/lib/agent-command-router.cjs',
       'gsd-core/bin/lib/agent-install-check.cjs',
