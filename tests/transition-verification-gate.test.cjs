@@ -10,9 +10,10 @@ const transitionWorkflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows
 test('transition workflow treats unresolved verification as a blocking phase gate (#1522)', () => {
   const content = fs.readFileSync(transitionWorkflowPath, 'utf-8');
 
-  assert.match(content, /This blocks transition/i);
+  assert.match(content, /preliminary check blocks obviously unresolved verification/i);
   assert.match(content, /phase\.complete[\s\S]*fail-closes/i);
-  assert.match(content, /frontmatter `status` is `passed`/i);
+  assert.match(content, /authoritative stale-aware gate/i);
+  assert.match(content, /canonical verification\s+status is `passed`/i);
   assert.doesNotMatch(content, /does NOT block transition/i);
   assert.doesNotMatch(content, /carry forward as debt/i);
 });

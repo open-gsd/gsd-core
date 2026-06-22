@@ -77,7 +77,7 @@ cat .planning/config.json 2>/dev/null || true
 **Check for verification debt in this phase:**
 
 ```bash
-# Read frontmatter status directly via awk — the runtime launcher is not yet
+# Run a preliminary frontmatter check via awk — the runtime launcher is not yet
 # defined at this step, so avoid any runtime tool calls here.
 # awk extracts only the status: field between the two --- fences to avoid
 # false positives from historical body text (e.g. previous_status: gaps_found).
@@ -95,8 +95,10 @@ Verification incomplete: ${VERIFY_STATUS:-missing}
 Resolve before transition. Review: `/gsd:audit-uat`
 ```
 
-This blocks transition; `gsd-tools.cjs query phase.complete` fail-closes
-unless canonical `*-VERIFICATION.md` frontmatter `status` is `passed`.
+This preliminary check blocks obviously unresolved verification before the
+launcher is available. `gsd-tools.cjs query phase.complete` remains the
+authoritative stale-aware gate and fail-closes unless canonical verification
+status is `passed`.
 
 **If all plans complete:**
 
