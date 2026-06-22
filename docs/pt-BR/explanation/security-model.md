@@ -163,10 +163,26 @@ disruptivo do que uma injeção não detectada em uma camada de varredura
 secundária.
 
 **Hook de runtime: `gsd-read-injection-scanner.js`.** Este hook é acionado na
-saída de cada chamada da ferramenta Read. Ele escaneia o *conteúdo que acabou
-de ser lido* em busca de instruções injetadas em conteúdo não confiável —
-capturando casos em que um atacante incorporou instruções em um arquivo que o
-GSD está prestes a incorporar ao contexto de um agente.
+saída de cada chamada das ferramentas Read, WebFetch e WebSearch. Ele escaneia
+o *conteúdo que acabou de ser lido ou obtido* em busca de instruções injetadas
+em conteúdo não confiável — capturando casos em que um atacante incorporou
+instruções em um arquivo ou recurso remoto que o GSD está prestes a incorporar
+ao contexto de um agente. Os 8 agentes de pesquisa e ingestão de documentos
+carregam adicionalmente um limite compartilhado de dados/instruções
+`<security_context>` (definido em
+`gsd-core/references/untrusted-input-boundary.md`): qualquer conteúdo obtido
+ou lido por esses agentes é tratado como dado, nunca como instrução,
+independentemente do que o conteúdo afirme ser.
+
+**Bloqueio opt-in (`security.injection_blocking`).** Por padrão, todas as
+detecções de injeção são apenas consultivas (registradas, não bloqueadas).
+Definir `security.injection_blocking = true` em `.planning/config.json` eleva
+detecções de alta confiança (HIGH) para **bloqueio**: o hook rejeita o resultado
+do Read, WebFetch ou WebSearch e apresenta o achado para revisão humana antes
+que o conteúdo entre em qualquer contexto de agente. Detecções de nível LOW e
+MEDIUM permanecem consultivas com essa configuração. Esse flag é opt-in; o
+padrão (apenas consultivo) é preservado para evitar quebrar fluxos de trabalho
+existentes.
 
 **Scanner de CI.** `prompt-injection-scan.security.test.cjs` escaneia todos os arquivos
 de agente, workflow e comando em busca de vetores de injeção embutidos como
@@ -179,11 +195,14 @@ papel.
 
 Os dois hooks cobrem superfícies complementares. `gsd-prompt-guard.js` monitora
 *gravações em artefatos de planejamento* — ele detecta injeções sendo plantadas.
-`gsd-read-injection-scanner.js` monitora *leituras de qualquer arquivo* — ele
-detecta injeções sendo ingeridas a partir de conteúdo externo (o README de uma
-dependência, um arquivo de configuração de terceiros, um documento fornecido
-pelo usuário). Juntos, eles delimitam o ciclo de vida ingestão → armazenamento
-→ releitura.
+`gsd-read-injection-scanner.js` monitora *leituras de qualquer arquivo e
+buscas remotas* — ele detecta injeções sendo ingeridas a partir de conteúdo
+externo (o README de uma dependência, um arquivo de configuração de terceiros,
+um documento fornecido pelo usuário ou qualquer URL obtida via WebFetch ou
+WebSearch). O limite `<security_context>` no prompt dos agentes de pesquisa
+fornece uma camada de contenção adicional: mesmo que uma string injetada chegue
+a um agente, ela é estruturalmente separada da região de instruções. Juntos,
+eles delimitam o ciclo de vida ingestão → armazenamento → releitura.
 
 ---
 
@@ -244,10 +263,14 @@ em uma detecção.
 
 **O que as defesas contra injeção de prompt não eliminam:** Uma injeção
 suficientemente criativa que não corresponde a padrões conhecidos, ou uma
-injeção que chega por um canal que os hooks não cobrem (por exemplo, conteúdo
-injetado no README publicado de uma dependência que é lido por um subagente
-navegando em documentação). Defesa em profundidade significa que cada camada
-torna o ataque mais difícil, não que qualquer camada isolada o torna impossível.
+injeção que chega por um canal que os hooks não cobrem. O canal anteriormente
+não coberto de conteúdo injetado no README publicado de uma dependência lido por
+um subagente navegando em documentação agora é escaneado na ingestão por
+`gsd-read-injection-scanner.js` (que cobre a saída de WebFetch e WebSearch) e
+isolado no prompt pelo limite `<security_context>` nos agentes de pesquisa —
+mas jailbreaks novos e injeções de baixo sinal ainda podem passar sem ser
+detectados. Defesa em profundidade significa que cada camada torna o ataque
+mais difícil, não que qualquer camada isolada o torna impossível.
 
 **Reportando vulnerabilidades.** Relate por meio de advisory de segurança
 privado do GitHub em
