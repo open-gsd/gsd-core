@@ -40,6 +40,19 @@ describe('eval.score (#10)', () => {
     // 40: coverage 40 (2/5), infra 40 (2/5 ok) ⇒ 40 SIGNIFICANT GAPS; under ⇒ NOT IMPLEMENTED
     const at40 = JSON.parse(capture(() =>
       evalMod.cmdEvalScore(process.cwd(), ['eval','score','--covered','2','--total','5','--infra','ok,ok,missing,missing,missing'], true)));
+    assert.equal(at40.overall_score, 40);
     assert.equal(at40.verdict, 'SIGNIFICANT GAPS');
+  });
+
+  test('missing --covered value errors: non-zero exitCode, no score JSON on stdout', () => {
+    const origExitCode = process.exitCode;
+    process.exitCode = 0;
+    const out = capture(() =>
+      evalMod.cmdEvalScore(process.cwd(), ['eval', 'score', '--total', '5', '--infra', 'ok,ok,ok,ok,ok'], true));
+    assert.equal(process.exitCode, 1);
+    let parsed;
+    try { parsed = JSON.parse(out); } catch (_) { parsed = null; }
+    assert.ok(parsed === null || parsed.overall_score === undefined, 'stdout must not be a valid score object');
+    process.exitCode = origExitCode;
   });
 });

@@ -20,6 +20,7 @@ const INFRA_VALUE: Record<string, number> = { ok: 1, partial: 0.5, missing: 0 };
 
 function computeEvalScore(covered: number, total: number, infra: string[]): EvalScoreResult {
   const coverage = total > 0 ? (covered / total) * 100 : 0;
+  // unknown/typo tokens are treated as `missing` (score 0) by design — upstream agent only passes ok|partial|missing
   const infraSum = infra.reduce((acc, s) => acc + (INFRA_VALUE[s.trim().toLowerCase()] ?? 0), 0);
   const infraScore = (infraSum / 5) * 100;
   const overall = coverage * 0.6 + infraScore * 0.4;
@@ -33,11 +34,18 @@ function computeEvalScore(covered: number, total: number, infra: string[]): Eval
 }
 
 function cmdEvalScore(_cwd: string, args: string[], raw: boolean): void {
-  const covered = Number(parseFlag(args, '--covered'));
-  const total = Number(parseFlag(args, '--total'));
+  const coveredRaw = parseFlag(args, '--covered');
+  const totalRaw = parseFlag(args, '--total');
   const infraRaw = parseFlag(args, '--infra') || '';
   const infra = infraRaw ? infraRaw.split(',') : [];
-  if (!Number.isFinite(covered) || !Number.isFinite(total) || infra.length !== 5) {
+  const covered = Number(coveredRaw);
+  const total = Number(totalRaw);
+  if (
+    coveredRaw === undefined || coveredRaw.trim() === '' ||
+    totalRaw === undefined || totalRaw.trim() === '' ||
+    !Number.isFinite(covered) || !Number.isFinite(total) ||
+    infra.length !== 5
+  ) {
     process.stderr.write('Usage: gsd-tools query eval.score --covered N --total N --infra a,b,c,d,e (each ok|partial|missing)\n');
     process.exitCode = 1;
     return;
