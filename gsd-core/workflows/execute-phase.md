@@ -91,13 +91,13 @@ Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelizat
 Read runtime/worktree config and fail closed before any executor dispatch:
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude 2>/dev/null || echo "claude")
-USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees 2>/dev/null || echo "true")
+RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
+USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
 EXECUTOR_STALL_INTERVAL_MINUTES=$(gsd_run query config-get executor.stall_detect_interval_minutes 2>/dev/null || echo "5")
 EXECUTOR_STALL_THRESHOLD_MINUTES=$(gsd_run query config-get executor.stall_threshold_minutes 2>/dev/null || echo "10")
 
-if [ "$RUNTIME" = "codex" ] && [ "$USE_WORKTREES" != "false" ]; then
-  echo "FATAL: Codex execute-phase worktree isolation is unsupported. Set workflow.use_worktrees=false or use a runtime with Agent isolation=\"worktree\" support." >&2
+if [ "$RUNTIME" != "claude" ] && [ "$USE_WORKTREES" != "false" ]; then
+  echo "FATAL: git worktree isolation (isolation=\"worktree\") is unsupported on runtime '$RUNTIME' — it would run executor agents unisolated against the main checkout. Set workflow.use_worktrees=false." >&2
   exit 1
 fi
 # Sweep orphaned locked worktrees from prior crashed sessions before spawning executors (#3707).
@@ -113,7 +113,7 @@ if [ "$RUNTIME" = "claude" ] && [ "$USE_WORKTREES" != "false" ]; then
   fi
 fi
 ```
-Codex maps subagents to `spawn_agent`, which has no direct Codex mapping for Claude Code's `isolation="worktree"` parameter. Failing closed prevents main-checkout edits while the workflow believes agents are isolated.
+`isolation="worktree"` is a Claude-Code-specific agent primitive; no other runtime can honor it (Codex maps subagents to `spawn_agent`, others prohibit or omit worktree binding). Failing closed prevents main-checkout edits while the workflow believes agents are isolated.
 
 If the project uses git submodules, worktree isolation is unsafe **only when a plan touches a submodule path** — the executor commit protocol cannot correctly handle submodule commits inside isolated worktrees. The previous behavior unconditionally disabled worktree isolation whenever `.gitmodules` existed, which penalised every plan in a submodule project even when the plan was nowhere near a submodule. Compute submodule paths once and intersect them per-plan with the plan's declared `files_modified` frontmatter.
 
@@ -687,7 +687,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    )
    ```
 
-   After each `Agent()` returns, parse executor-returned worktree metadata (`<worktree_metadata>`) before harness metadata, then atomically append `{agent_id, worktree_path, branch, expected_base}` to `WAVE_WORKTREE_MANIFEST`. Missing: stop and ask for recovery instead of scanning worktrees.
+   After each `Agent()` returns, parse executor-returned worktree metadata (`<worktree_metadata>`) before harness metadata, then record the `{agent_id, worktree_path, branch, expected_base}` entry with `gsd_run query worktree.record-agent --manifest "$WAVE_WORKTREE_MANIFEST" --agent-id … --path … --branch … --base …`. The verb validates every field at write time using the same rules the `cleanup-wave` reader enforces (write-strict `--agent-id`), failing loudly with a non-zero exit and recovery hint rather than appending an under-populated entry the reader would later drop silently. On a non-zero exit or any missing field: stop and ask for recovery instead of scanning worktrees.
 
    > **Worktree recovery policy (#48 + #1292):** See `execute-phase/steps/worktree-recovery-policy.md` — FAIL-CLOSED rule for base/HEAD-namespace mismatches AND isolated-run fail-safe recovery.
 

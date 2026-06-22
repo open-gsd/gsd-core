@@ -101,10 +101,8 @@ describe('processAttribution (relocated to runtime-artifact-conversion)', () => 
   });
 
   test('bin/install.js re-exports the SAME processAttribution reference (no drift)', () => {
-    // processAttribution flows into install.js's exports via the
-    // ...runtimeArtifactConversion spread, so the installer's processAttribution
-    // must be the conversion module's single implementation (the local copy is
-    // deleted; install.js binds it for its internal callers).
+    // processAttribution remains an explicit installer compatibility relay, so
+    // the export must keep pointing at the conversion module's implementation.
     assert.strictEqual(installer.processAttribution, conversion.processAttribution);
   });
 });

@@ -21,9 +21,45 @@ import os from 'node:os';
 import fs from 'node:fs';
 import commandRoster = require('./command-roster.cjs');
 const { readGsdCommandNames, transformContentToHyphen } = commandRoster;
-const pkg = require('../../../package.json');
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 const { getDirName } = runtimeNamePolicy;
+
+// #1383: resolve GSD's version WITHOUT a top-level
+// `require('../../../package.json')`. That require ran at module load on every
+// gsd-tools invocation (this module sits in the gsd-tools loader chain) and
+// threw `Cannot find module '../../../package.json'` on runtimes whose root has
+// no package.json — notably Codex, where the installer omits the synthetic root
+// package.json — taking the entire CLI down before it did anything. And even
+// where it resolved (Claude's synthetic `{"type":"commonjs"}`), there is no
+// `version` field, so the single consumer below already emitted
+// `version: undefined`. Resolve lazily and defensively instead:
+//   1. Installed trees carry <root>/gsd-core/VERSION (written by the installer);
+//      this module lives at <root>/gsd-core/bin/lib, so VERSION is two dirs up.
+//   2. The source / npm-package tree has no gsd-core/VERSION but carries a real
+//      package.json three dirs up — read it lazily, never at module-load time.
+// A failed/invalid lookup degrades to '' (the caller omits the field) rather
+// than crashing or emitting `version: undefined`. Both sources are validated
+// against the same semver shape the repo's other VERSION reader enforces
+// (src/update-context.cts) so a garbled VERSION file is never emitted verbatim.
+// Exported for the #1383 regression.
+const SEMVER_PREFIX = /^\d+\.\d+\.\d+/; // mirrors src/update-context.cts SEMVER_PREFIX
+function resolveVersionFrom(libDir: string): string {
+  try {
+    const v = fs.readFileSync(path.join(libDir, '..', '..', 'VERSION'), 'utf8').trim();
+    if (SEMVER_PREFIX.test(v)) return v;
+  } catch { /* not an installed tree (no gsd-core/VERSION) */ }
+  try {
+    const pkg = require(path.join(libDir, '..', '..', '..', 'package.json'));
+    if (pkg && typeof pkg.version === 'string' && SEMVER_PREFIX.test(pkg.version)) return pkg.version;
+  } catch { /* runtime root has no package.json (e.g. Codex) */ }
+  return '';
+}
+
+let cachedVersion: string | undefined;
+function gsdVersion(): string {
+  if (cachedVersion === undefined) cachedVersion = resolveVersionFrom(__dirname);
+  return cachedVersion;
+}
 
 
 const colorNameToHex = {
@@ -393,7 +429,10 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   // Hermes' SKILL.md spec lists `version` as a required frontmatter field.
   // Track GSD's package version so Hermes' skill_view() reports a stable
   // identifier per install.
-  if (runtime === 'hermes') fm += `version: ${yamlQuote(pkg.version)}\n`;
+  if (runtime === 'hermes') {
+    const version = gsdVersion();
+    if (version) fm += `version: ${yamlQuote(version)}\n`;
+  }
   // #778 (b) — Qwen-only numeric priority for /skills ordering. Scoped to qwen
   // so Claude/Hermes skill frontmatter is unchanged (they ignore the field, but
   // we keep their output byte-stable). skillName is the `gsd-<stem>` dir name.
@@ -2120,6 +2159,40 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
 }
 
 /**
+ * Canonical list of every non-Claude runtime that gsd-core emits artifacts for.
+ * Exported so test files can import this single source of truth rather than
+ * maintaining divergent hand-rolled arrays (#1521).
+ *
+ * Keep in sync with the runtime flags in bin/install.js and getDirName().
+ */
+const NON_CLAUDE_RUNTIMES: string[] = [
+  'codex', 'opencode', 'kilo', 'gemini', 'copilot', 'antigravity',
+  'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'kimi',
+  'codebuddy', 'cline',
+];
+
+/**
+ * #1521: Every non-Claude runtime resolves its own runtime identity from a
+ * runtime-neutral config, and defaults workflow.use_worktrees to false —
+ * GSD's worktree isolation uses Claude Code's isolation="worktree" spawn
+ * parameter, which no other runtime honors. Stamped into the emitted
+ * workflow runtime-resolution blocks. (Generalizes the Codex-only #1515 fix.)
+ *
+ * @private — exported as `_stampNonClaudeRuntimeDefaults` for tests.
+ */
+function _stampNonClaudeRuntimeDefaults(content: string, runtime: string): string {
+  content = content.replace(
+    /config-get workflow\.use_worktrees --raw 2>\/dev\/null \|\| echo "true"/g,
+    'config-get workflow.use_worktrees --default false --raw 2>/dev/null || echo "false"',
+  );
+  content = content.replace(
+    /config-get runtime --default claude --raw 2>\/dev\/null \|\| echo "claude"/g,
+    `config-get runtime --default ${runtime} --raw 2>/dev/null || echo "${runtime}"`,
+  );
+  return content;
+}
+
+/**
  * Apply the per-runtime rewrite table to a single content string.
  * Relocated from bin/install.js `_applyRuntimeRewrites`.
  *
@@ -2133,12 +2206,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
   const dirName = getDirName(runtime);
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
 
+  // #1521: stamp runtime identity + use_worktrees=false for every non-Claude runtime
+  // before brand-specific path rewrites, so the replace operates on the pristine
+  // source line and is idempotent regardless of subsequent path substitutions.
+  if (runtime !== 'claude') {
+    content = _stampNonClaudeRuntimeDefaults(content, runtime);
+  }
+
   switch (runtime) {
     case 'codex':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/~\/\.codex\//g, pathPrefix);
+      // #1515 stamp moved to _stampNonClaudeRuntimeDefaults (#1521 generalisation).
       content = processAttribution(content, attribution);
       break;
 
@@ -2402,6 +2483,11 @@ function rewriteStagedSkillBodies(stagedDir, opts) {
  * attribution from opts, then delegates to applyRuntimeContentRewritesForCommandsInPlace
  * (single copy+rewrite owner).
  *
+ * @internal — symmetric companion to rewriteStagedSkillBodies; retained as the deep-seam
+ * API for command bodies. No production caller today (install rewrites commands via
+ * copyWithPathReplacement → applyRuntimeContentRewritesForCommandsInPlace). Kept for
+ * API symmetry + test coverage.
+ *
  * @returns {string} path to the temp dir (caller is responsible for cleanup)
  */
 function rewriteStagedCommandBodies(stagedDir, opts) {
@@ -2494,6 +2580,9 @@ export = {
   convertClaudeCommandToKiloSkill,
   readGsdCommandNames,
   transformContentToHyphen,
+  // #1383: version resolver (exported for regression test of the Codex
+  // missing-package.json crash + the VERSION-file source of truth).
+  resolveVersionFrom,
   // #1182: agent converters + tool-name table dependency closure
   claudeToCopilotTools,
   convertCopilotToolName,
@@ -2517,4 +2606,7 @@ export = {
   rewriteStagedCommandBodies,
   _computePathPrefix: computePathPrefix,
   _applyRuntimeRewrites,
+  _stampNonClaudeRuntimeDefaults,
+  // #1521: canonical non-Claude runtime list for test files and tooling
+  NON_CLAUDE_RUNTIMES,
 };

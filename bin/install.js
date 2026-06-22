@@ -364,6 +364,10 @@ const {
   resolveRuntimeArtifactLayout,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-layout.cjs'));
 const {
+  createRuntimeArtifactInstallPlan,
+  createRuntimeArtifactUninstallPlan,
+} = require(path.join(_gsdLibDir, 'runtime-artifact-install-plan.cjs'));
+const {
   planLegacyCleanup,
   applyLegacyCleanup,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs'));
@@ -6698,6 +6702,7 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
 // reference-identical to the conversion module (consistent with the walkers above).
 // All call sites are below this line → no TDZ hazard.
 const _applyRuntimeRewrites = runtimeArtifactConversion._applyRuntimeRewrites;
+const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaudeRuntimeDefaults;
 
 /**
  * Copy a staged directory's contents into destDir.
@@ -7007,36 +7012,25 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
   _runLegacyInstallMigrations(runtime, configDir, scope);
 
   const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope);
-
-  // Compute pathPrefix once for the rewrite step (same derivation as the
-  // top-level install() function).
-  const _resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
-  const _homeDir = os.homedir().replace(/\\/g, '/');
-  const pathPrefix = computePathPrefix({
-    isGlobal: scope === 'global',
-    isOpencode: runtime === 'opencode',
-    isWindowsHost: process.platform === 'win32',
-    resolvedTarget: _resolvedTarget,
-    homeDir: _homeDir,
+  const planResult = createRuntimeArtifactInstallPlan({
+    layout,
+    resolvedProfile,
+    homedir: () => os.homedir(),
+    platform: process.platform,
+    resolveAttribution: getCommitAttribution,
   });
 
-  for (const kind of layout.kinds) {
-    const staged = kind.stage(resolvedProfile);
-    // stagedForCopy: the directory to copy from (may differ from staged if rewrites
-    // produce a temp copy — see applyRuntimeContentRewritesForCommandsInPlace).
-    let stagedForCopy = staged;
-    const isGlobal = scope === 'global';
-    if (kind.kind === 'skills' || kind.kind === 'kimi-agents') {
-      applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix, isGlobal, getCommitAttribution(runtime));
-    } else if (kind.kind === 'commands') {
-      // Returns a temp dir with rewritten content so source files are never mutated.
-      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix, isGlobal, getCommitAttribution(runtime));
+  const cleanupDirs = planResult.ok ? planResult.plan.cleanupDirs : planResult.cleanupDirs;
+  try {
+    if (!planResult.ok) {
+      throw new Error(planResult.message);
     }
-    // applyRuntimeContentRewritesForCommandsInPlace() returns a fresh mkdtemp dir under
-    // os.tmpdir() (gsd-cmd-rewrites-*); remove it once copied so it does not accumulate (#856).
-    const tempToClean = stagedForCopy !== staged ? stagedForCopy : null;
-    try {
-      const dest = path.join(layout.configDir, kind.destSubpath);
+
+    const kindsByName = new Map(layout.kinds.map((kind) => [kind.kind, kind]));
+    for (const item of planResult.plan.items) {
+      const kind = kindsByName.get(item.kind);
+      if (!kind) throw new Error(`Install plan returned unknown artifact kind: ${item.kind}`);
+      const dest = item.destDir;
       fs.mkdirSync(dest, { recursive: true });
       if (kind.kind === 'skills' && fs.existsSync(dest)) {
         // Pre-prune: snapshot user-owned content before _removeGsdEntries wipes it,
@@ -7063,7 +7057,7 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         }
 
         _removeGsdEntries(dest, kind);
-        _copyStaged(stagedForCopy, dest, kind);
+        _copyStaged(item.sourceDir, dest, kind);
 
         // Restore user-owned dirs after the prune+copy
         for (const [dirName, snap] of toPreserve) {
@@ -7073,12 +7067,12 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         // For non-skills kinds (commands, agents): no user content to preserve;
         // just prune stale gsd-* entries and copy new ones.
         _removeGsdEntries(dest, kind);
-        _copyStaged(stagedForCopy, dest, kind);
+        _copyStaged(item.sourceDir, dest, kind);
       }
-    } finally {
-      if (tempToClean) {
-        try { fs.rmSync(tempToClean, { recursive: true, force: true }); } catch { /* best-effort */ }
-      }
+    }
+  } finally {
+    for (const dir of cleanupDirs) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   }
 
@@ -7196,9 +7190,14 @@ function uninstallRuntimeArtifacts(runtime, configDir, scope) {
   const savedLegacyArtifacts = _runLegacyUninstallCleanup(runtime, configDir, scope);
 
   const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope);
-  for (const kind of layout.kinds) {
-    const dest = path.join(layout.configDir, kind.destSubpath);
-    _removeGsdEntries(dest, kind);
+  const plan = createRuntimeArtifactUninstallPlan(layout);
+  const kindsByName = new Map(layout.kinds.map((kind) => [kind.kind, kind]));
+  for (const item of plan.items) {
+    const kind = kindsByName.get(item.kind);
+    if (!kind) {
+      throw new Error(`Runtime artifact uninstall plan referenced unknown kind: ${item.kind}`);
+    }
+    _removeGsdEntries(item.destDir, kind);
   }
 
   // Hermes: after removing gsd-* skill dirs from skills/gsd/, also remove
@@ -7288,6 +7287,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
       }
       content = processAttribution(content, getCommitAttribution(runtime));
+
+      // #1521: stamp the workflow runtime-resolution block so every non-Claude
+      // install resolves its own runtime identity and defaults use_worktrees=false.
+      // copyWithPathReplacement is the emit path for gsd-core/workflows/*.md;
+      // _applyRuntimeRewrites is NOT invoked here, so this is what makes the fix
+      // live in real installs (it is a no-op for files without those lines).
+      if (runtime !== 'claude') {
+        content = _stampNonClaudeRuntimeDefaults(content, runtime);
+      }
 
       // #3683 — normalize /gsd:<cmd> → /gsd-<cmd> in any body passing through
       // copyWithPathReplacement for runtimes that register commands under the
@@ -12040,7 +12048,10 @@ module.exports = {
     // #1191 — exported so tests exercise the REAL readSettings, not a replica
     readSettings,
     stripJsonComments,
-    ...runtimeArtifactConversion,
+    // Compatibility relays retained after auditing the former broad
+    // runtimeArtifactConversion spread (#1559).
+    processAttribution,
+    applyRuntimeContentRewritesForCommandsInPlace,
   };
 
 // Main logic — only run when not loaded as a module for testing
