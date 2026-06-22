@@ -73,7 +73,7 @@ GSD Core 在三个层面应对提示注入。
 
 **运行时钩子：`gsd-read-injection-scanner.js`。** 该钩子在每次 Read、WebFetch 和 WebSearch 工具调用的输出时触发。它扫描*刚刚读取或获取的内容*中在不可信内容中注入的指令——捕获攻击者在 GSD 即将纳入代理上下文的文件或远程资源中嵌入指令的情况。8 个研究和文档摄取代理还额外携带共享的 `<security_context>` 数据/指令边界（定义于 `gsd-core/references/untrusted-input-boundary.md`）：无论内容声称是什么，这些代理获取或读取的内容均被视为数据而非指令。
 
-**可选阻断（`security.injection_blocking`）。** 默认情况下，所有注入检测结果均为仅供参考（记录日志，不阻断）。在 `.planning/config.json` 中设置 `security.injection_blocking = true` 可将 HIGH 置信度的检测升级为**阻断**：钩子拒绝 Read、WebFetch 或 WebSearch 的结果，并在内容进入任何代理上下文之前将发现呈现给人工审核。LOW 和 MEDIUM 级别的检测在此设置下仍为仅供参考。该标志为可选启用；默认值（仅供参考）被保留，以避免破坏现有工作流程。
+**可选阻断（`security.injection_blocking`）。** 默认情况下，所有注入检测结果均为仅供参考（记录日志，不阻断）。在 `.planning/config.json` 中设置 `security.injection_blocking = true` 可将 HIGH 置信度的检测升级为**阻断**：钩子拒绝 Read、WebFetch 或 WebSearch 的结果，并发出阻断信号，使代理不会处理或持久化检测到的内容。LOW 级别的检测在此设置下仍为仅供参考。该标志为可选启用；默认值（仅供参考）被保留，以避免破坏现有工作流程。
 
 **CI 扫描器。** `prompt-injection-scan.security.test.cjs` 作为测试套件的一部分，扫描所有代理、工作流和命令文件中嵌入的注入向量。这能捕获 GSD 源代码本身的注入尝试——例如，修改工作流文件以添加角色覆盖指令的供应链攻击。
 

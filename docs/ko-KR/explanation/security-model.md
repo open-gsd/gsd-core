@@ -79,7 +79,7 @@ GSD Core는 세 가지 수준에서 프롬프트 인젝션을 다룬다.
 
 **런타임 훅: `gsd-read-injection-scanner.js`.** 이 훅은 모든 Read, WebFetch, 및 WebSearch 도구 호출의 출력에서 실행된다. GSD가 에이전트 컨텍스트에 통합하려는 파일 또는 원격 리소스에서 방금 읽거나 가져온 *콘텐츠*를 신뢰할 수 없는 콘텐츠의 주입된 지시 사항으로 스캔한다. 8개의 리서치 및 문서 수집 에이전트는 추가로 공유 `<security_context>` 데이터/명령 경계(`gsd-core/references/untrusted-input-boundary.md`에 정의됨)를 갖는다: 해당 에이전트들이 가져오거나 읽은 콘텐츠는 콘텐츠가 무엇을 주장하는지와 관계없이 명령이 아닌 데이터로 처리된다.
 
-**옵트인 차단(`security.injection_blocking`).** 기본적으로 모든 인젝션 탐지는 자문적 전용이다(로그 기록되지만 차단되지 않음). `.planning/config.json`에서 `security.injection_blocking = true`로 설정하면 HIGH 신뢰도 탐지가 **차단**으로 업그레이드된다: 훅이 Read, WebFetch, 또는 WebSearch 결과를 거부하고 콘텐츠가 에이전트 컨텍스트에 들어가기 전에 사람 검토를 위해 발견 사항을 표시한다. LOW 및 MEDIUM 탐지는 이 설정에서도 자문적으로 유지된다. 이 플래그는 옵트인이다; 기존 워크플로우를 깨뜨리지 않기 위해 기본값(자문적 전용)이 유지된다.
+**옵트인 차단(`security.injection_blocking`).** 기본적으로 모든 인젝션 탐지는 자문적 전용이다(로그 기록되지만 차단되지 않음). `.planning/config.json`에서 `security.injection_blocking = true`로 설정하면 HIGH 신뢰도 탐지가 **차단**으로 업그레이드된다: 훅이 Read, WebFetch, 또는 WebSearch 결과를 거부하고 에이전트가 감지된 콘텐츠를 처리하거나 영속화하지 않도록 차단 신호를 통보한다. LOW 탐지는 이 설정에서도 자문적으로 유지된다. 이 플래그는 옵트인이다; 기존 워크플로우를 깨뜨리지 않기 위해 기본값(자문적 전용)이 유지된다.
 
 **CI 스캐너.** `prompt-injection-scan.security.test.cjs`는 테스트 스위트의 일부로 내장된 인젝션 벡터가 있는지 모든 에이전트, 워크플로우, 명령 파일을 스캔한다. 이는 GSD 소스 자체의 인젝션 시도를 잡아낸다 — 예를 들어 워크플로우 파일을 수정하여 역할 재정의 지시 사항을 추가하는 공급망 공격.
 

@@ -167,8 +167,8 @@ the content claims to be.
 detections are advisory-only (logged, not blocked). Setting
 `security.injection_blocking = true` in `.planning/config.json` upgrades
 HIGH-confidence detections to **blocking**: the hook rejects the Read, WebFetch,
-or WebSearch result and surfaces the finding for human review before the content
-enters any agent context. LOW and MEDIUM detections remain advisory under this
+or WebSearch result and surfaces a blocking signal so the agent does not act on
+or persist the detected content. LOW detections remain advisory under this
 setting. This flag is opt-in; the default (advisory-only) is preserved to avoid
 breaking existing workflows.
 

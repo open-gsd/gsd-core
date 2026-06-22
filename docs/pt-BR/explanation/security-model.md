@@ -178,9 +178,9 @@ independentemente do que o conteúdo afirme ser.
 detecções de injeção são apenas consultivas (registradas, não bloqueadas).
 Definir `security.injection_blocking = true` em `.planning/config.json` eleva
 detecções de alta confiança (HIGH) para **bloqueio**: o hook rejeita o resultado
-do Read, WebFetch ou WebSearch e apresenta o achado para revisão humana antes
-que o conteúdo entre em qualquer contexto de agente. Detecções de nível LOW e
-MEDIUM permanecem consultivas com essa configuração. Esse flag é opt-in; o
+do Read, WebFetch ou WebSearch e emite um sinal de bloqueio para que o agente não processe
+nem persista o conteúdo detectado. Detecções de nível LOW
+permanecem consultivas com essa configuração. Esse flag é opt-in; o
 padrão (apenas consultivo) é preservado para evitar quebrar fluxos de trabalho
 existentes.
 

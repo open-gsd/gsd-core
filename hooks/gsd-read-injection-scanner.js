@@ -201,7 +201,8 @@ process.stdin.on('end', () => {
     let blocking = false;
     if (severity === 'HIGH') {
       try {
-        const cfgPath = path.join(process.cwd(), '.planning', 'config.json');
+        const cfgBase = data.cwd || process.cwd();
+        const cfgPath = path.join(cfgBase, '.planning', 'config.json');
         const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
         blocking = cfg.security?.injection_blocking === true;
       } catch { /* no config ⇒ advisory */ }
