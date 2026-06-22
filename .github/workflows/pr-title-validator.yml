@@ -1,0 +1,121 @@
+name: PR Title Validator
+
+# Enforce the PR-title convention the release changelog depends on (#1549).
+#
+# The changelog is entirely title-driven: release.yml runs
+# `gh release create --generate-notes` (GitHub builds "What's Changed" from PR
+# titles) and scripts/release-notes/format-github-release-notes.cjs reformats
+# it. Two independent rules are read off the title:
+#   1. Bucket   — classifyBucket() anchors on the leading type (^feat / ^fix /
+#                 else Enhancement). A leading tag (e.g. `[security] `) defeats
+#                 the anchor and silently mis-files the entry.
+#   2. Issue link — the `(#<issue>)` in the title is what renders as a link to
+#                 the issue in the changelog line.
+#
+# This gate reuses the SAME matcher the changelog uses
+# (scripts/lib/conventional-title.cjs) — not a forked regex — so a title that
+# passes here cannot mis-bucket in the changelog.
+#
+# Unlike pr-target-validator, this runs for ALL authors (including members):
+# the changelog drift that motivated #1549 came from member PRs.
+#
+# Phase-1 rollout: set WARN_ONLY=true to comment without failing the check.
+# Shipped enforcing (WARN_ONLY=false); flip to 'true' for a grace period.
+#
+# See: scripts/lib/conventional-title.cjs, CONTRIBUTING.md, issue #1549.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate-title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      # Phase-1: set to 'true' to warn only. Shipped enforcing.
+      WARN_ONLY: 'false'
+    steps:
+      - name: Checkout base branch (trusted policy source)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          persist-credentials: false
+
+      - name: Validate PR title
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          WARN_ONLY: ${{ env.WARN_ONLY }}
+        with:
+          script: |
+            const { evaluatePrTitle } = require(`${process.env.GITHUB_WORKSPACE}/scripts/lib/conventional-title.cjs`);
+
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+            const warnOnly = process.env.WARN_ONLY === 'true';
+
+            const result = evaluatePrTitle({ title });
+
+            if (result.valid) {
+              core.info(`PR title OK: ${title}`);
+              return;
+            }
+
+            const msg = [
+              `### PR title needs the issue-ref convention`,
+              ``,
+              `\`${title}\``,
+              ``,
+              result.message,
+              ``,
+              `**How to fix:** click "Edit" next to the PR title above and retitle it`,
+              `as \`type(#<issue>): summary\`. No need to recreate the PR — this check`,
+              `re-runs when you edit the title.`,
+              ``,
+              `<details><summary>Why this is enforced</summary>`,
+              ``,
+              `The release changelog is built from PR titles. A leading tag mis-files`,
+              `the entry into the wrong section, and a scope without \`(#<issue>)\` leaves`,
+              `the changelog line with no link back to the issue. See issue #1549.`,
+              ``,
+              `</details>`,
+            ].join('\n');
+
+            // Post or update a sticky comment.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+            });
+            const marker = '<!-- pr-title-validator -->';
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            const body = `${marker}\n${msg}`;
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
+
+            if (warnOnly) {
+              core.warning(`PR title convention (warning-only mode): ${result.reason} — ${title}`);
+            } else {
+              core.setFailed(`PR title does not follow the convention (${result.reason}): ${title}`);
+            }
