@@ -18,6 +18,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fc = require('fast-check');
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
 
 const WORKTREE_SAFETY_PATH = path.join(
@@ -37,6 +38,8 @@ const {
   snapshotWorktreeInventory,
   planWorktreeWaveCleanup,
   executeWorktreeWaveCleanupPlan,
+  planWorktreeRecordAgent,
+  cmdWorktreeRecordAgent,
 } = require(WORKTREE_SAFETY_PATH);
 
 const isWindows = process.platform === 'win32';
@@ -559,6 +562,382 @@ describe('planWorktreeWaveCleanup', () => {
     assert.equal(plan.ok, false);
     assert.equal(plan.reason, 'empty_manifest');
     assert.deepEqual(plan.entries, []);
+  });
+});
+
+// ─── planWorktreeRecordAgent (#1298 writer verb) ──────────────────────────────
+// These tests pin the verb's reason for existing: a per-agent entry that
+// record-agent ACCEPTS must survive the cleanup-wave reader, and one it REJECTS
+// is exactly what the reader would have dropped silently. If write- and
+// read-side validation ever diverge, the round-trip tests below fail.
+
+describe('planWorktreeRecordAgent', () => {
+  const VALID = {
+    agentId: 'a1',
+    worktreePath: '/repo/.claude/worktrees/agent-a1',
+    branch: 'worktree-agent-a1',
+    base: 'abc123',
+  };
+
+  test('appends a validated entry that the cleanup-wave reader accepts (write/read parity)', () => {
+    const plan = planWorktreeRecordAgent('{"orchestrator_root":"/repo/main","worktrees":[]}', VALID);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.entry, {
+      agent_id: 'a1',
+      worktree_path: '/repo/.claude/worktrees/agent-a1',
+      branch: 'worktree-agent-a1',
+      expected_base: 'abc123',
+    });
+    // The serialized manifest must round-trip through the reader the cleanup
+    // path uses — proving write and read validate identically.
+    const written = JSON.parse(plan.manifest);
+    assert.equal(written.orchestrator_root, '/repo/main'); // preserved, no schema change
+    const readBack = planWorktreeWaveCleanup('/repo/main', written);
+    assert.equal(readBack.ok, true);
+    assert.equal(readBack.entries.length, 1);
+    assert.equal(readBack.entries[0].agent_id, 'a1');
+  });
+
+  test('preserves existing entries and other top-level keys when appending', () => {
+    const existing = JSON.stringify({
+      orchestrator_root: '/repo/main',
+      worktrees: [{
+        agent_id: 'a0',
+        worktree_path: '/repo/.claude/worktrees/agent-a0',
+        branch: 'worktree-agent-a0',
+        expected_base: 'aaa000',
+      }],
+    });
+    const plan = planWorktreeRecordAgent(existing, VALID);
+    assert.equal(plan.ok, true);
+    const written = JSON.parse(plan.manifest);
+    assert.equal(written.orchestrator_root, '/repo/main');
+    assert.equal(written.worktrees.length, 2);
+    assert.deepEqual(written.worktrees.map((w) => w.agent_id), ['a0', 'a1']);
+  });
+
+  test('accepts a bare top-level array manifest', () => {
+    const plan = planWorktreeRecordAgent('[]', VALID);
+    assert.equal(plan.ok, true);
+    const written = JSON.parse(plan.manifest);
+    assert.ok(Array.isArray(written));
+    assert.equal(written.length, 1);
+    assert.equal(written[0].branch, 'worktree-agent-a1');
+  });
+
+  // Write-strict agent_id: the reader treats agent_id as nullable, but the
+  // writer requires it — an entry whose author cannot be identified defeats the
+  // verb's purpose. This is the deliberate write-strict-vs-read-lenient decision.
+  test('fails loudly when --agent-id is empty (write-strict, unlike the lenient reader)', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, agentId: '' });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'missing_field');
+    assert.match(plan.hint, /--agent-id/);
+    assert.equal(plan.manifest, null);
+  });
+
+  test('reports every missing field, not just the first', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', {
+      agentId: '', worktreePath: '', branch: '', base: '',
+    });
+    assert.equal(plan.reason, 'missing_field');
+    for (const flag of ['--agent-id', '--path', '--branch', '--base']) {
+      assert.match(plan.hint, new RegExp(flag.replace(/[-]/g, '\\$&')));
+    }
+  });
+
+  // Branch-regex consistency caveat: a branch outside the disposable namespace
+  // is what the reader drops silently — record-agent must reject it at write time.
+  test('rejects a branch outside the worktree-agent-* namespace (the entry the reader would drop)', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, branch: 'feature/user-work' });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'invalid_entry');
+    assert.match(plan.hint, /worktree-agent-/);
+    assert.equal(plan.manifest, null);
+    // Confirm the rejected entry is genuinely one the reader drops.
+    const readBack = planWorktreeWaveCleanup('/repo/main', {
+      worktrees: [{ agent_id: 'a1', worktree_path: VALID.worktreePath, branch: 'feature/user-work', expected_base: 'abc123' }],
+    });
+    assert.equal(readBack.ok, false);
+    assert.equal(readBack.reason, 'empty_manifest');
+  });
+
+  test('fails loudly on malformed manifest JSON instead of clobbering it', () => {
+    const plan = planWorktreeRecordAgent('{not valid json', VALID);
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'invalid_manifest_json');
+    assert.equal(plan.manifest, null);
+  });
+
+  test('rejects a manifest whose worktrees field is not an array', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":{}}', VALID);
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'manifest_shape_invalid');
+    assert.equal(plan.manifest, null);
+  });
+
+  // The reader dedups on (worktree_path, branch); a re-record would be silently
+  // dropped at cleanup — exactly the failure mode the verb exists to eliminate —
+  // so the writer must reject it loudly rather than swallow it.
+  test('rejects a duplicate (worktree_path, branch) loudly instead of writing a droppable entry', () => {
+    const existing = JSON.stringify({
+      worktrees: [{
+        agent_id: 'a1',
+        worktree_path: '/repo/.claude/worktrees/agent-a1',
+        branch: 'worktree-agent-a1',
+        expected_base: 'abc123',
+      }],
+    });
+    // Same path+branch, different agent_id/base — still a duplicate by the reader's key.
+    const plan = planWorktreeRecordAgent(existing, { ...VALID, agentId: 'a1-retry', base: 'deadbee' });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'duplicate_entry');
+    assert.match(plan.hint, /worktree-agent-a1/);
+    assert.equal(plan.manifest, null);
+  });
+
+  test('detects a duplicate stored under the legacy `path` field too', () => {
+    const existing = JSON.stringify({
+      worktrees: [{ path: '/repo/.claude/worktrees/agent-a1', branch: 'worktree-agent-a1', expected_base: 'abc123' }],
+    });
+    const plan = planWorktreeRecordAgent(existing, VALID);
+    assert.equal(plan.reason, 'duplicate_entry');
+  });
+
+  // Reader-alignment: the cleanup reader dedups only over entries that normalize
+  // successfully, so a malformed same-key entry it would DROP must not block a
+  // valid recording — otherwise the writer is stricter than the reader and
+  // blocks legitimate recovery.
+  test('a malformed same-key existing entry does not block recording a valid one', () => {
+    const existing = JSON.stringify({
+      // Same path+branch as VALID but no expected_base — the reader drops this.
+      worktrees: [{ worktree_path: '/repo/.claude/worktrees/agent-a1', branch: 'worktree-agent-a1' }],
+    });
+    const plan = planWorktreeRecordAgent(existing, VALID);
+    assert.equal(plan.ok, true);
+    const readBack = planWorktreeWaveCleanup('/repo/main', JSON.parse(plan.manifest));
+    assert.equal(readBack.ok, true);
+    assert.equal(readBack.entries.length, 1); // reader keeps only the valid one
+    assert.equal(readBack.entries[0].expected_base, 'abc123');
+  });
+
+  test('rejects whitespace-only --path/--base (values are trimmed)', () => {
+    const wsPath = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, worktreePath: '   ' });
+    assert.equal(wsPath.reason, 'missing_field');
+    assert.match(wsPath.hint, /--path/);
+    const wsBase = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, base: '  \t ' });
+    assert.equal(wsBase.reason, 'missing_field');
+    assert.match(wsBase.hint, /--base/);
+  });
+
+  test('trims incidental surrounding whitespace on accepted values', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', {
+      agentId: ' a1 ', worktreePath: ' /repo/wt-a1 ', branch: ' worktree-agent-a1 ', base: ' abc123 ',
+    });
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.entry, {
+      agent_id: 'a1', worktree_path: '/repo/wt-a1', branch: 'worktree-agent-a1', expected_base: 'abc123',
+    });
+  });
+});
+
+// ─── planWorktreeRecordAgent — property-based write/read parity (#1298) ────────
+// The verb's reason for existing is the write→read parity invariant, so it must
+// carry a fast-check property test (RULESET.TESTS.property-based-testing): an
+// entry the writer ACCEPTS must survive the cleanup reader unchanged, and an
+// entry with an invalid branch must be REJECTED symmetrically.
+
+describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () => {
+  const seg = fc.stringMatching(/^[A-Za-z0-9._/-]+$/); // include '/' — the namespace allows it
+  const agentBranch = seg.map((s) => `worktree-agent-${s}`);
+  const nonEmpty = fc.stringMatching(/^\S[\S ]*$/); // no leading whitespace, not blank
+
+  test('any writer-accepted entry round-trips through the cleanup reader unchanged', () => {
+    fc.assert(fc.property(
+      fc.record({ agentId: nonEmpty, worktreePath: nonEmpty, branch: agentBranch, base: nonEmpty }),
+      (fields) => {
+        const plan = planWorktreeRecordAgent('{"worktrees":[]}', fields);
+        if (!plan.ok) return; // rejection is fine; this property is about accepted entries
+        const readBack = planWorktreeWaveCleanup('/repo/main', JSON.parse(plan.manifest));
+        assert.equal(readBack.ok, true);
+        assert.equal(readBack.entries.length, 1);
+        const e = readBack.entries[0];
+        assert.equal(e.worktree_path, fields.worktreePath.trim());
+        assert.equal(e.branch, fields.branch.trim());
+        assert.equal(e.expected_base, fields.base.trim());
+        assert.equal(e.agent_id, fields.agentId.trim());
+      },
+    ));
+  });
+
+  test('an entry with a branch outside the worktree-agent-* namespace is always rejected', () => {
+    fc.assert(fc.property(
+      fc.record({
+        agentId: nonEmpty,
+        worktreePath: nonEmpty,
+        // Any branch that does NOT match the disposable namespace.
+        branch: fc.string({ minLength: 1 }).filter((b) => !/^worktree-agent-[A-Za-z0-9._/-]+$/.test(b.trim())),
+        base: nonEmpty,
+      }),
+      (fields) => {
+        const plan = planWorktreeRecordAgent('{"worktrees":[]}', fields);
+        assert.equal(plan.ok, false);
+        assert.equal(plan.manifest, null);
+      },
+    ));
+  });
+});
+
+// ─── cmdWorktreeRecordAgent (#1298 CLI wrapper) ───────────────────────────────
+
+describe('cmdWorktreeRecordAgent', () => {
+  // process.exitCode is global; each failure-path test resets it so a failing
+  // exit code does not leak into the test runner's own exit status.
+  function withExitCode(fn) {
+    const saved = process.exitCode;
+    try { return fn(); } finally { process.exitCode = saved; }
+  }
+
+  const okArgs = [
+    '--manifest', 'manifest.json',
+    '--agent-id', 'a1',
+    '--path', '/repo/.claude/worktrees/agent-a1',
+    '--branch', 'worktree-agent-a1',
+    '--base', 'abc123',
+  ];
+
+  test('writes the manifest and reports ok on the happy path', () => {
+    let writtenPath = null;
+    let writtenContent = null;
+    const out = [];
+    const result = cmdWorktreeRecordAgent('/repo/main', okArgs, {
+      readFile: () => '{"orchestrator_root":"/repo/main","worktrees":[]}',
+      writeFile: (p, c) => { writtenPath = p; writtenContent = c; },
+      write: (s) => out.push(s),
+      writeErr: () => {},
+    });
+    assert.equal(result.ok, true);
+    assert.equal(writtenPath, path.resolve('/repo/main', 'manifest.json'));
+    const written = JSON.parse(writtenContent);
+    assert.equal(written.worktrees.length, 1);
+    assert.equal(written.worktrees[0].agent_id, 'a1');
+    assert.match(out.join(''), /"ok": true/);
+  });
+
+  test('exits 2 with usage when --manifest is missing', () => {
+    withExitCode(() => {
+      const errs = [];
+      const result = cmdWorktreeRecordAgent('/repo/main', ['--agent-id', 'a1'], {
+        writeErr: (s) => errs.push(s),
+        write: () => {},
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'usage');
+      assert.equal(process.exitCode, 2);
+      assert.match(errs.join(''), /Usage: worktree record-agent/);
+    });
+  });
+
+  test('exits 1 loudly when the manifest cannot be read', () => {
+    withExitCode(() => {
+      const errs = [];
+      const result = cmdWorktreeRecordAgent('/repo/main', okArgs, {
+        readFile: () => { throw new Error('ENOENT'); },
+        writeErr: (s) => errs.push(s),
+        write: () => {},
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'manifest_read_failed');
+      assert.equal(process.exitCode, 1);
+      assert.match(errs.join(''), /manifest_read_failed/);
+    });
+  });
+
+  test('does not write the manifest when the entry is invalid', () => {
+    withExitCode(() => {
+      let wrote = false;
+      const errs = [];
+      const result = cmdWorktreeRecordAgent('/repo/main',
+        ['--manifest', 'm.json', '--agent-id', 'a1', '--path', '/p', '--branch', 'feature/x', '--base', 'abc123'], {
+          readFile: () => '{"worktrees":[]}',
+          writeFile: () => { wrote = true; },
+          writeErr: (s) => errs.push(s),
+          write: () => {},
+        });
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'invalid_entry');
+      assert.equal(wrote, false); // must NOT append an under-populated entry
+      assert.equal(process.exitCode, 1);
+      assert.match(errs.join(''), /worktree-agent-/);
+    });
+  });
+});
+
+// ─── record-agent: real CLI dispatch + workflow wiring (#1298 integration) ────
+// The unit tests above inject IO; these pin the live `gsd-tools.cjs query
+// worktree.record-agent` dispatch and the execute-phase.md call site, so a
+// future typo in the dotted command or the workflow wiring fails loudly.
+
+describe('worktree record-agent — real CLI dispatch (#1298)', () => {
+  const fs = require('node:fs');
+  const { execFileSync } = require('node:child_process');
+  const GSD_TOOLS = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+  test('the dotted `query worktree.record-agent` path writes an entry the cleanup reader accepts', () => {
+    const dir = createTempDir();
+    try {
+      const manifest = path.join(dir, 'wave-manifest.json');
+      fs.writeFileSync(manifest, `${JSON.stringify({ orchestrator_root: dir, worktrees: [] })}\n`);
+      const out = execFileSync(process.execPath, [
+        GSD_TOOLS, 'query', 'worktree.record-agent',
+        '--manifest', manifest,
+        '--agent-id', 'a1',
+        '--path', path.join(dir, 'wt-a1'),
+        '--branch', 'worktree-agent-a1',
+        '--base', 'abc123',
+      ], { encoding: 'utf8' });
+      assert.match(out, /"ok": true/);
+      const written = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+      assert.equal(written.worktrees.length, 1);
+      assert.equal(written.worktrees[0].agent_id, 'a1');
+      // What the live CLI wrote must read back through the cleanup reader.
+      const readBack = planWorktreeWaveCleanup(dir, written);
+      assert.equal(readBack.ok, true);
+      assert.equal(readBack.entries[0].branch, 'worktree-agent-a1');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('a missing field fails loudly via the real CLI (non-zero exit, manifest untouched)', () => {
+    const dir = createTempDir();
+    try {
+      const manifest = path.join(dir, 'wave-manifest.json');
+      fs.writeFileSync(manifest, `${JSON.stringify({ worktrees: [] })}\n`);
+      let threw = false;
+      try {
+        execFileSync(process.execPath, [
+          GSD_TOOLS, 'query', 'worktree.record-agent',
+          '--manifest', manifest,
+          '--path', path.join(dir, 'wt'), '--branch', 'worktree-agent-x', '--base', 'abc123',
+        ], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (err) {
+        threw = true;
+        assert.equal(err.status, 1);
+        assert.match(String(err.stderr), /record-agent: missing_field/);
+      }
+      assert.ok(threw, 'CLI must exit non-zero when --agent-id is missing');
+      assert.deepEqual(JSON.parse(fs.readFileSync(manifest, 'utf8')).worktrees, []);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('the execute-phase.md per-agent append calls the record-agent verb', () => {
+    const wf = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'), 'utf8',
+    );
+    assert.match(wf, /worktree\.record-agent/, 'execute-phase.md must wire the record-agent verb');
   });
 });
 
