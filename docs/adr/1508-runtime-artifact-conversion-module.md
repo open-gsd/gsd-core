@@ -14,7 +14,7 @@ This is the **last upward dependency from the `.cts` source tree into the hand-a
 
 ## Decision
 
-- Promote the `[Planned]` **Runtime Artifact Conversion Module** (`src/runtime-artifact-conversion.cts`) to the single owner of per-runtime **content rewriting**: the per-runtime converters (already relocated as ADR-3660's "first slice", #1099), **plus** the rewrite engine `_applyRuntimeRewrites`, the staged-content walkers, path-prefix derivation, and commit attribution. The **Runtime Artifact Layout Module** keeps owning **placement** only.
+- Promote the `[Planned]` **Runtime Artifact Conversion Module** (`src/runtime-artifact-conversion.cts`) to the single owner of per-runtime **content rewriting**: the per-runtime converters (already relocated as ADR-3660's "first slice", #1099), **plus** the rewrite engine `_applyRuntimeRewrites`, the staged-content walkers, path-prefix derivation, and commit attribution. The **Runtime Artifact Layout Module** keeps owning **placement** only. **Exception:** opencode and kilo path-prefix rewriting remains a deliberate `bin/install.js`-owned pre-conversion step (see `applyOpencodeFamilyPathPrefix`); this is intentional per #784 and is not a violation of the single-owner rule.
 - **Public seam** — two deep calls; the caller passes only what it has, the module derives the rest:
   - `rewriteStagedSkillBodies(stagedDir, { runtime, configDir, scope }, env?)` — in-place walk (skills / kimi-agents).
   - `rewriteStagedCommandBodies(stagedDir, { runtime, configDir, scope }, env?) → tempDir` — copy-to-temp (commands).

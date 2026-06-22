@@ -20,14 +20,19 @@ const os = require('os');
 
 const repoRoot = path.join(__dirname, '..');
 
-// Simulate the pathPrefix computation from install.js (global install)
+// Thin adapter over the REAL _computePathPrefix (ADR-1508 Phase 2: deleted hand-copy).
+// Old signature: computePathPrefix(homedir, targetDir) assumed isGlobal=true, isOpencode=false.
+// This adapter preserves that contract so existing call-sites stay unchanged.
+process.env['GSD_TEST_MODE'] = '1';
+const { _computePathPrefix } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 function computePathPrefix(homedir, targetDir) {
-  const resolvedTarget = path.resolve(targetDir).replace(/\\/g, '/');
-  const homeDir = homedir.replace(/\\/g, '/');
-  if (resolvedTarget.startsWith(homeDir)) {
-    return '$HOME' + resolvedTarget.slice(homeDir.length) + '/';
-  }
-  return resolvedTarget + '/';
+  return _computePathPrefix({
+    isGlobal: true,
+    isOpencode: false,
+    isWindowsHost: process.platform === 'win32',
+    resolvedTarget: path.resolve(targetDir).replace(/\\/g, '/'),
+    homeDir: homedir.replace(/\\/g, '/'),
+  });
 }
 
 // Detect whether `content` leaks a resolved absolute homedir path (e.g.
@@ -65,29 +70,28 @@ describe('pathPrefix computation', () => {
   });
 
   test('Windows-style paths produce $HOME/ not C:/', () => {
-    // On Windows, path.resolve returns the input unchanged when it's already absolute.
-    // Simulate the string operation directly (can't use path.resolve for Windows paths on macOS/Linux).
-    const winHomedir = 'C:\\Users\\matte';
-    const winTargetDir = 'C:\\Users\\matte\\.claude';
-    const resolvedTarget = winTargetDir.replace(/\\/g, '/');
-    const homeDir = winHomedir.replace(/\\/g, '/');
-    const prefix = resolvedTarget.startsWith(homeDir)
-      ? '$HOME' + resolvedTarget.slice(homeDir.length) + '/'
-      : resolvedTarget + '/';
+    // Call the REAL _computePathPrefix with Windows-style paths.
+    // isWindowsHost=true is passed; today the function ignores it (no-op) and
+    // the $HOME shorthand is determined by the startsWith(homeDir) check alone.
+    const prefix = _computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: true,
+      resolvedTarget: 'C:/Users/matte/.claude',
+      homeDir: 'C:/Users/matte',
+    });
     assert.strictEqual(prefix, '$HOME/.claude/');
     assert.ok(!prefix.includes('C:'), `Should not contain drive letter, got: ${prefix}`);
   });
 
   test('target outside home uses absolute path', () => {
-    const homedir = '/home/user';
-    const targetDir = '/opt/gsd/.claude';
-    // path.resolve won't change an already-absolute path on the same OS,
-    // so simulate the string operation directly
-    const resolvedTarget = targetDir.replace(/\\/g, '/');
-    const homeDir = homedir.replace(/\\/g, '/');
-    const prefix = resolvedTarget.startsWith(homeDir)
-      ? '$HOME' + resolvedTarget.slice(homeDir.length) + '/'
-      : resolvedTarget + '/';
+    const prefix = _computePathPrefix({
+      isGlobal: true,
+      isOpencode: false,
+      isWindowsHost: false,
+      resolvedTarget: '/opt/gsd/.claude',
+      homeDir: '/home/user',
+    });
     assert.strictEqual(prefix, '/opt/gsd/.claude/');
     assert.ok(!prefix.includes('$HOME'), `Should not contain $HOME for non-home paths`);
   });

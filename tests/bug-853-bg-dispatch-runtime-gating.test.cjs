@@ -5,7 +5,8 @@
  * dispatched Plan/Execute via Agent(run_in_background=true). On Claude Code a
  * backgrounded agent has no Agent/Task tool, so it cannot spawn the nested
  * subagents (worktree executors, plan-checker, verifier). The workflows must
- * now resolve the runtime and run inline on Claude Code.
+ * now resolve the runtime and run inline everywhere except Codex, which is the
+ * only supported runtime where a backgrounded agent can still nest subagents.
  */
 
 const { describe, test } = require('node:test');
@@ -24,23 +25,47 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
     assert.ok(matches.length >= 2, 'manager.md must resolve runtime for both plan and execute dispatch');
   });
 
-  test('manager.md documents why Claude Code cannot background-dispatch', () => {
-    assert.match(MANAGER, /backgrounded agent has no `Agent`\/`Task` tool/);
+  test('manager.md documents why most runtimes cannot background-dispatch', () => {
+    // Accept both old singular form (backgrounded agent has no) and new plural form (backgrounded agents have no)
+    assert.match(MANAGER, /backgrounded agents? ha(?:s|ve) no `Agent`\/`Task` tool/);
   });
 
-  test('manager.md runs plan/execute inline on Claude Code', () => {
-    assert.match(MANAGER, /If `RUNTIME` is `claude`[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/);
-    assert.match(MANAGER, /If `RUNTIME` is `claude`[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/);
+  test('manager.md gates background dispatch on codex and runs plan/execute inline otherwise', () => {
+    // Codex takes the background path
+    assert.match(MANAGER, /If `RUNTIME` is `codex`[\s\S]{0,400}?run_in_background=true/);
+    // Inline is the default/else branch for plan — anchored on the explicit non-Codex label
+    assert.match(
+      MANAGER,
+      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/,
+    );
+    // Inline is the default/else branch for execute — anchored on the explicit non-Codex label
+    assert.match(
+      MANAGER,
+      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
+    );
   });
 
   test('autonomous.md gates interactive background dispatch by runtime', () => {
     const autoRuntimeMatches = AUTONOMOUS.match(/config-get runtime/g) || [];
     assert.ok(autoRuntimeMatches.length >= 2, 'autonomous.md must resolve runtime in both 3b (plan) and 3c (execute) interactive branches');
-    assert.match(AUTONOMOUS, /backgrounded agent has no `Agent`\/`Task` tool/);
+    // Accept both old singular form (backgrounded agent has no) and new plural form (backgrounded agents have no)
+    assert.match(AUTONOMOUS, /backgrounded agents? ha(?:s|ve) no `Agent`\/`Task` tool/);
   });
 
-  test('autonomous.md runs plan/execute inline on Claude Code in interactive mode', () => {
-    assert.match(AUTONOMOUS, /On Claude Code \(`RUNTIME` is `claude`\)[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/);
-    assert.match(AUTONOMOUS, /On Claude Code \(`RUNTIME` is `claude`\)[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/);
+  test('autonomous.md gates interactive background dispatch on codex; runs plan/execute inline otherwise', () => {
+    // Codex block: run_in_background=true appears within the codex branch and gsd-plan-phase is nearby
+    assert.match(AUTONOMOUS, /If `RUNTIME` is `codex`[\s\S]{0,1200}?run_in_background=true[\s\S]{0,600}?gsd-plan-phase/);
+    // Codex block: run_in_background=true appears within the codex branch and gsd-execute-phase is nearby
+    assert.match(AUTONOMOUS, /If `RUNTIME` is `codex`[\s\S]{0,3000}?run_in_background=true[\s\S]{0,200}?gsd-execute-phase/);
+    // Inline is the otherwise/else branch for plan — anchored on the explicit non-Codex label
+    assert.match(
+      AUTONOMOUS,
+      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/,
+    );
+    // Inline is the otherwise/else branch for execute — anchored on the explicit non-Codex label
+    assert.match(
+      AUTONOMOUS,
+      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
+    );
   });
 });
