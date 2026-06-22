@@ -677,7 +677,9 @@ describe('bug #3384: worktree cleanup workflow contracts', () => {
     const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf8');
     assert.match(content, /WAVE_WORKTREE_MANIFEST/);
     assert.match(content, /worktree\.cleanup-wave/);
-    assert.match(content, /atomically append `\{agent_id, worktree_path, branch, expected_base\}`/);
+    // #1298: the per-agent manifest write now goes through the validated
+    // `worktree record-agent` writer verb (was a prose "atomically append").
+    assert.match(content, /record the `\{agent_id, worktree_path, branch, expected_base\}` entry with `gsd_run query worktree\.record-agent/);
     assert.match(content, /try\{if\(!p\)throw new Error\("WAVE_WORKTREE_MANIFEST is unset"\)/);
     assert.match(content, /WT_PATHS_FILE=.*gsd-worktree-paths-/);
     assert.doesNotMatch(content, /done < <\(node -e 'const fs=require\("fs"\);const p=process\.env\.WAVE_WORKTREE_MANIFEST/);
