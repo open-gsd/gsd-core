@@ -546,6 +546,20 @@ node gsd-tools.cjs worktree set-baseref
 
 **`worktree set-baseref`** applies a no-clobber write of `worktree.baseRef:"head"` to `.claude/settings.local.json`. If the file already contains an explicit `baseRef` value other than `"head"`, the existing value is preserved and `skipped:"explicit-other"` is returned. Malformed JSON causes an error rather than a silent overwrite. Both fresh installs and upgrades of GSD Core run this automatically when `workflow.use_worktrees` is enabled (the default); the command is also available for manual use — for example, to apply the setting when worktrees were toggled on after installation, or to re-apply it after a settings change.
 
+### Wave-manifest recording
+
+The execute-phase orchestrator records each spawned executor's worktree identity into a wave cleanup manifest so the matching `cleanup-wave` reader can later merge and remove exactly those worktrees.
+
+```bash
+# Append a validated per-agent entry to the wave cleanup manifest.
+# Returns JSON: { ok, reason, entry, manifest_path } (exit 0), or
+#   { ok:false, reason, hint } with a non-zero exit on a rejected entry.
+node gsd-tools.cjs worktree record-agent \
+  --manifest <path> --agent-id <id> --path <worktree> --branch <branch> --base <sha>
+```
+
+**`worktree record-agent`** appends one `{agent_id, worktree_path, branch, expected_base}` entry to an already-initialized manifest, validating every field **at write time using the same rules the `cleanup-wave` reader enforces** — `--branch` must match the disposable `^worktree-agent-[A-Za-z0-9._/-]+$` namespace, and `--path`/`--branch`/`--base` must be non-empty. `--agent-id` is required (write-strict), even though the reader treats it as optional. A missing or garbled field — or a duplicate `(worktree_path, branch)` the reader would dedup away — fails loudly with a recovery hint and a non-zero exit **without** writing, instead of appending an under-populated or silently-dropped entry. Whitespace-only `--path`/`--base` are rejected (values are trimmed). The on-disk manifest shape is unchanged (the reader re-derives `allowed_bases`); the orchestrator still initializes the empty `{orchestrator_root, worktrees: []}` shell inline before any agent is recorded.
+
 ---
 
 ## Graphify

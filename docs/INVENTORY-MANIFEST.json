@@ -368,6 +368,7 @@
       "roadmap-upgrade.cjs",
       "roadmap.cjs",
       "runtime-artifact-conversion.cjs",
+      "runtime-artifact-install-plan.cjs",
       "runtime-artifact-layout.cjs",
       "runtime-config-adapter-registry.cjs",
       "runtime-homes.cjs",

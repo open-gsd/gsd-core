@@ -476,6 +476,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `roadmap-upgrade.cjs` | Migration tool for converting legacy `Phase N` entries to milestone-prefixed `Phase M-NN` convention; `computeMigrationPlan` + `applyMigration` with dry-run default and atomic rollback |
 | `roadmap.cjs` | ROADMAP.md parsing, phase extraction, plan progress |
 | `runtime-artifact-conversion.cjs` | Runtime artifact conversion module — projects Claude-authored commands, agents, and skills into runtime-specific artifact bodies while preserving installer compatibility exports |
+| `runtime-artifact-install-plan.cjs` | Runtime artifact install plan module — stages pre-resolved layout kinds, applies runtime body rewrites, and returns copy-plan items plus cleanup obligations |
 | `runtime-artifact-layout.cjs` | Runtime artifact layout module — resolves the artifact directory shapes (commands, agents, skills) for each supported runtime; single source of truth for per-runtime artifact placement (#3663) |
 | `runtime-config-adapter-registry.cjs` | Explicit runtime config adapter registry — resolves per-runtime config-mutation install intent (install surface, shared-settings gate, finish-phase permission writer); see ADR-58. |
 | `runtime-hooks-surface.cjs` | Runtime hooks surface module — standalone hook-surface writer functions extracted from bin/install.js (ADR-857 phase 5f-1); owns Cline/Cursor/Copilot/Codex hook artifact generation and reconciliation. |

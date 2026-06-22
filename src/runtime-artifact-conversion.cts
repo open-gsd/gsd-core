@@ -2120,6 +2120,40 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
 }
 
 /**
+ * Canonical list of every non-Claude runtime that gsd-core emits artifacts for.
+ * Exported so test files can import this single source of truth rather than
+ * maintaining divergent hand-rolled arrays (#1521).
+ *
+ * Keep in sync with the runtime flags in bin/install.js and getDirName().
+ */
+const NON_CLAUDE_RUNTIMES: string[] = [
+  'codex', 'opencode', 'kilo', 'gemini', 'copilot', 'antigravity',
+  'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'kimi',
+  'codebuddy', 'cline',
+];
+
+/**
+ * #1521: Every non-Claude runtime resolves its own runtime identity from a
+ * runtime-neutral config, and defaults workflow.use_worktrees to false —
+ * GSD's worktree isolation uses Claude Code's isolation="worktree" spawn
+ * parameter, which no other runtime honors. Stamped into the emitted
+ * workflow runtime-resolution blocks. (Generalizes the Codex-only #1515 fix.)
+ *
+ * @private — exported as `_stampNonClaudeRuntimeDefaults` for tests.
+ */
+function _stampNonClaudeRuntimeDefaults(content: string, runtime: string): string {
+  content = content.replace(
+    /config-get workflow\.use_worktrees --raw 2>\/dev\/null \|\| echo "true"/g,
+    'config-get workflow.use_worktrees --default false --raw 2>/dev/null || echo "false"',
+  );
+  content = content.replace(
+    /config-get runtime --default claude --raw 2>\/dev\/null \|\| echo "claude"/g,
+    `config-get runtime --default ${runtime} --raw 2>/dev/null || echo "${runtime}"`,
+  );
+  return content;
+}
+
+/**
  * Apply the per-runtime rewrite table to a single content string.
  * Relocated from bin/install.js `_applyRuntimeRewrites`.
  *
@@ -2133,12 +2167,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
   const dirName = getDirName(runtime);
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
 
+  // #1521: stamp runtime identity + use_worktrees=false for every non-Claude runtime
+  // before brand-specific path rewrites, so the replace operates on the pristine
+  // source line and is idempotent regardless of subsequent path substitutions.
+  if (runtime !== 'claude') {
+    content = _stampNonClaudeRuntimeDefaults(content, runtime);
+  }
+
   switch (runtime) {
     case 'codex':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/~\/\.codex\//g, pathPrefix);
+      // #1515 stamp moved to _stampNonClaudeRuntimeDefaults (#1521 generalisation).
       content = processAttribution(content, attribution);
       break;
 
@@ -2402,6 +2444,11 @@ function rewriteStagedSkillBodies(stagedDir, opts) {
  * attribution from opts, then delegates to applyRuntimeContentRewritesForCommandsInPlace
  * (single copy+rewrite owner).
  *
+ * @internal — symmetric companion to rewriteStagedSkillBodies; retained as the deep-seam
+ * API for command bodies. No production caller today (install rewrites commands via
+ * copyWithPathReplacement → applyRuntimeContentRewritesForCommandsInPlace). Kept for
+ * API symmetry + test coverage.
+ *
  * @returns {string} path to the temp dir (caller is responsible for cleanup)
  */
 function rewriteStagedCommandBodies(stagedDir, opts) {
@@ -2517,4 +2564,7 @@ export = {
   rewriteStagedCommandBodies,
   _computePathPrefix: computePathPrefix,
   _applyRuntimeRewrites,
+  _stampNonClaudeRuntimeDefaults,
+  // #1521: canonical non-Claude runtime list for test files and tooling
+  NON_CLAUDE_RUNTIMES,
 };
