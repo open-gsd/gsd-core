@@ -28,7 +28,7 @@ const { cleanup } = require('./helpers.cjs');
 
 const configLoader = require('../gsd-core/bin/lib/config-loader.cjs');
 
-const { loadConfig, loadConfigResolved, _resetRuntimeWarningCacheForTests } = configLoader;
+const { loadConfig, loadConfigResolved, _resetRuntimeWarningCacheForTests, _deepMergeConfig } = configLoader;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -490,5 +490,31 @@ describe('loadConfigResolved — provenance', () => {
     assert.equal(result.source, 'root');
     assert.equal(result.degraded, true);
     assert.equal(result.config.model_profile, 'root-val-c');
+  });
+});
+
+// ─── _deepMergeConfig prototype-pollution guard (audit M4) ───────────────────
+// The root↔workstream merge once iterated Object.keys(overlay) with no
+// __proto__/constructor/prototype guard — while four sibling paths in the same
+// file guard them. A config.json with {"__proto__": {...}} could pollute the
+// merged object's prototype chain and spoof unset config flags.
+describe('_deepMergeConfig — prototype-pollution guard (M4)', () => {
+  test('ignores a __proto__ overlay key (no proto pollution, no flag spoofing)', () => {
+    // JSON.parse (not an object literal) creates an OWN enumerable "__proto__"
+    // key — exactly what a malicious config.json on disk yields.
+    const malicious = JSON.parse('{"__proto__": {"injectedFlag": true}}');
+    const merged = _deepMergeConfig({ model_profile: 'base' }, malicious);
+    assert.equal({}.injectedFlag, undefined, 'global Object.prototype must not be polluted');
+    assert.equal(merged.injectedFlag, undefined, 'merged object must not expose the injected flag');
+    assert.equal(Object.getPrototypeOf(merged) === Object.prototype, true, 'merged prototype unchanged');
+    assert.equal(merged.model_profile, 'base', 'legitimate keys still merge');
+  });
+
+  test('ignores constructor/prototype overlay keys too', () => {
+    const malicious = JSON.parse('{"constructor": {"x": 1}, "prototype": {"y": 2}}');
+    const merged = _deepMergeConfig({ a: 1 }, malicious);
+    assert.equal(merged.a, 1);
+    // constructor must remain the native Object constructor, not the injected object
+    assert.equal(typeof merged.constructor, 'function');
   });
 });
