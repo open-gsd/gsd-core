@@ -24,6 +24,7 @@ interface ResolvedProfile {
 interface ArtifactKind {
   kind: ArtifactKindName;
   destSubpath: string;
+  prefix?: string;
   stage: (resolvedProfile: ResolvedProfile) => string;
 }
 
@@ -62,6 +63,15 @@ interface PlanItem {
 interface InstallPlan {
   items: PlanItem[];
   cleanupDirs: string[];
+}
+
+interface UninstallPlanItem {
+  kind: ArtifactKindName;
+  destDir: string;
+}
+
+interface UninstallPlan {
+  items: UninstallPlanItem[];
 }
 
 type InstallPlanResult =
@@ -143,4 +153,13 @@ function createRuntimeArtifactInstallPlan(args: CreateRuntimeArtifactInstallPlan
   return { ok: true, plan: { items, cleanupDirs } };
 }
 
-export = { createRuntimeArtifactInstallPlan };
+function createRuntimeArtifactUninstallPlan(layout: Layout): UninstallPlan {
+  return {
+    items: layout.kinds.map((kind) => ({
+      kind: kind.kind,
+      destDir: path.join(layout.configDir, kind.destSubpath),
+    })),
+  };
+}
+
+export = { createRuntimeArtifactInstallPlan, createRuntimeArtifactUninstallPlan };
