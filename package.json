@@ -120,5 +120,8 @@
     "test:coverage:all": "npm run test:coverage",
     "test:mutation": "stryker run",
     "test:mutation:since": "stryker run --incremental --since origin/next"
+  },
+  "allowScripts": {
+    "fallow@2.70.0": true
   }
 }

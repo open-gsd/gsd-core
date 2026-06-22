@@ -11,6 +11,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -32,7 +33,10 @@ function walk(dir, acc) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name), acc);
-    } else if (SCAN_EXT.has(path.extname(entry.name))) {
+    // entry.isFile() excludes symlinks (and other non-regular dirents) so a broken symlink like
+    // a gitignored CLAUDE.md worktree symlink is skipped deterministically on every platform —
+    // it can't be read and isn't shipped repo text (#1545).
+    } else if (entry.isFile() && SCAN_EXT.has(path.extname(entry.name))) {
       acc.push(path.join(dir, entry.name));
     }
   }
@@ -55,4 +59,42 @@ test('no phantom pre-migration issue references remain in repo text (#1073)', ()
     `Phantom issue refs (${PHANTOM.map((n) => '#' + n).join('/')}) found — repoint to a real ` +
       `successor (#717/#720) or rewrite as prose (see #1073):\n` + offenders.join('\n'),
   );
+});
+
+test('walk() skips broken symlinks and does not throw ENOENT (#1545)', (t) => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'nophantom-symlink-'));
+  let symlinkCreated = false;
+  try {
+    fs.writeFileSync(path.join(fixture, 'real.md'), '# real, no phantom refs\n');
+    try {
+      fs.symlinkSync(
+        path.join(fixture, 'does-not-exist-target'),
+        path.join(fixture, 'broken.md'),
+      );
+      // Verify the symlink actually exists (lstat succeeds even for dangling symlinks)
+      fs.lstatSync(path.join(fixture, 'broken.md'));
+      symlinkCreated = true;
+    } catch (e) {
+      // Windows without symlink privilege — genuine skip
+    }
+
+    if (!symlinkCreated) {
+      t.skip('platform cannot create symlinks unprivileged');
+      return;
+    }
+
+    const found = walk(fixture, []).map((f) => path.basename(f));
+
+    assert.ok(found.includes('real.md'), 'walk() must include real.md');
+    assert.ok(!found.includes('broken.md'), 'walk() must NOT include broken.md (broken symlink)');
+
+    // Mirror the production read loop — must not throw ENOENT
+    assert.doesNotThrow(
+      () => found.length && walk(fixture, []).forEach((fp) => fs.readFileSync(fp, 'utf8')),
+      'readFileSync on every walk() result must not throw (no broken symlinks returned)',
+    );
+  } finally {
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- local cleanup in standalone guard test; no helpers import available (would introduce a test-dep cycle)
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });

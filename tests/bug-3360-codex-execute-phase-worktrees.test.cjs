@@ -28,7 +28,8 @@ function parseWorkflowSteps(content) {
         name: match[1],
         // After #3797 architectural fix, callsites use gsd_run
         readsRuntimeConfig: body.includes('RUNTIME=$(gsd_run query config-get runtime --default claude'),
-        codexWorktreeGuard: body.includes('Codex execute-phase worktree isolation is unsupported'),
+        // #1521: guard generalized from Codex-specific to all non-Claude runtimes
+        codexWorktreeGuard: body.includes('git worktree isolation') && body.includes('unsupported on runtime'),
         worktreeDispatchGuidance: body.includes('isolation="worktree"'),
       };
     });
