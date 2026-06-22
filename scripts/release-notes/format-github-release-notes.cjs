@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 const { runMain, ExitError } = require('../lib/cli-exit.cjs');
-const { classifyBucket } = require('../lib/conventional-title.cjs');
+const { classifyBucket } = require('./conventional-title.cjs');
 
 /**
  * Classify a What's-Changed bullet line into 'Feature', 'Fix', or 'Enhancement'.

@@ -13,7 +13,7 @@ name: PR Title Validator
 #                 the issue in the changelog line.
 #
 # This gate reuses the SAME matcher the changelog uses
-# (scripts/lib/conventional-title.cjs) — not a forked regex — so a title that
+# (scripts/release-notes/conventional-title.cjs) — not a forked regex — so a title that
 # passes here cannot mis-bucket in the changelog.
 #
 # Unlike pr-target-validator, this runs for ALL authors (including members):
@@ -22,7 +22,7 @@ name: PR Title Validator
 # Phase-1 rollout: set WARN_ONLY=true to comment without failing the check.
 # Shipped enforcing (WARN_ONLY=false); flip to 'true' for a grace period.
 #
-# See: scripts/lib/conventional-title.cjs, CONTRIBUTING.md, issue #1549.
+# See: scripts/release-notes/conventional-title.cjs, CONTRIBUTING.md, issue #1549.
 
 on:
   pull_request:
@@ -60,7 +60,7 @@ jobs:
           WARN_ONLY: ${{ env.WARN_ONLY }}
         with:
           script: |
-            const { evaluatePrTitle } = require(`${process.env.GITHUB_WORKSPACE}/scripts/lib/conventional-title.cjs`);
+            const { evaluatePrTitle } = require(`${process.env.GITHUB_WORKSPACE}/scripts/release-notes/conventional-title.cjs`);
 
             const pr = context.payload.pull_request;
             const title = pr.title || '';

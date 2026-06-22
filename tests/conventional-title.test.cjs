@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const {
   classifyBucket,
   evaluatePrTitle,
-} = require('../scripts/lib/conventional-title.cjs');
+} = require('../scripts/release-notes/conventional-title.cjs');
 
 // The changelog classifier must consume the SAME matcher (single source of
 // truth — see #1549). If someone forks the regex, this cross-check breaks.

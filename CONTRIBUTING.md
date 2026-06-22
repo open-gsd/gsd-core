@@ -250,7 +250,7 @@ Examples: `fix(#1542): roadmap rollback`, `feat(#39): milestone-prefixed phase I
 
 **CI enforcement:** `pr-title-validator.yml` checks the title on open/edit and
 fails with the required format if it doesn't conform. It reuses the same matcher
-the changelog classifier uses (`scripts/lib/conventional-title.cjs`), so a title
+the changelog classifier uses (`scripts/release-notes/conventional-title.cjs`), so a title
 that passes the check is guaranteed to bucket and link correctly. Fix a flagged
 title by editing it in place — the check re-runs on edit, no need to recreate
 the PR.
