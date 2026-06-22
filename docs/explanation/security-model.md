@@ -165,12 +165,20 @@ the content claims to be.
 
 **Opt-in blocking (`security.injection_blocking`).** By default all injection
 detections are advisory-only (logged, not blocked). Setting
-`security.injection_blocking = true` in `.planning/config.json` upgrades
-HIGH-confidence detections to **blocking**: the hook rejects the Read, WebFetch,
-or WebSearch result and surfaces a blocking signal so the agent does not act on
-or persist the detected content. LOW detections remain advisory under this
-setting. This flag is opt-in; the default (advisory-only) is preserved to avoid
-breaking existing workflows.
+`security.injection_blocking = true` in `.planning/config.json` (a registered
+config key — `gsd config-set security.injection_blocking true`) upgrades
+HIGH-confidence detections to **blocking**. Be precise about what this does: the
+scanner is a **PostToolUse** hook, so it runs *after* the Read/WebFetch/WebSearch
+has already executed and the fetched content is already in the model's transcript.
+Blocking does **not** retroactively redact that content — it emits
+`decision: "block"`, which halts the agent's next step and feeds the detection back
+as the reason, so the agent is stopped from acting further on the flagged result
+instead of silently continuing. LOW detections remain advisory under this setting.
+This flag is opt-in; the default (advisory-only) is preserved to avoid breaking
+existing workflows. The prompt-level boundary above (treat fetched text as data,
+never instructions) is the layer that keeps an injection from being *followed* even
+while it sits in context; the hook is a coarse pattern pre-filter and circuit-breaker,
+not a redactor.
 
 **CI scanner.** `prompt-injection-scan.security.test.cjs` scans all agent, workflow,
 and command files for embedded injection vectors as part of the test suite.

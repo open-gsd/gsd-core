@@ -265,6 +265,7 @@
       "thinking-partner.md",
       "ui-brand.md",
       "universal-anti-patterns.md",
+      "untrusted-input-boundary.md",
       "user-profiling.md",
       "user-story-template.md",
       "verification-overrides.md",

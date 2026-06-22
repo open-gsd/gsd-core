@@ -95,7 +95,8 @@
     "model_policy.low",
     "agent_skills_security.trusted_global_roots",
     "capabilities.strict_known_registries",
-    "capabilities.auto_update"
+    "capabilities.auto_update",
+    "security.injection_blocking"
   ],
   "runtimeStateKeys": [
     "workflow._auto_chain_active"
