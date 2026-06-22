@@ -56,10 +56,14 @@ function extractFrontmatter(content: string): Frontmatter {
   const frontmatter: Frontmatter = {};
   // Match frontmatter only at byte 0 — a `---` block later in the document
   // body (YAML examples, horizontal rules) must never be treated as frontmatter.
-  const match = content.match(/^---\r?\n([\s\S]+?)\r?\n---/);
-  if (!match) return frontmatter;
+  const headerEnd = content.startsWith('---\r\n') ? 5 : content.startsWith('---\n') ? 4 : -1;
+  if (headerEnd === -1) return frontmatter;
 
-  const yaml = match[1];
+  const closingLineStart = content.indexOf('\n---', headerEnd);
+  if (closingLineStart === -1) return frontmatter;
+
+  const yamlEnd = content[closingLineStart - 1] === '\r' ? closingLineStart - 1 : closingLineStart;
+  const yaml = content.slice(headerEnd, yamlEnd);
   const lines = yaml.split(/\r?\n/);
 
   // Stack to track nested objects: [{obj, key, indent}]
