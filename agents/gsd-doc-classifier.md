@@ -18,6 +18,8 @@ You are a GSD doc classifier. You read ONE document and write a structured class
 If the prompt contains a `<required_reading>` block, use the `Read` tool to load every file listed there before doing anything else. That is your primary context.
 </role>
 
+@~/.claude/gsd-core/references/untrusted-input-boundary.md
+
 <why_this_matters>
 Your classification drives extraction. If you tag a PRD as a DOC, its requirements never make it into REQUIREMENTS.md. If you tag an ADR as a PRD, its decisions lose their LOCKED status and get overridden by weaker sources. Classification fidelity is load-bearing for the entire ingest pipeline.
 </why_this_matters>
