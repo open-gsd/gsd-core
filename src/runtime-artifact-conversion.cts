@@ -21,9 +21,45 @@ import os from 'node:os';
 import fs from 'node:fs';
 import commandRoster = require('./command-roster.cjs');
 const { readGsdCommandNames, transformContentToHyphen } = commandRoster;
-const pkg = require('../../../package.json');
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 const { getDirName } = runtimeNamePolicy;
+
+// #1383: resolve GSD's version WITHOUT a top-level
+// `require('../../../package.json')`. That require ran at module load on every
+// gsd-tools invocation (this module sits in the gsd-tools loader chain) and
+// threw `Cannot find module '../../../package.json'` on runtimes whose root has
+// no package.json — notably Codex, where the installer omits the synthetic root
+// package.json — taking the entire CLI down before it did anything. And even
+// where it resolved (Claude's synthetic `{"type":"commonjs"}`), there is no
+// `version` field, so the single consumer below already emitted
+// `version: undefined`. Resolve lazily and defensively instead:
+//   1. Installed trees carry <root>/gsd-core/VERSION (written by the installer);
+//      this module lives at <root>/gsd-core/bin/lib, so VERSION is two dirs up.
+//   2. The source / npm-package tree has no gsd-core/VERSION but carries a real
+//      package.json three dirs up — read it lazily, never at module-load time.
+// A failed/invalid lookup degrades to '' (the caller omits the field) rather
+// than crashing or emitting `version: undefined`. Both sources are validated
+// against the same semver shape the repo's other VERSION reader enforces
+// (src/update-context.cts) so a garbled VERSION file is never emitted verbatim.
+// Exported for the #1383 regression.
+const SEMVER_PREFIX = /^\d+\.\d+\.\d+/; // mirrors src/update-context.cts SEMVER_PREFIX
+function resolveVersionFrom(libDir: string): string {
+  try {
+    const v = fs.readFileSync(path.join(libDir, '..', '..', 'VERSION'), 'utf8').trim();
+    if (SEMVER_PREFIX.test(v)) return v;
+  } catch { /* not an installed tree (no gsd-core/VERSION) */ }
+  try {
+    const pkg = require(path.join(libDir, '..', '..', '..', 'package.json'));
+    if (pkg && typeof pkg.version === 'string' && SEMVER_PREFIX.test(pkg.version)) return pkg.version;
+  } catch { /* runtime root has no package.json (e.g. Codex) */ }
+  return '';
+}
+
+let cachedVersion: string | undefined;
+function gsdVersion(): string {
+  if (cachedVersion === undefined) cachedVersion = resolveVersionFrom(__dirname);
+  return cachedVersion;
+}
 
 
 const colorNameToHex = {
@@ -393,7 +429,10 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   // Hermes' SKILL.md spec lists `version` as a required frontmatter field.
   // Track GSD's package version so Hermes' skill_view() reports a stable
   // identifier per install.
-  if (runtime === 'hermes') fm += `version: ${yamlQuote(pkg.version)}\n`;
+  if (runtime === 'hermes') {
+    const version = gsdVersion();
+    if (version) fm += `version: ${yamlQuote(version)}\n`;
+  }
   // #778 (b) — Qwen-only numeric priority for /skills ordering. Scoped to qwen
   // so Claude/Hermes skill frontmatter is unchanged (they ignore the field, but
   // we keep their output byte-stable). skillName is the `gsd-<stem>` dir name.
@@ -2541,6 +2580,9 @@ export = {
   convertClaudeCommandToKiloSkill,
   readGsdCommandNames,
   transformContentToHyphen,
+  // #1383: version resolver (exported for regression test of the Codex
+  // missing-package.json crash + the VERSION-file source of truth).
+  resolveVersionFrom,
   // #1182: agent converters + tool-name table dependency closure
   claudeToCopilotTools,
   convertCopilotToolName,
