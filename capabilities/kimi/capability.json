@@ -1,7 +1,7 @@
 {
   "id": "kimi",
   "role": "runtime",
-  "version": "1.6.0-rc.1",
+  "version": "1.6.0-rc.2",
   "title": "Kimi CLI",
   "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
   "tier": "core",
