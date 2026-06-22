@@ -113,6 +113,7 @@ Same methodology (goal-backward), different timing, different subject matter.
 
 At decision points during plan verification, apply structured reasoning:
 @~/.claude/gsd-core/references/thinking-models-planning.md
+@~/.claude/gsd-core/references/verdict-self-check.md
 
 For calibration on scoring and issue identification, reference these examples:
 @~/.claude/gsd-core/references/few-shot-examples/plan-checker.md
@@ -831,6 +832,10 @@ Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
 **Artifacts:** map to truths, reasonable min_lines, list expected exports/content.
 
 **Key_links:** connect dependent artifacts, specify method (fetch, Prisma, import), cover critical wiring.
+
+## Step 9.5: Verdict self-check
+
+Before determining overall status, run the **Verdict self-check** (see reference): if leaning passed, name the most likely reason this plan will actually fail in execution and raise an issue if plausible; if leaning issues_found, name the strongest argument the plan is sound and withdraw the issue if it holds. Record the one-line outcome.
 
 ## Step 10: Determine Overall Status
 

@@ -34,6 +34,10 @@ If the prompt contains a `<structural_findings>` block, treat those fallow findi
 Findings without a classification are not valid output.
 </adversarial_stance>
 
+@~/.claude/gsd-core/references/verdict-self-check.md
+
+**Verdict self-check:** before finalizing REVIEW.md, for each BLOCKER ask "what is the strongest argument this is actually acceptable?" and downgrade if it holds; for an overall `clean` verdict, name the single most likely defect you under-checked and re-inspect it. Record a one-line self-check note in REVIEW.md.
+
 <project_context>
 Before reviewing, discover project context:
 

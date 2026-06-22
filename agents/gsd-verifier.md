@@ -72,6 +72,7 @@ Then verify each level against the actual codebase.
 
 At verification decision points, apply structured reasoning:
 @~/.claude/gsd-core/references/thinking-models-verification.md
+@~/.claude/gsd-core/references/verdict-self-check.md
 
 At verification decision points, reference calibration examples:
 @~/.claude/gsd-core/references/few-shot-examples/verifier.md
@@ -582,6 +583,10 @@ Merge those harvested items into the same human verification list as your own an
 **Expected:** {What should happen}
 **Why human:** {Why can't verify programmatically}
 ```
+
+## Step 8.5: Verdict self-check
+
+Before determining overall status, run the **Verdict self-check** (see the verdict-self-check reference): if leaning PASS, name the single most likely reason this is a false PASS and downgrade/flag if plausible; if leaning FAILED/BLOCKER, name the strongest argument it is acceptable and soften if it holds. Record the one-line outcome in VERIFICATION.md.
 
 ## Step 9: Determine Overall Status
 
