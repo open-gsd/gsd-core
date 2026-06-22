@@ -48,7 +48,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [15-autonomous-cross-ai-convergence.md](15-autonomous-cross-ai-convergence.md) | Cross-AI plan convergence via existing orchestration commands | Proposed |
 | [22-plan-drift-guard.md](22-plan-drift-guard.md) | Plan-vs-codebase drift guard: defaults and symbol-resolver seam | Proposed |
 | [3524-cjs-sdk-hard-seam.md](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — single canonical owner per responsibility (#3524) | Superseded by ADR-0174 |
-| [3660-runtime-artifact-layout-module.md](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Proposed |
+| [3660-runtime-artifact-layout-module.md](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted |
 | [0174-retire-gsd-sdk-package-boundary.md](0174-retire-gsd-sdk-package-boundary.md) | Retire @opengsd/gsd-sdk package boundary — single-runtime collapse | Accepted |
 | [452-eslint-lint-harness.md](452-eslint-lint-harness.md) | Adopt standard ESLint flat-config lint harness; retire homegrown regex scanners | Accepted |
 | [456-test-rigor-architecture.md](456-test-rigor-architecture.md) | Test-rigor architecture — deterministic scheduling, antagonistic tier, typed-surface mandate, delete-bad-tests policy | Accepted |
@@ -56,10 +56,11 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [660-release-from-next-head.md](660-release-from-next-head.md) | Release from the head of next; immutable release tags; @next dist-tag as the RC surface | Proposed |
 | [58-runtime-install-policy-module.md](58-runtime-install-policy-module.md) | Runtime Install Policy Module owns the typed install-plan projection | Accepted |
 | [766-claude-code-plugin-manifest-module.md](766-claude-code-plugin-manifest-module.md) | Claude Code Plugin Manifest Module owns the projection of gsd-core surfaces onto the Claude Code plugin contract | Accepted |
-| [1016-runtime-capability-descriptor.md](1016-runtime-capability-descriptor.md) | Runtime Capability Descriptor | Proposed |
+| [1016-runtime-capability-descriptor.md](1016-runtime-capability-descriptor.md) | Runtime Capability Descriptor | Accepted |
 | [1235-descriptor-driven-agent-conversion-migration.md](1235-descriptor-driven-agent-conversion-migration.md) | Migrate agent conversion to the descriptor-driven install path (parity + per-runtime cutover) | Proposed |
 | [1411-resolution-provenance.md](1411-resolution-provenance.md) | Resolution must report provenance, not fall open silently | Accepted |
 | [1508-runtime-artifact-conversion-module.md](1508-runtime-artifact-conversion-module.md) | Runtime Artifact Conversion Module owns per-runtime content rewriting | Accepted |
+| [1593-skill-mapping-converter-methodology.md](1593-skill-mapping-converter-methodology.md) | Skill mapping & converter methodology across runtimes | Accepted |
 
 ## Seam map
 
