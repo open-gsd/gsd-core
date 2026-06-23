@@ -16,7 +16,7 @@ Two mechanisms were considered for the **hook-level** control:
 ## Decision
 
 - Extend the scanner to match `Read | WebFetch | WebSearch`, documented honestly as a **pattern-based pre-filter**, not a model-level guard.
-- Make the **prompt-level boundary the primary control**: a shared `gsd-core/references/untrusted-input-boundary.md`, `@`-included by the 8 ingest agents, instructs treat-fetched-text-as-data, self-scan before use, task-anchoring, and a fresh random delimiter per quoted wrap. This is the layer that keeps an injection from being *followed* even while it sits in context.
+- Make the **prompt-level boundary the primary control**: a shared `gsd-core/references/untrusted-input-boundary.md`, `@`-included by the 10 ingest agents, instructs treat-fetched-text-as-data, self-scan before use, task-anchoring, and a fresh random delimiter per quoted wrap. This is the layer that keeps an injection from being *followed* even while it sits in context.
 - Ship hook-level blocking as an **opt-in circuit-breaker**: `security.injection_blocking` (a registered config key; default advisory). Documentation states plainly that enabling it halts further processing on a HIGH detection — it does not retroactively redact the already-fetched content. Redaction via `updatedToolOutput` is **deferred** until that field's behavior is verifiable in this runtime.
 
 ## Consequences
