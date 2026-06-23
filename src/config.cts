@@ -239,6 +239,7 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
       ui_safety_gate: true,
       ai_integration_phase: true,
       human_verify_mode: 'end-of-phase',
+      context_guard_mode: 'warn',
       text_mode: false,
       research_before_questions: false,
       discuss_mode: 'discuss',
@@ -611,6 +612,12 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   const VALID_HUMAN_VERIFY_MODES = ['mid-flight', 'end-of-phase'];
   if (kp === 'workflow.human_verify_mode' && !VALID_HUMAN_VERIFY_MODES.includes(String(parsedValue))) {
     error(`Invalid workflow.human_verify_mode '${val}'. Valid values: ${VALID_HUMAN_VERIFY_MODES.join(', ')}`);
+  }
+
+  // Context exhaustion guard mode (#1452)
+  const VALID_CONTEXT_GUARD_MODES = ['auto', 'warn', 'off'];
+  if (kp === 'workflow.context_guard_mode' && !VALID_CONTEXT_GUARD_MODES.includes(String(parsedValue))) {
+    error(`Invalid workflow.context_guard_mode '${val}'. Valid values: ${VALID_CONTEXT_GUARD_MODES.join(', ')}`);
   }
 
   // Context position enum validation (#2937)

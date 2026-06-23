@@ -625,7 +625,7 @@ describe('stage — cursor commands kind (#785)', () => {
   });
 });
 
-// ─── #1477: .gsd-source marker provisioning + deployed install-exports ─────────
+// ─── #1477: .gsd-source marker provisioning ───────────────────────────────────
 //
 // Regression for #1477: the Claude Code global skills layout ships
 // gsd-core/{bin,contexts,references,templates,workflows} but no commands/gsd
@@ -633,16 +633,18 @@ describe('stage — cursor commands kind (#785)', () => {
 // scope. At runtime findInstallSourceRoot's walk-up from gsd-core/bin/lib had
 // nothing to find and /gsd-surface threw for every subcommand (list/status
 // included); the marker reader added in #1476 never fired because nothing wrote
-// the marker. loadInstallExports' relative '../../../bin/install.js' also only
-// resolved in the repo — in a deployed tree it pointed at <configDir>/bin/
-// install.js, which is never shipped, so the surface write subcommands threw
-// MODULE_NOT_FOUND.
+// the marker.
 //
-// Fix (both halves): bin/install.js writes <configDir>/.gsd-source pointing at a
-// resolvable commands/gsd whose package root also holds bin/install.js, and
-// runtime-artifact-layout derives bin/install.js from that resolved source root.
+// Fix: bin/install.js writes <configDir>/.gsd-source pointing at a resolvable
+// commands/gsd, and findInstallSourceRoot prefers that marker over its walk-up.
+//
+// (The original #1477 also covered a deployed-install MODULE_NOT_FOUND from the
+// surface path's relative require('../../../bin/install.js'); ADR-1508 / #1511
+// removed that getInstallExports relay entirely — surface.cjs now calls the
+// shipped runtime-artifact-conversion sibling directly — so that half no longer
+// applies and is covered by the #1511 relocation suite.)
 
-describe('#1477 .gsd-source marker provisioning + deployed install-exports resolution', () => {
+describe('#1477 .gsd-source marker provisioning', () => {
   let tmpRoot;
   let savedHome;
   let savedUserProfile;
@@ -722,20 +724,12 @@ describe('#1477 .gsd-source marker provisioning + deployed install-exports resol
     assert.ok(fs.existsSync(markerSrc), `marker target must exist on disk: ${markerSrc}`);
     assert.equal(path.basename(markerSrc), 'gsd', 'marker must point at a commands/gsd directory');
     assert.equal(path.basename(path.dirname(markerSrc)), 'commands');
-
-    // The package root that holds commands/gsd must also hold bin/install.js —
-    // this is what loadInstallExports derives the installer exports from.
-    const derivedInstallJs = path.resolve(markerSrc, '..', '..', 'bin', 'install.js');
-    assert.ok(
-      fs.existsSync(derivedInstallJs),
-      `bin/install.js must be reachable from the marker's package root: ${derivedInstallJs}`,
-    );
   });
 
-  // ── Failures 1+2 end-to-end: resolution succeeds FROM the deployed tree ──────
+  // ── Failure 1 end-to-end: resolution succeeds FROM the deployed tree ─────────
   // The deployed module's __dirname is <claudeDir>/gsd-core/bin/lib, which has no
   // commands/gsd ancestor (global skills layout). Only the marker rescues it.
-  test('deployed global layout resolves source root + install-exports via the marker', () => {
+  test('deployed global layout resolves the source root via the marker', () => {
     const claudeDir = path.join(tmpRoot, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
     runInstall(true /* isGlobal */, 'claude');
@@ -766,65 +760,6 @@ describe('#1477 .gsd-source marker provisioning + deployed install-exports resol
     }, 'findInstallSourceRoot must resolve via the .gsd-source marker');
     assert.equal(path.basename(resolved), 'gsd');
     assert.ok(fs.existsSync(resolved));
-
-    // The write-subcommand path: install-exports must load in the deployed layout.
-    const exportsObj = deployed.getInstallExports(claudeDir);
-    assert.equal(typeof exportsObj.computePathPrefix, 'function',
-      'getInstallExports must expose computePathPrefix (used by applySurface)');
-    assert.equal(typeof exportsObj.applyRuntimeContentRewritesInPlace, 'function',
-      'getInstallExports must expose applyRuntimeContentRewritesInPlace (used by applySurface)');
-  });
-
-  // ── Failure 2 cache correctness: getInstallExports keys on runtimeConfigDir ──
-  // A module-level singleton cache would let a no-arg warm-up call (legacy
-  // walk-up path) poison every later getInstallExports(configDir) call —
-  // applySurface would then load the wrong install.js. Proves the cache is
-  // keyed per configDir so the marker-derived path always wins for its key.
-  test('getInstallExports caches per configDir — a no-arg warm-up does not poison a later configDir call', () => {
-    // A standalone package whose commands/gsd marker derives a sibling
-    // bin/install.js exporting a sentinel that the real repo install.js lacks.
-    const pkgRoot = path.join(tmpRoot, 'sentinel-pkg');
-    fs.mkdirSync(path.join(pkgRoot, 'commands', 'gsd'), { recursive: true });
-    fs.mkdirSync(path.join(pkgRoot, 'bin'), { recursive: true });
-    fs.writeFileSync(
-      path.join(pkgRoot, 'bin', 'install.js'),
-      "module.exports = { sentinel: 'PKG', computePathPrefix: () => '', applyRuntimeContentRewritesInPlace: () => {} };\n",
-      'utf8',
-    );
-    const cfgDir = path.join(tmpRoot, 'sentinel-cfg');
-    fs.mkdirSync(cfgDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(cfgDir, '.gsd-source'),
-      path.join(pkgRoot, 'commands', 'gsd') + '\n',
-      'utf8',
-    );
-
-    // Fresh module instance so the per-key cache starts empty for this test.
-    const layoutPath = require.resolve('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
-    const savedModule = require.cache[layoutPath];
-    delete require.cache[layoutPath];
-    try {
-      const fresh = require(layoutPath);
-
-      // Warm the cache via the no-arg legacy walk-up path (resolves the real
-      // repo bin/install.js, which has no `sentinel`).
-      const warm = fresh.getInstallExports();
-      assert.equal(warm.sentinel, undefined, 'no-arg path resolves the repo install.js');
-
-      // The configDir call must re-derive from the marker, NOT return the
-      // cached no-arg result. A singleton cache would return `warm` here.
-      const derived = fresh.getInstallExports(cfgDir);
-      assert.equal(derived.sentinel, 'PKG',
-        'no-arg warm-up must not poison the configDir-keyed resolution');
-
-      // Re-querying the same key returns its cached instance, not a re-derive.
-      assert.strictEqual(fresh.getInstallExports(cfgDir), derived,
-        'same configDir key must return the cached instance');
-    } finally {
-      // Restore the original shared module instance for later tests.
-      if (savedModule) require.cache[layoutPath] = savedModule;
-      else delete require.cache[layoutPath];
-    }
   });
 
   // ── Adversarial marker-reader cases (no full install needed) ─────────────────

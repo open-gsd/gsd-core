@@ -376,6 +376,7 @@ describe('C: plugin.json schema validation', () => {
         fs.copyFileSync(PLUGIN_JSON_PATH, path.join(pluginRoot, '.claude-plugin', 'plugin.json'));
         fs.symlinkSync(path.join(ROOT, 'commands'), path.join(pluginRoot, 'commands'), 'dir');
         fs.symlinkSync(path.join(ROOT, 'hooks'), path.join(pluginRoot, 'hooks'), 'dir');
+        fs.symlinkSync(path.join(ROOT, 'skills'), path.join(pluginRoot, 'skills'), 'dir');
 
         const result = spawnSync('claude', ['plugin', 'validate', pluginRoot, '--strict'], {
           cwd: ROOT,
@@ -888,6 +889,64 @@ describe('G: #997 ensureCanonicalPath() behavioural regression', () => {
       result.skipped.sort(),
       ['bin', 'contexts', 'templates'].sort(),
       'subdirs not present in the bundle must be skipped, not errored'
+    );
+  });
+});
+
+// ─── Section H: skills surface projection (#1596 — Phase B-provide) ──────────
+//
+// ADR-766 originally projected commands + hooks but NOT skills. Phase B-provide
+// (#1596) adds a build-generated `skills/` dir + a `skills` manifest field so
+// plugin-installed GSD exposes `gsd-core:<skill>` the native Claude Code way.
+// The skills are generated from `commands/gsd/*.md` by
+// `scripts/gen-plugin-skills.cjs` using `convertClaudeCommandToClaudeSkill`.
+describe('H: skills surface projection (#1596)', () => {
+  const SKILLS_DIR = path.resolve(ROOT, 'skills');
+
+  test('plugin.json declares skills: "./skills/"', () => {
+    const manifest = JSON.parse(fs.readFileSync(PLUGIN_JSON_PATH, 'utf-8'));
+    assert.equal(
+      manifest.skills, './skills/',
+      'plugin.json must declare "skills": "./skills/" so Claude Code discovers plugin skills (#1596)'
+    );
+  });
+
+  test('skills/ dir exists with at least one gsd-*/SKILL.md', () => {
+    assert.ok(fs.existsSync(SKILLS_DIR), `skills/ dir must exist (run: npm run gen:plugin-skills -- --write): ${SKILLS_DIR}`);
+    const entries = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+    const skillDirs = entries.filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.ok(skillDirs.length > 0, 'skills/ must contain at least one gsd-*/ directory');
+    // Each must have a SKILL.md
+    for (const dir of skillDirs) {
+      const skillMd = path.join(SKILLS_DIR, dir.name, 'SKILL.md');
+      assert.ok(fs.existsSync(skillMd), `${dir.name}/SKILL.md must exist`);
+    }
+  });
+
+  test('every generated SKILL.md has name: and description: frontmatter', () => {
+    assert.ok(fs.existsSync(SKILLS_DIR), 'skills/ must exist');
+    const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.ok(skillDirs.length > 0, 'must have at least one skill dir');
+    for (const dir of skillDirs) {
+      const raw = fs.readFileSync(path.join(SKILLS_DIR, dir.name, 'SKILL.md'), 'utf-8');
+      const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      assert.ok(fmMatch, `${dir.name}/SKILL.md must have frontmatter`);
+      const fm = fmMatch[1];
+      assert.ok(/^\s*name:\s*\S/m.test(fm), `${dir.name}/SKILL.md frontmatter must have a name: field`);
+      assert.ok(/^\s*description:\s*\S/m.test(fm), `${dir.name}/SKILL.md frontmatter must have a description: field`);
+    }
+  });
+
+  test('parity: one skill dir per command file (DEFECT.GENERATIVE-FIX)', () => {
+    const commandsDir = path.resolve(ROOT, 'commands', 'gsd');
+    const commandFiles = fs.readdirSync(commandsDir).filter(f => f.endsWith('.md'));
+    const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.equal(
+      skillDirs.length, commandFiles.length,
+      `skills/gsd-*/ count (${skillDirs.length}) must equal commands/gsd/*.md count (${commandFiles.length}). ` +
+      `Run: npm run gen:plugin-skills -- --write`
     );
   });
 });

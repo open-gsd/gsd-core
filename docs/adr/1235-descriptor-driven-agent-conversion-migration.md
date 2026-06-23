@@ -1,6 +1,6 @@
 # ADR-1235: Migrate agent conversion to the descriptor-driven install path
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-06-14
 - **Issue:** #1235
 - **Builds on:** [ADR-3660](3660-runtime-artifact-layout-module.md) (runtime artifact layout), [ADR-457](457-generated-cjs-single-source.md) (the `src/*.cts` build-at-publish tree the converters live in), [ADR-1016](1016-runtime-capability-descriptor.md) (runtime capability descriptor)

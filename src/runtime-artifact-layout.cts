@@ -34,76 +34,10 @@ const conversionExports = runtimeArtifactConversion as Record<string, unknown> &
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
 
-// ---------------------------------------------------------------------------
-// Lazy installer exports (avoids GSD_TEST_MODE env mutation at module load)
-// ---------------------------------------------------------------------------
-
-interface InstallExports {
-  computePathPrefix: (opts: { isGlobal: boolean; isOpencode: boolean; isWindowsHost: boolean; resolvedTarget: string; homeDir: string }) => string;
-  applyRuntimeContentRewritesInPlace: (stagedDir: string, runtime: string, pathPrefix: string) => void;
-  [converterName: string]: unknown;
-}
-
-/**
- * Resolve the absolute path to bin/install.js for the current layout (#1477).
- *
- * The relative specifier '../../../bin/install.js' only resolves in the repo
- * (where this module lives at gsd-core/bin/lib/). In a deployed install the
- * module sits at <configDir>/gsd-core/bin/lib/ and that specifier points at
- * <configDir>/bin/install.js, which is never shipped — so the surface write
- * subcommands threw MODULE_NOT_FOUND. Instead, derive install.js from the
- * resolved commands/gsd source root: its parent package root holds both
- * commands/gsd and bin/install.js. findInstallSourceRoot honors the
- * <configDir>/.gsd-source marker (deployed) and walks up to the repo root
- * (repo/tests), so this single derivation is correct in both layouts. Falls
- * back to the legacy relative path if no source root can be resolved.
- */
-function resolveInstallJsPath(runtimeConfigDir?: string): string {
-  try {
-    const commandsGsd = findInstallSourceRoot(runtimeConfigDir);
-    // <packageRoot>/commands/gsd -> <packageRoot>/bin/install.js
-    const candidate = path.resolve(commandsGsd, '..', '..', 'bin', 'install.js');
-    if (fs.existsSync(candidate)) return candidate;
-  } catch { /* fall through to the legacy module-relative path */ }
-  return path.join(__dirname, '..', '..', '..', 'bin', 'install.js');
-}
-
-/**
- * Load bin/install.js exports in a test-safe way.
- * Sets GSD_TEST_MODE only for the duration of the require() call and only if
- * it was not already set, restoring the original value in a finally block so
- * the module-level environment is never permanently mutated.
- */
-function loadInstallExports(runtimeConfigDir?: string): InstallExports {
-  const installPath = resolveInstallJsPath(runtimeConfigDir);
-  const savedTestMode = process.env['GSD_TEST_MODE'];
-  if (savedTestMode === undefined) process.env['GSD_TEST_MODE'] = '1';
-  try {
-    return _require(installPath) as InstallExports;
-  } finally {
-    if (savedTestMode === undefined) delete process.env['GSD_TEST_MODE'];
-    else process.env['GSD_TEST_MODE'] = savedTestMode;
-  }
-}
-
-/**
- * Cache after first successful load, keyed on runtimeConfigDir. The derived
- * install.js path depends on the configDir (marker-aware in a deployed layout
- * vs. walk-up in the repo), so a single module-level singleton would let a
- * no-arg warm-up call (legacy relative path) poison every later
- * getInstallExports(configDir) call. Keying on the arg keeps each layout's
- * resolution independent. The empty string stands in for the no-arg case.
- */
-const _installExportsByConfigDir = new Map<string, InstallExports>();
-function getInstallExports(runtimeConfigDir?: string): InstallExports {
-  const key = runtimeConfigDir ?? '';
-  let exports = _installExportsByConfigDir.get(key);
-  if (!exports) {
-    exports = loadInstallExports(runtimeConfigDir);
-    _installExportsByConfigDir.set(key, exports);
-  }
-  return exports;
-}
+// loadInstallExports / getInstallExports / InstallExports removed in ADR-1508
+// / #1511 Phase 2 — removed this module's upward dependency on bin/install.js
+// (the getInstallExports relay). surface.cts now calls
+// runtimeArtifactConversion.rewriteStagedSkillBodies directly.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,6 +175,20 @@ function agentsKind(destSubpath: string, prefix: string, configDir: string): Art
  * Agent filenames are preserved verbatim (the prefix is already embedded in the
  * agent stem — e.g. `gsd-planner.md`).
  *
+ * #1173 SCOPE — plumbing only (declarations deferred): this provides the
+ * converter dispatch + `isGlobal` scope threading for the descriptor's `agents`
+ * kind, but NO runtime currently declares a converted `agents` kind in its
+ * `capability.json`. The descriptor declarations for the 8 non-Claude runtimes
+ * (copilot/antigravity/cursor/windsurf/augment/trae/codebuddy/cline) are
+ * DEFERRED to a follow-up that first ships the ADR-1235 §0 byte-for-byte parity
+ * harness, because the second `layout.kinds` consumer — `applySurface` /
+ * `/gsd:surface` / `--materialize` (`src/surface.cts`) — does not yet mirror the
+ * legacy agent pipeline (Copilot's `.agent.md` filename rename, the cross-cutting
+ * path-prefix rewrite + attribution, stale-file cleanup, config-reading steps),
+ * so declaring the kind now would regress the surface path. Until then the legacy
+ * `bin/install.js` agent loop remains authoritative for the real install, and
+ * this `convertedAgentsKind` is exercised only by synthetic-descriptor seam tests.
+ *
  * Mirrors the `convertedCommandsKind` pattern (#785).
  *
  * @param destSubpath   destination subpath within configDir (e.g. 'agents')
@@ -253,14 +201,24 @@ function convertedAgentsKind(
   prefix: string,
   converterName: string,
   configDir: string,
+  scope: 'local' | 'global' = 'global',
 ): ArtifactKind {
   return {
     kind: 'agents',
     destSubpath,
     prefix,
     stage: (resolved) => {
-      const converter = conversionExports[converterName] as (content: string) => string;
-      return stageAgentsForRuntimeWithConverter(findAgentsSourceRoot(configDir), resolved, converter);
+      // isGlobal is threaded so scope-aware agent converters (copilot, antigravity)
+      // choose global-home vs workspace-relative paths; converters that only take
+      // (content) ignore the extra positional arg. Mirrors skillsKind's scope
+      // threading (#1173).
+      const converter = conversionExports[converterName] as (content: string, isGlobal?: boolean) => string;
+      return stageAgentsForRuntimeWithConverter(
+        findAgentsSourceRoot(configDir),
+        resolved,
+        converter,
+        scope === 'global',
+      );
     },
   };
 }
@@ -477,7 +435,7 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
       if (converter == null) {
         return agentsKind(destSubpath, prefix, configDir);
       }
-      return convertedAgentsKind(destSubpath, prefix, converter, configDir);
+      return convertedAgentsKind(destSubpath, prefix, converter, configDir, scope);
 
     case 'skills':
       if (converter == null) {
@@ -531,4 +489,5 @@ function resolveRuntimeArtifactLayoutFromRegistry(
   return { runtime, configDir, scope, kinds };
 }
 
-export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot, getInstallExports };
+// getInstallExports removed in ADR-1508 / #1511 Phase 2 (last upward .cts→install.js dep).
+export = { resolveRuntimeArtifactLayout, resolveRuntimeArtifactLayoutFromRegistry, findInstallSourceRoot };

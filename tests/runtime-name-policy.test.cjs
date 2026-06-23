@@ -9,6 +9,7 @@ const ROOT = path.join(__dirname, '..');
 const {
   canonicalizeRuntimeName,
   resolveRuntimeNameFromCandidates,
+  getProjectInstructionFile,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
 
 describe('runtime-name-policy canonical runtime ids', () => {
@@ -69,5 +70,57 @@ describe('runtime-name-policy windsurf alias parity — manifest vs FALLBACK_ALI
       manifestAliases,
       `FALLBACK_ALIASES windsurf=${JSON.stringify(srcAliases.sort())} must match manifest windsurf=${JSON.stringify(manifestAliases)}`,
     );
+  });
+});
+
+describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
+  test('claude maps to .claude/CLAUDE.md (kept-as-is boundary case)', () => {
+    assert.strictEqual(getProjectInstructionFile('claude'), '.claude/CLAUDE.md');
+  });
+
+  test('codex maps to AGENTS.md', () => {
+    assert.strictEqual(getProjectInstructionFile('codex'), 'AGENTS.md');
+  });
+
+  test('opencode maps to AGENTS.md (the #1529 bug surface)', () => {
+    assert.strictEqual(getProjectInstructionFile('opencode'), 'AGENTS.md');
+  });
+
+  test('kilo maps to AGENTS.md', () => {
+    assert.strictEqual(getProjectInstructionFile('kilo'), 'AGENTS.md');
+  });
+
+  test('kimi maps to AGENTS.md', () => {
+    assert.strictEqual(getProjectInstructionFile('kimi'), 'AGENTS.md');
+  });
+
+  test('copilot maps to .github/copilot-instructions.md (GitHub docs read path)', () => {
+    assert.strictEqual(getProjectInstructionFile('copilot'), '.github/copilot-instructions.md');
+  });
+
+  test('gemini maps to GEMINI.md', () => {
+    assert.strictEqual(getProjectInstructionFile('gemini'), 'GEMINI.md');
+  });
+
+  test('antigravity maps to GEMINI.md', () => {
+    assert.strictEqual(getProjectInstructionFile('antigravity'), 'GEMINI.md');
+  });
+
+  test('unknown runtime maps to AGENTS.md (safe cross-agent default, boundary case)', () => {
+    assert.strictEqual(getProjectInstructionFile('future-runtime-xyz'), 'AGENTS.md');
+    assert.strictEqual(getProjectInstructionFile(''), 'AGENTS.md');
+    assert.strictEqual(getProjectInstructionFile(null), 'AGENTS.md');
+    assert.strictEqual(getProjectInstructionFile(undefined), 'AGENTS.md');
+  });
+
+  test('aliases normalize via canonicalizeRuntimeName before mapping', () => {
+    // codex-cli is an alias for codex; it must resolve to the codex mapping.
+    assert.strictEqual(getProjectInstructionFile('codex-cli'), 'AGENTS.md');
+    // opencode-cli is an alias for opencode.
+    assert.strictEqual(getProjectInstructionFile('opencode-cli'), 'AGENTS.md');
+    // gemini-cli is an alias for gemini.
+    assert.strictEqual(getProjectInstructionFile('gemini-cli'), 'GEMINI.md');
+    // github-copilot is an alias for copilot.
+    assert.strictEqual(getProjectInstructionFile('github-copilot'), '.github/copilot-instructions.md');
   });
 });

@@ -285,6 +285,48 @@ describe('feat-1173: dispatchKindEntry agents converter wiring', () => {
     const stagedContent = fs.readFileSync(path.join(stagedDir, 'gsd-planner.md'), 'utf8');
     assert.strictEqual(stagedContent, CLAUDE_AGENT_SOURCE, 'converter=null must raw-copy the agent content');
   });
+
+  test('scope threads isGlobal to a scope-aware converter (global vs local differ)', (t) => {
+    // The plumbing kept by #1173 (option a): convertedAgentsKind / dispatchKindEntry
+    // pass the install scope to the converter as isGlobal. A scope-aware converter
+    // (copilot) must therefore produce different output for global vs local. This
+    // proves the thread is live via a synthetic descriptor — no real runtime
+    // declares a converted agents kind yet (declarations deferred to the ADR-1235
+    // §0 parity follow-up).
+    const fixtureRoot = makeFixtureRoot([{ name: 'gsd-planner.md', content: CLAUDE_AGENT_SOURCE }]);
+    t.after(() => {
+      cleanup(fixtureRoot);
+      cleanupStagedSkills();
+    });
+
+    const agentsEntry = {
+      kind: 'agents',
+      destSubpath: 'agents',
+      prefix: 'gsd-',
+      nesting: 'flat',
+      recursive: false,
+      converter: 'convertClaudeAgentToCopilotAgent',
+    };
+    const registry = {
+      runtimes: { testruntime: { runtime: { artifactLayout: { global: [agentsEntry], local: [agentsEntry] } } } },
+    };
+
+    const profile = { name: 'full', skills: '*', agents: new Set() };
+    const stageFor = (scope) => {
+      const layout = resolveRuntimeArtifactLayoutFromRegistry(registry, 'testruntime', fixtureRoot, scope);
+      const agentKind = layout.kinds.find((k) => k.kind === 'agents');
+      assert.ok(agentKind, `${scope} layout must include an agents kind`);
+      return fs.readFileSync(path.join(agentKind.stage(profile), 'gsd-planner.md'), 'utf8');
+    };
+
+    const globalOut = stageFor('global');
+    const localOut = stageFor('local');
+    assert.notStrictEqual(
+      globalOut,
+      localOut,
+      'scope-aware converter output must differ by scope — proves isGlobal is threaded from the descriptor scope',
+    );
+  });
 });
 
 // ─── real registry: claude agents kind has converter=null ────────────────────

@@ -541,6 +541,40 @@ describe('roadmap analyze missing phase details', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.missing_phase_details, null, 'missing_phase_details should be null');
   });
+
+  test('does not report phantom missing details for milestone-prefixed (M-NN) phase IDs', () => {
+    // The checklist scanner truncated dash-separated IDs at the dash (1-01 -> 1)
+    // while the detail-heading scanner kept the full ID, so every milestone-prefixed
+    // ROADMAP spuriously reported the truncated major as a missing detail section.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] **Phase 1-01: Foundation** - Set up project
+- [ ] **Phase 1-02: API** - Build REST API
+- [ ] **Phase 2-01: Ship** - Release
+
+### Phase 1-01: Foundation
+**Goal:** Set up project
+
+### Phase 1-02: API
+**Goal:** Build REST API
+
+### Phase 2-01: Ship
+**Goal:** Release
+`
+    );
+
+    const result = runGsdTools('roadmap analyze', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.missing_phase_details,
+      null,
+      'milestone-prefixed phases with matching detail sections should report no missing details'
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

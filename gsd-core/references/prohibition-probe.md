@@ -157,7 +157,7 @@ A `resolved`/`test`-tier prohibition MAY carry an **optional `check` descriptor*
 the wired mechanical check, so verify-phase locates it deterministically instead of inventing
 `{kind, target, rule}` each run. The descriptor is captured at spec-phase (soft / optional —
 the author wires it when the negative test or lint rule already exists) and is represented as
-**four flat scalar keys** on the `must_haves.prohibitions` item — never a nested `check: {}`
+**five flat scalar keys** on the `must_haves.prohibitions` item — never a nested `check: {}`
 object:
 
 - `check_kind` — `node-test` | `lint-rule` (which producer mechanism runs the check).
@@ -165,16 +165,19 @@ object:
 - `check_rule` — the `ruleId` to filter on, **lint-rule only** (absent for `node-test`).
 - `check_violation_fixture` — path to a KNOWN-BAD subject the #1279 prover runs the check against to
   machine-prove fail-first (rides BOTH kinds; for `node-test` it is injected via `GSD_PROHIB_SUBJECT`).
+- `check_clean_fixture` — **optional** path to a KNOWN-CLEAN control subject (#1346). When present the
+  node-test prover also runs the check against it and requires GREEN, proving the violation's RED is
+  caused by the subject's *content* (not merely by `GSD_PROHIB_SUBJECT` being set). Absent → no control.
 
 The flat-scalar shape is load-bearing: the shared `parseMustHavesBlock` is a flat parser and a
 nested object would flatten/mangle the round-trip (ADR-550 2026-06-15 addendum; #644 "no parser
 rewrite" precedent). `projectProhibitions` emits these keys **only for a well-formed descriptor**
 (valid `check_kind` + non-empty `check_target`; `check_rule` only on the lint-rule path;
-`check_violation_fixture` only when non-empty), and verify-phase reads them back via
-`descriptorFromProjection` into the `CheckDescriptor` handed to `check prohibition-enforcement`. This
-closes **both** the locate (#1278) and the machine-proof-fixture (#1346) halves with **zero manual
-descriptor authoring**: a prohibition authored with all four scalars greens end-to-end through the
-projection alone.
+`check_violation_fixture` and `check_clean_fixture` only when non-empty), and verify-phase reads them
+back via `descriptorFromProjection` into the `CheckDescriptor` handed to `check prohibition-enforcement`.
+This closes the locate (#1278), the machine-proof-fixture (#1279), and the causation-control (#1346)
+halves with **zero manual descriptor authoring**: a prohibition authored with the scalars greens
+end-to-end through the projection alone.
 
 **Fail-closed + backward-compat.** A partial descriptor (`lint-rule` missing `check_rule`), an
 unknown `check_kind`, an **absent** descriptor, OR a descriptor with **no `check_violation_fixture`**
@@ -182,8 +185,11 @@ falls through to the producer's fail-closed paths (`located: false`, or located-
 never a silent green. A prohibition with no descriptor parses and disposes byte-identically to today.
 `failFirst` is **not** sourced from the descriptor and is **demoted** (machine-proven fail-first
 DELIVERED in #1279 — no path greens on attestation alone, FF-08); the `dispositionForProhibition`
-policy is unchanged. Residual (tracked **#1346**): the node-test proof confirms the fixture exists and
-the check goes RED, but cannot generically prove the red was *caused by* the subject's content.
+policy is unchanged. Causation (**#1346**): the node-test proof confirms the fixture exists and the
+check goes RED; supplying `check_clean_fixture` adds an opt-in control that *also* requires GREEN on a
+known-clean subject, proving the red is content-caused. With no clean fixture the control cannot run,
+so that one residual case (a deceptive test reding merely because the env var is set) stays a
+documented constraint — an author opts into the stronger proof by wiring a clean control subject.
 
 ## Output schema
 
@@ -191,7 +197,7 @@ The probe emits, per kept prohibition, an item of the form:
 
 ```
 { requirement_id, category, status, verification, resolution, reason, statement,
-  check_kind?, check_target?, check_rule? }
+  check_kind?, check_target?, check_rule?, check_violation_fixture?, check_clean_fixture? }
 ```
 
 where `statement` is the must-NOT sentence and `category` is the values/safety/ethics class

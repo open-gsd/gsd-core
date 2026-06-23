@@ -8,10 +8,11 @@
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { execSync } = require('node:child_process');
+const { execSync, execFileSync } = require('node:child_process');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempDir, cleanup } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
 
 describe('history-digest command', () => {
   let tmpDir;
@@ -2363,5 +2364,417 @@ describe('user-story validate command (bug #1145)', () => {
   test('boundary — minimal valid story passes', () => {
     const out = validateStory('As a X, I want to Y, so that Z.');
     assert.equal(out.valid, true, `minimal valid story should pass: ${JSON.stringify(out)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pr-subrepo — regressions (#666) + workflow source invariants
+// ---------------------------------------------------------------------------
+
+describe('pr-subrepo', () => {
+  function writePrSubrepoConfig(dir, obj) {
+    const planningDir = path.join(dir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify(obj, null, 2));
+  }
+
+  function initPrSubrepo(dir) {
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir, stdio: 'pipe' });
+    fs.writeFileSync(path.join(dir, '.gitkeep'), '');
+    fs.writeFileSync(path.join(dir, 'feature.js'), '// initial\n');
+    fs.writeFileSync(path.join(dir, 'a.js'), '// initial\n');
+    fs.writeFileSync(path.join(dir, 'b.js'), '// initial\n');
+    execFileSync('git', ['add', '.gitkeep', 'feature.js', 'a.js', 'b.js'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', 'chore: initial commit'], { cwd: dir, stdio: 'pipe' });
+  }
+
+  function wirePrSubrepoRemote(repoDir, bareDir) {
+    fs.mkdirSync(bareDir, { recursive: true });
+    execFileSync('git', ['init', '--bare'], { cwd: bareDir, stdio: 'pipe' });
+    execFileSync('git', ['remote', 'add', 'origin', bareDir], { cwd: repoDir, stdio: 'pipe' });
+    const branch = execFileSync('git', ['branch', '--show-current'], {
+      cwd: repoDir, encoding: 'utf8',
+    }).trim();
+    execFileSync('git', ['push', 'origin', branch], { cwd: repoDir, stdio: 'pipe' });
+  }
+
+  describe('regressions (#666 — cmdPrSubrepo seam)', () => {
+    let rootDir;
+    let subDir;
+    let bareDir;
+
+    beforeEach(() => {
+      rootDir = createTempDir('gsd-666-root-');
+      subDir  = path.join(rootDir, 'backend');
+      bareDir = path.join(rootDir, '_bare-backend.git');
+      writePrSubrepoConfig(rootDir, { planning: { sub_repos: ['backend'] } });
+      initPrSubrepo(subDir);
+      wirePrSubrepoRemote(subDir, bareDir);
+    });
+
+    afterEach(() => {
+      cleanup(rootDir);
+    });
+
+    test('config-get planning.sub_repos resolves canonical config location', () => {
+      const res = runGsdTools(['query', 'config-get', 'planning.sub_repos'], rootDir);
+      assert.ok(res.success, `config-get planning.sub_repos failed: ${res.error}`);
+      assert.deepStrictEqual(JSON.parse(res.output), ['backend']);
+    });
+
+    test('config-get sub_repos (top-level) fails — confirming bug #666 Blocker 1 is gone', () => {
+      const res = runGsdTools(['query', 'config-get', 'sub_repos'], rootDir);
+      assert.ok(!res.success, 'top-level sub_repos key must not resolve — fix requires planning.sub_repos');
+    });
+
+    test('pr-subrepo happy path: branch created, files staged explicitly, commit pushed', () => {
+      fs.writeFileSync(path.join(subDir, 'feature.js'), 'module.exports = 42;\n');
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): add feature',
+         '--repo', 'backend', '--branch', 'fix-666-backend-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo failed: ${res.error}`);
+
+      const result = JSON.parse(res.output);
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.repo, 'backend');
+      assert.strictEqual(result.branch, 'fix-666-backend-pr');
+      assert.strictEqual(result.committed, true);
+      assert.ok(Array.isArray(result.files) && result.files.length > 0);
+      assert.ok(result.files.includes('feature.js'), `feature.js missing from files: ${JSON.stringify(result.files)}`);
+      assert.ok(typeof result.commit_hash === 'string' && result.commit_hash.length > 0);
+    });
+
+    test('pr-subrepo stages files explicitly — result.files lists every changed file', () => {
+      fs.writeFileSync(path.join(subDir, 'a.js'), '1\n');
+      fs.writeFileSync(path.join(subDir, 'b.js'), '2\n');
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): two files',
+         '--repo', 'backend', '--branch', 'fix-666-explicit-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo failed: ${res.error}`);
+
+      const result = JSON.parse(res.output);
+      assert.ok(result.files.includes('a.js'), 'a.js must be staged');
+      assert.ok(result.files.includes('b.js'), 'b.js must be staged');
+    });
+
+    test('pr-subrepo: nothing_to_commit when sub-repo is clean', () => {
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): nothing',
+         '--repo', 'backend', '--branch', 'fix-666-clean-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo should succeed on clean repo: ${res.error}`);
+      const result = JSON.parse(res.output);
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.committed, false);
+      assert.strictEqual(result.reason, 'nothing_to_commit');
+    });
+
+    test('pr-subrepo: duplicate branch guard — errors when branch already exists', () => {
+      fs.writeFileSync(path.join(subDir, 'a.js'), '1\n');
+      const first = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): first',
+         '--repo', 'backend', '--branch', 'fix-666-dup-pr'],
+        rootDir
+      );
+      assert.ok(first.success, `first call failed: ${first.error}`);
+
+      fs.writeFileSync(path.join(subDir, 'b.js'), '2\n');
+      const second = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): second',
+         '--repo', 'backend', '--branch', 'fix-666-dup-pr'],
+        rootDir
+      );
+      assert.ok(!second.success, 'Expected failure on duplicate branch name');
+      assert.ok(second.error.includes('already exists'), `Got: ${second.error}`);
+    });
+
+    test('pr-subrepo: missing --repo returns descriptive error', () => {
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix: msg', '--branch', 'some-branch'],
+        rootDir
+      );
+      assert.ok(!res.success);
+      assert.ok(res.error.includes('--repo required'), `Got: ${res.error}`);
+    });
+
+    test('pr-subrepo: missing --branch returns descriptive error', () => {
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix: msg', '--repo', 'backend'],
+        rootDir
+      );
+      assert.ok(!res.success);
+      assert.ok(res.error.includes('--branch required'), `Got: ${res.error}`);
+    });
+
+    test('pr-subrepo: missing commit message returns descriptive error', () => {
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', '--repo', 'backend', '--branch', 'some-branch'],
+        rootDir
+      );
+      assert.ok(!res.success);
+      assert.ok(res.error.includes('commit message required'), `Got: ${res.error}`);
+    });
+
+    test('pr-subrepo: non-existent repo path returns descriptive error', () => {
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix: msg', '--repo', 'nonexistent', '--branch', 'some-branch'],
+        rootDir
+      );
+      assert.ok(!res.success);
+      assert.ok(
+        res.error.includes('not found') || res.error.includes('nonexistent'),
+        `Got: ${res.error}`
+      );
+    });
+
+    test('pr-subrepo: path traversal (../escape) is rejected', () => {
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix: msg', '--repo', '../escape', '--branch', 'some-branch'],
+        rootDir
+      );
+      assert.ok(!res.success, 'Expected failure on path traversal attempt');
+      assert.ok(
+        res.error.includes('unsafe') || res.error.includes('escape'),
+        `Got: ${res.error}`
+      );
+    });
+
+    test('pr-subrepo push failure: branch+commit survive when push is rejected (no data loss)', () => {
+      // Reproduce the data-loss scenario flagged in review: a rejecting remote must leave
+      // the local branch+commit intact so the user can retry git push manually.
+      const branch = 'fix-666-push-fail-pr';
+
+      // Wire a bare remote with a pre-receive hook that rejects all pushes.
+      const rejectingBare = path.join(rootDir, '_rejecting-bare.git');
+      fs.mkdirSync(rejectingBare, { recursive: true });
+      execFileSync('git', ['init', '--bare'], { cwd: rejectingBare, stdio: 'pipe' });
+      const hookPath = path.join(rejectingBare, 'hooks', 'pre-receive');
+      fs.writeFileSync(hookPath, '#!/bin/sh\nexit 1\n');
+      fs.chmodSync(hookPath, 0o755);
+
+      // Point origin at the rejecting bare (overwrite the working one wired in beforeEach).
+      execFileSync('git', ['remote', 'set-url', 'origin', rejectingBare], { cwd: subDir, stdio: 'pipe' });
+
+      fs.writeFileSync(path.join(subDir, 'feature.js'), 'IMPORTANT USER WORK\n');
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): push-fail test',
+         '--repo', 'backend', '--branch', branch],
+        rootDir
+      );
+
+      // Command must fail because push was rejected.
+      assert.ok(!res.success, `Expected failure on rejected push, got success: ${res.output}`);
+
+      // The local branch must still exist — work must not be lost.
+      const branches = execFileSync('git', ['branch', '--list', branch], {
+        cwd: subDir, encoding: 'utf8',
+      });
+      assert.ok(branches.trim().length > 0, `Branch ${branch} was deleted after push failure — user work lost`);
+
+      // The commit on that branch must contain the user's changes.
+      const log = execFileSync('git', ['log', branch, '--oneline', '-1'], {
+        cwd: subDir, encoding: 'utf8',
+      });
+      assert.ok(log.trim().length > 0, `No commit on ${branch} — staged work was lost`);
+    });
+
+    test('pr-subrepo porcelain: staged rename — both old and new paths in result.files', () => {
+      // git mv produces "R  old -> new" in porcelain v1; both paths must be staged.
+      execFileSync('git', ['mv', 'feature.js', 'renamed-feature.js'], { cwd: subDir, stdio: 'pipe' });
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): rename',
+         '--repo', 'backend', '--branch', 'fix-666-rename-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo failed: ${res.error}`);
+      const result = JSON.parse(res.output);
+      assert.ok(result.files.includes('feature.js'), `old path missing: ${JSON.stringify(result.files)}`);
+      assert.ok(result.files.includes('renamed-feature.js'), `new path missing: ${JSON.stringify(result.files)}`);
+    });
+
+    test('pr-subrepo porcelain: non-ASCII filename (core.quotePath=false)', () => {
+      // Without -c core.quotePath=false, "café.js" is C-escaped → slice(2) parse breaks.
+      fs.writeFileSync(path.join(subDir, 'café.js'), '// initial\n');
+      execFileSync('git', ['add', 'café.js'], { cwd: subDir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-m', 'chore: add café.js'], { cwd: subDir, stdio: 'pipe' });
+      fs.writeFileSync(path.join(subDir, 'café.js'), 'updated\n');
+
+      const res = runGsdTools(
+        ['query', 'pr-subrepo', 'fix(backend): non-ascii',
+         '--repo', 'backend', '--branch', 'fix-666-nonascii-pr'],
+        rootDir
+      );
+      assert.ok(res.success, `pr-subrepo failed: ${res.error}`);
+      const result = JSON.parse(res.output);
+      assert.ok(result.files.includes('café.js'), `non-ASCII file missing: ${JSON.stringify(result.files)}`);
+    });
+
+    test('pr-subrepo porcelain: fc property — parsed filenames are always non-empty strings', () => {
+      // Local mirror of cmdPrSubrepo's porcelain line-parsing logic (commands.cts).
+      // Tests the transformation contract without needing a real git repo.
+      function parsePorcelainLine(line) {
+        const normalized = line.trimStart();
+        const file = normalized.slice(2).trim();
+        const arrowIdx = file.indexOf(' -> ');
+        return arrowIdx !== -1
+          ? [file.slice(0, arrowIdx).trim(), file.slice(arrowIdx + 4).trim()]
+          : [file];
+      }
+
+      const safeFilename = fc.stringMatching(/^[a-zA-Z0-9._-]+$/);
+      const xyChar = fc.constantFrom('M', 'A', 'D', 'R', 'C', 'U');
+      const normalLine = fc.tuple(xyChar, xyChar, safeFilename)
+        .map(([x, y, f]) => `${x}${y} ${f}`);
+      const renameLine = fc.tuple(xyChar, safeFilename, safeFilename)
+        .map(([x, o, n]) => `${x}  ${o} -> ${n}`);
+      // First-line trim edge case: leading space stripped by execGit global trim
+      const trimmedLine = fc.tuple(xyChar, safeFilename)
+        .map(([y, f]) => ` ${y} ${f}`);
+
+      fc.assert(fc.property(
+        fc.oneof(normalLine, renameLine, trimmedLine),
+        (line) => {
+          const files = parsePorcelainLine(line);
+          return files.length > 0 && files.every(f => typeof f === 'string' && f.length > 0);
+        }
+      ));
+    });
+  });
+
+  describe('workflow source invariants (#666 — pr-branch.md)', () => {
+    // allow-test-rule: source-text-is-the-product see #666
+    // pr-branch.md is a workflow file whose deployed text IS the runtime contract.
+    const workflowPath = path.resolve(__dirname, '..', 'gsd-core', 'workflows', 'pr-branch.md');
+    let wfContent;
+
+    test('setup', () => {
+      wfContent = fs.readFileSync(workflowPath, 'utf-8');
+      assert.ok(wfContent.length > 0);
+    });
+
+    test('uses planning.sub_repos (canonical key) — not legacy top-level sub_repos', () => {
+      wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
+      assert.ok(wfContent.includes('planning.sub_repos'), 'must call config-get planning.sub_repos');
+      assert.ok(
+        !/config-get sub_repos(?!\.)/.test(wfContent),
+        'must not call config-get sub_repos without the planning. prefix'
+      );
+    });
+
+    test('delegates git work to gsd_run query pr-subrepo — no inline git add -A in code', () => {
+      wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
+      assert.ok(wfContent.includes('pr-subrepo'), 'must invoke the pr-subrepo seam');
+      const hasForbiddenGitAdd = /^\s*git(?:\s+-C\s+\S+)?\s+add\s+(?:-A|\.)\b/m.test(wfContent);
+      assert.ok(!hasForbiddenGitAdd, 'must not use git add -A or git add . as a shell command');
+    });
+
+    test('persists dirty-repo list without bash arrays (temp file or inline string)', () => {
+      wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
+      assert.ok(
+        !wfContent.includes('DIRTY_REPOS=()') && !wfContent.includes('DIRTY_REPOS+='),
+        'bash arrays must not be used — they do not survive across command blocks'
+      );
+    });
+
+    test('branch name includes repo-specific slug to avoid root PR_BRANCH collision', () => {
+      wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
+      assert.ok(
+        /REPO_SAFE|SUB_BRANCH.*REPO/.test(wfContent),
+        'sub-repo branch name must embed a repo-specific component'
+      );
+    });
+
+    test('handle_sub_repos positioned before analyze_commits', () => {
+      wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
+      const a = wfContent.indexOf('handle_sub_repos');
+      const b = wfContent.indexOf('analyze_commits');
+      assert.ok(a !== -1 && b !== -1 && a < b);
+    });
+
+    test('dirty-scan rejects traversal, newline, and symlink entries before invoking git (security)', () => {
+      // Extracts and executes the ACTUAL node -e script shipped in pr-branch.md — not a
+      // mirror — so this test fails if the real script regresses, not just a copy of it.
+      wfContent = wfContent || fs.readFileSync(workflowPath, 'utf-8');
+      const match = wfContent.match(/node -e "([\s\S]*?)"\s+"\$SUB_REPOS_JSON" "\$ROOT" "\$DIRTY_FILE"/);
+      assert.ok(match, 'could not extract dirty-scan node script from pr-branch.md');
+      const script = match[1];
+
+      // Helper: init a git repo with a TRACKED dirty change. An untracked file would be
+      // filtered by the ?? exclusion and the repo would look clean even without the guard,
+      // making the assertions vacuous. A tracked modification ensures that WITHOUT the
+      // guard the repo WOULD be reported dirty, so the test genuinely fails-first.
+      const initDirtyRepo = (dir, file) => {
+        execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir, stdio: 'pipe' });
+        fs.writeFileSync(path.join(dir, file), 'committed\n');
+        execFileSync('git', ['add', file], { cwd: dir, stdio: 'pipe' });
+        execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', 'init'], { cwd: dir, stdio: 'pipe' });
+        fs.writeFileSync(path.join(dir, file), 'modified\n');
+      };
+
+      const scanRoot = createTempDir('gsd-666-scan-root-');
+      const outsideDir = createTempDir('gsd-666-scan-outside-');
+      initDirtyRepo(outsideDir, 'secret.txt');
+
+      // Positive control: a legit dirty sub-repo INSIDE the workspace must still be reported,
+      // so the test can't pass by a guard that simply rejects everything.
+      const backendDir = path.join(scanRoot, 'backend');
+      fs.mkdirSync(backendDir, { recursive: true });
+      initDirtyRepo(backendDir, 'app.js');
+
+      // Symlink escape: an in-tree name with no ".." and no "/" that points outside root.
+      // path.resolve would keep it "inside"; only realpathSync catches it. Symlink
+      // creation needs privileges on Windows — skip just this vector if it throws.
+      let symlinked = true;
+      try { fs.symlinkSync(outsideDir, path.join(scanRoot, 'evil')); } catch { symlinked = false; }
+
+      const traversalEntry = path.relative(scanRoot, outsideDir); // e.g. "../gsd-666-scan-outside-XXXX"
+      const newlineEntry = 'good\nbad'; // record-separator injection attempt
+      const dirtyFile = path.join(scanRoot, '_dirty');
+      const entries = symlinked
+        ? ['evil', traversalEntry, newlineEntry, 'backend']
+        : [traversalEntry, newlineEntry, 'backend'];
+      const subReposJson = JSON.stringify(entries);
+
+      try {
+        execFileSync('node', ['-e', script, subReposJson, scanRoot, dirtyFile], { stdio: 'pipe' });
+        const dirty = fs.existsSync(dirtyFile) ? fs.readFileSync(dirtyFile, 'utf-8') : '';
+        const lines = dirty.split('\n').filter(Boolean);
+        assert.ok(
+          !dirty.includes(path.basename(outsideDir)),
+          `Path traversal reached git outside the workspace: ${JSON.stringify(dirty)}`
+        );
+        if (symlinked) {
+          assert.ok(
+            !lines.includes('evil'),
+            `Symlink entry reached git outside the workspace: ${JSON.stringify(dirty)}`
+          );
+        }
+        assert.ok(
+          !lines.includes('bad'),
+          `Embedded-newline entry injected a spurious record: ${JSON.stringify(dirty)}`
+        );
+        assert.deepStrictEqual(
+          lines, ['backend'],
+          `Positive control failed — expected only 'backend', got: ${JSON.stringify(lines)}`
+        );
+      } finally {
+        cleanup(scanRoot);
+        cleanup(outsideDir);
+      }
+    });
   });
 });
