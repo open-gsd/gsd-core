@@ -589,8 +589,18 @@ function validateFeatureBody(cap) {
           if (h.matcher !== undefined) {
             if (typeof h.matcher !== 'string' || h.matcher.length === 0) {
               errors.push('hooks[' + i + '].matcher must be a non-empty string when present');
-            } else if (/[\x00-\x1f\x7f]/.test(h.matcher)) {
-              errors.push('hooks[' + i + '].matcher must not contain control characters');
+            } else {
+              // Reject ASCII control characters (0x00-0x1f and 0x7f DEL) via char codes — a literal
+              // control-char range regex trips ESLint's no-control-regex rule, and char codes are
+              // equally precise.
+              let hasControl = false;
+              for (let c = 0; c < h.matcher.length; c++) {
+                const code = h.matcher.charCodeAt(c);
+                if (code < 0x20 || code === 0x7f) { hasControl = true; break; }
+              }
+              if (hasControl) {
+                errors.push('hooks[' + i + '].matcher must not contain control characters');
+              }
             }
           }
         }

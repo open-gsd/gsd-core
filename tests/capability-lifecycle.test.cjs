@@ -467,8 +467,13 @@ test('#1634: a .cjs hook command is node-prefixed so it runs without the executa
   lifecycle.applyCapabilitySharedEdits({ runtimeDir: dir, capId, manifest, sharedFiles: ['settings.json'] });
 
   const command = readSettings(dir).hooks.PreToolUse[0].hooks[0].command;
-  assert.strictEqual((fs.statSync(path.join(capDirPath, 'hooks', 'genfile-guard.cjs')).mode & 0o777), 0o644,
-    'precondition: file staged without +x');
+  // The executable bit is a POSIX concept; on Windows fs modes are not POSIX (a 0o644 write reads
+  // back as 0o666), so the precondition is checked on POSIX only. The node-prefix assertion below
+  // is the actual fix and is platform-independent.
+  if (process.platform !== 'win32') {
+    assert.strictEqual((fs.statSync(path.join(capDirPath, 'hooks', 'genfile-guard.cjs')).mode & 0o777), 0o644,
+      'precondition: file staged without +x');
+  }
   // revert-fails: command was a bare single-quoted path -> /bin/sh: Permission denied on non-+x.
   assert.ok(/^node '/.test(command), 'command is node-prefixed for a .cjs hook: ' + command);
 });
