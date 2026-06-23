@@ -68,3 +68,13 @@ To keep the Seam honest about where the plugin contract ends:
 - Installer Module (`bin/install.js`) — owns the `settings.json` always-on hook wiring this Module mirrors for the plugin path.
 - `CONTEXT.md` § Glossary — Domain modules and seams (where this Module is registered).
 - Claude Code plugin contract: <https://code.claude.com/docs/en/plugins-reference>.
+
+## Amendment 2026-06-22 — Skills surface projection (#1596)
+
+The original mapping table projected commands + hooks but omitted skills. Phase B-provide of epic #1258 adds the skills surface:
+
+| gsd-core surface / source | Claude Code plugin field | Rule / invariant |
+|---|---|---|
+| Skill surface (`commands/gsd/*.md` → build-converted) | `skills: "./skills/"` | A `skills/` dir of build-generated `gsd-<stem>/SKILL.md` files, produced by `scripts/gen-plugin-skills.cjs` running `convertClaudeCommandToClaudeSkill` (the same converter the file-copy installer uses). Generated at build time (`npm run build`) and committed (consistent with ADR-457's generated-committed-output pattern). This closes the gap where plugin-only installs lacked the skill surface because `bin/install.js` never ran. Methodology defined by ADR-1593 §5. |
+
+The `skills/` dir is **generated, not hand-authored** — `scripts/gen-plugin-skills.cjs --check` verifies staleness. The conformance test (`tests/issue-766-plugin-manifest.test.cjs` Section H) asserts the manifest field, dir presence, frontmatter validity, and count parity with `commands/gsd/*.md` (`DEFECT.GENERATIVE-FIX`).

@@ -1855,11 +1855,17 @@ function convertGeminiToolName(claudeTool) {
   // Task/Agent: exclude — agents are auto-registered as callable tools.
   // AskUserQuestion: exclude — Gemini CLI does not expose an ask_user tool;
   // emitting it causes frontmatter validation errors (#3362).
+  // Skill/SlashCommand: exclude — Gemini CLI has no 'skill' built-in tool;
+  // the lowercase fallback would emit an invalid 'skill'/'slashcommand' name
+  // that fails frontmatter validation (tools.N: Invalid tool name) and aborts
+  // the entire agent load (#1394).
   if (
     claudeTool === 'Task' ||
     claudeTool === 'Agent' ||
     claudeTool === 'AskUserQuestion' ||
-    claudeTool === 'ask_user'
+    claudeTool === 'ask_user' ||
+    claudeTool === 'Skill' ||
+    claudeTool === 'SlashCommand'
   ) {
     return null;
   }

@@ -642,7 +642,7 @@ describe('planWorktreeRecordAgent', () => {
     });
     assert.equal(plan.reason, 'missing_field');
     for (const flag of ['--agent-id', '--path', '--branch', '--base']) {
-      assert.match(plan.hint, new RegExp(flag.replace(/[-]/g, '\\$&')));
+      assert.match(plan.hint, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     }
   });
 

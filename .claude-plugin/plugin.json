@@ -19,5 +19,6 @@
     "gsd"
   ],
   "commands": "./commands/gsd/",
+  "skills": "./skills/",
   "hooks": "./hooks/hooks.json"
 }
