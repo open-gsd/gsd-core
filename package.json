@@ -1,6 +1,6 @@
 {
   "name": "@opengsd/gsd-core",
-  "version": "1.6.0-rc.1",
+  "version": "1.6.0-rc.2",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "bin": {
     "gsd-core": "bin/install.js",
@@ -10,6 +10,7 @@
   "files": [
     "bin",
     "commands",
+    "skills",
     "gsd-core",
     "assets",
     "agents",
@@ -78,11 +79,12 @@
     "check:alias-drift": "node scripts/check-alias-drift.cjs",
     "check:identity-drift": "node scripts/lint-package-identity-drift.cjs",
     "check:integrity": "node scripts/check-npm-integrity.cjs",
-    "build": "npm run generate:identity && npm run build:lib && npm run gen:loop-host-contract && npm run gen:capability-registry && npm run build:hooks",
+    "build": "npm run generate:identity && npm run build:lib && npm run gen:plugin-skills && npm run gen:loop-host-contract && npm run gen:capability-registry && npm run build:hooks",
     "build:hooks": "node scripts/build-hooks.js",
     "build:lib": "tsc -p tsconfig.build.json",
     "generate:identity": "node scripts/generate-package-identity.cjs",
     "gen:loop-host-contract": "node scripts/gen-loop-host-contract.cjs --write",
+    "gen:plugin-skills": "node scripts/gen-plugin-skills.cjs --write",
     "gen:capability-registry": "node scripts/gen-capability-registry.cjs --write",
     "prepack": "npm run build:lib",
     "prepare": "npm run build:lib",
@@ -120,5 +122,8 @@
     "test:coverage:all": "npm run test:coverage",
     "test:mutation": "stryker run",
     "test:mutation:since": "stryker run --incremental --since origin/next"
+  },
+  "allowScripts": {
+    "fallow@2.70.0": true
   }
 }

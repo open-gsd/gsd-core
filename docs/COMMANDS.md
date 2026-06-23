@@ -1370,6 +1370,8 @@ Execute a trivial task inline — no subagents, no planning overhead. For typo f
 
 Cross-AI peer review of phase plans from external AI CLIs.
 
+Reviewers are prompted to verify the plan's claims against the actual repository source — opening the referenced files and citing `file:line` evidence with the mechanism — rather than reviewing the plan text in isolation. A reviewer that has no file access flags what it cannot verify instead of asserting it, and `file:line`-grounded findings are weighted more heavily during consensus synthesis.
+
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `--phase N` | **Yes** | Phase number to review |
@@ -1485,10 +1487,11 @@ Capture ideas, tasks, notes, and seeds to their appropriate destination. Default
 | `--backlog <description>` | Add to the backlog parking lot using 999.x numbering |
 | `--seed [idea summary]` | Capture a forward-looking idea with trigger conditions |
 | `--list` | List pending todos and select one to work on |
+| `--list-seeds [status]` | List/audit captured seeds, optionally filtered by status (read-only) |
 | `--global` | Use global scope (for note operations) |
 
 **Backlog:** 999.x numbering keeps items outside the active phase sequence; phase directories are created immediately so `/gsd-discuss-phase` and `/gsd-plan-phase` work on them.
-**Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`.
+**Seeds:** Preserve full WHY, WHEN to surface, and breadcrumbs — consumed by `/gsd-new-milestone`. Audit parked seeds anytime with `--list-seeds` (optionally `--list-seeds dormant`).
 
 **Produces:** `.planning/todos/` (default), note files (--note), ROADMAP.md backlog section (--backlog), `.planning/seeds/SEED-NNN-slug.md` (--seed)
 
@@ -1500,6 +1503,8 @@ Capture ideas, tasks, notes, and seeds to their appropriate destination. Default
 /gsd-capture --backlog "GraphQL API layer"         # Add to backlog
 /gsd-capture --seed "Add real-time collaboration when WebSocket infra is in place"
 /gsd-capture --list                                # Browse and act on todos
+/gsd-capture --list-seeds                          # Audit all captured seeds
+/gsd-capture --list-seeds dormant                  # Filter seeds by status
 ```
 
 ---

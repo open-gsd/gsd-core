@@ -394,6 +394,16 @@ List pending todos and select one to work on.
 Usage: `/gsd:capture --list`
 Usage: `/gsd:capture --list api`
 
+**`/gsd:capture --list-seeds [status]`**
+List and audit captured seeds (read-only).
+
+- Lists all seeds with ID, status, scope, trigger, and title
+- Optional status filter (e.g., `/gsd:capture --list-seeds dormant`)
+- Does not modify any seed — enrich with `/gsd:capture --seed --enrich SEED-NNN`
+
+Usage: `/gsd:capture --list-seeds`
+Usage: `/gsd:capture --list-seeds dormant`
+
 ### User Acceptance Testing
 
 **`/gsd:verify-work [phase]`**

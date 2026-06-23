@@ -93,6 +93,9 @@ function spySAB() {
 describe('perf #407: withPlanningLock hoists sleep buffer — exactly one SAB per call', () => {
   let tmpDir;
   let lockPath;
+  // Keep a reference to the module so _setLockProbes/_resetLockProbes are
+  // accessible across beforeEach/afterEach boundaries.
+  let mod;
 
   beforeEach(() => {
     tmpDir = makeTempDir();
@@ -100,6 +103,12 @@ describe('perf #407: withPlanningLock hoists sleep buffer — exactly one SAB pe
   });
 
   afterEach(() => {
+    // Reset the liveness probe to the real implementation so other tests
+    // (or subsequent runs) are not affected by our deterministic override.
+    if (mod) {
+      mod._resetLockProbes();
+      mod = null;
+    }
     try { fs.unlinkSync(lockPath); } catch { /* already gone */ }
     removeTempDir(tmpDir);
     // Purge module cache so each test gets a fresh require (and fresh SAB spy window).
@@ -119,11 +128,23 @@ describe('perf #407: withPlanningLock hoists sleep buffer — exactly one SAB pe
         // Purge any previously cached versions so the spy catches module-level allocs.
         delete require.cache[PLANNING_WORKSPACE_CJS_PATH];
         delete require.cache[CLOCK_CJS_PATH];
-        withPlanningLock = require(PLANNING_WORKSPACE_CJS_PATH).withPlanningLock;
+        mod = require(PLANNING_WORKSPACE_CJS_PATH);
+        withPlanningLock = mod.withPlanningLock;
       } finally {
         spy.restore();
       }
       const sabCountAtLoad = spy.getCount();
+
+      // ── Inject deterministic liveness probe ───────────────────────────────
+      // PR #1532 replaced mtime-staleness with PID-liveness (process.kill(pid,0))
+      // to decide whether a contending lock holder should be waited on (live) or
+      // immediately stolen (dead). The test plants pid: process.pid + 1, which is
+      // environment-dependent: on some runners that pid is alive, on others it is
+      // not, making the retry/sleep path non-deterministic and causing CI flakiness
+      // (issue #1531). The _setLockProbes seam lets us pin the decision: treating
+      // the planted pid as LIVE deterministically forces the SUT into the retry path
+      // on every runner, which is exactly what the test intends to exercise.
+      mod._setLockProbes({ isPidAlive: (pid) => pid === process.pid + 1 });
 
       // ── Step 2: pre-create the lock file (simulates a contending process) ──
       // writing a valid lock JSON so withPlanningLock's stale-check doesn't

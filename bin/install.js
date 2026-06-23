@@ -33,6 +33,11 @@ const {
   getGlobalConfigDir,
   getGlobalSkillsBase,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
+// getDirName (runtime -> local config dir name) is relocated out of this
+// installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
+// conversion module's rewrite engine can consume it without importing
+// bin/install.js. Re-exported below for back-compat consumers/tests.
+const { getDirName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
@@ -359,6 +364,10 @@ const {
   resolveRuntimeArtifactLayout,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-layout.cjs'));
 const {
+  createRuntimeArtifactInstallPlan,
+  createRuntimeArtifactUninstallPlan,
+} = require(path.join(_gsdLibDir, 'runtime-artifact-install-plan.cjs'));
+const {
   planLegacyCleanup,
   applyLegacyCleanup,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs'));
@@ -461,25 +470,8 @@ Then re-run: npx ${pkg.name}@latest
   }
 }
 
-// Helper to get directory name for a runtime (used for local/project installs)
-function getDirName(runtime) {
-  if (runtime === 'copilot') return '.github';
-  if (runtime === 'opencode') return '.opencode';
-  if (runtime === 'gemini') return '.gemini';
-  if (runtime === 'kilo') return '.kilo';
-  if (runtime === 'codex') return '.codex';
-  if (runtime === 'antigravity') return '.agents';
-  if (runtime === 'cursor') return '.cursor';
-  if (runtime === 'windsurf') return '.devin';
-  if (runtime === 'augment') return '.augment';
-  if (runtime === 'trae') return '.trae';
-  if (runtime === 'qwen') return '.qwen';
-  if (runtime === 'hermes') return '.hermes';
-  if (runtime === 'kimi') return '.kimi-code';
-  if (runtime === 'codebuddy') return '.codebuddy';
-  if (runtime === 'cline') return '.cline';
-  return '.claude';
-}
+// getDirName (runtime -> local config dir name) now lives in
+// runtime-name-policy.cjs (ADR-1508 / #1510 Phase 1); imported + re-exported.
 
 /**
  * Get the config directory path relative to home directory for a runtime
@@ -605,30 +597,12 @@ if (hasHelp) {
   process.exit(0);
 }
 
-/**
- * Compute the path prefix used for `@file` references in installed command/skill
- * markdown. For global installs into a runtime config dir under $HOME, we
- * normally substitute the home prefix with `$HOME` so paths expand correctly
- * inside double-quoted shell commands. OpenCode is exempt on every platform:
- * its `@file` include syntax does NOT shell-expand `$HOME`, so a literal
- * `@$HOME/...` is treated as a path relative to the config command/ dir, which
- * resolves to `command/$HOME/...` (file not found). For OpenCode we always emit
- * the absolute resolved path. (#2376 Windows, #2831 macOS/Linux.)
- *
- * @param {object} args
- * @param {boolean} args.isGlobal - Global runtime install vs local project
- * @param {boolean} args.isOpencode - Whether the runtime is OpenCode
- * @param {boolean} args.isWindowsHost - process.platform === 'win32'
- * @param {string} args.resolvedTarget - Absolute target dir, forward-slashed
- * @param {string} args.homeDir - User home dir, forward-slashed
- * @returns {string} pathPrefix ending with '/'
- */
-function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost, resolvedTarget, homeDir }) {
-  if (isGlobal && resolvedTarget.startsWith(homeDir) && !isOpencode) {
-    return '$HOME' + resolvedTarget.slice(homeDir.length) + '/';
-  }
-  return `${resolvedTarget}/`;
-}
+// computePathPrefix: implementation moved to runtimeArtifactConversion._computePathPrefix
+// (ADR-1508 / #1511 Phase 2 — single owner). The const binding above (~line 638)
+// re-exports it here for call sites and module.exports.
+// Original doc: Compute the path prefix used for `@file` references in installed
+// command/skill markdown. For global installs under $HOME uses $HOME/... form;
+// OpenCode always uses the absolute path (#2376 Windows, #2831 macOS/Linux).
 
 // normalizeNodePath, resolveNodeRunner, resolveBashRunner, referencesHook are
 // now owned by the runtime-hooks-surface module. Import them here so
@@ -643,6 +617,19 @@ const referencesHook = hooksSurface.referencesHook;
 // applySettingsJsonHooks: mutates settings.hooks.* in place with all GSD-managed
 // hook registrations for settings.json-surface runtimes (ADR-857 phase 5f-1b).
 const applySettingsJsonHooks = hooksSurface.applySettingsJsonHooks;
+// processAttribution: pure Co-Authored-By content transform, relocated to the
+// conversion module (ADR-1508 / #1510 Phase 1). Bound here so install.js
+// callers continue to work and there is a single implementation. (All call
+// sites are below this line, so the const binding has no TDZ hazard.)
+const processAttribution = runtimeArtifactConversion.processAttribution;
+// computePathPrefix / applyRuntimeContentRewritesInPlace / applyRuntimeContentRewritesForCommandsInPlace:
+// Single implementations now live in runtimeArtifactConversion (ADR-1508 / #1511 Phase 2).
+// Re-bound here so install.js call sites and exports continue to work unchanged.
+// Local bodies replaced by breadcrumb comments at their original locations.
+// All call sites are below this line → no TDZ hazard.
+const computePathPrefix = runtimeArtifactConversion._computePathPrefix;
+const applyRuntimeContentRewritesInPlace = runtimeArtifactConversion.applyRuntimeContentRewritesInPlace;
+const applyRuntimeContentRewritesForCommandsInPlace = runtimeArtifactConversion.applyRuntimeContentRewritesForCommandsInPlace;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
   return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
@@ -1417,24 +1404,9 @@ function getCommitAttribution(runtime) {
   return result;
 }
 
-/**
- * Process Co-Authored-By lines based on attribution setting
- * @param {string} content - File content to process
- * @param {null|undefined|string} attribution - null=remove, undefined=keep, string=replace
- * @returns {string} Processed content
- */
-function processAttribution(content, attribution) {
-  if (attribution === null) {
-    // Remove Co-Authored-By lines and the preceding blank line
-    return content.replace(/(\r?\n){2}Co-Authored-By:.*$/gim, '');
-  }
-  if (attribution === undefined) {
-    return content;
-  }
-  // Replace with custom attribution (escape $ to prevent backreference injection)
-  const safeAttribution = attribution.replace(/\$/g, '$$$$');
-  return content.replace(/Co-Authored-By:.*$/gim, `Co-Authored-By: ${safeAttribution}`);
-}
+// processAttribution (pure Co-Authored-By content transform) relocated to
+// runtime-artifact-conversion.cjs (ADR-1508 / #1510 Phase 1); bound above.
+// getCommitAttribution stays here — it is impure install-time config I/O.
 
 /**
  * Convert Claude Code frontmatter to opencode format
@@ -1545,11 +1517,17 @@ function convertGeminiToolName(claudeTool) {
   // Task/Agent: exclude — agents are auto-registered as callable tools.
   // AskUserQuestion: exclude — Gemini CLI does not expose an ask_user tool;
   // emitting it causes frontmatter validation errors (#3362).
+  // Skill/SlashCommand: exclude — Gemini CLI has no 'skill' built-in tool;
+  // the lowercase fallback would emit an invalid 'skill'/'slashcommand' name
+  // that fails frontmatter validation (tools.N: Invalid tool name) and aborts
+  // the entire agent load (#1394).
   if (
     claudeTool === 'Task' ||
     claudeTool === 'Agent' ||
     claudeTool === 'AskUserQuestion' ||
-    claudeTool === 'ask_user'
+    claudeTool === 'ask_user' ||
+    claudeTool === 'Skill' ||
+    claudeTool === 'SlashCommand'
   ) {
     return null;
   }
@@ -6689,24 +6667,10 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
  * @param {string} pathPrefix  e.g. "~/.codex/" — trailing-slash string
  * @param {boolean} [isGlobal=false]  true when the install is a global (home-dir) install
  */
-function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix, isGlobal = false) {
-  if (!fs.existsSync(stagedDir)) return;
-
-  // Walk all SKILL.md files under stagedDir
-  const walkAndRewrite = (dir) => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walkAndRewrite(fullPath);
-      } else if (entry.name.endsWith('.md')) {
-        let content = fs.readFileSync(fullPath, 'utf8');
-        content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal);
-        fs.writeFileSync(fullPath, content);
-      }
-    }
-  };
-  walkAndRewrite(stagedDir);
-}
+// applyRuntimeContentRewritesInPlace: walk loop is now owned by
+// runtimeArtifactConversion.applyRuntimeContentRewritesInPlace (ADR-1508 / #1511 Phase 2).
+// The const binding above (~line 629) delegates here. Call sites in installRuntimeArtifacts
+// pass attribution as the 5th arg (getCommitAttribution(runtime)) per the new contract.
 
 /**
  * Apply per-runtime content rewrites to flat .md files in a staged commands dir.
@@ -6724,30 +6688,10 @@ function applyRuntimeContentRewritesInPlace(stagedDir, runtime, pathPrefix, isGl
  * @param {boolean} [isGlobal=false]  true when the install is a global (home-dir) install
  * @returns {string}  path to a temp dir with rewritten files (caller is responsible for cleanup)
  */
-function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix, isGlobal = false) {
-  if (!fs.existsSync(stagedDir)) return stagedDir;
-  // Always copy to a temp dir — stageSkillsForProfile() returns the original source
-  // dir on full/default profile (skills === '*'), so writing in-place would corrupt the
-  // package source. A temp copy is unconditional to keep the code simple and safe.
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-cmd-rewrites-'));
-  try {
-    for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-      let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
-      content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal);
-      // For augment commands, apply the markdown conversion so tool references
-      // and skill paths use Augment equivalents.
-      if (runtime === 'augment') {
-        content = convertClaudeToAugmentMarkdown(content);
-      }
-      fs.writeFileSync(path.join(tempDir, entry.name), content);
-    }
-  } catch (err) {
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
-    throw err;
-  }
-  return tempDir;
-}
+// applyRuntimeContentRewritesForCommandsInPlace: copy+rewrite loop is now owned by
+// runtimeArtifactConversion.applyRuntimeContentRewritesForCommandsInPlace (ADR-1508 / #1511 Phase 2).
+// The const binding above (~line 630) delegates here. Call sites in installRuntimeArtifacts
+// pass attribution as the 5th arg (getCommitAttribution(runtime)) per the new contract.
 
 /**
  * Apply the per-runtime rewrite table to a single content string.
@@ -6759,196 +6703,12 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
  * @param {boolean} [isGlobal=false]  true when the install is a global (home-dir) install
  * @returns {string}
  */
-function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false) {
-  const dirName = getDirName(runtime);
-  const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
-
-  switch (runtime) {
-    case 'codex':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.codex\//g, pathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'cline':
-      // Slash forms: both the original ~/.claude/ (safety net) and the stage-time
-      // converted ~/.cline/ (from convertClaudeToCliineMarkdown) → pathPrefix
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.cline\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.cline\//g, pathPrefix);
-      // Bare forms (no trailing slash)
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/~\/\.cline\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.cline\b/g, normalizedPathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'cursor':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      // Bare forms (no trailing slash) — use (?![\w-]) instead of \b so that
-      // .claude-plugin / .claudeignore are NOT corrupted (the \b word-boundary
-      // fires between 'e' and '-', which rewrites .claude-plugin → .cursor-plugin).
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
-      content = content.replace(/~\/\.cursor\//g, pathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'windsurf': {
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      // Bare forms (no trailing slash) — use (?![\w-]) instead of \b so that
-      // .claude-plugin / .claudeignore are NOT corrupted (the \b word-boundary
-      // fires between 'e' and '-', which rewrites .claude-plugin → .devin-plugin).
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/~\/\.codeium\/windsurf\//g, pathPrefix);
-      // Stage-1 converter rewrites .claude/skills/ → .devin/skills/ (workspace-relative
-      // form). For global installs the real path is pathPrefix + skills/, so fix that up
-      // here using the real isGlobal flag (threaded from installRuntimeArtifacts scope,
-      // not derived from pathPrefix substring which misclassifies custom config dirs).
-      // For local installs, the relative .devin/ form is correct — leave it. (#1085)
-      if (isGlobal) {
-        content = content.replace(/\.devin\/skills\//g, `${pathPrefix}skills/`);
-        content = content.replace(/\.\/\.devin\//g, pathPrefix);
-        content = content.replace(/~\/\.devin(?![\w-])/g, normalizedPathPrefix);
-        content = content.replace(/\$HOME\/\.devin(?![\w-])/g, normalizedPathPrefix);
-      }
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-    }
-
-    case 'augment':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
-      content = content.replace(/~\/\.augment\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.augment\//g, pathPrefix);
-      content = content.replace(/~\/\.augment(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.augment(?![\w-])/g, normalizedPathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'trae':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-      content = content.replace(/~\/\.trae\//g, pathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'codebuddy':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-      // The codebuddy converter rewrites `.claude/` → `.codebuddy/` at stage
-      // time, so `$HOME/.claude/...` arrives here as `$HOME/.codebuddy/...`.
-      // Normalize BOTH the `~/` and `$HOME/` forms (slash + bare) to the install
-      // target so `--config-dir`/local installs don't leak the default home.
-      content = content.replace(/~\/\.codebuddy\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.codebuddy\//g, pathPrefix);
-      content = content.replace(/~\/\.codebuddy\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.codebuddy\b/g, normalizedPathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'copilot':
-      // Copilot converter handles path rewrites; only attribution here
-      content = processAttribution(content, getCommitAttribution('copilot'));
-      break;
-
-    case 'antigravity':
-      // Antigravity converter handles path rewrites; only attribution here
-      content = processAttribution(content, getCommitAttribution('antigravity'));
-      break;
-
-    case 'claude':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'qwen':
-      // Branding rewrites run before path rewrites to avoid consuming
-      // patterns that the path step would also match.
-      content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
-      content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
-      // Base path rewrites (use ~/ and $HOME/ slash forms first — most specific)
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/~\/\.qwen\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.qwen\//g, pathPrefix);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/~\/\.qwen(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.qwen(?![\w-])/g, normalizedPathPrefix);
-      // Bare relative .claude/ → .qwen/ (residual refs not matched above)
-      content = content.replace(/\.claude\//g, '.qwen/');
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/\.\/\.qwen\//g, `./${dirName}/`);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'hermes':
-      // Branding rewrites run before path rewrites (same rationale as qwen)
-      content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
-      content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
-      // Base path rewrites
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/~\/\.hermes\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.hermes\//g, pathPrefix);
-      content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/~\/\.hermes(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.hermes(?![\w-])/g, normalizedPathPrefix);
-      // Bare relative .claude/ → .hermes/ (residual refs)
-      content = content.replace(/\.claude\//g, '.hermes/');
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    case 'kimi':
-      content = content.replace(/~\/\.claude\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
-      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
-      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
-      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      break;
-
-    default:
-      // Unknown runtime — no rewrites.
-      // OpenCode/Kilo are intentionally absent: their skills are written by
-      // installOpencodeFamilySkills, which applies pathPrefix BEFORE the
-      // command→skill conversion (mirroring copyFlattenedCommands) rather than
-      // rewriting already-converted SKILL.md bodies. See #784.
-      break;
-  }
-
-  return content;
-}
+// _applyRuntimeRewrites: single implementation lives in runtimeArtifactConversion
+// (ADR-1508 / #1511 Phase 2). Bound here so install.js call sites and exports are
+// reference-identical to the conversion module (consistent with the walkers above).
+// All call sites are below this line → no TDZ hazard.
+const _applyRuntimeRewrites = runtimeArtifactConversion._applyRuntimeRewrites;
+const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaudeRuntimeDefaults;
 
 /**
  * Copy a staged directory's contents into destDir.
@@ -7258,36 +7018,25 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
   _runLegacyInstallMigrations(runtime, configDir, scope);
 
   const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope);
-
-  // Compute pathPrefix once for the rewrite step (same derivation as the
-  // top-level install() function).
-  const _resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
-  const _homeDir = os.homedir().replace(/\\/g, '/');
-  const pathPrefix = computePathPrefix({
-    isGlobal: scope === 'global',
-    isOpencode: runtime === 'opencode',
-    isWindowsHost: process.platform === 'win32',
-    resolvedTarget: _resolvedTarget,
-    homeDir: _homeDir,
+  const planResult = createRuntimeArtifactInstallPlan({
+    layout,
+    resolvedProfile,
+    homedir: () => os.homedir(),
+    platform: process.platform,
+    resolveAttribution: getCommitAttribution,
   });
 
-  for (const kind of layout.kinds) {
-    const staged = kind.stage(resolvedProfile);
-    // stagedForCopy: the directory to copy from (may differ from staged if rewrites
-    // produce a temp copy — see applyRuntimeContentRewritesForCommandsInPlace).
-    let stagedForCopy = staged;
-    const isGlobal = scope === 'global';
-    if (kind.kind === 'skills' || kind.kind === 'kimi-agents') {
-      applyRuntimeContentRewritesInPlace(staged, runtime, pathPrefix, isGlobal);
-    } else if (kind.kind === 'commands') {
-      // Returns a temp dir with rewritten content so source files are never mutated.
-      stagedForCopy = applyRuntimeContentRewritesForCommandsInPlace(staged, runtime, pathPrefix, isGlobal);
+  const cleanupDirs = planResult.ok ? planResult.plan.cleanupDirs : planResult.cleanupDirs;
+  try {
+    if (!planResult.ok) {
+      throw new Error(planResult.message);
     }
-    // applyRuntimeContentRewritesForCommandsInPlace() returns a fresh mkdtemp dir under
-    // os.tmpdir() (gsd-cmd-rewrites-*); remove it once copied so it does not accumulate (#856).
-    const tempToClean = stagedForCopy !== staged ? stagedForCopy : null;
-    try {
-      const dest = path.join(layout.configDir, kind.destSubpath);
+
+    const kindsByName = new Map(layout.kinds.map((kind) => [kind.kind, kind]));
+    for (const item of planResult.plan.items) {
+      const kind = kindsByName.get(item.kind);
+      if (!kind) throw new Error(`Install plan returned unknown artifact kind: ${item.kind}`);
+      const dest = item.destDir;
       fs.mkdirSync(dest, { recursive: true });
       if (kind.kind === 'skills' && fs.existsSync(dest)) {
         // Pre-prune: snapshot user-owned content before _removeGsdEntries wipes it,
@@ -7314,7 +7063,7 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         }
 
         _removeGsdEntries(dest, kind);
-        _copyStaged(stagedForCopy, dest, kind);
+        _copyStaged(item.sourceDir, dest, kind);
 
         // Restore user-owned dirs after the prune+copy
         for (const [dirName, snap] of toPreserve) {
@@ -7324,12 +7073,12 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         // For non-skills kinds (commands, agents): no user content to preserve;
         // just prune stale gsd-* entries and copy new ones.
         _removeGsdEntries(dest, kind);
-        _copyStaged(stagedForCopy, dest, kind);
+        _copyStaged(item.sourceDir, dest, kind);
       }
-    } finally {
-      if (tempToClean) {
-        try { fs.rmSync(tempToClean, { recursive: true, force: true }); } catch { /* best-effort */ }
-      }
+    }
+  } finally {
+    for (const dir of cleanupDirs) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
     }
   }
 
@@ -7447,9 +7196,14 @@ function uninstallRuntimeArtifacts(runtime, configDir, scope) {
   const savedLegacyArtifacts = _runLegacyUninstallCleanup(runtime, configDir, scope);
 
   const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope);
-  for (const kind of layout.kinds) {
-    const dest = path.join(layout.configDir, kind.destSubpath);
-    _removeGsdEntries(dest, kind);
+  const plan = createRuntimeArtifactUninstallPlan(layout);
+  const kindsByName = new Map(layout.kinds.map((kind) => [kind.kind, kind]));
+  for (const item of plan.items) {
+    const kind = kindsByName.get(item.kind);
+    if (!kind) {
+      throw new Error(`Runtime artifact uninstall plan referenced unknown kind: ${item.kind}`);
+    }
+    _removeGsdEntries(item.destDir, kind);
   }
 
   // Hermes: after removing gsd-* skill dirs from skills/gsd/, also remove
@@ -7539,6 +7293,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
         content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
       }
       content = processAttribution(content, getCommitAttribution(runtime));
+
+      // #1521: stamp the workflow runtime-resolution block so every non-Claude
+      // install resolves its own runtime identity and defaults use_worktrees=false.
+      // copyWithPathReplacement is the emit path for gsd-core/workflows/*.md;
+      // _applyRuntimeRewrites is NOT invoked here, so this is what makes the fix
+      // live in real installs (it is a no-op for files without those lines).
+      if (runtime !== 'claude') {
+        content = _stampNonClaudeRuntimeDefaults(content, runtime);
+      }
 
       // #3683 — normalize /gsd:<cmd> → /gsd-<cmd> in any body passing through
       // copyWithPathReplacement for runtimes that register commands under the
@@ -10044,7 +9807,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
         const stem = entry.name.slice(0, -3);
         let content = fs.readFileSync(path.join(gsdSrc, entry.name), 'utf8');
-        content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal);
+        content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal, getCommitAttribution(runtime));
         content = normalizeAgentBodyForRuntime(content, runtime, cmdNames);
         fs.writeFileSync(path.join(commandsDir, `gsd-${stem}.md`), content);
         cmdCount++;
@@ -12291,7 +12054,10 @@ module.exports = {
     // #1191 — exported so tests exercise the REAL readSettings, not a replica
     readSettings,
     stripJsonComments,
-    ...runtimeArtifactConversion,
+    // Compatibility relays retained after auditing the former broad
+    // runtimeArtifactConversion spread (#1559).
+    processAttribution,
+    applyRuntimeContentRewritesForCommandsInPlace,
   };
 
 // Main logic — only run when not loaded as a module for testing

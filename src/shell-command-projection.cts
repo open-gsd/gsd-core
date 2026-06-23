@@ -550,17 +550,71 @@ export function normalizeContent(filePath: string, content: string, opts: { enco
   return { content: normalized, encoding };
 }
 
+// Rename errnos that are transient on Windows: a concurrent reader (or an AV
+// scanner / indexer) holding the target open makes renameSync fail briefly.
+// Same idiom as capability-ledger.cts / capability-consent.cts.
+const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_MAX_ATTEMPTS = 3;
+const RENAME_RETRY_BACKOFF_MS = 50;
+
+/** Synchronous best-effort backoff sleep (Atomics.wait — same idiom as io.cts). */
+let _renameSleepBuf: Int32Array | null = null;
+function renameBackoff(): void {
+  if (_renameSleepBuf === null) _renameSleepBuf = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(_renameSleepBuf, 0, 0, RENAME_RETRY_BACKOFF_MS);
+}
+
+/**
+ * Atomic publish with bounded retry on transient Windows lock errnos.
+ * Returns null on success, or the final error if every attempt failed.
+ */
+function atomicRenameWithRetry(tmpPath: string, filePath: string): NodeJS.ErrnoException | null {
+  let renameErr: NodeJS.ErrnoException | null = null;
+  for (let attempt = 1; attempt <= RENAME_MAX_ATTEMPTS; attempt++) {
+    try {
+      fs.renameSync(tmpPath, filePath);
+      return null;
+    } catch (err) {
+      renameErr = err as NodeJS.ErrnoException;
+      if (attempt < RENAME_MAX_ATTEMPTS && RENAME_RETRY_ERRNOS.has(renameErr.code ?? '')) {
+        renameBackoff();
+        continue;
+      }
+      break;
+    }
+  }
+  return renameErr;
+}
+
 export function platformWriteSync(filePath: string, content: string, opts: { encoding?: BufferEncoding } = {}): void {
   const { content: normalized, encoding } = normalizeContent(filePath, content, opts);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = filePath + '.tmp.' + process.pid;
+
+  // Step 1: write the sibling tmp file. If THIS fails, nothing was published, so a
+  // direct fallback write cannot truncate a concurrent reader of an existing file.
   try {
     fs.writeFileSync(tmpPath, normalized, encoding);
-    fs.renameSync(tmpPath, filePath);
   } catch {
     try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
     fs.writeFileSync(filePath, normalized, encoding);
+    return;
   }
+
+  // Step 2: atomic publish, retrying transient Windows locks.
+  const renameErr = atomicRenameWithRetry(tmpPath, filePath);
+  if (renameErr === null) return;
+
+  try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
+  if (RENAME_RETRY_ERRNOS.has(renameErr.code ?? '')) {
+    // A live reader still holds the target open after every retry. A non-atomic
+    // direct write here would truncate that reader (the exact corruption this seam
+    // exists to prevent), so surface the error instead of falling back.
+    throw renameErr;
+  }
+  // Atomic publish is genuinely impossible here (e.g. EXDEV cross-device move):
+  // fall back to a direct write to preserve write availability.
+  fs.writeFileSync(filePath, normalized, encoding);
 }
 
 export function platformReadSync(filePath: string, opts: { encoding?: BufferEncoding; required?: boolean } = {}): string | null {
