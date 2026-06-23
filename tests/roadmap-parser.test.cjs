@@ -186,6 +186,69 @@ describe('roadmap-parser: extractCurrentMilestone', () => {
     assert.ok(result.includes('real goal'), 'phase 1 content included');
     assert.ok(result.includes('Also Real'), 'phase 2 content also included');
   });
+
+  test('flat Phase Details append ignores fenced phase headings in its prefix (#1588)', () => {
+    writeState(tmpDir, { milestone: 'v1.1' });
+    const content = [
+      '# Roadmap',
+      '',
+      '<details open>',
+      '<summary>v1.1 Current (Phases 8-9) - PLANNED</summary>',
+      '',
+      '- [ ] **Phase 9: Real Phase**',
+      '',
+      '</details>',
+      '',
+      '## Phase Details',
+      '',
+      '```markdown',
+      '### Phase 9: Fenced Example Phase',
+      '**Goal**: This example must not be treated as roadmap structure.',
+      '```',
+      '',
+      '### Phase 9: Real Phase',
+      '**Goal**: Use the real phase details outside the fenced block.',
+      '**Requirements**: REAL-01',
+      '',
+      '## Backlog',
+      '',
+      '### Phase 999.1: Backlog Thing',
+      '**Goal**: Future backlog item.',
+      '',
+    ].join('\n');
+    writeRoadmap(tmpDir, content);
+
+    const result = extractCurrentMilestone(content, tmpDir);
+    assert.match(result, /### Phase 9: Real Phase/);
+    assert.doesNotMatch(result, /Fenced Example Phase/);
+    assert.doesNotMatch(result, /### Phase 999\.1: Backlog Thing/);
+  });
+
+  test('flat Phase Details append ignores phase references inside fenced active content (#1588)', () => {
+    writeState(tmpDir, { milestone: 'v1.1' });
+    const content = [
+      '# Roadmap',
+      '',
+      '<details open>',
+      '<summary>v1.1 Current (Phases 8-9) - PLANNED</summary>',
+      '',
+      '```markdown',
+      '- [ ] **Phase 9: Fenced Only**',
+      '```',
+      '',
+      '</details>',
+      '',
+      '## Phase Details',
+      '',
+      '### Phase 9: Real Phase',
+      '**Goal**: This phase is not referenced by active milestone prose.',
+      '',
+    ].join('\n');
+    writeRoadmap(tmpDir, content);
+
+    const result = extractCurrentMilestone(content, tmpDir);
+    assert.doesNotMatch(result, /### Phase 9: Real Phase/);
+  });
 });
 
 // ─── replaceInCurrentMilestone ────────────────────────────────────────────────

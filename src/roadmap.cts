@@ -14,7 +14,14 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseTokenMatches } = phaseIdMod;
+const {
+  escapeRegex,
+  normalizePhaseName,
+  phaseMarkdownRegexSource,
+  phaseMarkdownRegexSourceExact,
+  phaseTokenMatches,
+  stripProjectCodePrefix,
+} = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -30,6 +37,7 @@ import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
+import { stripFencedCode, tokenizeHeadings } from './markdown-sectionizer.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -106,6 +114,10 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
 
 // `phaseMarkdownRegexSource` lives in phase-id.cjs (#3537) and is imported above.
 
+function isBacklogPhaseId(phaseNum: unknown): boolean {
+  return /^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum));
+}
+
 // ─── searchPhaseInContent ─────────────────────────────────────────────────────
 
 /**
@@ -114,20 +126,24 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
  * checklist-only match), or null if the phase is not present at all.
  */
 function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: string): PhaseSearchResult | null {
-  // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
+  // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name.
+  // tokenizeHeadings ignores headings inside fenced code blocks.
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
+    `^(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)$`,
     'i'
   );
-  const headerMatch = content.match(phasePattern);
+  const headings = tokenizeHeadings(content);
+  const header = headings.find(
+    (h) => h.level >= 2 && h.level <= 4 && phasePattern.test(h.text),
+  );
 
-  if (!headerMatch) {
+  if (!header) {
     // Fallback: check if phase exists in summary list but missing detail section
     const checklistPattern = new RegExp(
       `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${escapedPhase}:\\s*([^*]+)\\*\\*`,
       'i'
     );
-    const checklistMatch = content.match(checklistPattern);
+    const checklistMatch = stripFencedCode(content).text.match(checklistPattern);
 
     if (checklistMatch) {
       return {
@@ -142,16 +158,14 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
     return null;
   }
 
+  const headerMatch = phasePattern.exec(header.text)!;
   const phaseName = headerMatch[1].trim();
-  const headerIndex = headerMatch.index!;
+  const headerIndex = header.offset;
 
-  // Find the end of this section (next ## or ### phase header, or end of file).
-  // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01:.
-  const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w][\w.-]*/i);
-  const sectionEnd = nextHeaderMatch
-    ? headerIndex + nextHeaderMatch.index!
-    : content.length;
+  const nextHeader = headings.find(
+    (h) => h.offset > header.offset && h.level <= header.level,
+  );
+  const sectionEnd = nextHeader ? nextHeader.offset : content.length;
 
   const section = content.slice(headerIndex, sectionEnd).trim();
 
@@ -199,6 +213,7 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
 function getRoadmapPhaseWithFallback(cwd: string, phaseNum: string): string | null {
   const roadmapPath = planningPaths(cwd).roadmap;
   if (!fs.existsSync(roadmapPath)) return null;
+  if (isBacklogPhaseId(phaseNum)) return null;
 
   const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
@@ -233,6 +248,11 @@ function cmdRoadmapGetPhase(cwd: string, phaseNum: string, raw: boolean): void {
   }
 
   try {
+    if (isBacklogPhaseId(phaseNum)) {
+      output({ found: false, phase_number: phaseNum }, raw, '');
+      return;
+    }
+
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const milestoneContent = extractCurrentMilestone(rawContent, cwd);
 

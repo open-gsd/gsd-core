@@ -84,7 +84,7 @@ describe('roadmap get-phase fallback to full ROADMAP.md (#1634)', () => {
     assert.equal(output.goal, 'Set up project infrastructure');
   });
 
-  test('backlog phase outside current milestone resolves via fallback', () => {
+  test('999.x backlog phase outside current milestone is not activated via fallback (#1588)', () => {
     writeState(tmpDir, 'v1.0');
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -106,10 +106,8 @@ describe('roadmap get-phase fallback to full ROADMAP.md (#1634)', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.equal(output.found, true, 'backlog phase should be found via fallback');
+    assert.equal(output.found, false, '999.x backlog phase should not be found via fallback');
     assert.equal(output.phase_number, '999.60');
-    assert.equal(output.phase_name, 'Backlog Cleanup');
-    assert.equal(output.goal, 'Clean up technical debt from backlog');
   });
 
   test('future planned milestone phase resolves via fallback', () => {

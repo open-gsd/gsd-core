@@ -30,7 +30,7 @@ const {
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 import { platformReadSync } from './shell-command-projection.cjs';
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { stripFencedCode, tokenizeHeadings } from './markdown-sectionizer.cjs';
 
 // ─── Roadmap milestone scoping ───────────────────────────────────────────────
 
@@ -39,6 +39,70 @@ import { tokenizeHeadings } from './markdown-sectionizer.cjs';
  */
 function stripShippedMilestones(content: string): string {
   return content.replace(/<details>[\s\S]*?<\/details>/gi, '');
+}
+
+function normalizeRoadmapPhaseId(id: string): string {
+  return stripProjectCodePrefix(id)
+    .split('-')
+    .map((seg) => seg.replace(/^0+(?=\d)/, '') || '0')
+    .join('-')
+    .toLowerCase();
+}
+
+function phaseIdFromHeadingText(text: string): string | null {
+  const match = /^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/i.exec(text);
+  return match ? normalizeRoadmapPhaseId(match[1]) : null;
+}
+
+function isBacklogPhaseId(phaseNum: unknown): boolean {
+  return /^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum));
+}
+
+function collectReferencedPhaseIds(section: string): Set<string> {
+  const ids = new Set<string>();
+  const phaseRefRe = /\bPhase\s+([\w][\w.-]*)\s*:/gi;
+  const text = stripFencedCode(section).text;
+  let match: RegExpExecArray | null;
+  while ((match = phaseRefRe.exec(text)) !== null) {
+    if (!/^999(?:\.|$)/.test(stripProjectCodePrefix(match[1]))) {
+      ids.add(normalizeRoadmapPhaseId(match[1]));
+    }
+  }
+  return ids;
+}
+
+function appendReferencedFlatPhaseDetails(content: string, section: string, afterOffset: number): string {
+  const activePhaseIds = collectReferencedPhaseIds(section);
+  if (activePhaseIds.size === 0) return section;
+
+  const headings = tokenizeHeadings(content);
+  const detailsHeading = headings.find(
+    (h) => h.offset >= afterOffset && /^Phase Details\b/i.test(h.text),
+  );
+  if (!detailsHeading) return section;
+
+  const detailsEnd = headings.find(
+    (h) => h.offset > detailsHeading.offset && h.level <= detailsHeading.level,
+  )?.offset ?? content.length;
+  const detailsSection = content.slice(detailsHeading.offset, detailsEnd);
+  const detailsHeadings = tokenizeHeadings(detailsSection);
+  const phaseHeadings = detailsHeadings.filter((h) => {
+    const id = phaseIdFromHeadingText(h.text);
+    return id !== null && activePhaseIds.has(id);
+  });
+  if (phaseHeadings.length === 0) return section;
+
+  const firstPhaseOffset = phaseHeadings[0].offset;
+  const prefix = stripFencedCode(detailsSection.slice(0, firstPhaseOffset)).text.trimEnd();
+  const pieces: string[] = [];
+  for (const h of phaseHeadings) {
+    const next = detailsHeadings.find(
+      (candidate) => candidate.offset > h.offset && candidate.level <= h.level,
+    );
+    pieces.push(detailsSection.slice(h.offset, next?.offset ?? detailsSection.length).trimEnd());
+  }
+
+  return `${section}\n${prefix ? `${prefix}\n\n` : ''}${pieces.join('\n\n')}`;
 }
 
 /**
@@ -98,7 +162,11 @@ function extractCurrentMilestone(content: string, cwd?: string): string {
           .replace(/<details>[\s\S]*?<\/details>/gi, '')
           .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
           .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
-        return preamble + content.slice(detailsOpenIdx, detailsEnd);
+        return appendReferencedFlatPhaseDetails(
+          content,
+          preamble + content.slice(detailsOpenIdx, detailsEnd),
+          detailsEnd,
+        );
       }
     }
     return stripShippedMilestones(content);
@@ -179,9 +247,10 @@ function extractCurrentMilestone(content: string, cwd?: string): string {
     .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
     .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
 
-  return detailsSection
+  const scoped = detailsSection
     ? preamble + currentSection + '\n' + detailsSection
     : preamble + currentSection;
+  return appendReferencedFlatPhaseDetails(content, scoped, sectionEnd);
 }
 
 /**
@@ -210,17 +279,22 @@ interface RoadmapPhaseResult {
 
 function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+    `^(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)$`,
     'i'
   );
-  const headerMatch = content.match(phasePattern);
-  if (!headerMatch) return null;
+  const headings = tokenizeHeadings(content);
+  const header = headings.find(
+    (h) => h.level >= 2 && h.level <= 4 && phasePattern.test(h.text),
+  );
+  if (!header) return null;
 
+  const headerMatch = phasePattern.exec(header.text)!;
   const phaseName = headerMatch[1].trim();
-  const headerIndex = headerMatch.index!;
-  const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i);
-  const sectionEnd = nextHeaderMatch ? headerIndex + nextHeaderMatch.index! : content.length;
+  const headerIndex = header.offset;
+  const nextHeader = headings.find(
+    (h) => h.offset > header.offset && h.level <= header.level,
+  );
+  const sectionEnd = nextHeader ? nextHeader.offset : content.length;
   const section = content.slice(headerIndex, sectionEnd).trim();
 
   const goalMatch = section.match(/\*\*Goal(?:\*\*:|\*?\*?:\*\*)\s*([^\n]+)/i);
@@ -256,6 +330,7 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
   if (!phaseNum) return null;
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) return null;
+  if (isBacklogPhaseId(phaseNum)) return null;
 
   try {
     const roadmapRaw = platformReadSync(roadmapPath);
