@@ -44,6 +44,7 @@ const {
   resolveKiloConfigPath,
   configureKiloPermissions,
   selectRuntimesFromArgs,
+  normalizeNodePath,
 } = require('../bin/install.js');
 
 const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
@@ -1646,4 +1647,64 @@ describe('#767 Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGE
         `docs/AGENTS.md "Disallowed Tools" for ${agent} must be "${expectedTools}" but got "${docTools}"`);
     });
   }
+});
+
+// ─── normalizeNodePath — mise versioned install path → stable shim (#1619) ────
+//
+// Bug #1619: `resolveNodeRunner()` bakes process.execPath into managed hook
+// commands. Node realpaths execPath, so under mise it resolves to
+// `<data>/installs/node/<ver>/bin/node` — a concrete version mise prunes on
+// `mise up`, after which every managed hook 404s (same class as #977 fnm /
+// #3181 Homebrew). normalizeNodePath now rewrites it to the stable sibling
+// shim `<data>/shims/node` when that shim exists, deriving <data> from the
+// path so a custom MISE_DATA_DIR works, and falling back to execPath otherwise.
+// Folded into install.test.cjs (not a new bug-NNNN file) per the regression
+// test-name lint. Assertions go against the exported function's return values.
+describe('normalizeNodePath — mise versioned path → sibling shim (#1619)', () => {
+  const MISE_DATA = '/Users/u/.local/share/mise';
+  const MISE_NODE_PINNED = `${MISE_DATA}/installs/node/26.3.0/bin/node`;
+  const MISE_SHIM = `${MISE_DATA}/shims/node`;
+  const MISE_WIN_DATA = 'C:/Users/u/AppData/Local/mise';
+  const MISE_WIN_NODE = `${MISE_WIN_DATA}/installs/node/22.1.0/node.exe`; // no bin/ on Windows
+  const MISE_WIN_SHIM = `${MISE_WIN_DATA}/shims/node.exe`;
+  const MISE_CUSTOM_DATA = '/opt/mise-data';
+  const MISE_CUSTOM_NODE = `${MISE_CUSTOM_DATA}/installs/node/20.0.0/bin/node`;
+  const MISE_CUSTOM_SHIM = `${MISE_CUSTOM_DATA}/shims/node`;
+
+  test('POSIX pinned install path + shim exists → sibling shim', () => {
+    assert.equal(
+      normalizeNodePath(MISE_NODE_PINNED, { existsSync: p => p === MISE_SHIM }),
+      MISE_SHIM);
+  });
+
+  test('Windows node.exe + shim exists → shims/node.exe (.exe preserved)', () => {
+    assert.equal(
+      normalizeNodePath(MISE_WIN_NODE, { existsSync: p => p === MISE_WIN_SHIM }),
+      MISE_WIN_SHIM);
+  });
+
+  test('backslash Windows path normalizes the same as forward-slash', () => {
+    assert.equal(
+      normalizeNodePath(MISE_WIN_NODE.replace(/\//g, '\\'),
+        { existsSync: p => p === MISE_WIN_SHIM }),
+      MISE_WIN_SHIM);
+  });
+
+  test('custom MISE_DATA_DIR layout → shim derived from execPath, not env', () => {
+    assert.equal(
+      normalizeNodePath(MISE_CUSTOM_NODE, { existsSync: p => p === MISE_CUSTOM_SHIM }),
+      MISE_CUSTOM_SHIM);
+  });
+
+  test('no regression: shim absent → falls back to raw execPath unchanged', () => {
+    assert.equal(
+      normalizeNodePath(MISE_NODE_PINNED, { existsSync: () => false }),
+      MISE_NODE_PINNED);
+  });
+
+  test('non-mise path (Homebrew symlink) is left unchanged here', () => {
+    assert.equal(
+      normalizeNodePath('/opt/homebrew/bin/node', { existsSync: () => true }),
+      '/opt/homebrew/bin/node');
+  });
 });
