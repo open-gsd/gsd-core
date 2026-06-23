@@ -451,3 +451,80 @@ describe('SECURE: threat-model-anchored behaviour', () => {
     );
   });
 });
+
+// ─── 8. Regression: security config variables resolved before use (#1625) ────
+// allow-test-rule: runtime-contract-is-the-product — secure-phase.md prose is the executed contract (#1625)
+
+describe('SECURE: security config variables resolved before use (#1625)', () => {
+  const wfPath = path.join(WORKFLOWS_DIR, 'secure-phase.md');
+
+  test('SECURITY_ASVS is assigned (not only used as placeholder)', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('SECURITY_ASVS='),
+      'SECURITY_ASVS must be assigned via config-get in the workflow, not only appear as {SECURITY_ASVS} placeholder'
+    );
+  });
+
+  test('SECURITY_BLOCK_ON is assigned (not only used as placeholder)', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('SECURITY_BLOCK_ON='),
+      'SECURITY_BLOCK_ON must be assigned via config-get in the workflow, not only appear as {SECURITY_BLOCK_ON} placeholder'
+    );
+  });
+
+  test('SECURITY_ASVS assignment appears before the auditor <config> injection line', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    const assignIdx = content.indexOf('SECURITY_ASVS=');
+    const configInjIdx = content.indexOf('block_on: {SECURITY_BLOCK_ON}');
+    assert.ok(assignIdx > -1, 'SECURITY_ASVS= must exist in the file');
+    assert.ok(configInjIdx > -1, 'block_on: {SECURITY_BLOCK_ON} injection line must exist');
+    assert.ok(
+      assignIdx < configInjIdx,
+      'SECURITY_ASVS must be assigned before the auditor <config> injection line that references {SECURITY_BLOCK_ON}'
+    );
+  });
+
+  test('SECURITY_BLOCK_ON assignment appears before the auditor <config> injection line', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    const assignIdx = content.indexOf('SECURITY_BLOCK_ON=');
+    const configInjIdx = content.indexOf('block_on: {SECURITY_BLOCK_ON}');
+    assert.ok(assignIdx > -1, 'SECURITY_BLOCK_ON= must exist in the file');
+    assert.ok(configInjIdx > -1, 'block_on: {SECURITY_BLOCK_ON} injection line must exist');
+    assert.ok(
+      assignIdx < configInjIdx,
+      'SECURITY_BLOCK_ON must be assigned before the auditor <config> injection line that references it'
+    );
+  });
+
+  test('security config resolved via config-get with correct keys and defaults', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('config-get workflow.security_asvs_level'),
+      'must resolve SECURITY_ASVS via config-get workflow.security_asvs_level'
+    );
+    assert.ok(
+      content.includes('config-get workflow.security_block_on'),
+      'must resolve SECURITY_BLOCK_ON via config-get workflow.security_block_on'
+    );
+    assert.ok(
+      content.includes('echo "1"') && content.includes('echo "high"'),
+      'config-get resolution must include the registry default fallbacks (1, high) so an unset/failed lookup still yields a valid value'
+    );
+  });
+
+  test('security config-get uses --raw so the injected string value is unquoted', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    // Without --raw, config-get returns JSON ("high" with quotes), which would
+    // corrupt the auditor <config> block to `block_on: "high"`. --raw yields bare `high`.
+    assert.ok(
+      /config-get workflow\.security_block_on --raw/.test(content),
+      'SECURITY_BLOCK_ON must be resolved with --raw (config-get returns a quoted "high" without it)'
+    );
+    assert.ok(
+      /config-get workflow\.security_asvs_level --raw/.test(content),
+      'SECURITY_ASVS must be resolved with --raw for consistency'
+    );
+  });
+});
