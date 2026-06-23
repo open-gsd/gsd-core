@@ -315,7 +315,7 @@ describe('installRuntimeArtifacts — windsurf workflows layout (#1615)', () => 
     const helpContent = fs.readFileSync(path.join(workflowsDir, 'gsd-help.md'), 'utf8');
     assert.ok(!helpContent.startsWith('---'), 'Windsurf workflows must be plain markdown, not SKILL.md frontmatter');
     assert.match(helpContent, /# gsd-help/, 'workflow should identify the slash command it backs');
-    assert.ok(helpContent.includes(`${configDir}/gsd-core/commands/gsd/help.md`),
+    assert.ok(helpContent.includes(`${configDir}/gsd-core/commands/gsd/help.md`.replace(/\\/g, '/')),
       'workflow should reference the installed command body using the actual install target');
 
     for (const fileName of fs.readdirSync(workflowsDir)) {

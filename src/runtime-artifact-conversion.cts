@@ -2169,10 +2169,18 @@ function convertClaudeCommandToKiloSkill(content, skillName) {
  * @private — exported as `_computePathPrefix` for tests.
  */
 function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost, resolvedTarget, homeDir }) {
-  if (isGlobal && resolvedTarget.startsWith(homeDir) && !isOpencode) {
-    return '$HOME' + resolvedTarget.slice(homeDir.length) + '/';
+  // #1615: normalize Windows backslashes to forward slashes. This prefix is
+  // substituted into markdown @-references (e.g. Windsurf workflow files),
+  // which use POSIX paths universally. Idempotent on POSIX (no backslashes).
+  // Without this, path.join on Windows produces a backslash prefix that
+  // leaks into markdown content and breaks cross-platform substring checks.
+  // See DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT in CONTEXT.md.
+  const posixTarget = String(resolvedTarget).replace(/\\/g, '/');
+  const posixHome = homeDir ? String(homeDir).replace(/\\/g, '/') : homeDir;
+  if (isGlobal && posixTarget.startsWith(posixHome) && !isOpencode) {
+    return '$HOME' + posixTarget.slice(posixHome.length) + '/';
   }
-  return `${resolvedTarget}/`;
+  return `${posixTarget}/`;
 }
 
 /**

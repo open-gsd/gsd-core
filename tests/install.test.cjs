@@ -1320,7 +1320,7 @@ describe('windsurf local install writes workflow slash commands (#1615)', () => 
       const workflowFile = path.join(workflowsDir, workflowEntry.name);
       const content = fs.readFileSync(workflowFile, 'utf8');
       assert.ok(
-        content.includes(`${tmpDir}/.windsurf/gsd-core/commands/gsd/`),
+        content.includes(`${tmpDir}/.windsurf/gsd-core/commands/gsd/`.replace(/\\/g, '/')),
         `${workflowEntry.name} must reference the installed canonical command body`,
       );
       assert.ok(

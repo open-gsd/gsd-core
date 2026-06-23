@@ -722,6 +722,14 @@ A legal deferred state of an Execute step (`external_job_waiting`): the executor
 `DEFECT.WINDOWS-TEST-PORTABILITY.fix-forward=gate platform-specific execution with if (process.platform !== 'win32'); normalize path expectations to forward slashes with .replace(/\\/g, '/'); invoke scripts via explicit interpreter (sh <path>) rather than relying on exec-bit; annotate // windows-portability-ok: <reason> when a bypass is intentional`
 `DEFECT.WINDOWS-TEST-PORTABILITY.prevention=run lint:ci before opening a PR; treat the CI windows lane as the only true Windows signal — gsd-test (Mac/Linux only) cannot substitute for it`
 
+`DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT.symptom=path.join() result on Windows (backslashes) substituted verbatim into markdown body (@-references, workflow files, generated docs); content gains mixed separators; cross-platform substring assertions fail on windows-latest CI lane only; macOS/Linux CI green so defect ships undetected`
+`DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT.examples=PR #1622 computePathPrefix returned ${resolvedTarget}/ verbatim — rewrites of @~/.claude/gsd-core/commands/gsd/X.md wrote @C:\...\gsd-ial-windsurf-XXX\gsd-core/commands/gsd/help.md (trailing forward slashes from the original literal survived, prefix backslashes did not); tests/install-runtime-artifacts.test.cjs:318 + tests/install.test.cjs:1323 failed on windows-latest only`
+`DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT.detect=any function returning a filesystem path that flows into markdown/text body substitution; grep for path.join/raw resolvedTarget/${configDir}/ in code paths writing workflow .md, agent .md, or generated docs; smoke pattern is ${resolvedTarget}/ or ${configDir}/... templates that bypass normalization`
+`DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT.fix-forward=normalize at the SOURCE not the test: posixTarget=String(resolvedTarget).replace(/\\/g,'/'), posixHome=homeDir?String(homeDir).replace(/\\/g,'/'):homeDir; markdown body is POSIX-only; .replace(/\\/g,'/') is idempotent on POSIX (no backslashes present) so safe to apply unconditionally; isWindowsHost arg is a no-op tripwire (enh-1511) — do NOT branch on it, normalize always`
+`DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT.prevention=RULESET.CONTENT-PATH-NORMALIZATION; tests are downstream signal, never the fix; ref DEFECT.WINDOWS-TEST-PORTABILITY for test-side parity (normalize expected substrings too: ${configDir}/foo.replace(/\\/g,'/'))`
+
+`RULESET.CONTENT-PATH-NORMALIZATION=filesystem paths substituted into markdown body text (@-references, workflow .md, agent .md, generated docs, command bodies) MUST be normalized to POSIX forward slashes via .replace(/\\/g,'/') at the production source BEFORE substitution; never push normalization to tests; cross-platform content is POSIX-only; applies to: computePathPrefix output, install-path rewrites, generated shim paths emitted into .md bodies; idempotent on POSIX so unconditional`
+
 
 ---
 
