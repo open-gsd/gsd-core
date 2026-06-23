@@ -220,7 +220,7 @@ Collect all answers into an answers JSON object mapping dimension keys to select
 ```bash
 # BSD/macOS mktemp only randomizes XXXXXX when it is the final path component, so make a
 # suffixless temp then append the extension — portable across BSD + GNU (#1520).
-ANSWERS_PATH=$(mktemp /tmp/gsd-profile-answers-XXXXXX) && mv "$ANSWERS_PATH" "${ANSWERS_PATH}.json" && ANSWERS_PATH="${ANSWERS_PATH}.json" || exit 1
+ANSWERS_PATH=$(mktemp "${TMPDIR:-/tmp}/gsd-profile-answers-XXXXXX") && mv "$ANSWERS_PATH" "${ANSWERS_PATH}.json" && ANSWERS_PATH="${ANSWERS_PATH}.json" || exit 1
 ```
 
 Write the answers JSON to `$ANSWERS_PATH`.
@@ -236,7 +236,7 @@ Save analysis JSON to a temp file:
 ```bash
 # BSD/macOS mktemp only randomizes XXXXXX when it is the final path component, so make a
 # suffixless temp then append the extension — portable across BSD + GNU (#1520).
-ANALYSIS_PATH=$(mktemp /tmp/gsd-profile-analysis-XXXXXX) && mv "$ANALYSIS_PATH" "${ANALYSIS_PATH}.json" && ANALYSIS_PATH="${ANALYSIS_PATH}.json" || exit 1
+ANALYSIS_PATH=$(mktemp "${TMPDIR:-/tmp}/gsd-profile-analysis-XXXXXX") && mv "$ANALYSIS_PATH" "${ANALYSIS_PATH}.json" && ANALYSIS_PATH="${ANALYSIS_PATH}.json" || exit 1
 ```
 
 Write the analysis JSON to `$ANALYSIS_PATH`.
