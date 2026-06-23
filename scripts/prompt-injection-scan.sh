@@ -77,6 +77,7 @@ ALLOWLIST=(
   'hooks/gsd-prompt-guard.js'
   'hooks/gsd-read-injection-scanner.js'
   'tests/read-injection-scanner.security.test.cjs'
+  'tests/read-injection-scanner.property.test.cjs'
   'tests/security-prompt-injection.security.test.cjs'
   'tests/list-seeds.test.cjs'
   'tests/fixtures/adversarial/security/'

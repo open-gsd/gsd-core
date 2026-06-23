@@ -156,12 +156,15 @@ than a missed injection in a secondary scan layer.
 output of every Read, WebFetch, and WebSearch tool call. It scans the *content
 that was just read or fetched* for injected instructions in untrusted content —
 catching cases where an attacker has embedded instructions in a file or remote
-resource that GSD is about to incorporate into an agent's context. The 8
+resource that GSD is about to incorporate into an agent's context. The 10
 research and doc-ingest agents additionally carry a shared `<security_context>`
 data/instruction boundary (defined in
-`gsd-core/references/untrusted-input-boundary.md`): any content fetched or read
-by those agents is treated as data, never as instructions, regardless of what
-the content claims to be.
+`gsd-core/references/untrusted-input-boundary.md`): `gsd-project-researcher`,
+`gsd-phase-researcher`, `gsd-ui-researcher`, `gsd-assumptions-analyzer`,
+`gsd-advisor-researcher`, `gsd-doc-classifier`, `gsd-doc-synthesizer`,
+`gsd-research-synthesizer`, `gsd-ai-researcher`, and `gsd-domain-researcher`.
+Any content fetched or read by those agents is treated as data, never as
+instructions, regardless of what the content claims to be.
 
 **Opt-in blocking (`security.injection_blocking`).** By default all injection
 detections are advisory-only (logged, not blocked). Setting
