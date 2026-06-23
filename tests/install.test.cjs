@@ -1167,6 +1167,24 @@ describe('antigravity local install writes to .agents/ canonical dir (#791)', ()
     assert.ok(fs.existsSync(firstSkill), `SKILL.md must exist at ${firstSkill}`);
   });
 
+  test('install writes concrete skills at the immediate level AGY scans', () => {
+    install(false, 'antigravity');
+    const skillsDir = path.join(tmpDir, '.agents', 'skills');
+
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-progress', 'SKILL.md')),
+      'AGY scans immediate skill folders, so /gsd-progress must be installed at .agents/skills/gsd-progress/SKILL.md',
+    );
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-verify-work', 'SKILL.md')),
+      'AGY scans immediate skill folders, so /gsd-verify-work must be installed at .agents/skills/gsd-verify-work/SKILL.md',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(skillsDir, 'gsd-ns-workflow', 'skills', 'progress', 'SKILL.md')),
+      'Antigravity must not rely on router-nested concrete skills that AGY does not discover',
+    );
+  });
+
   test('installed agent files reference .agents/ not ~/.claude/ or bare .agent/', () => {
     // NOTE: skill content is intentionally NOT asserted here. The installer calls
     // convertClaudeCommandToAntigravitySkill(content, skillName, runtime, cmdNames)
