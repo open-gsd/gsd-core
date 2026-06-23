@@ -194,6 +194,9 @@ describe('Cline install (local)', () => {
         } else if (entry.name.endsWith('.md') || entry.name.endsWith('.cjs') || entry.name.endsWith('.js')) {
           // CHANGELOG.md is a historical record and is not path-converted — skip it
           if (entry.name === 'CHANGELOG.md') continue;
+          // Converter source contains literal Claude source-path templates used before
+          // runtime-specific install rewrites; this test is only for deployed Cline payload leaks.
+          if (entry.name === 'runtime-artifact-conversion.cjs') continue;
           const content = fs.readFileSync(fullPath, 'utf8');
           // Check for GSD install paths that should have been substituted.
           // profile-pipeline.cjs intentionally references ~/.claude/projects (Claude Code

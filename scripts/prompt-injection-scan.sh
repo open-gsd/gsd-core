@@ -90,6 +90,10 @@ ALLOWLIST=(
   # ("ignore previous instructions", "you are now…") as examples agents must
   # NOT comply with — it is the defense, not an attack vector.
   'references/untrusted-input-boundary.md'
+  # Security regression tests for input validators — fixtures must contain
+  # real injection payloads to prove the validator rejects them. See
+  # DEFECT.PROMPT-INJECTION-SCAN-COLLISION in CONTEXT.md.
+  'tests/windsurf-conversion.test.cjs'
 )
 
 is_allowlisted() {

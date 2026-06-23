@@ -1056,3 +1056,58 @@ describe('listSurface', () => {
     }
   });
 });
+
+// ─── #1615: applySurface must rewrite commands kind (Windsurf workflows) ─────
+// Adversarial review of PR #1622 found that applySurface only rewrites 'skills'
+// kinds, skipping 'commands'. Windsurf's capability now stages workflow files
+// as kind='commands'; without the rewrite, /gsd-surface would write workflow
+// bodies containing raw @~/.claude/... references that don't exist on a
+// Windsurf install. The same gap affected any runtime with commands kinds.
+describe('applySurface — commands kind path rewrite (#1615 adversarial review)', () => {
+  test('windsurf workflow bodies are rewritten to install target (no raw ~/.claude/)', (t) => {
+    const base = createTempDir('gsd-surface-cmds-windsurf-');
+    t.after(() => cleanup(base));
+    const runtimeConfigDir = base;
+
+    // Stage the canonical command body the workflow delegates to.
+    const canonicalDir = path.join(runtimeConfigDir, 'gsd-core', 'commands', 'gsd');
+    fs.mkdirSync(canonicalDir, { recursive: true });
+    fs.writeFileSync(path.join(canonicalDir, 'help.md'),
+      '---\nname: help\ndescription: Show help\n---\n\nHelp body\n');
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('windsurf', runtimeConfigDir, 'local');
+
+    // Sanity: layout must have a commands kind (workflows) — pre-condition
+    // introduced by PR #1622; if a future refactor removes it, this test
+    // would silently pass without exercising the rewrite path.
+    const commandsKind = layout.kinds.find((k) => k.kind === 'commands');
+    assert.ok(commandsKind, 'pre-condition: windsurf layout has a commands kind');
+
+    applySurface(runtimeConfigDir, layout, manifest, CLUSTERS);
+
+    // Workflow files should be written to <configDir>/workflows/gsd-*.md
+    const workflowsDir = path.join(runtimeConfigDir, 'workflows');
+    const workflowFiles = fs.existsSync(workflowsDir)
+      ? fs.readdirSync(workflowsDir).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'))
+      : [];
+    assert.ok(workflowFiles.length > 0,
+      `expected at least one gsd-*.md workflow under ${workflowsDir}; got [${workflowFiles.join(', ')}]`);
+
+    // Every workflow body must reference the install target, NOT the raw
+    // ~/.claude/ path. This is the regression: pre-fix, the commands kind
+    // was skipped and raw @~/.claude/... survived into the synced file.
+    for (const fileName of workflowFiles) {
+      const workflowPath = path.join(workflowsDir, fileName);
+      const content = fs.readFileSync(workflowPath, 'utf8');
+      assert.ok(
+        !content.includes('~/.claude/'),
+        `${fileName} must not contain raw ~/.claude/ after applySurface rewrite (got: ${content.slice(0, 200)})`,
+      );
+      assert.ok(
+        !content.includes('$HOME/.claude/'),
+        `${fileName} must not contain raw $HOME/.claude/ after applySurface rewrite`,
+      );
+    }
+  });
+});

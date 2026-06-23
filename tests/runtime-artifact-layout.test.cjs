@@ -134,15 +134,22 @@ describe('resolveRuntimeArtifactLayout — antigravity', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — windsurf', () => {
-  test('returns correct layout for windsurf', () => {
-    const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR);
+  test('returns local workflow layout for windsurf', () => {
+    const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR, 'local');
     assert.strictEqual(layout.runtime, 'windsurf');
     assert.strictEqual(layout.configDir, FAKE_DIR);
     assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
+    assert.strictEqual(layout.kinds[0].kind, 'commands');
+    assert.strictEqual(layout.kinds[0].destSubpath, 'workflows');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+  });
+
+  test('returns empty global layout for windsurf', () => {
+    const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR, 'global');
+    assert.strictEqual(layout.runtime, 'windsurf');
+    assert.strictEqual(layout.configDir, FAKE_DIR);
+    assert.strictEqual(layout.kinds.length, 0);
   });
 });
 

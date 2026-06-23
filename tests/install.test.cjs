@@ -1269,12 +1269,12 @@ describe('install — --devin-desktop CLI flag routes to windsurf runtime (#792)
     assert.deepStrictEqual(selectRuntimesFromArgs(['--devin-desktop']), ['windsurf']);
   });
 });
-// ─── Section N: Windsurf .devin canonical workspace dir (#1085) ─────────────
+// ─── Section N: Windsurf workflow slash-command install (#1615) ─────────────
 // allow-test-rule: runtime-contract-is-the-product
-// Reads deployed skill .md files whose text IS the product surface the
-// Windsurf/Devin Desktop runtime loads at startup (path references, command names).
+// Reads deployed workflow .md files whose text IS the product surface the
+// Windsurf runtime loads at startup (path references, command names).
 
-describe('windsurf local install writes to .devin/ canonical dir (#1085)', () => {
+describe('windsurf local install writes workflow slash commands (#1615)', () => {
   let tmpDir;
   let previousCwd;
 
@@ -1289,50 +1289,75 @@ describe('windsurf local install writes to .devin/ canonical dir (#1085)', () =>
     cleanup(tmpDir);
   });
 
-  test('install writes workspace skills under .devin/skills/', () => {
+  test('install writes workspace workflows under .windsurf/workflows/', () => {
     const result = install(false, 'windsurf');
-    const devinDir = path.join(tmpDir, '.devin');
+    const windsurfDir = path.join(tmpDir, '.windsurf');
     assert.strictEqual(result.runtime, 'windsurf');
-    assert.ok(fs.existsSync(devinDir), '.devin/ must be created for local windsurf install');
-    const skillsDir = path.join(devinDir, 'skills');
-    assert.ok(fs.existsSync(skillsDir), '.devin/skills/ must exist after install');
-    const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
-      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
-    assert.ok(skillEntries.length > 0, 'at least one gsd-* skill must be installed under .devin/skills/');
-    const firstSkill = path.join(skillsDir, skillEntries[0].name, 'SKILL.md');
-    assert.ok(fs.existsSync(firstSkill), `SKILL.md must exist at ${firstSkill}`);
+    assert.ok(fs.existsSync(windsurfDir), '.windsurf/ must be created for local windsurf install');
+    const workflowsDir = path.join(windsurfDir, 'workflows');
+    assert.ok(fs.existsSync(workflowsDir), '.windsurf/workflows/ must exist after install');
+    const workflowEntries = fs.readdirSync(workflowsDir, { withFileTypes: true })
+      .filter(e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md'));
+    assert.ok(workflowEntries.length > 0, 'at least one gsd-* workflow must be installed under .windsurf/workflows/');
+    assert.ok(fs.existsSync(path.join(workflowsDir, 'gsd-help.md')), 'gsd-help.md workflow must exist');
   });
 
-  test('legacy .windsurf/ is NOT written on a fresh local install', () => {
+  test('legacy .devin/skills is NOT written on a fresh local install', () => {
     install(false, 'windsurf');
-    const legacyDir = path.join(tmpDir, '.windsurf');
-    assert.ok(!fs.existsSync(legacyDir),
-      '.windsurf/ must not be created by a fresh install (new installs use .devin/)');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.devin', 'skills')),
+      '.devin/skills must not be created by a fresh install (new installs use .windsurf/workflows)');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.windsurf', 'skills')),
+      '.windsurf/skills must not be created for slash commands');
   });
 
-  test('installed skill content references .devin/ not bare .windsurf/ or ~/.claude/', () => {
+  test('installed workflow content references command body, not skill locations', () => {
     install(false, 'windsurf');
-    const skillsDir = path.join(tmpDir, '.devin', 'skills');
-    const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
-      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
-    assert.ok(skillEntries.length > 0, 'pre-condition: at least one gsd-* skill must be installed');
-    for (const skillEntry of skillEntries) {
-      const skillFile = path.join(skillsDir, skillEntry.name, 'SKILL.md');
-      if (!fs.existsSync(skillFile)) continue;
-      const content = fs.readFileSync(skillFile, 'utf8');
+    const workflowsDir = path.join(tmpDir, '.windsurf', 'workflows');
+    const workflowEntries = fs.readdirSync(workflowsDir, { withFileTypes: true })
+      .filter(e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md'));
+    assert.ok(workflowEntries.length > 0, 'pre-condition: at least one gsd-* workflow must be installed');
+    for (const workflowEntry of workflowEntries) {
+      const workflowFile = path.join(workflowsDir, workflowEntry.name);
+      const content = fs.readFileSync(workflowFile, 'utf8');
       assert.ok(
-        !content.includes('~/.claude/') && !content.includes('$HOME/.claude/'),
-        `${skillEntry.name}/SKILL.md must not contain ~/.claude/ or $HOME/.claude/ in a local install`,
+        content.includes(`${tmpDir}/.windsurf/gsd-core/commands/gsd/`.replace(/\\/g, '/')),
+        `${workflowEntry.name} must reference the installed canonical command body`,
       );
-      // Local install must use workspace-relative .devin/ form, not the legacy .windsurf/ form
       assert.ok(
-        !content.includes('~/.windsurf/') && !content.includes('.windsurf/skills/'),
-        `${skillEntry.name}/SKILL.md must not contain bare .windsurf/ path in a local install (use .devin/ instead)`,
+        !content.includes('/skills/') && !content.includes('SKILL.md'),
+        `${workflowEntry.name} must not reference Windsurf skill locations`,
       );
     }
   });
 
-  test('global windsurf install still writes to ~/.codeium/windsurf/ (unchanged)', () => {
+  // #1629 Finding A: every workflow's @-reference target must exist on disk
+  // after install. Pre-fix, gsd-core/ was copied AFTER workflows were written;
+  // a throw or kill in that window left workflows pointing at missing files.
+  // Post-fix, gsd-core/ is copied first. This behavioral invariant catches
+  // any ordering regression that leaves a workflow target absent.
+  test('every workflow @-reference target exists on disk after install (#1629 Finding A)', () => {
+    install(false, 'windsurf');
+    const workflowsDir = path.join(tmpDir, '.windsurf', 'workflows');
+    const workflowEntries = fs.readdirSync(workflowsDir, { withFileTypes: true })
+      .filter(e => e.isFile() && e.name.startsWith('gsd-') && e.name.endsWith('.md'));
+    assert.ok(workflowEntries.length > 0, 'pre-condition: at least one gsd-* workflow must be installed');
+
+    const commandsGsdDir = path.join(tmpDir, '.windsurf', 'gsd-core', 'commands', 'gsd');
+    assert.ok(fs.existsSync(commandsGsdDir),
+      `gsd-core/commands/gsd/ must exist at ${commandsGsdDir} so workflows can delegate to it`);
+
+    for (const workflowEntry of workflowEntries) {
+      // Workflow naming convention: gsd-<stem>.md → delegates to commands/gsd/<stem>.md
+      const stem = workflowEntry.name.replace(/^gsd-/, '').replace(/\.md$/, '');
+      const targetFile = path.join(commandsGsdDir, `${stem}.md`);
+      assert.ok(
+        fs.existsSync(targetFile),
+        `${workflowEntry.name} delegates to commands/gsd/${stem}.md, but that file does not exist at ${targetFile}`,
+      );
+    }
+  });
+
+  test('global windsurf install does not write unsupported workflows or skills', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ws-global-'));
     const savedHome = process.env.HOME;
     const savedUserProfile = process.env.USERPROFILE;
@@ -1348,12 +1373,12 @@ describe('windsurf local install writes to .devin/ canonical dir (#1085)', () =>
         `global windsurf install must go to codeium/windsurf path, got: ${result.configDir}`,
       );
       assert.ok(
-        fs.existsSync(path.join(result.configDir, 'skills')),
-        'global windsurf install must create skills/ under ~/.codeium/windsurf',
+        !fs.existsSync(path.join(result.configDir, 'workflows')),
+        'global windsurf install must not create unsupported workflows/ under ~/.codeium/windsurf',
       );
       assert.ok(
-        !fs.existsSync(path.join(homeDir, '.devin')),
-        '.devin/ must NOT be created by a global install (global path is ~/.codeium/windsurf)',
+        !fs.existsSync(path.join(result.configDir, 'skills')),
+        'global windsurf install must not create dead skills/ artifacts',
       );
     } finally {
       if (savedHome === undefined) delete process.env.HOME;
@@ -1366,7 +1391,7 @@ describe('windsurf local install writes to .devin/ canonical dir (#1085)', () =>
     }
   });
 
-  test('global windsurf install skill content references codeium path not .devin/', () => {
+  test('global windsurf install still installs shared workflow assets', () => {
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-ws-global-c-'));
     const savedHome = process.env.HOME;
     const savedUserProfile = process.env.USERPROFILE;
@@ -1376,37 +1401,10 @@ describe('windsurf local install writes to .devin/ canonical dir (#1085)', () =>
     process.env.USERPROFILE = homeDir;
     try {
       const result = install(true, 'windsurf');
-      const skillsDir = path.join(result.configDir, 'skills');
-      if (!fs.existsSync(skillsDir)) return; // no skills emitted — skip
-      const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
-        .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
-      // At least one skill body must reference the codeium/windsurf global path (#1085):
-      // the isGlobal-threaded rewrite converts .devin/skills/ → $HOME/.codeium/windsurf/skills/
-      let foundGlobalRef = false;
-      for (const skillEntry of skillEntries) {
-        const skillFile = path.join(skillsDir, skillEntry.name, 'SKILL.md');
-        if (!fs.existsSync(skillFile)) continue;
-        const content = fs.readFileSync(skillFile, 'utf8');
-        // Global skill content must not reference local workspace-relative .devin/ paths
-        assert.ok(
-          !content.includes('.devin/skills/'),
-          `${skillEntry.name}/SKILL.md must not reference .devin/skills/ in global install (should use codeium path)`,
-        );
-        assert.ok(
-          !content.includes('~/.claude/') && !content.includes('$HOME/.claude/'),
-          `${skillEntry.name}/SKILL.md must not contain ~/.claude/ or $HOME/.claude/ in global install`,
-        );
-        if (content.includes('codeium/windsurf/skills/') || content.includes('$HOME/.codeium/windsurf/skills/')) {
-          foundGlobalRef = true;
-        }
-      }
-      // Verify the global-path rewrite actually fired on at least one skill (FIX 1 guard)
-      if (skillEntries.some(e => fs.existsSync(path.join(skillsDir, e.name, 'SKILL.md')))) {
-        assert.ok(
-          foundGlobalRef,
-          'at least one global windsurf SKILL.md must reference the codeium/windsurf/skills/ path (isGlobal rewrite must have fired)',
-        );
-      }
+      assert.ok(fs.existsSync(path.join(result.configDir, 'gsd-core', 'workflows', 'update.md')),
+        'global windsurf install should still copy shared gsd-core workflow assets');
+      assert.ok(!fs.existsSync(path.join(result.configDir, 'workflows')),
+        'global windsurf install must not write workflow files into an undocumented global path');
     } finally {
       if (savedHome === undefined) delete process.env.HOME;
       else process.env.HOME = savedHome;
