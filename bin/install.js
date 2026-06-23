@@ -2523,6 +2523,20 @@ function convertClaudeCommandToWindsurfSkill(content, skillName) {
 }
 
 function convertClaudeCommandToWindsurfWorkflow(content, commandName) {
+  // #1615 security: commandName flows unsanitized into a markdown body that
+  // Windsurf loads as an LLM-readable workflow. Validate at entry to prevent
+  // (a) prompt injection via newlines / markdown structure in the filename,
+  // (b) path-component injection via .., /, \ in stem → @-reference target.
+  // Pattern: optional gsd- prefix + lowercase alphanumeric + dashes; rejects
+  // everything else. See DEFECT.PROMPT-INJECTION-SCAN-COLLISION and the
+  // PR #1622 security review.
+  if (typeof commandName !== 'string' || !/^(?:gsd-)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(commandName)) {
+    const preview = typeof commandName === 'string' ? JSON.stringify(commandName.slice(0, 60)) : String(commandName);
+    throw new Error(
+      `convertClaudeCommandToWindsurfWorkflow: rejected commandName ${preview}; ` +
+      'must match /^(?:gsd-)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/ (no slashes, backslashes, spaces, dots, trailing dash, or control chars — prevents prompt injection and path-component injection into the workflow body)'
+    );
+  }
   const converted = convertClaudeToWindsurfMarkdown(content);
   const { frontmatter } = extractFrontmatterAndBody(converted);
   const description = frontmatter ? extractFrontmatterField(frontmatter, 'description') : '';
