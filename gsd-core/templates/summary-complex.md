@@ -19,6 +19,10 @@ key-decisions:
   - "Decision 1"
 patterns-established:
   - "Pattern 1: description"
+# coverage: (#1602) optional per-deliverable UAT-routing block — see templates/summary.md <coverage_guidance>.
+#   Add live `coverage:` entries (id/description/verification[]/human_judgment[/rationale]) to enable
+#   deterministic UAT routing in verify-work; OMIT for legacy prose-only SUMMARYs. When coverage is
+#   uncertain, default human_judgment: true with a rationale — never auto-skip the human.
 duration: Xmin
 completed: YYYY-MM-DD
 status: complete
