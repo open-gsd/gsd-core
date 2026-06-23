@@ -582,6 +582,17 @@ function validateFeatureBody(cap) {
               'absolute path, or ".." segment) — it contains unsafe characters: ' + JSON.stringify(h.script),
             );
           }
+          // #1634: optional tool-scoping `matcher` (a settings.json concept — exact tool name,
+          // pipe-separated list, wildcard, or regex; e.g. "Write|Edit"). When present it must be a
+          // non-empty string without control characters; absent => match-all (omitted at projection
+          // so existing shipped capabilities are unchanged).
+          if (h.matcher !== undefined) {
+            if (typeof h.matcher !== 'string' || h.matcher.length === 0) {
+              errors.push('hooks[' + i + '].matcher must be a non-empty string when present');
+            } else if (/[\x00-\x1f\x7f]/.test(h.matcher)) {
+              errors.push('hooks[' + i + '].matcher must not contain control characters');
+            }
+          }
         }
       }
     }
