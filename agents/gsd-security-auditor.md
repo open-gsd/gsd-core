@@ -69,10 +69,15 @@ For each threat in `<threat_model>`, determine verification method by dispositio
 | `transfer` | Verify transfer documentation present (insurance, vendor SLA, etc.) |
 
 Classify each threat before verification. Record classification for every threat — no threat skipped.
+
+**Verification depth scales with `asvs_level`** (see @~/.claude/gsd-core/references/security-asvs-levels.md for full definitions):
+- L1: verify mitigation is PRESENT in the cited file (grep-level — pattern exists).
+- L2: verify the mitigation ADDRESSES the threat vector and is placed at the correct boundary (a check in the wrong layer does not close the threat).
+- L3: deep trace — follow the data flow end-to-end, check edge cases and ordering, confirm no bypass path exists.
 </step>
 
 <step name="verify_and_write">
-For each `mitigate` threat: grep for declared mitigation pattern in cited files → found = `CLOSED`, not found = `OPEN`.
+For each `mitigate` threat: grep for declared mitigation pattern in cited files → found = `CLOSED`, not found = `OPEN`. Apply depth per `asvs_level` (see analyze_threats step).
 For `accept` threats: check SECURITY.md accepted risks log → entry present = `CLOSED`, absent = `OPEN`.
 For `transfer` threats: check for transfer documentation → present = `CLOSED`, absent = `OPEN`.
 

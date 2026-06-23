@@ -77,7 +77,8 @@ Classify each threat:
 Build: `{ threat_id, category, component, disposition, status, evidence }`
 
 **Short-circuit rule:**
-- If `threats_open: 0 AND register_authored_at_plan_time: true` → skip to Step 6 directly. All plan-time threats are verified CLOSED.
+- If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level == 1` → skip to Step 6 directly. All plan-time threats are verified CLOSED at L1 grep-depth; no deeper verification required.
+- If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level >= 2` → **do NOT skip**. The preliminary threat classification is grep-level (L1 depth) and is insufficient for L2/L3. Proceed to Step 5 (spawn the auditor) so that L2 boundary-placement checks and L3 end-to-end trace checks are performed. Skipping the auditor here would defeat ASVS level scaling for "clean" phases.
 - If `threats_open: 0 AND register_authored_at_plan_time: false` → **do NOT skip**. Empty-by-no-planning must not rubber-stamp a clean SECURITY.md. Proceed to Step 5 in **retroactive-STRIDE mode** — the auditor builds a register from implementation files first, then verifies mitigations.
 - If `threats_open > 0` → proceed to Step 4 (present threat plan to user).
 
@@ -177,7 +178,8 @@ Display `/clear` reminder.
 - [ ] Input state detected (A/B/C) — state C exits cleanly
 - [ ] PLAN.md threat model parsed, register built
 - [ ] SUMMARY.md threat flags incorporated
-- [ ] threats_open: 0 AND register_authored_at_plan_time: true → skip directly to Step 6
+- [ ] threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level == 1 → skip directly to Step 6 (L1 grep-depth sufficient)
+- [ ] threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level >= 2 → do NOT skip; auditor spawned for L2/L3 deep verification
 - [ ] threats_open: 0 AND register_authored_at_plan_time: false → retroactive-STRIDE mode (Step 5), not skipped
 - [ ] User gate with threat table presented
 - [ ] Auditor spawned with complete context
