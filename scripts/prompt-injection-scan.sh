@@ -85,6 +85,10 @@ ALLOWLIST=(
   # and are not attack vectors — they explain/demonstrate injection patterns.
   'TEST-EXAMPLES.md'
   'explanation/security-model.md'
+  # The untrusted-input boundary reference quotes injection phrases
+  # ("ignore previous instructions", "you are now…") as examples agents must
+  # NOT comply with — it is the defense, not an attack vector.
+  'references/untrusted-input-boundary.md'
 )
 
 is_allowlisted() {
