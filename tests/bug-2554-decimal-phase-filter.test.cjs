@@ -54,8 +54,8 @@ describe('bug #2554 — getMilestonePhaseFilter decimal phase dirs', () => {
       'decimal phase dir "00.1-<slug>" must be counted in the milestone'
     );
 
-    // Neighbours should still match (no regression).
-    assert.strictEqual(filter('0-foundation'), true);
+    // Phase 0 is now a pre-milestone sentinel, but decimal 00.1 remains a real inserted phase.
+    assert.strictEqual(filter('0-foundation'), false);
     assert.strictEqual(filter('1-feature'), true);
   });
 

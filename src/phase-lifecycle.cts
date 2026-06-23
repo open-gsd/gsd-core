@@ -20,6 +20,10 @@
  *   - Issue #4 (open-gsd/gsd-core)
  */
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { isMilestoneSentinelPhaseId } = phaseIdMod;
+
 /** Result of deriveProgressFromRoadmap. */
 export interface RoadmapProgress {
   completedPhases: number | null;
@@ -37,30 +41,41 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
   let totalPlans: number | null = null;
 
   try {
+    const firstCell = (row: string): string | null => {
+      const m = row.match(/^\s*\|\s*([^|]+?)\s*\|/);
+      return m ? m[1].trim() : null;
+    };
+
     // Count Complete rows in the progress table (Status column = "Complete").
     // Pattern: row where the phase cell starts with a digit (data row, not header),
     // followed by any cell content, then a "Complete" status cell.
     // Handles both short form ("| 4. |") and long form ("| 01. Foundation |").
     // See phase-lifecycle.ts ~line 1655 for the original SDK pattern.
-    const tableCompletePattern = /\|\s*\d+[^|]*\|\s*[^|]*\|\s*Complete\s*\|/gi;
-    const completeMatches = roadmapContent.match(tableCompletePattern);
-    completedPhases = completeMatches ? completeMatches.length : null;
+    const tableCompletePattern = /^\s*\|\s*\d+[^|]*\|\s*[^|]*\|\s*Complete\s*\|.*$/gmi;
+    let completeCount = 0;
+    let cm: RegExpExecArray | null;
+    while ((cm = tableCompletePattern.exec(roadmapContent)) !== null) {
+      const cell = firstCell(cm[0]);
+      if (cell && isMilestoneSentinelPhaseId(cell)) continue;
+      completeCount++;
+    }
+    completedPhases = completeCount > 0 ? completeCount : null;
 
     // Count total phase rows in the progress table.
     // Identify the table by looking for Phase|...|Status|...|Completed header.
     const progressTableMatch = roadmapContent.match(
       // allow-adhoc-markdown: table-scoped regex with heading lookahead as stop; table parsing, out of seam scope; pending #1372
-      /\|\s*Phase\s*\|[^|]*\|[^|]*Status[^|]*\|[^|]*Completed[^|]*\|[\s\S]*?(?=\n\n|\n##|$)/i,
+      /(?:^|\n)\s*\|\s*Phase\s*\|[^|]*\|[^|]*Status[^|]*\|[^|]*Completed[^|]*\|[\s\S]*?(?=\n\n|\n##|$)/i,
     );
     if (progressTableMatch) {
       const tableText = progressTableMatch[0];
       // Count data rows (rows starting with pipe then a phase number),
-      // excluding 999.x backlog phases. Mirrors init.cts /^999(?:\.|$)/ filter.
-      const dataRowPattern = /^\|\s*(\d+[^|]*)\|/gm;
+      // excluding 0/999 sentinel phases. Mirrors phase-id.cts.
+      const dataRowPattern = /^\s*\|\s*(\d+[^|]*)\|/gm;
       let dataRowCount = 0;
       let drm: RegExpExecArray | null;
       while ((drm = dataRowPattern.exec(tableText)) !== null) {
-        if (/^999\b/.test(drm[1].trim())) continue;
+        if (isMilestoneSentinelPhaseId(drm[1])) continue;
         dataRowCount++;
       }
       totalPhases = dataRowCount > 0 ? dataRowCount : null;
@@ -68,10 +83,11 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
 
     // Sum plan counts from M/N columns in progress table
     let totalPlansSum = 0;
-    const planCellPattern = /\|\s*\d+[^|]*\|\s*(\d+)\/(\d+)\s*\|/gi;
+    const planCellPattern = /^\s*\|\s*(\d+[^|]*)\|\s*(\d+)\/(\d+)\s*\|/gmi;
     let pm: RegExpExecArray | null;
     while ((pm = planCellPattern.exec(roadmapContent)) !== null) {
-      totalPlansSum += parseInt(pm[2], 10);
+      if (isMilestoneSentinelPhaseId(pm[1])) continue;
+      totalPlansSum += parseInt(pm[3], 10);
     }
     if (totalPlansSum > 0) totalPlans = totalPlansSum;
   } catch { /* intentionally empty — fall through to existing values */ }

@@ -16,7 +16,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex } = phaseIdMod;
+const { escapeRegex, isMilestoneSentinelPhaseId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
@@ -1512,8 +1512,8 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
                 // Only count tokens that contain at least one digit — excludes
                 // pure-word section headings (Overview, Details) while keeping
                 // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-                // Also exclude 999.x backlog phases. Mirrors init.cts filter.
-                if (/\d/.test(m[1]) && !/^999\b/.test(m[1])) roadmapPhaseCount++;
+                // Also exclude 0/999 sentinel phases. Mirrors phase-id.cts.
+                if (/\d/.test(m[1]) && !isMilestoneSentinelPhaseId(m[1])) roadmapPhaseCount++;
               }
             }
           } catch { /* fall through: phaseDirs.length used as sole count */ }
@@ -2607,12 +2607,14 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     return;
   }
 
-  // Scan all phases
+  // Scan all current-milestone phases.
   let entries: string[];
   try {
+    const isDirInMilestone = getMilestonePhaseFilter(cwd) as (dir: string) => boolean;
     entries = fs.readdirSync(phasesDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
+      .filter(isDirInMilestone)
       .sort();
   } catch {
     output({ synced: true, changes: [], dry_run: !!verify }, raw, undefined);
@@ -2667,8 +2669,9 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
       while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
         // Only count tokens that contain at least one digit — excludes
         // pure-word section headings (Overview, Details) while keeping
-        // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-        if (/\d/.test(m[1])) roadmapPhaseCount++;
+        // numeric phases (01, 05.1) and project-code IDs (PROJ-42), excluding
+        // 0/999 sentinel phases. Mirrors buildStateFrontmatter.
+        if (/\d/.test(m[1]) && !isMilestoneSentinelPhaseId(m[1])) roadmapPhaseCount++;
       }
     }
     if (roadmapPhaseCount > 0) {

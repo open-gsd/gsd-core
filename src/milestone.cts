@@ -21,7 +21,7 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseTokenMatches } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseTokenMatches, isMilestoneSentinelPhaseId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
@@ -184,6 +184,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         })();
         while ((pm = phasePattern.exec(scopedContent)) !== null) {
           const phaseNum = pm[1];
+          if (isMilestoneSentinelPhaseId(phaseNum)) continue;
           const normalized = normalizePhaseName(phaseNum);
           // A phase has disk_status: 'no_directory' when no phase directory
           // with a matching token exists on disk. Use the same phaseTokenMatches

@@ -1619,6 +1619,141 @@ describe('milestone-scoped phase counting in frontmatter', () => {
     const output = JSON.parse(jsonResult.output);
     assert.strictEqual(Number(output.progress.total_phases), 4, 'without ROADMAP should count all 4 phases');
   });
+
+  test('total_phases and percent exclude Phase 0 and 999 sentinel headings and dirs (#1580)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## v1.0 Milestone',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal**: Shipped work',
+        '',
+        '### Phase 0: Bootstrap / Parking Lot',
+        '**Goal**: Pre-milestone notes, never executed',
+        '',
+        '### Phase 999: Backlog / Someday',
+        '**Goal**: Deferred items, never executed',
+        '',
+        '### Phase 999.1: Later Backlog Item',
+        '**Goal**: Deferred item, never executed',
+      ].join('\n'),
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        "gsd_state_version: '1.0'",
+        'status: executing',
+        'milestone: v1.0',
+        '---',
+        '# State',
+        '',
+        '## Current Position',
+        'Phase: 1 of 1',
+      ].join('\n'),
+    );
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    for (const sentinelDir of ['00-bootstrap', '999-backlog', '999.1-later']) {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', sentinelDir), { recursive: true });
+    }
+
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(output.progress, 'state json must return progress');
+    assert.equal(output.progress.total_phases, 1);
+    assert.equal(output.progress.completed_phases, 1);
+    assert.equal(output.progress.percent, 100);
+  });
+
+  test('sentinel-only roadmap and dirs do not inflate total_phases (#1580)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## v1.0 Milestone',
+        '',
+        '### Phase 0: Bootstrap / Parking Lot',
+        '**Goal**: Pre-milestone notes, never executed',
+        '',
+        '### Phase 999: Backlog / Someday',
+        '**Goal**: Deferred items, never executed',
+        '',
+        '### Phase 999.1: Later Backlog Item',
+        '**Goal**: Deferred item, never executed',
+      ].join('\n'),
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        "gsd_state_version: '1.0'",
+        'status: executing',
+        'milestone: v1.0',
+        '---',
+        '# State',
+      ].join('\n'),
+    );
+
+    for (const sentinelDir of ['00-bootstrap', '999-backlog', '999.1-later']) {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', sentinelDir), { recursive: true });
+    }
+
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(output.progress, 'state json must return progress');
+    assert.equal(output.progress.total_phases, 0);
+    assert.equal(output.progress.completed_phases, 0);
+    assert.equal(output.progress.percent ?? 0, 0);
+  });
+
+  test('missing roadmap fallback still excludes Phase 0 and 999 sentinel dirs (#1580)', () => {
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    if (fs.existsSync(roadmapPath)) fs.unlinkSync(roadmapPath);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        "gsd_state_version: '1.0'",
+        'status: executing',
+        'milestone: v1.0',
+        '---',
+        '# State',
+      ].join('\n'),
+    );
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    for (const sentinelDir of ['00-bootstrap', '999-backlog', '999.1-later']) {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', sentinelDir), { recursive: true });
+    }
+
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(output.progress, 'state json must return progress');
+    assert.equal(output.progress.total_phases, 1);
+    assert.equal(output.progress.completed_phases, 1);
+    assert.equal(output.progress.percent, 100);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2495,6 +2630,72 @@ describe('state sync command', () => {
 
     const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.strictEqual(before, after, 'File should not be modified in verify mode');
+  });
+
+  test('state sync excludes Phase 0 and 999 sentinel dirs from progress percent (#1580)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## v1.0 Milestone',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal**: Shipped work',
+        '',
+        '### Phase 0: Bootstrap / Parking Lot',
+        '**Goal**: Pre-milestone notes, never executed',
+        '',
+        '### Phase 999: Backlog / Someday',
+        '**Goal**: Deferred items, never executed',
+        '',
+        '### Phase 999.1: Later Backlog Item',
+        '**Goal**: Deferred item, never executed',
+      ].join('\n'),
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        "gsd_state_version: '1.0'",
+        'status: executing',
+        'milestone: v1.0',
+        '---',
+        '# GSD State',
+        '',
+        '## Configuration',
+        'Current Phase: 1',
+        'Current Phase Name: foundation',
+        'Total Plans in Phase: 1',
+        'Current Plan: 1',
+        'Status: Executing Phase 1',
+        'Last Activity: 2026-01-01',
+        'Progress: [░░░░░░░░░░] 0%',
+        '',
+      ].join('\n'),
+    );
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    for (const sentinelDir of ['00-bootstrap', '999-backlog', '999.1-later']) {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', sentinelDir), { recursive: true });
+    }
+
+    const syncResult = runGsdTools('state sync', tmpDir);
+    assert.ok(syncResult.success, `state sync failed: ${syncResult.error}`);
+
+    const jsonResult = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(jsonResult.success, `state json failed: ${jsonResult.error}`);
+
+    const output = JSON.parse(jsonResult.output);
+    assert.ok(output.progress, 'state json must return progress');
+    assert.equal(output.progress.total_phases, 1);
+    assert.equal(output.progress.completed_phases, 1);
+    assert.equal(output.progress.percent, 100);
   });
 });
 

@@ -95,6 +95,42 @@ describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
       `total_phases must be null when the only rows are 999.x backlog. Got ${result.totalPhases}`,
     );
   });
+
+  test('Phase 0 and 999 sentinels do not affect table progress but decimal 00.1 does (#1580)', () => {
+    const roadmap = [
+      '## Milestone v1.0: Test',
+      '',
+      '| Phase | Plans | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 0. | 1/1 | Complete | ✅ |',
+      '| 0 Bootstrap | 1/1 | Complete | ✅ |',
+      '| 00.1 Inserted | 1/1 | Complete | ✅ |',
+      '| 1 Alpha | 2/2 | Complete | ✅ |',
+      '| 999.1 Backlog | 9/9 | Complete | ✅ |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.totalPhases, 2);
+    assert.equal(result.completedPhases, 2);
+    assert.equal(result.totalPlans, 3);
+  });
+
+  test('indented progress table rows are still parsed while excluding sentinels (#1580)', () => {
+    const roadmap = [
+      '## Milestone v1.0: Test',
+      '',
+      '  | Phase | Plans | Status | Completed |',
+      '  | --- | --- | --- | --- |',
+      '  | 0. | 1/1 | Complete | ✅ |',
+      '  | 0.1 Inserted | 1/1 | Complete | ✅ |',
+      '  | 1. Alpha | 2/2 | Complete | ✅ |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.totalPhases, 2);
+    assert.equal(result.completedPhases, 2);
+    assert.equal(result.totalPlans, 3);
+  });
 });
 
 // ─── Scenario B: state json total_phases via roadmapPhaseCount ───────────────

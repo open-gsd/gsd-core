@@ -577,6 +577,76 @@ describe('roadmap analyze missing phase details', () => {
   });
 });
 
+describe('roadmap analyze sentinel regressions', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('excludes Phase 0 and 999 sentinels while keeping phase 1000 as a real next phase (#1580)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## v1.0 Milestone',
+        '',
+        '## Phases',
+        '- [x] **Phase 1: Foundation**',
+        '- [ ] **Phase 0: Bootstrap / Parking Lot**',
+        '- [ ] **Phase 999: Backlog / Someday**',
+        '- [ ] **Phase 999.1: Later Backlog Item**',
+        '- [ ] **Phase 1000: Large Canonical Phase**',
+        '',
+        '## Phase Details',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal**: Shipped work',
+        '**Plans**: 1 plan',
+        '',
+        '### Phase 0: Bootstrap / Parking Lot',
+        '**Goal**: Pre-milestone notes, never executed',
+        '',
+        '### Phase 999: Backlog / Someday',
+        '**Goal**: Deferred items, never executed',
+        '',
+        '### Phase 999.1: Later Backlog Item',
+        '**Goal**: Deferred item, never executed',
+        '',
+        '### Phase 1000: Large Canonical Phase',
+        '**Goal**: A real future phase whose number must not be treated as backlog',
+      ].join('\n'),
+    );
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    for (const sentinelDir of ['00-bootstrap', '999-backlog', '999.1-later']) {
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', sentinelDir), { recursive: true });
+    }
+
+    const result = runGsdTools(['roadmap', 'analyze'], tmpDir);
+    assert.ok(result.success, `roadmap analyze failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.deepEqual(
+      output.phases.map((phase) => phase.number),
+      ['1', '1000'],
+      'phase list should exclude 0/999 sentinels but keep canonical phase 1000',
+    );
+    assert.equal(output.phase_count, 2);
+    assert.equal(output.next_phase, '1000');
+    assert.equal(output.missing_phase_details, null);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // roadmap get-phase success criteria
 // ─────────────────────────────────────────────────────────────────────────────

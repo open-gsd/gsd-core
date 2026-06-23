@@ -391,10 +391,13 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
 
-  test('returns passAll (phaseCount=0) when ROADMAP.md missing', () => {
+  test('returns fallback filter (phaseCount=0) when ROADMAP.md missing', () => {
     const filter = getMilestonePhaseFilter(tmpDir);
     assert.strictEqual(filter.phaseCount, 0);
     assert.strictEqual(filter('anything'), true);
+    assert.strictEqual(filter('00-bootstrap'), false, 'Phase 0 sentinel dir excluded even without ROADMAP');
+    assert.strictEqual(filter('00.1-inserted'), true, 'decimal Phase 00.1 dir remains real');
+    assert.strictEqual(filter('999-backlog'), false, 'Phase 999 sentinel dir excluded even without ROADMAP');
   });
 
   test('basic milestone phase filter — matches dirs by phase number', () => {
@@ -476,6 +479,40 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.ok(filter.phaseCount >= 1, 'at least one phase found');
     // Decimal phase IDs are non-numeric so filter should handle them
     assert.strictEqual(filter('1.5-interstitial'), true, 'decimal phase dir matches');
+  });
+
+  test('Phase 0 sentinel is excluded while decimal Phase 00.1 remains real (#1580)', () => {
+    writeRoadmap(tmpDir, [
+      '## v1.0: Sentinel Boundary',
+      '### Phase 0: Bootstrap',
+      '### Phase 00.1: Inserted urgent work',
+      '### Phase 999: Backlog',
+      '### Phase 999.1: Backlog child',
+      '### Phase 1000: Canonical large phase',
+    ].join('\n'));
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(filter.phaseCount, 2);
+    assert.strictEqual(filter('00-bootstrap'), false, 'Phase 0 sentinel dir is excluded');
+    assert.strictEqual(filter('00.1-inserted-urgent-work'), true, 'decimal Phase 00.1 dir remains real');
+    assert.strictEqual(filter('999-backlog'), false, 'Phase 999 sentinel dir is excluded');
+    assert.strictEqual(filter('999.1-backlog-child'), false, 'Phase 999.x sentinel dir is excluded');
+    assert.strictEqual(filter('1000-canonical-large-phase'), true, 'Phase 1000 remains a real phase');
+  });
+
+  test('sentinel-only milestone returns an empty filter instead of pass-all (#1580)', () => {
+    writeRoadmap(tmpDir, [
+      '## v1.0: Sentinels Only',
+      '### Phase 0: Bootstrap',
+      '### Phase 999: Backlog',
+      '### Phase 999.1: Backlog child',
+    ].join('\n'));
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(filter.phaseCount, 0);
+    assert.strictEqual(filter('00-bootstrap'), false);
+    assert.strictEqual(filter('999-backlog'), false);
+    assert.strictEqual(filter('999.1-backlog-child'), false);
   });
 
   test('repeated phase IDs — deduplication (no double count)', () => {

@@ -67,6 +67,12 @@ function getMilestoneFromPhaseId(phaseId: unknown): string | null {
   return `v${major}.0`;
 }
 
+function isMilestoneSentinelPhaseId(phaseId: unknown): boolean {
+  const stripped = stripProjectCodePrefix(phaseId).trim();
+  if (/^0+(?=$|[\s-]|\.(?:\s|$))/.test(stripped)) return true;
+  return /^0*999(?=$|[\s.-])/.test(stripped);
+}
+
 function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | undefined, projectCode: string | null | undefined): string | null {
   const stripped = stripProjectCodePrefix(phaseId);
   const m = stripped.match(/^0*(\d+)-(0*(\d+(?:-\d+)*))$/);
@@ -223,6 +229,7 @@ export = {
   stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,
+  isMilestoneSentinelPhaseId,
   getPhaseDirFromPhaseId,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,

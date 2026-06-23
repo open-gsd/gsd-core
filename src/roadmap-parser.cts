@@ -10,7 +10,7 @@
  *
  * Dependencies (leaf modules only — no loadConfig):
  *   - node:fs / node:path (stdlib)
- *   - ./phase-id.cjs        (escapeRegex, phaseMarkdownRegexSource)
+ *   - ./phase-id.cjs        (escapeRegex, phaseMarkdownRegexSource, sentinel helpers)
  *   - ./planning-workspace.cjs (planningDir)
  *   - ./shell-command-projection.cjs (platformReadSync)
  */
@@ -25,6 +25,7 @@ const {
   phaseMarkdownRegexSourceExact,
   stripProjectCodePrefix,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  isMilestoneSentinelPhaseId,
 } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -435,19 +436,30 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
     // Use tokenizeHeadings (fence-aware) instead of stripFencedLines + regex.
     // T4 seam migration: phase headings inside fences are excluded automatically.
     const phaseHeadingPattern = /^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/i;
+    let sawPhaseHeading = false;
     for (const h of tokenizeHeadings(roadmap)) {
       if (h.level < 2 || h.level > 4) continue;
       const pm = phaseHeadingPattern.exec(h.text);
-      // Exclude 999.x backlog phases from milestone phase set. Mirrors init.cts filter.
-      if (pm && !/^999\b/.test(pm[1])) milestonePhaseNums.add(pm[1]);
+      // Exclude 0/999 sentinel phases from milestone phase set.
+      if (pm) {
+        sawPhaseHeading = true;
+        if (!isMilestoneSentinelPhaseId(pm[1])) milestonePhaseNums.add(pm[1]);
+      }
+    }
+
+    if (sawPhaseHeading && milestonePhaseNums.size === 0) {
+      const passNone = (() => false) as unknown as MilestonePhaseFilter;
+      passNone.phaseCount = 0;
+      passNone.missingExplicitVersion = missingExplicitVersion;
+      return passNone;
     }
   } catch { /* intentionally empty */ }
 
   if (milestonePhaseNums.size === 0) {
-    const passAll = (() => true) as unknown as MilestonePhaseFilter;
-    passAll.phaseCount = 0;
-    passAll.missingExplicitVersion = missingExplicitVersion;
-    return passAll;
+    const passNonSentinel = ((dirName: string) => !isMilestoneSentinelPhaseId(dirName)) as unknown as MilestonePhaseFilter;
+    passNonSentinel.phaseCount = 0;
+    passNonSentinel.missingExplicitVersion = missingExplicitVersion;
+    return passNonSentinel;
   }
 
   const normalized = new Set(

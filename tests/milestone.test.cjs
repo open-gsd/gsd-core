@@ -44,6 +44,58 @@ function mkPhaseDir(tmpDir, name, opts = {}) {
   return p;
 }
 
+function writeSentinelMilestoneFixture(tmpDir) {
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'STATE.md'),
+    [
+      '---',
+      "gsd_state_version: '1.0'",
+      'status: executing',
+      'milestone: v1.0',
+      '---',
+      '# State',
+      '',
+      '## Current Position',
+      'Phase: 1 of 1',
+    ].join('\n'),
+  );
+
+  writeRoadmap(
+    tmpDir,
+    [
+      '# Roadmap',
+      '',
+      '## v1.0 Milestone',
+      '',
+      '## Phases',
+      '- [x] **Phase 1: Foundation**',
+      '- [ ] **Phase 0: Bootstrap / Parking Lot**',
+      '- [ ] **Phase 999: Backlog / Someday**',
+      '- [ ] **Phase 999.1: Later Backlog Item**',
+      '',
+      '## Phase Details',
+      '',
+      '### Phase 1: Foundation',
+      '**Goal**: Shipped work',
+      '**Plans**: 1 plan',
+      '',
+      '### Phase 0: Bootstrap / Parking Lot',
+      '**Goal**: Pre-milestone notes, never executed',
+      '',
+      '### Phase 999: Backlog / Someday',
+      '**Goal**: Deferred items, never executed',
+      '',
+      '### Phase 999.1: Later Backlog Item',
+      '**Goal**: Deferred item, never executed',
+    ].join('\n'),
+  );
+
+  mkPhaseDir(tmpDir, '01-foundation', { plan: true, oneLiner: 'shipped foundation' });
+  for (const sentinelDir of ['00-bootstrap', '999-backlog', '999.1-later']) {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', sentinelDir), { recursive: true });
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // milestone complete command
 // ─────────────────────────────────────────────────────────────────────────────
@@ -358,6 +410,17 @@ describe('milestone complete command', () => {
     assert.strictEqual(output.phases, 0);
     assert.strictEqual(output.plans, 0);
     assert.strictEqual(output.tasks, 0);
+  });
+
+  test('ignores Phase 0 and 999 sentinel headings when checking unstarted phases (#1580)', () => {
+    writeSentinelMilestoneFixture(tmpDir);
+
+    const result = runGsdTools(['milestone', 'complete', 'v1.0', '--name', 'Sentinel Demo'], tmpDir);
+    assert.ok(result.success, `milestone complete should ignore sentinel headings: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.equal(output.version, 'v1.0');
+    assert.equal(output.phases, 1, 'only the real phase directory should be counted in milestone stats');
   });
 });
 
