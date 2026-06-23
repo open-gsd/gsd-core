@@ -17,6 +17,7 @@ function parseFlag(args: string[], flag: string): string | undefined {
 }
 
 const INFRA_VALUE: Record<string, number> = { ok: 1, partial: 0.5, missing: 0 };
+const INFRA_TOKENS = new Set(Object.keys(INFRA_VALUE));
 
 function computeEvalScore(covered: number, total: number, infra: string[]): EvalScoreResult {
   const coverage = total > 0 ? (covered / total) * 100 : 0;
@@ -37,7 +38,7 @@ function cmdEvalScore(_cwd: string, args: string[], raw: boolean): void {
   const coveredRaw = parseFlag(args, '--covered');
   const totalRaw = parseFlag(args, '--total');
   const infraRaw = parseFlag(args, '--infra') || '';
-  const infra = infraRaw ? infraRaw.split(',') : [];
+  const infra = infraRaw ? infraRaw.split(',').map((s) => s.trim().toLowerCase()) : [];
   const covered = Number(coveredRaw);
   const total = Number(totalRaw);
   if (
@@ -52,9 +53,16 @@ function cmdEvalScore(_cwd: string, args: string[], raw: boolean): void {
   }
   // Domain validation: this is a public CLI verb, so reject out-of-domain inputs
   // rather than emit nonsense (covered>total -> coverage_score>100; negatives ->
-  // negative scores). Counts must be non-negative and covered cannot exceed total.
-  if (covered < 0 || total < 0 || covered > total) {
-    process.stderr.write('Invalid eval.score domain: require 0 <= covered <= total (both non-negative).\n');
+  // negative scores). Counts must be non-negative integers and covered cannot
+  // exceed total; infra tokens must match the documented ok|partial|missing set.
+  if (!Number.isInteger(covered) || !Number.isInteger(total) || covered < 0 || total < 0 || covered > total) {
+    process.stderr.write('Invalid eval.score domain: require integer counts with 0 <= covered <= total.\n');
+    process.exitCode = 1;
+    return;
+  }
+  const invalidInfra = infra.find((s) => !INFRA_TOKENS.has(s));
+  if (invalidInfra !== undefined) {
+    process.stderr.write(`Invalid eval.score infra token: ${invalidInfra || '<empty>'}. Expected ok|partial|missing.\n`);
     process.exitCode = 1;
     return;
   }
