@@ -10,7 +10,7 @@
  *
  * Dependencies (leaf modules only — no loadConfig):
  *   - node:fs / node:path (stdlib)
- *   - ./phase-id.cjs        (escapeRegex, phaseMarkdownRegexSource)
+ *   - ./phase-id.cjs        (escapeRegex, phaseMarkdownRegexSource, sentinel helpers)
  *   - ./planning-workspace.cjs (planningDir)
  *   - ./shell-command-projection.cjs (platformReadSync)
  */
@@ -25,6 +25,7 @@ const {
   phaseMarkdownRegexSourceExact,
   stripProjectCodePrefix,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  isBacklogPhaseId,
 } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -54,17 +55,13 @@ function phaseIdFromHeadingText(text: string): string | null {
   return match ? normalizeRoadmapPhaseId(match[1]) : null;
 }
 
-function isBacklogPhaseId(phaseNum: unknown): boolean {
-  return /^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum));
-}
-
 function collectReferencedPhaseIds(section: string): Set<string> {
   const ids = new Set<string>();
   const phaseRefRe = /\bPhase\s+([\w][\w.-]*)\s*:/gi;
   const text = stripFencedCode(section).text;
   let match: RegExpExecArray | null;
   while ((match = phaseRefRe.exec(text)) !== null) {
-    if (!/^999(?:\.|$)/.test(stripProjectCodePrefix(match[1]))) {
+    if (!isBacklogPhaseId(match[1])) {
       ids.add(normalizeRoadmapPhaseId(match[1]));
     }
   }

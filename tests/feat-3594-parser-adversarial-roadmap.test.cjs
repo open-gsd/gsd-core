@@ -14,7 +14,7 @@
  * Several fixtures encode known historical regressions:
  *   - fenced-code-block headings shadowing real phases (#2787)
  *   - decimal phase prefix collisions (#3537)
- *   - HTML-comment heading false positives
+ *   - HTML-comment sentinel fixtures
  *
  * Pre-existing parser bugs surfaced by these fixtures are NOT fixed in
  * this PR — fixing them is out of scope for "add adversarial test
@@ -190,11 +190,12 @@ describe('feat-3594: roadmap parser and HTML-commented headings', () => {
     assert.equal(result.parsed.phase_name, 'real phase');
   });
 
-  test('phase 999 sentinel inside an HTML comment is not activated by get-phase (#1588)', (t) => {
+  test('phase 999 sentinel is not activated even when it only appears inside an HTML comment (#1588)', (t) => {
     const projectDir = projectWithFixture(t, 'markdown-headings-inside-html-comment.md');
     const result = getPhase(projectDir, '999');
     assert.equal(result.hasStackTrace, false, 'no stack trace');
     assert.ok(result.parsed, `expected JSON payload, got: ${result.raw}`);
+    // This pins the backlog sentinel guard; tokenizeHeadings does not strip HTML comments.
     assert.equal(result.parsed.found, false, '999 sentinel phases must not be activated by get-phase fallback');
   });
 });

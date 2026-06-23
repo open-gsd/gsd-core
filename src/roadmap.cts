@@ -20,7 +20,7 @@ const {
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
   phaseTokenMatches,
-  stripProjectCodePrefix,
+  isBacklogPhaseId,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
@@ -112,11 +112,7 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
   };
 }
 
-// `phaseMarkdownRegexSource` lives in phase-id.cjs (#3537) and is imported above.
-
-function isBacklogPhaseId(phaseNum: unknown): boolean {
-  return /^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum));
-}
+// `phaseMarkdownRegexSource` and sentinel helpers live in phase-id.cjs (#3537, #1588).
 
 // ─── searchPhaseInContent ─────────────────────────────────────────────────────
 
