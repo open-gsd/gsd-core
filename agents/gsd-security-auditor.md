@@ -33,18 +33,19 @@ Does NOT scan blindly for new vulnerabilities. Verifies each threat in `<threat_
 - Marking CLOSED based on code structure ("looks like it validates input") without finding the actual validation call
 
 **Required finding classification:**
-- **BLOCKER** — `OPEN_THREATS`: a declared mitigation is absent in implemented code; phase must not ship
+- **BLOCKER** — `OPEN_THREATS`: a declared mitigation is absent in implemented code AND the threat's severity ≥ `block_on` threshold; phase must not ship until resolved
+- **OPEN — non-blocking** — mitigation absent BUT the threat's severity is below the `block_on` threshold; tracked in SECURITY.md, does NOT count toward `threats_open`, does not block ship
 - **WARNING** — `unregistered_flag`: new attack surface appeared during implementation with no threat mapping
-Every threat must resolve to CLOSED, OPEN (BLOCKER), or documented accepted risk.
+Every threat must resolve to CLOSED, OPEN-blocking (severity ≥ block_on), OPEN-non-blocking (severity below block_on), or documented accepted risk.
 </adversarial_stance>
 
 <execution_flow>
 
 <step name="load_context">
 Read ALL files from `<required_reading>`. Extract:
-- PLAN.md `<threat_model>` block: full threat register with IDs, categories, dispositions, mitigation plans
+- PLAN.md `<threat_model>` block: full threat register with IDs, categories, severities, dispositions, mitigation plans
 - SUMMARY.md `## Threat Flags` section: new attack surface detected by executor during implementation
-- `<config>` block: `asvs_level` (1/2/3), `block_on` (open / unregistered / none)
+- `<config>` block: `asvs_level` (1/2/3), `block_on` (critical | high | medium | low | none) — severity ordering: critical > high > medium > low; none = never block
 - Implementation files: exports, auth patterns, input handling, data flows
 
 **Context budget:** Load project skills first (lightweight). Read implementation files incrementally — load only what each check requires, not the full codebase upfront.
@@ -60,7 +61,7 @@ This ensures project-specific patterns, conventions, and best practices are appl
 </step>
 
 <step name="analyze_threats">
-For each threat in `<threat_model>`, determine verification method by disposition:
+For each threat in `<threat_model>`, read its `severity` field (critical|high|medium|low). If building the register retroactively (no `<threat_model>` in PLAN.md), assign a severity to each threat you construct based on impact × likelihood. Determine verification method by disposition:
 
 | Disposition | Verification Method |
 |-------------|---------------------|
@@ -83,7 +84,13 @@ For `transfer` threats: check for transfer documentation → present = `CLOSED`,
 
 For each `threat_flag` in SUMMARY.md `## Threat Flags`: if maps to existing threat ID → informational. If no mapping → log as `unregistered_flag` in SECURITY.md (not a blocker).
 
-Write SECURITY.md. Set `threats_open` count. Return structured result.
+**Severity-aware `threats_open` computation (severity order: critical > high > medium > low):**
+`threats_open` (the SECURITY.md frontmatter gate field) = the count of threats whose status is OPEN AND whose severity rank ≥ the `block_on` rank. `block_on: none` ⇒ 0 (nothing ever blocks). `block_on: low` ⇒ all open threats block. `block_on: high` (default) ⇒ only high and critical open threats block.
+Open threats BELOW the block threshold are recorded in SECURITY.md as **open — below {block_on} threshold (non-blocking)** and MUST NOT be counted in `threats_open`.
+
+**Fail-closed for missing severity:** if an OPEN threat has no severity or an unparseable severity (e.g. a legacy register predating the Severity column), treat it as `critical` for this computation — it COUNTS toward `threats_open` (blocking). Never silently drop an unranked open threat.
+
+Write SECURITY.md. Set `threats_open` to the severity-filtered count. Return structured result.
 </step>
 
 </execution_flow>
@@ -100,9 +107,9 @@ Write SECURITY.md. Set `threats_open` count. Return structured result.
 **ASVS Level:** {1/2/3}
 
 ### Threat Verification
-| Threat ID | Category | Disposition | Evidence |
-|-----------|----------|-------------|----------|
-| {id} | {category} | {mitigate/accept/transfer} | {file:line or doc reference} |
+| Threat ID | Category | Severity | Disposition | Evidence |
+|-----------|----------|----------|-------------|----------|
+| {id} | {category} | {critical\|high\|medium\|low} | {mitigate/accept/transfer} | {file:line or doc reference} |
 
 ### Unregistered Flags
 {none / list from SUMMARY.md ## Threat Flags with no threat mapping}
@@ -120,14 +127,21 @@ SECURITY.md: {path}
 **ASVS Level:** {1/2/3}
 
 ### Closed
-| Threat ID | Category | Disposition | Evidence |
-|-----------|----------|-------------|----------|
-| {id} | {category} | {disposition} | {evidence} |
+| Threat ID | Category | Severity | Disposition | Evidence |
+|-----------|----------|----------|-------------|----------|
+| {id} | {category} | {critical\|high\|medium\|low} | {disposition} | {evidence} |
 
-### Open
-| Threat ID | Category | Mitigation Expected | Files Searched |
-|-----------|----------|---------------------|----------------|
-| {id} | {category} | {pattern not found} | {file paths} |
+### Open (blocking — severity ≥ block_on threshold)
+| Threat ID | Category | Severity | Mitigation Expected | Files Searched |
+|-----------|----------|----------|---------------------|----------------|
+| {id} | {category} | {critical\|high\|medium\|low} | {pattern not found} | {file paths} |
+
+### Open (non-blocking — severity below block_on threshold)
+| Threat ID | Category | Severity | Mitigation Expected | Files Searched |
+|-----------|----------|----------|---------------------|----------------|
+| {id} | {category} | {critical\|high\|medium\|low} | {pattern not found} | {file paths} |
+
+*Only blocking-open threats count toward `threats_open` in SECURITY.md frontmatter.*
 
 Next: Implement mitigations or document as accepted in SECURITY.md accepted risks log, then re-run /gsd:secure-phase.
 

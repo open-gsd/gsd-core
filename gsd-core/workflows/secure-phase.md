@@ -53,7 +53,7 @@ SUMMARY_FILES=$(ls "${PHASE_DIR}"/*-SUMMARY.md 2>/dev/null)
 
 ### 2a. Read Phase Artifacts
 
-Read PLAN.md — extract `<threat_model>` block: trust boundaries, STRIDE register (`threat_id`, `category`, `component`, `disposition`, `mitigation_plan`).
+Read PLAN.md — extract `<threat_model>` block: trust boundaries, STRIDE register (`threat_id`, `category`, `component`, `severity`, `disposition`, `mitigation_plan`).
 
 ### 2b. Read Summary Threat Flags
 
@@ -61,7 +61,7 @@ Read SUMMARY.md — extract `## Threat Flags` entries.
 
 ### 2c. Build Threat Register
 
-Per threat: `{ threat_id, category, component, disposition, mitigation_pattern, files_to_check }`
+Per threat: `{ threat_id, category, component, severity, disposition, mitigation_pattern, files_to_check }`
 
 Also set `register_authored_at_plan_time: true` if **at least one** PLAN file contained a parseable `<threat_model>` block; `false` if no PLAN files had any `<threat_model>` block (legacy phase authored before formal threat modelling was standard).
 
@@ -74,10 +74,10 @@ Classify each threat:
 | CLOSED | mitigation found OR accepted risk documented in SECURITY.md OR transfer documented |
 | OPEN | none of the above |
 
-Build: `{ threat_id, category, component, disposition, status, evidence }`
+Build: `{ threat_id, category, component, severity, disposition, status, evidence }`
 
 **Short-circuit rule:**
-- If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level == 1` → skip to Step 6 directly. All plan-time threats are verified CLOSED at L1 grep-depth; no deeper verification required.
+- If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level == 1` → skip to Step 6 directly. No open threats at or above the block threshold remain (threats_open: 0); below-threshold open threats may remain and are non-blocking. L1 grep-depth is sufficient; no deeper verification required.
 - If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level >= 2` → **do NOT skip**. The preliminary threat classification is grep-level (L1 depth) and is insufficient for L2/L3. Proceed to Step 5 (spawn the auditor) so that L2 boundary-placement checks and L3 end-to-end trace checks are performed. Skipping the auditor here would defeat ASVS level scaling for "clean" phases.
 - If `threats_open: 0 AND register_authored_at_plan_time: false` → **do NOT skip**. Empty-by-no-planning must not rubber-stamp a clean SECURITY.md. Proceed to Step 5 in **retroactive-STRIDE mode** — the auditor builds a register from implementation files first, then verifies mitigations.
 - If `threats_open > 0` → proceed to Step 4 (present threat plan to user).
@@ -146,7 +146,7 @@ Handle return:
 
 ```
 GSD > PHASE {N} SECURITY BLOCKED
-{K} threats open — phase advancement blocked until threats_open: 0
+{K} blocking threats open — phase advancement blocked until threats_open: 0
 ▶ Fix mitigations then re-run: /gsd:secure-phase {N}
 ▶ Or document accepted risks in SECURITY.md and re-run.
 ```
@@ -164,7 +164,7 @@ gsd_run query commit "docs(phase-${PHASE}): add/update security threat verificat
 **Secured (threats_open: 0):**
 ```
 GSD > PHASE {N} THREAT-SECURE
-threats_open: 0 — all threats have dispositions.
+threats_open: 0 — no blocking threats remain (threats_open: 0).
 ▶ /gsd:validate-phase {N}    validate test coverage
 ▶ /gsd:verify-work {N}       run UAT
 ```
