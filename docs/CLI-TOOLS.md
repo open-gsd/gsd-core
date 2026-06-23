@@ -271,7 +271,7 @@ Deterministic scorer for eval-auditor results. Computes coverage, infrastructure
 | `coverage_score` | number | `covered / total × 100` |
 | `infra_score` | number | `(sum of component weights) / 5 × 100` (`ok`=1, `partial`=0.5, `missing`=0) |
 | `overall_score` | number | `(coverage_score × 0.6) + (infra_score × 0.4)` |
-| `verdict` | string | `PRODUCTION READY` (80–100) / `NEEDS WORK` (60–79) / `SIGNIFICANT GAPS` (40–59) / `NOT IMPLEMENTED` (0–39) |
+| `verdict` | string | `PRODUCTION READY` (80–100) / `NEEDS WORK` (60–<80) / `SIGNIFICANT GAPS` (40–<60) / `NOT IMPLEMENTED` (0–<40) |
 
 **Example:**
 
