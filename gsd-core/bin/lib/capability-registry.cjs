@@ -65,7 +65,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Antigravity",
-    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -93,7 +93,7 @@ const capabilities = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -103,7 +103,7 @@ const capabilities = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -2723,7 +2723,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Antigravity",
-    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -2751,7 +2751,7 @@ const runtimes = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -2761,7 +2761,7 @@ const runtimes = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }

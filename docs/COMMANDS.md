@@ -313,6 +313,29 @@ For browser-backed UAT, use a configured browser MCP server. The current Open GS
 /gsd-verify-work 1                  # UAT for phase 1
 ```
 
+**Coverage-aware UAT routing (#1602).** When a SUMMARY.md carries a `coverage:` frontmatter block, `verify-work` classifies each deliverable deterministically instead of prompting for every prose bullet: deliverables proven by passing tests are auto-passed (recorded with `source: automated`, no prompt) and only judgment-dependent deliverables are presented for human sign-off. SUMMARYs without a `coverage:` block fall back to the previous prose-based extraction unchanged. See the [`coverage:` block reference](#summary-coverage-block) below.
+
+#### SUMMARY `coverage:` block
+
+A SUMMARY.md may carry an optional `coverage:` frontmatter block — a list of per-deliverable entries that joins requirements → tests → verification status:
+
+| Field | Description |
+|-------|-------------|
+| `id` | Stable identifier (`D1`, `D2`…), unique within the SUMMARY |
+| `description` | The deliverable in human-readable form |
+| `requirement` | Optional REQ-ID linking to REQUIREMENTS.md |
+| `verification[].kind` | `unit` \| `integration` \| `e2e` \| `automated_ui` \| `manual_procedural` \| `other` |
+| `verification[].ref` | Test path + descriptor, screenshot ref, or command |
+| `verification[].status` | `pass` \| `fail` \| `unknown` |
+| `human_judgment` | Required boolean. `true` always routes to a human |
+| `rationale` | Required when `human_judgment: true` |
+
+A deliverable is auto-passed **only** when `human_judgment: false`, its `verification` list is non-empty, and every entry's `status` is `pass`. Anything else — `human_judgment: true`, an empty `verification`, a non-`pass` status, or a schema error — is presented to a human (fail-safe). Inspect the classification directly with:
+
+```bash
+node gsd-tools.cjs uat classify-coverage --summary .planning/phases/01-foundation/01-01-SUMMARY.md
+```
+
 ---
 
 ---

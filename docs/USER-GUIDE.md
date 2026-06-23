@@ -462,6 +462,19 @@ The review step slots in after execution and before UAT:
 
 ---
 
+## Coverage-Aware UAT Routing
+
+Historically, `/gsd-verify-work` turned every `## Accomplishments` bullet in a SUMMARY into a manual checkpoint — even deliverables already covered one-to-one by a passing unit test. With a green test suite you were still asked to re-confirm things the tests had already proven, every phase.
+
+GSD now lets the executor record, at authoring time, *how each deliverable was verified*. When a SUMMARY.md carries a `coverage:` frontmatter block (see [the `coverage:` block reference](COMMANDS.md#summary-coverage-block)), `/gsd-verify-work` routes deterministically:
+
+- **Auto-passed** — a deliverable marked `human_judgment: false` whose `verification` list is non-empty and entirely `pass` is recorded as passed (`source: automated`) and never prompted.
+- **Presented** — everything else is shown to you for sign-off: anything flagged `human_judgment: true` (visual adequacy, multi-device behaviour, subjective quality), anything with no verification, anything not fully passing, and any malformed entry.
+
+The asymmetry is deliberate. The worst outcome is auto-passing something broken that UAT existed to catch, so auto-pass is the narrow, fully-proven case and *uncertainty always routes back to you*. Flipping the flag alone cannot skip a prompt — a passing test reference is also required. SUMMARYs without a `coverage:` block behave exactly as before (prose-based checkpoints), so nothing changes for existing or un-migrated phases.
+
+---
+
 ## Command And Configuration Reference
 
 - **Command Reference:** see [`docs/COMMANDS.md`](COMMANDS.md) for every stable command's flags, subcommands, and examples.

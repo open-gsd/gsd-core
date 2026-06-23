@@ -228,6 +228,33 @@ node scripts/release-notes/format-github-release-notes.cjs \
 Omit `--apply` to print the reformatted body to stdout for review without
 publishing.
 
+### PR title convention (enforced at open time)
+
+Because the changelog is built from PR titles, your **PR title** must follow:
+
+```
+type(#<issue>): short summary
+```
+
+- **Start with the type** — `feat`, `fix`, or any other conventional type
+  (`chore`, `docs`, `refactor`, …). No leading tags or prefixes: a title like
+  `[security] fix(config): …` defeats the `^fix` bucket anchor and silently
+  files the entry under the wrong changelog section.
+- **Put the linked issue ref in the scope** — `(#<digits>)`. This is what
+  renders as a link to the issue in the changelog line. `fix(core): …` buckets
+  correctly but produces a changelog entry with **no issue link**.
+- A breaking-change marker is fine: `feat(#42)!: …`.
+
+Examples: `fix(#1542): roadmap rollback`, `feat(#39): milestone-prefixed phase IDs`,
+`enhance(#1549): add PR-title validator`.
+
+**CI enforcement:** `pr-title-validator.yml` checks the title on open/edit and
+fails with the required format if it doesn't conform. It reuses the same matcher
+the changelog classifier uses (`scripts/release-notes/conventional-title.cjs`), so a title
+that passes the check is guaranteed to bucket and link correctly. Fix a flagged
+title by editing it in place — the check re-runs on edit, no need to recreate
+the PR.
+
 ## Documentation Updates — Update the Relevant Docs
 
 If your PR adds, changes, deprecates, or removes user-visible behavior, you **must** update the relevant documentation in `docs/`. CI will fail any PR whose changeset fragment is typed `Added`, `Changed`, `Deprecated`, or `Removed` without also modifying at least one file under `docs/` ([#3213](https://github.com/open-gsd/gsd-core/issues/3213)).

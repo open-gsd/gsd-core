@@ -368,12 +368,15 @@ function convertedCommandsKind(
 //     augment    — https://docs.augmentcode.com/cli/skills (flat single-level)
 //     trae       — docs.trae.ai/ide/skills + Trae-AI/TRAE#2253 (flat; nesting errors)
 //                  Trae IDE (trae.ai), not trae-agent — see runtime-homes.cts header note
-//     antigravity— discuss.ai.google.dev/t/more-antigravity-issues/145875 ("will not recursive scan")
-//
 //   FLAT (recursive loader → nesting gives no saving):
 //     cursor     — https://cursor.com/docs/skills (walks skills root recursively)
 //     opencode   — sst/opencode skill/index.ts glob "skills/**/SKILL.md"
 //     kilo       — Kilo-Org/kilocode (opencode fork, same ** glob)
+//
+//   FLAT (one-level scan, but concrete skills must be directly discoverable):
+//     antigravity— https://antigravity.google/docs/skills + /docs/cli-plugins
+//                  (skills live at <skills-dir>/<skill-folder>/SKILL.md; AGY does not
+//                   register router-nested concrete skills as slash commands)
 //
 //   FLAT (reverted from nested — nested skills not discoverable by Skill tool, #924):
 //     claude     — https://code.claude.com/docs/en/skills + anthropics/claude-code#28266

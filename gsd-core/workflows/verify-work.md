@@ -178,7 +178,24 @@ fi
 
 The verb owns the canonical regex `/^As a .+, I want to .+, so that .+\.$/` and returns slot extractions plus per-error guidance when invalid. Halt UAT generation on failure — never attempt to derive user-flow steps from a non-User-Story goal (low-quality UAT).
 
-**Extract testable deliverables from SUMMARY.md:**
+**Coverage-aware deterministic classification (#1602).** Before deriving checkpoints from prose, classify each SUMMARY's structured `coverage:` block. For each `*-SUMMARY.md`:
+
+```bash
+COVERAGE=$(gsd_run query uat.classify-coverage --summary "$SUMMARY_FILE")
+```
+
+Read the JSON result (`mode`, `total`, `all_auto_covered`, `auto_passed[]`, `present[]`, `errors[]`):
+
+- **`mode: legacy`** (no `coverage:` block, OR a malformed block that could not be parsed) → **fall through** to the prose-based extraction below. Behavior is byte-identical to pre-#1602 for un-migrated SUMMARYs; do NOT auto-pass anything. If `errors[]` is non-empty (a `malformed_block`), note the broken coverage block to the user before proceeding so the SUMMARY can be fixed.
+- **`mode: coverage`** →
+  - Each `auto_passed[]` entry is recorded in UAT.md as `result: pass`, `source: automated` (see `create_uat_file`) — **do not present it as a checkpoint.** It is deterministically covered by the passing tests in its `verification` refs.
+  - Each `present[]` entry becomes a human UAT checkpoint: use its `description` as the test and carry its `rationale` into the checkpoint context. The `reason` (`human_judgment` / `no_verification` / `verification_not_passing` / `validation_failed`) explains why a human is needed.
+  - If `all_auto_covered` is `true` (every entry auto-passed, including the `coverage: []` case) → do NOT generate zero checkpoints; present a **single confirmation summary** listing the auto-covered deliverables with their covering tests and ask the user to confirm.
+  - Surface any `errors[]` to the user (malformed coverage block) but still treat their entries as human checkpoints — **never drop a deliverable** (fail-safe).
+
+The cold-start smoke test injection below still applies in `coverage` mode.
+
+**Extract testable deliverables from SUMMARY.md (legacy fallback — used when `mode: legacy`):**
 
 Parse for:
 1. **Accomplishments** - Features/functionality added
@@ -251,6 +268,18 @@ expected: [observable behavior]
 result: [pending]
 
 ...
+
+**Coverage auto-passed entries (#1602):** for each `auto_passed[]` entry from `uat classify-coverage`, write a Tests entry pre-resolved as automated — these are NOT presented to the user:
+
+```
+### N. [coverage description]
+expected: [coverage description]
+result: pass
+source: automated
+coverage_id: [D-id]
+```
+
+The `source: automated` marker is additive — existing consumers that read only `result:` are unaffected.
 
 ## Summary
 

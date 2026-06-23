@@ -312,6 +312,7 @@
       "configuration.cjs",
       "context-utilization.cjs",
       "core-utils.cjs",
+      "coverage.cjs",
       "decisions.cjs",
       "docs.cjs",
       "drift.cjs",
