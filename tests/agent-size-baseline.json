@@ -1,7 +1,7 @@
 {
   "gsd-advisor-researcher.md": 4603,
   "gsd-ai-researcher.md": 5911,
-  "gsd-assumptions-analyzer.md": 4496,
+  "gsd-assumptions-analyzer.md": 4556,
   "gsd-code-fixer.md": 36506,
   "gsd-code-reviewer.md": 16780,
   "gsd-codebase-mapper.md": 21395,
@@ -30,7 +30,7 @@
   "gsd-security-auditor.md": 6226,
   "gsd-ui-auditor.md": 17159,
   "gsd-ui-checker.md": 11088,
-  "gsd-ui-researcher.md": 19272,
+  "gsd-ui-researcher.md": 19332,
   "gsd-user-profiler.md": 8516,
   "gsd-verifier.md": 48859
 }

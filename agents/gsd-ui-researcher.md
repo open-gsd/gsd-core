@@ -27,6 +27,8 @@ If the prompt contains a `<required_reading>` block, you MUST use the `Read` too
 - Return structured result to orchestrator
 </role>
 
+@~/.claude/gsd-core/references/untrusted-input-boundary.md
+
 <documentation_lookup>
 @~/.claude/gsd-core/references/research-documentation-lookup.md
 </documentation_lookup>

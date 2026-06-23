@@ -10,6 +10,10 @@ const INGEST_AGENTS = [
   'gsd-phase-researcher', 'gsd-project-researcher', 'gsd-domain-researcher',
   'gsd-ai-researcher', 'gsd-advisor-researcher', 'gsd-research-synthesizer',
   'gsd-doc-classifier', 'gsd-doc-synthesizer',
+  // AC #2 named agents: gsd-ui-researcher carries the full WebSearch/WebFetch
+  // toolset (web ingress); gsd-assumptions-analyzer reads 5-15 codebase source
+  // files (external/source-document ingress per the boundary).
+  'gsd-ui-researcher', 'gsd-assumptions-analyzer',
 ];
 
 describe('untrusted-input isolation (#12)', () => {
