@@ -318,7 +318,7 @@ npx @opengsd/gsd-core@latest --windsurf --global
 npx @opengsd/gsd-core@latest --devin-desktop --global
 ```
 
-Global skills land in `~/.codeium/windsurf/` (unchanged). Local workspace installs write to `.devin/skills/` (Devin Desktop's preferred location, #1085); the legacy `.windsurf/skills/` layout is still recognized for backward-compat. GSD installs skills, agents, and workspace rules.
+Use a workspace install for Windsurf slash commands. Workspace installs write `/gsd-*` commands as Windsurf workflow files under `.windsurf/workflows/`. Windsurf discovers those `.md` workflow files in Cascade and exposes them through the `/` menu. Global-scope Windsurf workflow installation is intentionally a no-op for now because global workflow locations are outside GSD's normal user-owned runtime config directory.
 
 **Override the install directory:**
 

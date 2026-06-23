@@ -29,7 +29,7 @@ describe('getDirName (relocated to runtime-name-policy)', () => {
     codex: '.codex',
     antigravity: '.agents',
     cursor: '.cursor',
-    windsurf: '.devin',
+    windsurf: '.windsurf',
     augment: '.augment',
     trae: '.trae',
     qwen: '.qwen',

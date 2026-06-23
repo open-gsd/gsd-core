@@ -693,6 +693,21 @@ Also available:
 
 **Exit the plan-phase workflow. Do not continue.**
 
+## 5.65. Codebase Map Freshness Pre-Check (drift plan:pre gate)
+
+If `activeHooks` (from `PLAN_PRE_HOOKS_JSON`, §5.6) has a `kind == "gate"`, `capId == "drift"`,
+`check.query == "verify.codebase-drift"` entry (`workflow.plan_drift_precheck` on), run the same check the
+execute gate uses; otherwise skip to step 6:
+
+```bash
+DRIFT=$(gsd_run verify codebase-drift 2>/dev/null || echo '{"skipped":true}')
+```
+
+This gate is **non-blocking** and **never blocks, never spawns** the mapper at plan time. If `skipped` or
+`action_required` is false, continue silently to step 6. If `action_required` is true, print `message`
+verbatim (it ends with a `/gsd:map-codebase` pointer) and continue — planning proceeds whether or not the
+map is refreshed first. (`drift_action: auto-remap` stays at `execute:wave:post`.)
+
 ## 6. Check Existing Plans
 
 ```bash

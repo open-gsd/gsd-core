@@ -104,12 +104,9 @@ const GOLDEN = {
   ],
 
   // ── windsurf ─────────────────────────────────────────────────────────────────
-  // Old switch: no scope branch → local == global. 5b backfill restores this.
-  'windsurf/global': [
-    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
-  ],
+  'windsurf/global': [],
   'windsurf/local': [
-    { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'workflows', prefix: 'gsd-' },
   ],
 
   // ── augment ──────────────────────────────────────────────────────────────────

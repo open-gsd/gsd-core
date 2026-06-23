@@ -16,7 +16,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, extractPhaseToken } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
@@ -1405,6 +1405,63 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
 // ─── State Frontmatter Sync ──────────────────────────────────────────────────
 
 /**
+ * Canonical key for matching a ROADMAP phase token against an on-disk phase
+ * directory: normalizePhaseName collapses padding/case, strips the project-code
+ * prefix, and handles decimals/letter-suffixes/milestone-prefixed IDs, so
+ * "Phase 4"/"Phase 04"/dir "04-delta" and "Phase PROJ-42"/dir "PROJ-42-foo"
+ * each map to one key. For a directory, extract its phase token first.
+ *
+ * Stripping the project-code prefix is GSD's canonical phase identity (a
+ * project_code is a display prefix; normalizePhaseName / phaseTokenMatches treat
+ * `CK-01` and `01` as the same phase, which is what lets a prefixed dir match a
+ * bare ROADMAP token). A consistent project uses one scheme, so a bare numeric
+ * and a same-suffix project-code phase never coexist in one milestone.
+ */
+function phaseKeyFromToken(token: string): string {
+  return normalizePhaseName(token).toUpperCase();
+}
+function phaseKeyFromDir(dir: string): string {
+  return phaseKeyFromToken(extractPhaseToken(dir));
+}
+
+/**
+ * Extract the set of retired/folded phase keys from a ROADMAP milestone scope
+ * (#1514). A retired phase is struck through with GFM strikethrough,
+ * e.g. `- [x] ~~**Phase 04: Delta**~~ — folded into Phase 05; number retired`.
+ * Such a phase keeps a `[x]` mark and often a directory but ships no completion
+ * artifact, so it would otherwise inflate `total_phases` (the denominator)
+ * without ever satisfying the numerator, freezing a shipped milestone below
+ * 100%.
+ *
+ * Detection is scoped to the lines that canonically mark a phase retired — a
+ * checklist entry (`- [x] …`) or a phase heading (`#### Phase …`) — and within
+ * those, only a struck span whose SUBJECT is the phase counts: the phase
+ * reference must sit at the start of the `~~…~~` span (after optional markdown
+ * emphasis), as in `~~**Phase 04: Delta**~~`, `~~Phase 04~~`, or
+ * `~~Phase PROJ-42~~`. This ignores struck PROSE that merely mentions a phase
+ * (a goal line `~~folded into Phase 05~~`, or `~~Phase 04 was renamed~~`) and
+ * the fold target in `~~Phase 04~~ — folded into Phase 05` (outside the span).
+ * The phase token shape mirrors the heading counter's `[\w][\w.-]*` so numeric,
+ * decimal, and project-code IDs are detected alike. Returns canonical keys
+ * (see phaseKeyFromToken).
+ */
+function extractRetiredPhaseNumbers(scope: string): Set<string> {
+  const retired = new Set<string>();
+  const isChecklistOrHeading = /^\s*(?:[-*+]\s*\[[ xX]\]|#{1,6}\s)/;
+  for (const line of scope.split(/\r?\n/)) {
+    if (!isChecklistOrHeading.test(line)) continue;
+    const strikeSpan = /~~([^~]*?)~~/g;
+    let s: RegExpExecArray | null;
+    while ((s = strikeSpan.exec(line)) !== null) {
+      const phaseRef = /^[\s*_]*Phase\s+([\w][\w.-]*)/i.exec(s[1]);
+      // Require a digit so struck prose like ~~Phase Overview~~ is ignored.
+      if (phaseRef && /\d/.test(phaseRef[1])) retired.add(phaseKeyFromToken(phaseRef[1]));
+    }
+  }
+  return retired;
+}
+
+/**
  * Extract machine-readable fields from STATE.md markdown body and build
  * a YAML frontmatter object. Allows hooks and scripts to read state
  * reliably via `state json` instead of fragile regex parsing.
@@ -1456,6 +1513,21 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
         // on repeated buildStateFrontmatter invocations within the same process (#1967)
         let cached = _diskScanCache.get(cwd);
         if (!cached) {
+          // Read the current-milestone ROADMAP scope once: it feeds both the
+          // heading-based phase count below and the retired/folded-phase
+          // exclusion (#1514). Computed before the disk scan so retired phases
+          // can be dropped from the dir set too.
+          let roadmapScope: string | null = null;
+          let retiredPhaseNums = new Set<string>();
+          try {
+            const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+            const roadmapRaw = platformReadSync(roadmapPath);
+            if (roadmapRaw !== null) {
+              roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
+              retiredPhaseNums = extractRetiredPhaseNumbers(roadmapScope);
+            }
+          } catch { /* fall through: no roadmap scope → no retired exclusion */ }
+
           const isDirInMilestone = getMilestonePhaseFilter(cwd) as (dir: string) => boolean;
           const allMatchingDirs = fs.readdirSync(phasesDir, { withFileTypes: true })
             .filter(e => e.isDirectory()).map(e => e.name)
@@ -1467,6 +1539,11 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
           // modified dir. This prevents double-counting (e.g. two "Phase 1" dirs).
           const seenPhaseNums = new Map<string, string>(); // normalizedNum -> dirName
           for (const dir of allMatchingDirs) {
+            // #1514: a retired/folded phase keeps a directory but no completion
+            // artifact; drop it from the disk phase set so it counts toward
+            // neither the denominator nor the numerator (mirrors the heading
+            // exclusion below). Project-code-aware via phaseKeyFromDir.
+            if (retiredPhaseNums.size > 0 && retiredPhaseNums.has(phaseKeyFromDir(dir))) continue;
             const m = dir.match(/^0*(\d+[A-Za-z]?(?:\.\d+)*)/);
             const key = m ? m[1].toLowerCase() : dir;
             if (!seenPhaseNums.has(key)) {
@@ -1501,22 +1578,21 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
           // `## Phase Overview:` or `## Phase Details:` — single source of
           // truth for total_phases (#549).
           let roadmapPhaseCount = 0;
-          try {
-            const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
-            const roadmapRaw = platformReadSync(roadmapPath);
-            if (roadmapRaw !== null) {
-              const roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
-              const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
-              let m: RegExpExecArray | null;
-              while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
-                // Only count tokens that contain at least one digit — excludes
-                // pure-word section headings (Overview, Details) while keeping
-                // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-                // Also exclude 999.x backlog phases. Mirrors init.cts filter.
-                if (/\d/.test(m[1]) && !/^999\b/.test(m[1])) roadmapPhaseCount++;
-              }
+          if (roadmapScope !== null) {
+            const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
+            let m: RegExpExecArray | null;
+            while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
+              // Only count tokens that contain at least one digit — excludes
+              // pure-word section headings (Overview, Details) while keeping
+              // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
+              // Also exclude 999.x backlog phases. Mirrors init.cts filter.
+              if (!/\d/.test(m[1]) || /^999\b/.test(m[1])) continue;
+              // #1514: retired/folded phases are struck through in the ROADMAP;
+              // exclude them from the denominator (they can never be completed).
+              if (retiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
+              roadmapPhaseCount++;
             }
-          } catch { /* fall through: phaseDirs.length used as sole count */ }
+          }
 
           cached = {
             totalPhases: roadmapPhaseCount > 0
@@ -2607,12 +2683,27 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     return;
   }
 
+  // #1514: read the current-milestone ROADMAP scope once so retired/folded
+  // phases are excluded from BOTH the disk scan and the heading count here,
+  // exactly as buildStateFrontmatter does — otherwise `state sync --verify`
+  // would keep re-deriving the inflated denominator and report "no drift".
+  let syncRoadmapScope: string | null = null;
+  let syncRetiredPhaseNums = new Set<string>();
+  try {
+    const roadmapRaw = platformReadSync(path.join(planningDir(cwd), 'ROADMAP.md'));
+    if (roadmapRaw !== null) {
+      syncRoadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
+      syncRetiredPhaseNums = extractRetiredPhaseNumbers(syncRoadmapScope);
+    }
+  } catch { /* fall through: no roadmap scope → no retired exclusion */ }
+
   // Scan all phases
   let entries: string[];
   try {
     entries = fs.readdirSync(phasesDir, { withFileTypes: true })
       .filter(e => e.isDirectory())
       .map(e => e.name)
+      .filter(name => !(syncRetiredPhaseNums.size > 0 && syncRetiredPhaseNums.has(phaseKeyFromDir(name))))
       .sort();
   } catch {
     output({ synced: true, changes: [], dry_run: !!verify }, raw, undefined);
@@ -2658,17 +2749,17 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   let syncTotalPhases: number | null = null;
   try {
     let roadmapPhaseCount = 0;
-    const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
-    const roadmapRaw = platformReadSync(roadmapPath);
-    if (roadmapRaw !== null) {
-      const roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
+    if (syncRoadmapScope !== null) {
       const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
       let m: RegExpExecArray | null;
-      while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
+      while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
         // Only count tokens that contain at least one digit — excludes
         // pure-word section headings (Overview, Details) while keeping
         // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-        if (/\d/.test(m[1])) roadmapPhaseCount++;
+        if (!/\d/.test(m[1])) continue;
+        // #1514: retired/folded phases are struck through; exclude from total.
+        if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
+        roadmapPhaseCount++;
       }
     }
     if (roadmapPhaseCount > 0) {
@@ -3098,6 +3189,9 @@ export = {
   cmdStateMilestoneSwitch,
   cmdSignalWaiting,
   cmdSignalResume,
+  // Test seam (#1514): the pure retired/folded-phase parser, exposed so its
+  // strikethrough-detection logic can be property-tested directly.
+  _extractRetiredPhaseNumbers: extractRetiredPhaseNumbers,
   // Test seam (audit M1): inject a deterministic isPidAlive so the liveness-gated
   // steal decision is exercised without real pids. Mirrors capability-lock.cts.
   _setLockProbes(probes: Partial<{ isPidAlive: (pid: number) => boolean }>): void {
