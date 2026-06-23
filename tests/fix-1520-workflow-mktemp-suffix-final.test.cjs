@@ -51,7 +51,7 @@ function collectWorkflowMarkdown(dir) {
   return out;
 }
 
-describe('bug #1520: workflow mktemp templates keep XXXXXX path-final', () => {
+describe('#1520: workflow mktemp templates keep XXXXXX path-final', () => {
   test('no gsd-core/workflows/**/*.md calls mktemp with a suffix after the XXXXXX run', () => {
     const files = collectWorkflowMarkdown(WORKFLOWS_DIR);
     assert.ok(files.length > 0, 'expected workflow markdown files to exist');
