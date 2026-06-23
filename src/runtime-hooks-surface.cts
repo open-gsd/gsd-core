@@ -253,6 +253,23 @@ function normalizeNodePath(execPath: string, opts?: NodeNormOpts): string {
   if (/^\/opt\/homebrew\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
     return '/opt/homebrew/bin/node';
   }
+
+  // mise pins a concrete node version at <data>/installs/node/<ver>/bin/node
+  // (Windows: <data>/installs/node/<ver>/node.exe). Node realpaths
+  // process.execPath to that versioned path, and `mise up` prunes old versions,
+  // so a baked hook command 404s after any node bump — the same ephemeral-path
+  // failure #977 fixed for fnm. The stable alias is the sibling shim
+  // (<data>/shims/node), which always resolves to the active version, like the
+  // Homebrew symlink survives `brew upgrade node`. Derive <data> from execPath
+  // so a custom MISE_DATA_DIR layout still works, and only rewrite when the shim
+  // exists — otherwise fall back to the raw execPath unchanged.
+  const miseMatch = normalizedForMatch.match(
+    /^(.*)\/installs\/node\/[^/]+\/(?:bin\/)?node(\.exe)?$/,
+  );
+  if (miseMatch) {
+    const shim = `${miseMatch[1]}/shims/node${miseMatch[2] || ''}`;
+    if (existsSync(shim)) return shim;
+  }
   return execPath;
 }
 
