@@ -1416,6 +1416,130 @@ describe('windsurf local install writes workflow slash commands (#1615)', () => 
     }
   });
 });
+
+// ─── #1629 Finding B: legacy .devin/skills/gsd-* cleanup on Windsurf reinstall ─
+describe('cleanupWindsurfLegacyDevinSkills — removes pre-#1615 skill artifacts (#1629)', () => {
+  const { cleanupWindsurfLegacyDevinSkills } = require('../bin/install.js');
+
+  test('removes GSD-managed gsd-* dirs under .devin/skills/', (t) => {
+    const tmpDir = createTempDir('gsd-1629b-cleanup-');
+    t.after(() => cleanup(tmpDir));
+
+    // Stage legacy .devin/skills/gsd-*/ artifacts (pre-#1615 layout)
+    const legacySkillsDir = path.join(tmpDir, '.devin', 'skills');
+    for (const skill of ['gsd-help', 'gsd-plan-phase', 'gsd-ship']) {
+      const skillDir = path.join(legacySkillsDir, skill);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Legacy skill\n');
+    }
+
+    const removed = cleanupWindsurfLegacyDevinSkills(tmpDir);
+
+    assert.strictEqual(removed, 3, 'should remove exactly 3 gsd-* dirs');
+    for (const skill of ['gsd-help', 'gsd-plan-phase', 'gsd-ship']) {
+      assert.ok(
+        !fs.existsSync(path.join(legacySkillsDir, skill)),
+        `${skill} should be removed from .devin/skills/`,
+      );
+    }
+    // Empty container dirs should also be pruned
+    assert.ok(!fs.existsSync(legacySkillsDir), '.devin/skills/ should be pruned when empty');
+    assert.ok(!fs.existsSync(path.join(tmpDir, '.devin')), '.devin/ should be pruned when empty');
+  });
+
+  test('preserves user-owned non-gsd- content under .devin/skills/', (t) => {
+    const tmpDir = createTempDir('gsd-1629b-preserve-');
+    t.after(() => cleanup(tmpDir));
+
+    const legacySkillsDir = path.join(tmpDir, '.devin', 'skills');
+    // Stage mixed content: legacy GSD + user-authored + user-owned gsd-dev-preferences
+    fs.mkdirSync(path.join(legacySkillsDir, 'gsd-help'), { recursive: true });
+    fs.writeFileSync(path.join(legacySkillsDir, 'gsd-help', 'SKILL.md'), '# legacy\n');
+    fs.mkdirSync(path.join(legacySkillsDir, 'my-custom-skill'), { recursive: true });
+    fs.writeFileSync(path.join(legacySkillsDir, 'my-custom-skill', 'SKILL.md'), '# user\n');
+    fs.mkdirSync(path.join(legacySkillsDir, 'gsd-dev-preferences'), { recursive: true });
+    fs.writeFileSync(path.join(legacySkillsDir, 'gsd-dev-preferences', 'SKILL.md'), '# prefs\n');
+
+    const removed = cleanupWindsurfLegacyDevinSkills(tmpDir);
+
+    assert.strictEqual(removed, 1, 'only gsd-help should be removed (gsd-dev-preferences is user-owned)');
+    assert.ok(!fs.existsSync(path.join(legacySkillsDir, 'gsd-help')), 'legacy gsd-help removed');
+    assert.ok(
+      fs.existsSync(path.join(legacySkillsDir, 'my-custom-skill')),
+      'user-authored my-custom-skill must be preserved',
+    );
+    assert.ok(
+      fs.existsSync(path.join(legacySkillsDir, 'gsd-dev-preferences')),
+      'user-owned gsd-dev-preferences must be preserved (#2973)',
+    );
+    // Container NOT pruned because it still has user content
+    assert.ok(fs.existsSync(legacySkillsDir), '.devin/skills/ preserved when user content remains');
+    assert.ok(fs.existsSync(path.join(tmpDir, '.devin')), '.devin/ preserved when user content remains');
+  });
+
+  test('skips symlinks pointing outside the .devin tree (escape guard)', (t) => {
+    const tmpDir = createTempDir('gsd-1629b-symlink-');
+    t.after(() => cleanup(tmpDir));
+
+    const legacySkillsDir = path.join(tmpDir, '.devin', 'skills');
+    fs.mkdirSync(legacySkillsDir, { recursive: true });
+    // Create a symlink that points outside the tree
+    const outsideTarget = path.join(tmpDir, 'secret');
+    fs.mkdirSync(outsideTarget);
+    fs.writeFileSync(path.join(outsideTarget, 'secret.txt'), 'secret\n');
+    fs.symlinkSync(outsideTarget, path.join(legacySkillsDir, 'gsd-symlinked'));
+
+    const removed = cleanupWindsurfLegacyDevinSkills(tmpDir);
+
+    assert.strictEqual(removed, 0, 'symlinked gsd-* dir must not be removed');
+    assert.ok(
+      fs.existsSync(path.join(legacySkillsDir, 'gsd-symlinked')),
+      'symlink must be preserved (escape guard)',
+    );
+    assert.ok(
+      fs.existsSync(path.join(outsideTarget, 'secret.txt')),
+      'out-of-tree target must not be touched',
+    );
+  });
+
+  test('no-op when .devin/skills/ does not exist', () => {
+    const tmpDir = createTempDir('gsd-1629b-noop-');
+    const removed = cleanupWindsurfLegacyDevinSkills(tmpDir);
+    assert.strictEqual(removed, 0, 'should return 0 when .devin/skills/ is absent');
+    cleanup(tmpDir);
+  });
+
+  test('install(false, "windsurf") removes pre-existing .devin/skills/gsd-* on reinstall', (t) => {
+    // End-to-end: stage legacy artifacts, run a fresh Windsurf install,
+    // verify the old layout is cleaned up while the new .windsurf/ layout is written.
+    const tmpDir = createTempDir('gsd-1629b-e2e-');
+    t.after(() => cleanup(tmpDir));
+    const previousCwd = process.cwd();
+    process.chdir(tmpDir);
+    try {
+      // Stage pre-#1615 artifacts
+      const legacyDir = path.join(tmpDir, '.devin', 'skills', 'gsd-help');
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'SKILL.md'), '# legacy\n');
+
+      // Fresh Windsurf install
+      install(false, 'windsurf');
+
+      // Legacy layout should be cleaned up
+      assert.ok(
+        !fs.existsSync(path.join(tmpDir, '.devin', 'skills', 'gsd-help')),
+        'pre-existing .devin/skills/gsd-help should be removed by fresh windsurf install',
+      );
+      // New layout should be present
+      assert.ok(
+        fs.existsSync(path.join(tmpDir, '.windsurf', 'workflows')),
+        '.windsurf/workflows/ should exist after fresh install',
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
+});
 // ─── Section N+1: #767 — disallowedTools injection for read-only agents ──────
 //
 // Verifies (installer-behavioral test — drives install() to a temp dir):
