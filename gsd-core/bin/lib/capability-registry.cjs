@@ -1977,7 +1977,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Windsurf",
-    "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+    "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -1994,24 +1994,15 @@ const capabilities = {
       },
       "configFormat": "none",
       "artifactLayout": {
-        "global": [
-          {
-            "kind": "skills",
-            "destSubpath": "skills",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
-          }
-        ],
+        "global": [],
         "local": [
           {
-            "kind": "skills",
-            "destSubpath": "skills",
+            "kind": "commands",
+            "destSubpath": "workflows",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
+            "converter": "convertClaudeCommandToWindsurfWorkflow"
           }
         ]
       },
@@ -3656,7 +3647,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Windsurf",
-    "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+    "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -3673,24 +3664,15 @@ const runtimes = {
       },
       "configFormat": "none",
       "artifactLayout": {
-        "global": [
-          {
-            "kind": "skills",
-            "destSubpath": "skills",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
-          }
-        ],
+        "global": [],
         "local": [
           {
-            "kind": "skills",
-            "destSubpath": "skills",
+            "kind": "commands",
+            "destSubpath": "workflows",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
+            "converter": "convertClaudeCommandToWindsurfWorkflow"
           }
         ]
       },

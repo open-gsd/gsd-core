@@ -48,7 +48,7 @@ GSD ships six **namespace router bundles** (`gsd-ns-workflow`, `gsd-ns-project`,
 
 Each router's body contains a routing table. When the model receives a request, it reads the router, identifies the relevant sub-skill by name, then opens `skills/<name>/SKILL.md` via a file-path `Read`. The concrete skill is fully available — it is not invocable by bare name through the Skill tool's top-level listing, but is reachable through the router.
 
-The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Claude (global), Cline, Qwen, Hermes, Augment, Trae, Antigravity**. Recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
+The nested layout applies only to runtimes with confirmed non-recursive skill loaders: **Cline, Qwen, Hermes, Augment, Trae**. Claude's loader is also non-recursive, but #924 reverted it flat because the Skill tool hard-errors on unknown names rather than re-routing via the router. Antigravity's loader is also non-recursive, but #1614 moved it flat because `agy` scans only `skills/<name>/SKILL.md` — nested sub-skills were unreachable. Other recursive or unconfirmed loaders (Cursor, Codex, Copilot, Windsurf, CodeBuddy, OpenCode, Kilo) retain the flat layout unchanged.
 
 | Namespace | Router bundle | Routes to |
 |-----------|--------------|-----------|

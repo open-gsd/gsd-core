@@ -31,8 +31,8 @@ For the transform each converter applies, see [ADR-1593 §3 — converter transf
 | **kilo** | `skills/` | `gsd-` | flat | recursive (`**` glob) | `convertClaudeCommandToKiloSkill` | OpenCode fork; same `**` glob loader. `permissionWriter: kilo`. Also ships `command` commands. |
 | **cursor** | `skills/` | `gsd-` | flat | recursive | `convertClaudeCommandToCursorSkill` | Also ships flat `commands/` via `convertClaudeCommandToCursorCommand`. `configFormat: none`. |
 | **copilot** | `skills/` | `gsd-` | flat | unconfirmed → conservative | `convertClaudeCommandToCopilotSkill` | Markdown config. Scope-aware converter (global-home vs workspace-relative). |
-| **antigravity** | `skills/` | `gsd-` | nested | non-recursive (one-level) | `convertClaudeCommandToAntigravitySkill` | `dot-home-nested` config home. Scope-aware converter. Nesting confirmed: *"will not recursive scan"*. |
-| **windsurf** | `skills/` | `gsd-` | flat | unconfirmed → conservative | `convertClaudeCommandToWindsurfSkill` | `configFormat: none`. `installSurface: profile-marker-only`. |
+| **antigravity** | `skills/` | `gsd-` | flat | non-recursive (one-level) | `convertClaudeCommandToAntigravitySkill` | `dot-home-nested` config home. Scope-aware converter. Loader confirmed: *"will not recursive scan"*. Flattened by #1614 — `agy` scans only `skills/<name>/SKILL.md`, so nesting hid sub-skills. |
+| **windsurf** | — *(no skills kind)* | `gsd-` | — | workflows | `convertClaudeCommandToWindsurfWorkflow` | Emits `.windsurf/workflows/gsd-*.md` slash-command workflows. `configFormat: none`. `installSurface: profile-marker-only`. |
 | **augment** | `skills/` | `gsd-` | nested | non-recursive (single-level) | `convertClaudeCommandToAugmentSkill` | Also ships flat `commands/`. Settings-json config. |
 | **trae** | `skills/` | `gsd-` | nested | non-recursive (flat; nesting errors) | `convertClaudeCommandToTraeSkill` | `configFormat: none`. Trae IDE (trae.ai), not trae-agent. |
 | **qwen** | `skills/` | `gsd-` | nested | non-recursive (flat readdir) | `convertClaudeCommandToClaudeSkill` | **Shares Claude's converter.** Emits numeric `priority:` (`QWEN_SKILL_PRIORITY`) for `/skills` ordering. Settings-json config. |
@@ -43,9 +43,9 @@ For the transform each converter applies, see [ADR-1593 §3 — converter transf
 
 ### Structural facts
 
-- **All 15 skill-bearing runtimes use `prefix: "gsd-"`.** Gemini is the only runtime with no skills kind (commands-only TOML).
-- **Six runtimes nest** (cline, qwen, hermes, augment, trae, antigravity) because their skill loaders scan one level deep — nesting drops nested concrete skills out of the eager top-level listing while keeping them readable by file path (the namespace-router contract, #69).
-- **Eight runtimes stay flat**: three because their loaders recurse (cursor, opencode, kilo — nesting saves nothing), one because nesting was reverted (claude — the Skill tool errors on unknown names rather than re-routing, #924), and four conservatively where the loader depth is unconfirmed (codex, copilot, windsurf, codebuddy).
+- **All 14 skill-bearing runtimes use `prefix: "gsd-"`.** Two runtimes have no skills kind: Gemini (commands-only TOML) and Windsurf (emits `.windsurf/workflows/gsd-*.md` slash-command workflows instead — #1615).
+- **Five runtimes nest** (cline, qwen, hermes, augment, trae) because their skill loaders scan one level deep — nesting drops nested concrete skills out of the eager top-level listing while keeping them readable by file path (the namespace-router contract, #69).
+- **Eight runtimes stay flat**: three because their loaders recurse (cursor, opencode, kilo — nesting saves nothing), two because nesting was reverted (claude — the Skill tool errors on unknown names rather than re-routing, #924; antigravity — `agy` scans only `skills/<name>/SKILL.md`, so nested sub-skills were unreachable, #1614), and three conservatively where the loader depth is unconfirmed (codex, copilot, codebuddy).
 - **Three runtimes share `convertClaudeCommandToClaudeSkill`** (claude, qwen, hermes). The converter branches on the `runtime` arg for per-runtime branding (Hermes `version:`, Qwen `priority:`).
 
 ## Nesting/loader verification (June 2026)
@@ -54,10 +54,10 @@ The nesting flag is set per the verified loader behavior of each runtime. Source
 
 | Behavior | Runtimes | Evidence |
 |----------|----------|----------|
-| **NEST** (non-recursive / one-level scan) | cline, qwen, hermes, augment, trae, antigravity | cline `skills.ts` flat `fs.readdir`; Qwen `skill-load.ts` flat readdir; hermes single-level subdir probe; augment flat single-level; trae flat (nesting errors, Trae-AI/TRAE#2253); antigravity *"will not recursive scan"* |
+| **NEST** (non-recursive / one-level scan) | cline, qwen, hermes, augment, trae | cline `skills.ts` flat `fs.readdir`; Qwen `skill-load.ts` flat readdir; hermes single-level subdir probe; augment flat single-level; trae flat (nesting errors, Trae-AI/TRAE#2253) |
 | **FLAT** (recursive loader → nesting gives no saving) | cursor, opencode, kilo | cursor walks skills root recursively; opencode `skill/index.ts` glob `skills/**/SKILL.md`; kilo (opencode fork, same `**` glob) |
-| **FLAT** (reverted from nested) | claude | anthropics/claude-code#28266 — one-level scan, but Skill-tool errors on unknown names rather than re-routing via the router (#924) |
-| **FLAT** (unconfirmed → conservative) | codex, copilot, windsurf, codebuddy | Loader depth not independently verified; kept flat to avoid mis-nesting |
+| **FLAT** (reverted from nested) | claude, antigravity | claude: anthropics/claude-code#28266 — one-level scan, but Skill-tool errors on unknown names rather than re-routing via the router (#924). antigravity: `agy` scans only `skills/<name>/SKILL.md`; nesting made sub-skills unreachable, reverted to flat (#1614) |
+| **FLAT** (unconfirmed → conservative) | codex, copilot, codebuddy | Loader depth not independently verified; kept flat to avoid mis-nesting |
 
 ## Plugin / external-skill provision + consumption
 

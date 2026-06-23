@@ -399,7 +399,185 @@ describe('SECURE: VALIDATION.md security columns', () => {
   });
 });
 
-// ─── 7. Threat-model-anchored behaviour (structural) ────────────────────────
+// ─── 7. Per-threat severity gate (#1626) ────────────────────────────────────
+
+describe('SECURE: per-threat severity gate (#1626)', () => {
+  const plannerPath = path.join(AGENTS_DIR, 'gsd-planner.md');
+  const auditorPath = path.join(AGENTS_DIR, 'gsd-security-auditor.md');
+  const tplPath = path.join(TEMPLATES_DIR, 'SECURITY.md');
+  const configDocPath = path.join(REPO_ROOT, 'gsd-core', 'references', 'planning-config.md');
+
+  // ── planner: Severity column in threat register header ──────────────────
+  test('gsd-planner.md threat_model register header has Severity column', () => {
+    const content = fs.readFileSync(plannerPath, 'utf-8');
+    assert.ok(
+      content.includes('| Threat ID | Category | Component | Severity | Disposition | Mitigation Plan |'),
+      'planner STRIDE Threat Register header must include a Severity column'
+    );
+  });
+
+  test('gsd-planner.md security instruction assigns severity to each threat', () => {
+    const content = fs.readFileSync(plannerPath, 'utf-8');
+    assert.ok(
+      content.includes('severity') && content.includes('critical|high|medium|low'),
+      'planner security instruction must tell agents to assign a severity (critical|high|medium|low) to each threat'
+    );
+  });
+
+  test('gsd-planner.md checklist has Severity item', () => {
+    const content = fs.readFileSync(plannerPath, 'utf-8');
+    assert.ok(
+      content.includes('Every threat has a Severity (critical|high|medium|low)'),
+      'planner success_criteria checklist must include a Severity checklist item'
+    );
+  });
+
+  // ── auditor: block_on uses severity vocabulary ───────────────────────────
+  test('gsd-security-auditor.md block_on domain is severity vocabulary', () => {
+    const content = fs.readFileSync(auditorPath, 'utf-8');
+    assert.ok(
+      content.includes('block_on') && content.includes('critical') && content.includes('none'),
+      'auditor <config> block_on must use severity vocabulary (critical ... none), not the old open/unregistered/none'
+    );
+  });
+
+  test('gsd-security-auditor.md defines severity ordering critical > high > medium > low', () => {
+    const content = fs.readFileSync(auditorPath, 'utf-8');
+    assert.ok(
+      content.includes('critical > high > medium > low'),
+      'auditor must define the severity ordering: critical > high > medium > low'
+    );
+  });
+
+  test('gsd-security-auditor.md threats_open counts only open threats at or above block_on', () => {
+    const content = fs.readFileSync(auditorPath, 'utf-8');
+    assert.ok(
+      content.includes('threats_open') && content.includes('severity rank') && content.includes('block_on'),
+      'auditor must state that threats_open counts only open threats whose severity rank >= block_on rank'
+    );
+  });
+
+  test('gsd-security-auditor.md documents non-blocking below-threshold opens', () => {
+    const content = fs.readFileSync(auditorPath, 'utf-8');
+    assert.ok(
+      content.includes('non-blocking') && content.includes('below'),
+      'auditor must state that open threats below the block_on threshold are non-blocking and must not count toward threats_open'
+    );
+  });
+
+  // ── SECURITY.md template: Severity column ───────────────────────────────
+  test('SECURITY.md template Threat Register has Severity column', () => {
+    const content = fs.readFileSync(tplPath, 'utf-8');
+    assert.ok(
+      content.includes('Severity'),
+      'SECURITY.md Threat Register table must include a Severity column'
+    );
+  });
+
+  // ── planning-config.md: security_block_on reconciled enum ───────────────
+  test('planning-config.md security_block_on row lists critical', () => {
+    const content = fs.readFileSync(configDocPath, 'utf-8');
+    const blockOnLineIdx = content.indexOf('security_block_on');
+    assert.ok(blockOnLineIdx > -1, 'planning-config.md must have security_block_on row');
+    const lineEnd = content.indexOf('\n', blockOnLineIdx);
+    const row = content.slice(blockOnLineIdx, lineEnd);
+    assert.ok(
+      row.includes('critical'),
+      'security_block_on allowed values must include "critical"'
+    );
+  });
+
+  test('planning-config.md security_block_on row lists none', () => {
+    const content = fs.readFileSync(configDocPath, 'utf-8');
+    const blockOnLineIdx = content.indexOf('security_block_on');
+    assert.ok(blockOnLineIdx > -1, 'planning-config.md must have security_block_on row');
+    const lineEnd = content.indexOf('\n', blockOnLineIdx);
+    const row = content.slice(blockOnLineIdx, lineEnd);
+    assert.ok(
+      row.includes('none'),
+      'security_block_on allowed values must include "none"'
+    );
+  });
+
+  // ── auditor: classification vocabulary is severity-conditioned (not all-open-blocks) ──
+  test('gsd-security-auditor.md BLOCKER classification conditions blocking on severity threshold (no unconditional all-open-blocks language)', () => {
+    const content = fs.readFileSync(auditorPath, 'utf-8');
+    // The reworded classification must include both the blocking condition (severity >= block_on)
+    // AND the non-blocking category for below-threshold threats.
+    // These substrings only appear in the reworded classification block.
+    assert.ok(
+      content.includes('severity ≥ `block_on`'),
+      'BLOCKER classification must condition blocking on "severity ≥ `block_on`" threshold'
+    );
+    assert.ok(
+      content.includes('OPEN-non-blocking (severity below block_on)'),
+      'classification must include OPEN-non-blocking category for below-threshold threats'
+    );
+    // The old unconditional language said "phase must not ship" without a severity qualifier.
+    // After the fix, every "phase must not ship" must be paired with a severity condition.
+    // Find all occurrences of "must not ship" and verify none appear without "severity" nearby.
+    const lines = content.split('\n');
+    for (const line of lines) {
+      if (line.includes('must not ship') && !line.includes('severity')) {
+        assert.fail(
+          `Found "must not ship" without a severity condition on line: ${line.trim()}`
+        );
+      }
+    }
+  });
+
+  // ── auditor: fail-closed for missing/unranked severity (Finding 1) ─────────
+  test('gsd-security-auditor.md states fail-closed rule for missing/unranked severity', () => {
+    const content = fs.readFileSync(auditorPath, 'utf-8');
+    assert.ok(
+      content.includes('Fail-closed') && content.includes('missing') && content.includes('critical'),
+      'auditor must state that open threats with missing or unparseable severity are treated as critical (fail-closed / blocking)'
+    );
+  });
+
+  // ── secure-phase workflow: blocking-threshold semantics in prose (Finding 2)
+  test('secure-phase.md prose reflects blocking-threshold semantics for threats_open', () => {
+    const wfPath = path.join(WORKFLOWS_DIR, 'secure-phase.md');
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('blocking threats') || content.includes('block threshold'),
+      'secure-phase.md must use "blocking threats" or "block threshold" language when describing the threats_open gate'
+    );
+  });
+
+  // ── secure-phase workflow: severity field in register shapes (#1626) ────────
+  test('secure-phase.md Step 2c per-threat shape includes severity', () => {
+    const wfPath = path.join(WORKFLOWS_DIR, 'secure-phase.md');
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    // Step 2c defines the per-threat object shape — must carry severity so the
+    // auditor's fail-closed rule can rank it rather than defaulting to critical.
+    assert.ok(
+      content.includes('threat_id, category, component, severity, disposition, mitigation_pattern'),
+      'secure-phase.md Step 2c per-threat shape must include severity field'
+    );
+  });
+
+  // ── docs/CONFIGURATION.md: security_block_on full enum (Finding 3) ─────────
+  test('docs/CONFIGURATION.md security_block_on mentions critical and none', () => {
+    const docsConfigPath = path.join(REPO_ROOT, 'docs', 'CONFIGURATION.md');
+    const content = fs.readFileSync(docsConfigPath, 'utf-8');
+    // Find the markdown table row (starts with '| `workflow.security_block_on`')
+    const tableRowIdx = content.indexOf('| `workflow.security_block_on`');
+    assert.ok(tableRowIdx > -1, 'docs/CONFIGURATION.md must have a workflow.security_block_on table row');
+    const lineEnd = content.indexOf('\n', tableRowIdx);
+    const row = content.slice(tableRowIdx, lineEnd);
+    assert.ok(
+      row.includes('critical'),
+      'docs/CONFIGURATION.md security_block_on row must include "critical"'
+    );
+    assert.ok(
+      row.includes('none'),
+      'docs/CONFIGURATION.md security_block_on row must include "none"'
+    );
+  });
+});
+
+// ─── 8. Threat-model-anchored behaviour (structural) ────────────────────────
 
 describe('SECURE: threat-model-anchored behaviour', () => {
   const agentPath = path.join(AGENTS_DIR, 'gsd-security-auditor.md');
@@ -448,6 +626,83 @@ describe('SECURE: threat-model-anchored behaviour', () => {
     assert.ok(
       content.includes('Do NOT emit next-phase routing'),
       'workflow must explicitly prevent next-phase routing when blocked'
+    );
+  });
+});
+
+// ─── 8. Regression: security config variables resolved before use (#1625) ────
+// allow-test-rule: runtime-contract-is-the-product — secure-phase.md prose is the executed contract (#1625)
+
+describe('SECURE: security config variables resolved before use (#1625)', () => {
+  const wfPath = path.join(WORKFLOWS_DIR, 'secure-phase.md');
+
+  test('SECURITY_ASVS is assigned (not only used as placeholder)', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('SECURITY_ASVS='),
+      'SECURITY_ASVS must be assigned via config-get in the workflow, not only appear as {SECURITY_ASVS} placeholder'
+    );
+  });
+
+  test('SECURITY_BLOCK_ON is assigned (not only used as placeholder)', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('SECURITY_BLOCK_ON='),
+      'SECURITY_BLOCK_ON must be assigned via config-get in the workflow, not only appear as {SECURITY_BLOCK_ON} placeholder'
+    );
+  });
+
+  test('SECURITY_ASVS assignment appears before the auditor <config> injection line', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    const assignIdx = content.indexOf('SECURITY_ASVS=');
+    const configInjIdx = content.indexOf('block_on: {SECURITY_BLOCK_ON}');
+    assert.ok(assignIdx > -1, 'SECURITY_ASVS= must exist in the file');
+    assert.ok(configInjIdx > -1, 'block_on: {SECURITY_BLOCK_ON} injection line must exist');
+    assert.ok(
+      assignIdx < configInjIdx,
+      'SECURITY_ASVS must be assigned before the auditor <config> injection line that references {SECURITY_BLOCK_ON}'
+    );
+  });
+
+  test('SECURITY_BLOCK_ON assignment appears before the auditor <config> injection line', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    const assignIdx = content.indexOf('SECURITY_BLOCK_ON=');
+    const configInjIdx = content.indexOf('block_on: {SECURITY_BLOCK_ON}');
+    assert.ok(assignIdx > -1, 'SECURITY_BLOCK_ON= must exist in the file');
+    assert.ok(configInjIdx > -1, 'block_on: {SECURITY_BLOCK_ON} injection line must exist');
+    assert.ok(
+      assignIdx < configInjIdx,
+      'SECURITY_BLOCK_ON must be assigned before the auditor <config> injection line that references it'
+    );
+  });
+
+  test('security config resolved via config-get with correct keys and defaults', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    assert.ok(
+      content.includes('config-get workflow.security_asvs_level'),
+      'must resolve SECURITY_ASVS via config-get workflow.security_asvs_level'
+    );
+    assert.ok(
+      content.includes('config-get workflow.security_block_on'),
+      'must resolve SECURITY_BLOCK_ON via config-get workflow.security_block_on'
+    );
+    assert.ok(
+      content.includes('echo "1"') && content.includes('echo "high"'),
+      'config-get resolution must include the registry default fallbacks (1, high) so an unset/failed lookup still yields a valid value'
+    );
+  });
+
+  test('security config-get uses --raw so the injected string value is unquoted', () => {
+    const content = fs.readFileSync(wfPath, 'utf-8');
+    // Without --raw, config-get returns JSON ("high" with quotes), which would
+    // corrupt the auditor <config> block to `block_on: "high"`. --raw yields bare `high`.
+    assert.ok(
+      /config-get workflow\.security_block_on --raw/.test(content),
+      'SECURITY_BLOCK_ON must be resolved with --raw (config-get returns a quoted "high" without it)'
+    );
+    assert.ok(
+      /config-get workflow\.security_asvs_level --raw/.test(content),
+      'SECURITY_ASVS must be resolved with --raw for consistency'
     );
   });
 });

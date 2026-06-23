@@ -2457,20 +2457,18 @@ function convertClaudeToWindsurfMarkdown(content) {
   // Replace subagent_type from Claude to Windsurf format
   converted = converted.replace(/subagent_type="general-purpose"/g, 'subagent_type="generalPurpose"');
   converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
-  // Replace project-level Claude conventions with Windsurf/Devin equivalents
-  // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
-  // Legacy .windsurf/ is still recognized on read but new installs use .devin/.
-  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.devin/rules`');
-  converted = converted.replace(/\.\/CLAUDE\.md/g, '.devin/rules');
-  converted = converted.replace(/`CLAUDE\.md`/g, '`.devin/rules`');
-  converted = converted.replace(/\bCLAUDE\.md\b/g, '.devin/rules');
-  converted = converted.replace(/\.claude\/skills\//g, '.devin/skills/');
-  converted = converted.replace(/\.\/\.claude\//g, './.devin/');
-  converted = converted.replace(/\.claude\//g, '.devin/');
+  // Replace project-level Claude conventions with Windsurf equivalents.
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.windsurf/rules`');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, '.windsurf/rules');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`.windsurf/rules`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, '.windsurf/rules');
+  converted = converted.replace(/\.claude\/skills\//g, '.windsurf/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.windsurf/');
+  converted = converted.replace(/\.claude\//g, '.windsurf/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.devin');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.devin');
+  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.windsurf');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.windsurf');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'WINDSURF_CONFIG_DIR');
   // Remove Claude Code-specific bug workarounds before brand replacement
@@ -2522,6 +2520,33 @@ function convertClaudeCommandToWindsurfSkill(content, skillName) {
   const adapter = getWindsurfSkillAdapterHeader(skillName);
 
   return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
+}
+
+function convertClaudeCommandToWindsurfWorkflow(content, commandName) {
+  // #1615 security: commandName flows unsanitized into a markdown body that
+  // Windsurf loads as an LLM-readable workflow. Validate at entry to prevent
+  // (a) prompt injection via newlines / markdown structure in the filename,
+  // (b) path-component injection via .., /, \ in stem → @-reference target.
+  // Pattern: optional gsd- prefix + lowercase alphanumeric + dashes; rejects
+  // everything else. See DEFECT.PROMPT-INJECTION-SCAN-COLLISION and the
+  // PR #1622 security review.
+  if (typeof commandName !== 'string' || !/^(?:gsd-)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(commandName)) {
+    const preview = typeof commandName === 'string' ? JSON.stringify(commandName.slice(0, 60)) : String(commandName);
+    throw new Error(
+      `convertClaudeCommandToWindsurfWorkflow: rejected commandName ${preview}; ` +
+      'must match /^(?:gsd-)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/ (no slashes, backslashes, spaces, dots, trailing dash, or control chars — prevents prompt injection and path-component injection into the workflow body)'
+    );
+  }
+  const converted = convertClaudeToWindsurfMarkdown(content);
+  const { frontmatter } = extractFrontmatterAndBody(converted);
+  const description = frontmatter ? extractFrontmatterField(frontmatter, 'description') : '';
+  const stem = commandName.startsWith('gsd-') ? commandName.slice(4) : commandName;
+  const workflow = `# ${commandName}\n\n${toSingleLine(description || `Run ${commandName}.`)}\n\nRead and execute the GSD command at @~/.claude/gsd-core/commands/gsd/${stem}.md end-to-end. Treat the user's message after /${commandName} as the command arguments.`;
+  const byteLength = Buffer.byteLength(workflow, 'utf8');
+  if (byteLength > 12000) {
+    throw new Error(`Windsurf workflow ${commandName} exceeds 12000 bytes (${byteLength}); extract references before installing`);
+  }
+  return workflow;
 }
 
 /**
@@ -3227,6 +3252,66 @@ function cleanupCodexSkillMetadataSidecars(skillsDir) {
       // Fail open — a single bad dir must not block the install.
     }
   }
+}
+
+/**
+ * Remove legacy Windsurf skill artifacts from .devin/skills/gsd- directories.
+ *
+ * Pre-#1615 Windsurf installs wrote skills under .devin/ (Devin Desktop
+ * preferred dir, #1085). #1615 moved Windsurf to .windsurf/workflows/.
+ * Old .devin/skills/gsd- dirs linger on disk indefinitely and confuse
+ * users who see two GSD trees.
+ *
+ * Preserves user-owned content:
+ *   - non-gsd-* dirs under .devin/skills/ (user-authored skills)
+ *   - gsd-dev-preferences/ (user-owned per #2973)
+ *   - any files (not dirs) under .devin/skills/
+ *
+ * @param {string} workspaceDir - workspace root (process.cwd() for local installs)
+ * @returns {number} count of removed legacy gsd-* skill directories
+ */
+function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
+  const legacySkillsDir = path.join(workspaceDir, '.devin', 'skills');
+  if (!fs.existsSync(legacySkillsDir)) return 0;
+
+  // Mirror the user-owned list from cleanupCodexSkillMetadataSidecars (#2973).
+  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
+  let removed = 0;
+
+  for (const entry of fs.readdirSync(legacySkillsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
+    if (_userOwnedSkillDirs.has(entry.name)) continue;
+
+    const dirToRemove = path.join(legacySkillsDir, entry.name);
+    try {
+      // Symlink guard: if the gsd-* dir is itself a symlink pointing outside
+      // the .devin tree, deleting through it could escape the tree. Skip.
+      const stat = fs.lstatSync(dirToRemove);
+      if (stat.isSymbolicLink()) continue;
+
+      fs.rmSync(dirToRemove, { recursive: true, force: true });
+      removed++;
+    } catch (_err) {
+      // Fail open — a single bad dir must not block the install.
+    }
+  }
+
+  // If .devin/skills/ is now empty, prune it. If .devin/ itself is then empty,
+  // prune that too — leaves the workspace clean for the new .windsurf/ layout.
+  // Never remove non-empty containers (user may have other Devin content).
+  try {
+    if (fs.existsSync(legacySkillsDir) && fs.readdirSync(legacySkillsDir).length === 0) {
+      fs.rmdirSync(legacySkillsDir);
+      const devinDir = path.join(workspaceDir, '.devin');
+      if (fs.existsSync(devinDir) && fs.readdirSync(devinDir).length === 0) {
+        fs.rmdirSync(devinDir);
+      }
+    }
+  } catch (_err) {
+    // best-effort container cleanup
+  }
+
+  return removed;
 }
 
 /**
@@ -9598,6 +9683,17 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       cleanupCodexSkillMetadataSidecars(path.join(targetDir, 'skills'));
     }
 
+    // #1629 Finding B: Windsurf local only — remove legacy .devin/skills/gsd-*
+    // dirs from pre-#1615 installs. #1615 moved Windsurf to .windsurf/workflows/
+    // but never cleaned up the old .devin/skills/ layout (#1085). User-owned
+    // content is preserved (non-gsd- dirs, gsd-dev-preferences, symlinks).
+    if (isWindsurf && !isGlobal) {
+      const removedCount = cleanupWindsurfLegacyDevinSkills(process.cwd());
+      if (removedCount > 0) {
+        console.log(`  ${green}✓${reset} Removed ${removedCount} legacy .devin/skills/gsd-* dir(s) (pre-#1615 Windsurf layout)`);
+      }
+    }
+
     // Hermes only: write DESCRIPTION.md for the gsd/ category after layout install
     if (isHermes) {
       writeHermesCategoryDescription(path.join(targetDir, 'skills', 'gsd'));
@@ -9637,6 +9733,23 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         console.log(`      Launch with: kimi --agent-file ${rootAgentPath}`);
       } else {
         failures.push('agents/gsd.yaml');
+      }
+    } else if (isWindsurf) {
+      if (isGlobal) {
+        console.log(`  ${green}✓${reset} Windsurf global install skipped workflow artifacts (workspace-only)`);
+      } else {
+        const workflowsDir = path.join(targetDir, 'workflows');
+        if (fs.existsSync(workflowsDir)) {
+          const workflowCount = fs.readdirSync(workflowsDir)
+            .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
+          if (workflowCount > 0) {
+            console.log(`  ${green}✓${reset} Installed ${workflowCount} workflows to workflows/`);
+          } else {
+            failures.push('workflows/gsd-*');
+          }
+        } else {
+          failures.push('workflows/gsd-*');
+        }
       }
     } else {
       const skillsDir = path.join(targetDir, 'skills');
@@ -9861,6 +9974,23 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     console.log(`  ${green}✓${reset} Installed workflow assets`);
   } else {
     failures.push('gsd-core');
+  }
+
+  // #1629 critical fix: Windsurf workflow wrappers (convertClaudeCommandToWindsurfWorkflow)
+  // delegate to command bodies at <targetDir>/gsd-core/commands/gsd/${stem}.md via a
+  // hardcoded @~/.claude/gsd-core/commands/gsd/ path that _applyRuntimeRewrites rewrites
+  // to the install target. The source gsd-core/ dir does NOT ship with commands/ —
+  // the canonical command source lives at the package root (commands/gsd/). Without
+  // this copy, every /gsd-* workflow in Cascade references a missing file and the LLM
+  // cannot execute the command body. Surfaced by the #1629 regression test after the
+  // original adversarial review of #1622 missed it.
+  if (isWindsurf && !isGlobal) {
+    const commandsSrc = path.join(src, 'commands', 'gsd');
+    const commandsDest = path.join(skillDest, 'commands', 'gsd');
+    if (fs.existsSync(commandsSrc)) {
+      copyWithPathReplacement(commandsSrc, commandsDest, pathPrefix, runtime, true, isGlobal);
+      console.log(`  ${green}✓${reset} Installed command bodies to gsd-core/commands/gsd/ (workflow delegation targets)`);
+    }
   }
 
   // Copy shared manifests into the gsd-core payload
@@ -11919,6 +12049,7 @@ module.exports = {
     convertClaudeAgentToCodexAgent,
     generateCodexAgentToml,
     cleanupCodexSkillMetadataSidecars,
+    cleanupWindsurfLegacyDevinSkills,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,
@@ -11980,6 +12111,7 @@ module.exports = {
     skillFrontmatterName,
     convertClaudeToWindsurfMarkdown,
     convertClaudeCommandToWindsurfSkill,
+    convertClaudeCommandToWindsurfWorkflow,
     convertClaudeAgentToWindsurfAgent,
     convertClaudeToAugmentMarkdown,
     convertClaudeCommandToAugmentSkill,

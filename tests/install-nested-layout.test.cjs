@@ -48,7 +48,6 @@ const FLAT = [
   { runtime: 'cursor',    scope: 'global', skillsSub: 'skills' },
   { runtime: 'codex',     scope: 'global', skillsSub: 'skills' },
   { runtime: 'copilot',   scope: 'global', skillsSub: 'skills' },
-  { runtime: 'windsurf',  scope: 'global', skillsSub: 'skills' },
   { runtime: 'codebuddy', scope: 'global', skillsSub: 'skills' },
   { runtime: 'opencode',  scope: 'global', skillsSub: 'skills' },
   { runtime: 'kilo',      scope: 'global', skillsSub: 'skills' },
