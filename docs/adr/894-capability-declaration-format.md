@@ -48,7 +48,7 @@ Schema-validated JSON. Common envelope + role-typed body (`role: feature | runti
 | Field | Type | Notes |
 |---|---|---|
 | `skills` / `agents` | string[] | owned stems — exactly one owner each across all capabilities |
-| `hooks` | `{event, script}[]` | lifecycle hooks |
+| `hooks` | `{event, script, matcher?}[]` | lifecycle hooks; optional `matcher` is a settings.json tool-scoping pattern (exact tool name, pipe-separated list, wildcard, or regex, e.g. `Write|Edit`); absent = match-all (see *#1634 amendment* below) |
 | `config` | object | federated config-key schema slice |
 | `steps` / `contributions` / `gates` | arrays | loop hooks (below) |
 
@@ -203,6 +203,8 @@ This ADR was stress-tested in two rounds before merge; the format changed materi
 4. **Gate `check`** = query / declarative-predicate / agentVerdict; agentVerdict forced advisory; only deterministic checks may block.
 5. **Hook activation `when`** — declarative config-level gating; deeper context applicability self-gates in the skill (no phase-context vocabulary).
 6. **`byLoopPoint` ordering materialized** in the registry; resolver filters active + renders. Same-capability hooks must degrade gracefully when an entry step self-gates.
+
+**Amendment — #1634 (lifecycle hook `matcher`):** the `role: "feature"` `hooks[]` entry gained an optional `matcher` field. `matcher` is a settings.json tool-scoping pattern — exact tool name, pipe-separated list, wildcard, or regex (e.g. `Write|Edit`). The capability install path projects a declared `matcher` onto the emitted settings.json hook entry (an entry-level sibling of `hooks`, exactly matching the runtime's native shape); **absent means match-all** — the field is omitted, so the shipped capabilities' wiring is byte-for-byte unchanged. This closes #1634, where a tool-scoped `PreToolUse`/`PostToolUse` hook otherwise fired on every tool (a fail-closed guard could block the whole session). `matcher` is a settings.json-family concept; per-runtime matcher projection (ADR-857 D8, runtimes-as-descriptors) is deliberately left as a separate concern rather than baking a raw Claude regex into every runtime's projection. The validator gates `matcher` to a non-empty string with no control characters.
 
 ## Consequences
 
