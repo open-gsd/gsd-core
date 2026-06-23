@@ -40,6 +40,24 @@ patterns-established:
 
 requirements-completed: []  # REQUIRED — Copy ALL requirement IDs from this plan's `requirements` frontmatter field.
 
+# Coverage metadata (#1602) — one entry per shipped deliverable. Drives DETERMINISTIC UAT routing in verify-work.
+# OMIT this whole block for legacy/prose-only SUMMARYs — verify-work then falls back to the ## Accomplishments bullets
+# (byte-identical behavior for un-migrated phases). See <coverage_guidance> below for the contract.
+coverage:
+  - id: D1
+    description: "[deliverable in human-readable form — what would have been a prose ## Accomplishments bullet]"
+    requirement: "[REQ-ID from this plan's `requirements`, or omit if none]"
+    verification:
+      - kind: unit            # unit | integration | e2e | automated_ui | manual_procedural | other
+        ref: "[tests/path.test.ts#test name | playwright:shot.png | command invocation]"
+        status: pass          # pass | fail | unknown — from the latest run
+    human_judgment: false     # REQUIRED boolean. false => may auto-pass IF every verification status is `pass`.
+  - id: D2
+    description: "[a deliverable that needs a human to sign off]"
+    verification: []
+    human_judgment: true
+    rationale: "[REQUIRED when human_judgment: true — why automation is insufficient]"
+
 # Metrics
 duration: Xmin
 completed: YYYY-MM-DD
@@ -147,6 +165,29 @@ None - no external service configuration required.
 
 **Population:** Frontmatter is populated during summary creation in execute-plan.md. See `<step name="create_summary">` for field-by-field guidance.
 </frontmatter_guidance>
+
+<coverage_guidance>
+**Purpose (#1602):** The `coverage:` block is a per-deliverable Requirements Traceability Matrix. It lets `verify-work`'s `extract_tests` step route deliverables DETERMINISTICALLY — auto-passing those proven by passing tests and reserving human UAT for genuine judgment — instead of re-deriving coverage from prose. Consumed via `gsd-tools uat classify-coverage --summary <SUMMARY>`.
+
+**Field semantics:**
+
+| Field | Purpose |
+|---|---|
+| `id` | Stable identifier (`D1`, `D2`…) for cross-referencing from UAT.md and audit reports. Must be unique within the SUMMARY. |
+| `description` | The deliverable in human-readable form — what would have been a prose bullet. |
+| `requirement` | Links back to a REQUIREMENTS.md REQ-ID (joins `requirements-completed`). Optional. |
+| `verification[].kind` | Enum: `unit \| integration \| e2e \| automated_ui \| manual_procedural \| other`. |
+| `verification[].ref` | Test path + descriptor (`file#test name`), Playwright screenshot ref, or command invocation. Required per entry. |
+| `verification[].status` | `pass \| fail \| unknown` — populated from the latest test run. |
+| `human_judgment` | Explicit boolean; REQUIRED. `true` always routes to a human. |
+| `rationale` | REQUIRED when `human_judgment: true`. The audit trail for why automation is insufficient. |
+
+**Deterministic contract (what the classifier does):**
+- A deliverable auto-passes (no human prompt) **only** when `human_judgment: false` AND `verification` is non-empty AND every `verification[].status` is `pass`. This is the narrow, fully-proven case.
+- **Everything else is presented to a human** — `human_judgment: true`, an empty `verification:`, any non-`pass`/`unknown` status, or any schema error. A false-negative is a redundant prompt (the status quo); a false-positive ships a bug UAT existed to catch.
+- **Fail-safe default:** if you cannot determine coverage for a deliverable, you MUST set `human_judgment: true` with `rationale: "Coverage not determined at authoring time — verifier must classify"`. Never leave a deliverable's `human_judgment` empty, and never set it `false` just to skip the prompt — auto-pass additionally requires a passing `verification` entry, so the flag alone cannot skip the human.
+- `coverage: []` means "no deliverables to classify" (the single-confirmation path). OMITTING the block entirely means "legacy" — `verify-work` falls back to prose `## Accomplishments` extraction unchanged.
+</coverage_guidance>
 
 <one_liner_rules>
 The one-liner MUST be substantive:

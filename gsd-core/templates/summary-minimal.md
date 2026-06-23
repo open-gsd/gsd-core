@@ -13,6 +13,9 @@ key-files:
   created: [important files created]
   modified: [important files modified]
 key-decisions: []
+# coverage: (#1602) optional per-deliverable UAT-routing block — see templates/summary.md <coverage_guidance>.
+#   Add live `coverage:` entries to enable deterministic UAT routing in verify-work; OMIT for legacy
+#   prose-only SUMMARYs. When coverage is uncertain, default human_judgment: true — never auto-skip the human.
 duration: Xmin
 completed: YYYY-MM-DD
 status: complete

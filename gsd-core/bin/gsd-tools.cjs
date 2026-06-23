@@ -85,6 +85,7 @@
  * UAT Audit:
  *   audit-uat                           Scan all phases for unresolved UAT/verification items
  *   uat render-checkpoint --file <path> Render the current UAT checkpoint block
+ *   uat classify-coverage --summary <path> Classify a SUMMARY coverage block into auto-passed vs human-UAT (#1602)
  *
  * Open Artifact Audit:
  *   audit-open [--json]                 Scan all .planning/ artifact types for unresolved items
@@ -1360,12 +1361,16 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
     case 'uat': {
       const subcommand = args[1];
-      const uat = require('./lib/uat.cjs');
       if (subcommand === 'render-checkpoint') {
+        const uat = require('./lib/uat.cjs');
         const options = parseNamedArgs(args, ['file']);
         uat.cmdRenderCheckpoint(cwd, options, raw);
+      } else if (subcommand === 'classify-coverage') {
+        const coverage = require('./lib/coverage.cjs');
+        const options = parseNamedArgs(args, ['summary', 'file']);
+        coverage.cmdClassify(cwd, options, raw);
       } else {
-        error('Unknown uat subcommand. Available: render-checkpoint', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+        error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
       break;
     }
