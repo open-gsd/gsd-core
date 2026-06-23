@@ -283,6 +283,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `verification-patterns.md` | How to verify different artifact types. |
 | `verification-overrides.md` | Per-artifact verification override rules. |
 | `planning-config.md` | Full config schema and behavior. |
+| `security-asvs-levels.md` | OWASP ASVS level definitions for GSD threat modeling — per-level planner disposition rigor and auditor verification depth (L1 opportunistic, L2 standard, L3 comprehensive). |
 | `git-integration.md` | Git commit, branching, and history patterns. |
 | `git-planning-commit.md` | Planning directory commit conventions. |
 | `questioning.md` | Dream-extraction philosophy for project initialization. |

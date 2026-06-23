@@ -27,6 +27,8 @@ Parse: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`.
 ```bash
 AUDITOR_MODEL=$(gsd_run query resolve-model gsd-security-auditor --raw)
 VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+SECURITY_ASVS=$(gsd_run query config-get workflow.security_asvs_level --raw 2>/dev/null || echo "1")
+SECURITY_BLOCK_ON=$(gsd_run query config-get workflow.security_block_on --raw 2>/dev/null || echo "high")
 ```
 
 Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "secure-phase"`.
@@ -51,7 +53,7 @@ SUMMARY_FILES=$(ls "${PHASE_DIR}"/*-SUMMARY.md 2>/dev/null)
 
 ### 2a. Read Phase Artifacts
 
-Read PLAN.md — extract `<threat_model>` block: trust boundaries, STRIDE register (`threat_id`, `category`, `component`, `disposition`, `mitigation_plan`).
+Read PLAN.md — extract `<threat_model>` block: trust boundaries, STRIDE register (`threat_id`, `category`, `component`, `severity`, `disposition`, `mitigation_plan`).
 
 ### 2b. Read Summary Threat Flags
 
@@ -59,7 +61,7 @@ Read SUMMARY.md — extract `## Threat Flags` entries.
 
 ### 2c. Build Threat Register
 
-Per threat: `{ threat_id, category, component, disposition, mitigation_pattern, files_to_check }`
+Per threat: `{ threat_id, category, component, severity, disposition, mitigation_pattern, files_to_check }`
 
 Also set `register_authored_at_plan_time: true` if **at least one** PLAN file contained a parseable `<threat_model>` block; `false` if no PLAN files had any `<threat_model>` block (legacy phase authored before formal threat modelling was standard).
 
@@ -72,10 +74,11 @@ Classify each threat:
 | CLOSED | mitigation found OR accepted risk documented in SECURITY.md OR transfer documented |
 | OPEN | none of the above |
 
-Build: `{ threat_id, category, component, disposition, status, evidence }`
+Build: `{ threat_id, category, component, severity, disposition, status, evidence }`
 
 **Short-circuit rule:**
-- If `threats_open: 0 AND register_authored_at_plan_time: true` → skip to Step 6 directly. All plan-time threats are verified CLOSED.
+- If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level == 1` → skip to Step 6 directly. No open threats at or above the block threshold remain (threats_open: 0); below-threshold open threats may remain and are non-blocking. L1 grep-depth is sufficient; no deeper verification required.
+- If `threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level >= 2` → **do NOT skip**. The preliminary threat classification is grep-level (L1 depth) and is insufficient for L2/L3. Proceed to Step 5 (spawn the auditor) so that L2 boundary-placement checks and L3 end-to-end trace checks are performed. Skipping the auditor here would defeat ASVS level scaling for "clean" phases.
 - If `threats_open: 0 AND register_authored_at_plan_time: false` → **do NOT skip**. Empty-by-no-planning must not rubber-stamp a clean SECURITY.md. Proceed to Step 5 in **retroactive-STRIDE mode** — the auditor builds a register from implementation files first, then verifies mitigations.
 - If `threats_open > 0` → proceed to Step 4 (present threat plan to user).
 
@@ -94,6 +97,8 @@ Call AskUserQuestion with threat table and options:
 
 - `register_authored_at_plan_time: true` — **Verify mitigations exist** — do not scan for new threats. The register is complete; verify each threat's mitigation is present in the implementation.
 - `register_authored_at_plan_time: false` (retroactive-STRIDE mode) — **Retroactive-STRIDE: build a STRIDE register from implementation files first, then verify mitigations.** The phase was authored before formal threat modelling; the auditor must construct the register from scratch before verifying.
+
+Substitute `{SECURITY_ASVS}` with the value of `$SECURITY_ASVS` and `{SECURITY_BLOCK_ON}` with the value of `$SECURITY_BLOCK_ON` resolved in Step 0 via `config-get`.
 
 Print: `◆ Spawning security auditor... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
@@ -141,7 +146,7 @@ Handle return:
 
 ```
 GSD > PHASE {N} SECURITY BLOCKED
-{K} threats open — phase advancement blocked until threats_open: 0
+{K} blocking threats open — phase advancement blocked until threats_open: 0
 ▶ Fix mitigations then re-run: /gsd:secure-phase {N}
 ▶ Or document accepted risks in SECURITY.md and re-run.
 ```
@@ -159,7 +164,7 @@ gsd_run query commit "docs(phase-${PHASE}): add/update security threat verificat
 **Secured (threats_open: 0):**
 ```
 GSD > PHASE {N} THREAT-SECURE
-threats_open: 0 — all threats have dispositions.
+threats_open: 0 — no blocking threats remain (threats_open: 0).
 ▶ /gsd:validate-phase {N}    validate test coverage
 ▶ /gsd:verify-work {N}       run UAT
 ```
@@ -173,7 +178,8 @@ Display `/clear` reminder.
 - [ ] Input state detected (A/B/C) — state C exits cleanly
 - [ ] PLAN.md threat model parsed, register built
 - [ ] SUMMARY.md threat flags incorporated
-- [ ] threats_open: 0 AND register_authored_at_plan_time: true → skip directly to Step 6
+- [ ] threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level == 1 → skip directly to Step 6 (L1 grep-depth sufficient)
+- [ ] threats_open: 0 AND register_authored_at_plan_time: true AND asvs_level >= 2 → do NOT skip; auditor spawned for L2/L3 deep verification
 - [ ] threats_open: 0 AND register_authored_at_plan_time: false → retroactive-STRIDE mode (Step 5), not skipped
 - [ ] User gate with threat table presented
 - [ ] Auditor spawned with complete context

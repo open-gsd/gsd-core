@@ -3255,6 +3255,66 @@ function cleanupCodexSkillMetadataSidecars(skillsDir) {
 }
 
 /**
+ * Remove legacy Windsurf skill artifacts from .devin/skills/gsd- directories.
+ *
+ * Pre-#1615 Windsurf installs wrote skills under .devin/ (Devin Desktop
+ * preferred dir, #1085). #1615 moved Windsurf to .windsurf/workflows/.
+ * Old .devin/skills/gsd- dirs linger on disk indefinitely and confuse
+ * users who see two GSD trees.
+ *
+ * Preserves user-owned content:
+ *   - non-gsd-* dirs under .devin/skills/ (user-authored skills)
+ *   - gsd-dev-preferences/ (user-owned per #2973)
+ *   - any files (not dirs) under .devin/skills/
+ *
+ * @param {string} workspaceDir - workspace root (process.cwd() for local installs)
+ * @returns {number} count of removed legacy gsd-* skill directories
+ */
+function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
+  const legacySkillsDir = path.join(workspaceDir, '.devin', 'skills');
+  if (!fs.existsSync(legacySkillsDir)) return 0;
+
+  // Mirror the user-owned list from cleanupCodexSkillMetadataSidecars (#2973).
+  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
+  let removed = 0;
+
+  for (const entry of fs.readdirSync(legacySkillsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('gsd-')) continue;
+    if (_userOwnedSkillDirs.has(entry.name)) continue;
+
+    const dirToRemove = path.join(legacySkillsDir, entry.name);
+    try {
+      // Symlink guard: if the gsd-* dir is itself a symlink pointing outside
+      // the .devin tree, deleting through it could escape the tree. Skip.
+      const stat = fs.lstatSync(dirToRemove);
+      if (stat.isSymbolicLink()) continue;
+
+      fs.rmSync(dirToRemove, { recursive: true, force: true });
+      removed++;
+    } catch (_err) {
+      // Fail open — a single bad dir must not block the install.
+    }
+  }
+
+  // If .devin/skills/ is now empty, prune it. If .devin/ itself is then empty,
+  // prune that too — leaves the workspace clean for the new .windsurf/ layout.
+  // Never remove non-empty containers (user may have other Devin content).
+  try {
+    if (fs.existsSync(legacySkillsDir) && fs.readdirSync(legacySkillsDir).length === 0) {
+      fs.rmdirSync(legacySkillsDir);
+      const devinDir = path.join(workspaceDir, '.devin');
+      if (fs.existsSync(devinDir) && fs.readdirSync(devinDir).length === 0) {
+        fs.rmdirSync(devinDir);
+      }
+    }
+  } catch (_err) {
+    // best-effort container cleanup
+  }
+
+  return removed;
+}
+
+/**
  * Generate the GSD config block for Codex config.toml.
  * @param {Array<{name: string, description: string}>} agents
  */
@@ -9623,6 +9683,17 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       cleanupCodexSkillMetadataSidecars(path.join(targetDir, 'skills'));
     }
 
+    // #1629 Finding B: Windsurf local only — remove legacy .devin/skills/gsd-*
+    // dirs from pre-#1615 installs. #1615 moved Windsurf to .windsurf/workflows/
+    // but never cleaned up the old .devin/skills/ layout (#1085). User-owned
+    // content is preserved (non-gsd- dirs, gsd-dev-preferences, symlinks).
+    if (isWindsurf && !isGlobal) {
+      const removedCount = cleanupWindsurfLegacyDevinSkills(process.cwd());
+      if (removedCount > 0) {
+        console.log(`  ${green}✓${reset} Removed ${removedCount} legacy .devin/skills/gsd-* dir(s) (pre-#1615 Windsurf layout)`);
+      }
+    }
+
     // Hermes only: write DESCRIPTION.md for the gsd/ category after layout install
     if (isHermes) {
       writeHermesCategoryDescription(path.join(targetDir, 'skills', 'gsd'));
@@ -11978,6 +12049,7 @@ module.exports = {
     convertClaudeAgentToCodexAgent,
     generateCodexAgentToml,
     cleanupCodexSkillMetadataSidecars,
+    cleanupWindsurfLegacyDevinSkills,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,

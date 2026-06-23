@@ -395,7 +395,9 @@ describe('gsd-planner.md — supply-chain row in threat_model template', () => {
     const supplyChainRow = strideTable.rows.find((row) => hasAllTokens(row.cells[0] || '', ['t-{phase}-sc']));
     assert.ok(supplyChainRow, 'threat_model must include T-{phase}-SC supply-chain row');
 
-    const disposition = supplyChainRow.cells[3] || '';
+    const dispoIdx = strideTable.headers.findIndex((h) => /disposition/i.test(String(h)));
+    assert.ok(dispoIdx >= 0, 'STRIDE table must have a Disposition column');
+    const disposition = supplyChainRow.cells[dispoIdx] || '';
     assert.ok(hasAllTokens(disposition, ['mitigate']), 'supply-chain threat disposition must be mitigate');
   });
 });

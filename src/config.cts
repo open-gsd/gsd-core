@@ -24,7 +24,7 @@ import modelProfiles = require('./model-profiles.cjs');
 const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTable } = modelProfiles;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
-const { VALID_CONFIG_KEYS, isValidConfigKey } = configSchema;
+const { VALID_CONFIG_KEYS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskSecret } from './secrets.cjs';
 import { normalizeConfiguredDefaultReviewers } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
@@ -533,6 +533,23 @@ function setConfigValues(
 }
 
 /**
+ * Type-safe enum guard for config-set string-enum keys.
+ *
+ * Rejects any parsedValue that is not a plain string AND a member of `allowed`.
+ * This closes the JSON-array coercion bypass: String(["val"]) === "val" satisfies
+ * a bare .includes(String(parsedValue)) check, but typeof parsedValue !== 'string'
+ * catches the array before the includes test.
+ *
+ * The `label` parameter is used verbatim in the error message so callers can
+ * preserve existing message text byte-for-byte.
+ */
+function assertEnumValue(parsedValue: unknown, rawVal: string, allowed: readonly string[], label: string): void {
+  if (typeof parsedValue !== 'string' || !allowed.includes(parsedValue)) {
+    error(`Invalid ${label} '${rawVal}'. Valid values: ${allowed.join(', ')}`);
+  }
+}
+
+/**
  * Command to set a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
  *
@@ -575,15 +592,11 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   }
 
   const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];
-  if (kp === 'context' && !VALID_CONTEXT_VALUES.includes(String(parsedValue))) {
-    error(`Invalid context value '${val}'. Valid values: ${VALID_CONTEXT_VALUES.join(', ')}`);
-  }
+  if (kp === 'context') assertEnumValue(parsedValue, val, VALID_CONTEXT_VALUES, 'context value');
 
   // Codebase drift detector (#2003)
   const VALID_DRIFT_ACTIONS = ['warn', 'auto-remap'];
-  if (kp === 'workflow.drift_action' && !VALID_DRIFT_ACTIONS.includes(String(parsedValue))) {
-    error(`Invalid workflow.drift_action '${val}'. Valid values: ${VALID_DRIFT_ACTIONS.join(', ')}`);
-  }
+  if (kp === 'workflow.drift_action') assertEnumValue(parsedValue, val, VALID_DRIFT_ACTIONS, 'workflow.drift_action');
   if (kp === 'workflow.drift_threshold') {
     if (typeof parsedValue !== 'number' || !Number.isInteger(parsedValue) || parsedValue < 1) {
       error(`Invalid workflow.drift_threshold '${val}'. Must be a positive integer.`);
@@ -610,31 +623,21 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   // Human verification checkpoint mode (#3309)
   const VALID_HUMAN_VERIFY_MODES = ['mid-flight', 'end-of-phase'];
-  if (kp === 'workflow.human_verify_mode' && !VALID_HUMAN_VERIFY_MODES.includes(String(parsedValue))) {
-    error(`Invalid workflow.human_verify_mode '${val}'. Valid values: ${VALID_HUMAN_VERIFY_MODES.join(', ')}`);
-  }
+  if (kp === 'workflow.human_verify_mode') assertEnumValue(parsedValue, val, VALID_HUMAN_VERIFY_MODES, 'workflow.human_verify_mode');
 
   // Context exhaustion guard mode (#1452)
   const VALID_CONTEXT_GUARD_MODES = ['auto', 'warn', 'off'];
-  if (kp === 'workflow.context_guard_mode' && !VALID_CONTEXT_GUARD_MODES.includes(String(parsedValue))) {
-    error(`Invalid workflow.context_guard_mode '${val}'. Valid values: ${VALID_CONTEXT_GUARD_MODES.join(', ')}`);
-  }
+  if (kp === 'workflow.context_guard_mode') assertEnumValue(parsedValue, val, VALID_CONTEXT_GUARD_MODES, 'workflow.context_guard_mode');
 
   // Context position enum validation (#2937)
   const VALID_CONTEXT_POSITIONS = ['front', 'end'];
-  if (kp === 'statusline.context_position' && !VALID_CONTEXT_POSITIONS.includes(String(parsedValue))) {
-    error(`Invalid statusline.context_position '${val}'. Valid values: ${VALID_CONTEXT_POSITIONS.join(', ')}`);
-  }
+  if (kp === 'statusline.context_position') assertEnumValue(parsedValue, val, VALID_CONTEXT_POSITIONS, 'statusline.context_position');
 
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
-  if (kp === 'code_quality.fallow.scope' && !VALID_FALLOW_SCOPES.includes(String(parsedValue))) {
-    error(`Invalid code_quality.fallow.scope '${val}'. Valid values: ${VALID_FALLOW_SCOPES.join(', ')}`);
-  }
+  if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');
   const VALID_FALLOW_PROFILES = ['minimal', 'standard', 'strict'];
-  if (kp === 'code_quality.fallow.profile' && !VALID_FALLOW_PROFILES.includes(String(parsedValue))) {
-    error(`Invalid code_quality.fallow.profile '${val}'. Valid values: ${VALID_FALLOW_PROFILES.join(', ')}`);
-  }
+  if (kp === 'code_quality.fallow.profile') assertEnumValue(parsedValue, val, VALID_FALLOW_PROFILES, 'code_quality.fallow.profile');
 
   // plan_review.source_grounding (#22) — boolean only
   if (kp === 'plan_review.source_grounding') {
@@ -645,8 +648,43 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   // plan_review.source_grounding_authority (#22) — enum
   const VALID_SOURCE_GROUNDING_AUTHORITIES = ['grep', 'intel', 'treesitter', 'lsp', 'scip'];
-  if (kp === 'plan_review.source_grounding_authority' && !VALID_SOURCE_GROUNDING_AUTHORITIES.includes(String(parsedValue))) {
-    error(`Invalid plan_review.source_grounding_authority '${val}'. Valid values: ${VALID_SOURCE_GROUNDING_AUTHORITIES.join(', ')}`);
+  if (kp === 'plan_review.source_grounding_authority') assertEnumValue(parsedValue, val, VALID_SOURCE_GROUNDING_AUTHORITIES, 'plan_review.source_grounding_authority');
+
+  // Generic capability-registry validation (#1628). Capability-owned keys declare
+  // their type/values in the registry but most lack a hardcoded guard, so out-of-
+  // domain values (including JSON array/object coercion) were stored silently.
+  const capDef = getCapabilityConfigSchema(cwd)[kp] as { type?: string; values?: unknown[] } | undefined;
+  if (capDef && typeof capDef.type === 'string') {
+    switch (capDef.type) {
+      case 'enum':
+        if (Array.isArray(capDef.values)) {
+          assertEnumValue(parsedValue, val, capDef.values.map((v) => String(v)), kp);
+        }
+        break;
+      case 'boolean':
+        if (typeof parsedValue !== 'boolean') {
+          error(`Invalid ${kp} '${val}'. Must be a boolean (true or false).`);
+        }
+        break;
+      case 'number':
+        if (typeof parsedValue !== 'number' || !Number.isFinite(parsedValue)) {
+          error(`Invalid ${kp} '${val}'. Must be a number.`);
+        }
+        break;
+      case 'string':
+        if (typeof parsedValue !== 'string') {
+          error(`Invalid ${kp} '${val}'. Must be a string.`);
+        }
+        break;
+    }
+  }
+
+  // Security — ASVS level range (#1628)
+  // Must be an integer in {1, 2, 3} (OWASP ASVS levels).
+  if (kp === 'workflow.security_asvs_level') {
+    if (typeof parsedValue !== 'number' || !Number.isInteger(parsedValue) || parsedValue < 1 || parsedValue > 3) {
+      error(`Invalid workflow.security_asvs_level '${val}'. Must be an integer 1, 2, or 3.`);
+    }
   }
 
   if (kp === 'review.default_reviewers') {
