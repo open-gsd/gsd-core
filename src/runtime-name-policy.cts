@@ -101,7 +101,7 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
  * Mapping table (per the #1529 issue contract):
  *
  *   claude                      → .claude/CLAUDE.md
- *   codex, opencode, kilo, kimi → AGENTS.md
+ *   codex, opencode, kilo, kimi, qoder → AGENTS.md
  *   copilot                     → .github/copilot-instructions.md
  *   antigravity, gemini         → GEMINI.md
  *   unknown / future runtimes   → AGENTS.md (safe cross-agent default)
@@ -113,7 +113,7 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
  *     https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
  *     (Installer parity: runtime-config-adapter-registry.cts installSurface
  *     'copilot-instructions' writes the same `.github/copilot-instructions.md`.)
- *   - codex/opencode/kilo/kimi: AGENTS.md is the documented cross-agent
+ *   - codex/opencode/kilo/kimi/qoder: AGENTS.md is the documented cross-agent
  *     instruction file (agentsmd/agents.md convention).
  *   - antigravity/gemini: GEMINI.md is Gemini CLI's contextFileName.
  *
@@ -127,7 +127,7 @@ export function getProjectInstructionFile(runtime: unknown): string {
   if (canonical === 'claude') return '.claude/CLAUDE.md';
   if (canonical === 'copilot') return '.github/copilot-instructions.md';
   if (canonical === 'antigravity' || canonical === 'gemini') return 'GEMINI.md';
-  // codex, opencode, kilo, kimi, AND unknown/future runtimes all default to
+  // codex, opencode, kilo, kimi, qoder, AND unknown/future runtimes all default to
   // root AGENTS.md (the safe cross-agent instruction file).
   return 'AGENTS.md';
 }
