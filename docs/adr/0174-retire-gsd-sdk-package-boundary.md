@@ -1,6 +1,6 @@
 # ADR-0174: Retire @opengsd/gsd-sdk package boundary — single-runtime collapse
 
-- **Status:** Accepted (2026-05-23)
+- **Status:** Accepted (2026-05-23); amended #1642 (2026-06-23) — §5 reconciled to as-built Result type + `exitReason?` field added on `InvalidArgs`
 - **Date:** 2026-05-23
 - **Tracking issue:** [#174](https://github.com/open-gsd/get-shit-done-redux/issues/174) — sub-issues #175–#197
 
@@ -71,19 +71,33 @@ Dispatch is synchronous: `dispatch<T>(req: DispatchRequest): Result<T>`.
 
 Rationale: continuous stack traces, no async-boundary races in the logger, no orphaned side effects, SIGINT shows what is actually running. `synckit` dependency is removed.
 
-The `Result<T>` type is a discriminated union per `errorKind` variant, not a flat string field:
+The `Result<T>` type is a discriminated union per `errorKind` variant, not a flat string field. The as-built type (in `src/command-routing-hub.cts`) is:
 
 ```ts
 type Result<T> =
   | { ok: true; data: T }
-  | { ok: false; kind: 'Unknown'; command: string }
-  | { ok: false; kind: 'BadArgs'; arg: string; reason: string }
-  | { ok: false; kind: 'ValidationFailed'; field: string; expected: string; actual: unknown }
-  | { ok: false; kind: 'HandlerFailed'; message: string; cause?: Error }
-  | { ok: false; kind: 'NotImplemented'; command: string };
+  | { ok: false; kind: 'UnknownCommand'; command: string }
+  | { ok: false; kind: 'InvalidArgs'; arg: string; reason: string; exitReason?: string }
+  | { ok: false; kind: 'HandlerRefusal'; reason: string }
+  | { ok: false; kind: 'HandlerFailure'; message: string; cause?: Error };
 ```
 
-Adding a new variant requires amending this ADR (preserving the drift-prevention property from ADR-0012).
+> **Drift note (amendment #1642, 2026-06-23):** the original §5 text specified a different planned shape — `'Unknown'` / `'BadArgs'` / `'ValidationFailed'` / `'NotImplemented'` / `'HandlerFailed'`. The SDK retirement migration kept the ADR-0012 names (`UnknownCommand` / `InvalidArgs` / `HandlerFailure`) and never added the planned `ValidationFailed` or `NotImplemented` variants; `HandlerRefusal` was added during implementation but never back-filled into this ADR. This amendment reconciles the ADR to the as-built code so the contract documented here matches what consumers actually depend on. The drift was caught during architecture review (parent #1641).
+
+**Factories** (`src/command-routing-hub.cts`):
+
+```ts
+makeUnknownCommand(command: string) → Readonly<UnknownCommandResult>
+makeInvalidArgs(arg: string, reason: string, exitReason?: string) → Readonly<InvalidArgsResult>
+makeHandlerRefusal(reason: string) → Readonly<HandlerRefusalResult>
+makeHandlerFailure(message: string, cause?: unknown) → HandlerFailureResult
+```
+
+**The `exitReason?` field on `InvalidArgs`** (added by this amendment) carries an `ERROR_REASON` enum value (e.g. `ERROR_REASON.USAGE`) separately from the existing `reason` explanation text. This lets routers that today call `error(msg, ERROR_REASON.USAGE)` directly — bypassing the Hub — preserve `ERROR_REASON` granularity when they migrate to returning `makeInvalidArgs(...)` Results through the Hub. The field is optional and additive; existing callers are unaffected.
+
+**Dispatcher translation contract:** when an adapter translates an `InvalidArgs` Result whose `exitReason` is present, it passes `exitReason` as the second argument to `error(message, exitReason)` so the JSON-error envelope (`GSD_JSON_ERRORS=1`) preserves the typed reason for downstream consumers (CLI tests, integration harnesses).
+
+Adding a new variant **or adding a field to an existing variant** requires amending this ADR (preserving the drift-prevention property from ADR-0012).
 
 ### 6. Observability seam — silent on success, structured JSON on error, opt-in audit
 
