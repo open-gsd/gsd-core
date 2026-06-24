@@ -226,6 +226,27 @@ function sliceTopLevelFrontmatterSegments(yaml: string): Array<{ key: string; ra
   return segments;
 }
 
+/**
+ * Regenerate one frontmatter key's serialization, fail-closed if the lossy
+ * `reconstructFrontmatter` cannot represent the value (#1572 codex review). Object-list
+ * items (e.g. must_haves.artifacts `{path, provides}` maps) serialize as the literal
+ * string "[object Object]"; rather than silently emit that and destroy the data, refuse
+ * so the caller (cmdFrontmatterSet/Merge) errors out WITHOUT writing — directing the
+ * user to edit the file directly. The reported #1572 case (mutating an UNRELATED field)
+ * is unaffected: unchanged keys preserve their original raw text and never reach here.
+ */
+function regenerateFrontmatterKey(key: string, value: FrontmatterValue): string {
+  const rendered = reconstructFrontmatter({ [key]: value });
+  if (/\[object Object\]/.test(rendered)) {
+    throw new Error(
+      `frontmatter: cannot faithfully serialize key "${key}" — it contains a nested object-list ` +
+        `(e.g. must_haves.artifacts) the frontmatter writer cannot represent, and serializing it would ` +
+        `emit "[object Object]". Edit the file directly instead of using frontmatter set/merge.`,
+    );
+  }
+  return rendered;
+}
+
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
   const match = content.match(/^---\r?\n[\s\S]+?\r?\n---/);
   if (match) {
@@ -274,7 +295,7 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
         if (frontmatterDeepEqual(newObj[seg.key], originalParsed[seg.key])) {
           emitted.push(seg.raw); // unchanged → preserve original raw text verbatim
         } else {
-          emitted.push(reconstructFrontmatter({ [seg.key]: newObj[seg.key] })); // changed → regenerate
+          emitted.push(regenerateFrontmatterKey(seg.key, newObj[seg.key])); // changed → regenerate (fail-closed on object-lists)
         }
       }
       // else: key absent from newObj → drop (not emitted).
@@ -282,14 +303,21 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     // Append genuinely-new keys not present in the original frontmatter.
     for (const k of Object.keys(newObj)) {
       if (!seen.has(k)) {
-        emitted.push(reconstructFrontmatter({ [k]: newObj[k] }));
+        emitted.push(regenerateFrontmatterKey(k, newObj[k]));
       }
     }
 
     const yamlStr = emitted.join('\n');
     return `---\n${yamlStr}\n---` + content.slice(fmBlock.length);
   }
+  // No existing frontmatter — generate from scratch, fail-closed on unrepresentable values.
   const yamlStr = reconstructFrontmatter(newObj);
+  if (/\[object Object\]/.test(yamlStr)) {
+    throw new Error(
+      'frontmatter: cannot faithfully serialize the requested frontmatter — it contains a nested ' +
+        'object-list (e.g. must_haves.artifacts) the writer cannot represent. Edit the file directly.',
+    );
+  }
   return `---\n${yamlStr}\n---\n\n` + content;
 }
 

@@ -376,4 +376,29 @@ describe('frontmatter set/merge preserves must_haves object-lists (#1572)', () =
       'must_haves.artifacts must survive repeated sets on an unrelated field',
     );
   });
+
+  test('directly setting must_haves to a new object-list fails closed instead of emitting [object Object] (#1572 codex review)', () => {
+    // A CHANGED key whose value is an object-list cannot be faithfully serialized by the
+    // lossy writer (it would emit "[object Object]"). Rather than silently destroy the
+    // data, spliceFrontmatter throws — the command fails and the file is left unchanged.
+    const file = writeTempFile(ARTIFACTS_PLAN);
+    const result = runGsdTools([
+      'frontmatter', 'set', file, '--field', 'must_haves',
+      '--value', JSON.stringify({ artifacts: [{ path: 'src/new.ts', provides: 'new thing' }] }),
+    ]);
+    assert.ok(
+      !result.success,
+      'frontmatter set of a must_haves object-list must fail closed (refuse to emit "[object Object]")',
+    );
+    const after = fs.readFileSync(file, 'utf-8');
+    assert.ok(!/\[object Object\]/.test(after), 'the file must not contain "[object Object]" after a refused set');
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'the original must_haves.artifacts must be intact after the refused set',
+    );
+  });
 });
