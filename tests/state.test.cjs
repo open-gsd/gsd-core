@@ -2111,6 +2111,45 @@ describe('updatePerformanceMetricsSection', () => {
     // Total plans count updated correctly (1 pre-existing + 2 new summaries)
     assert.ok(stateAfter.match(/Total plans completed:\s*3/), 'Total plans completed should be 3 after upsert');
   });
+
+  test('#1658 — By-Phase table row upserts on a CRLF STATE.md (byPhaseTablePattern must be CRLF-tolerant)', () => {
+    const content = [
+      '# Project State', '',
+      '**Current Phase:** 07', '**Status:** Executing Phase 7', '',
+      '## Performance Metrics', '',
+      '**Velocity:**',
+      '- Total plans completed: [N]',
+      '- Average duration: N/A',
+      '- Total execution time: 0 hours', '',
+      '**By Phase:**', '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| - | - | - | - |', '',
+      '## Accumulated Context', '',
+    ].join('\n');
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    // Force CRLF line endings across the whole STATE.md (Windows / hand-edited).
+    fs.writeFileSync(statePath, content.replace(/\n/g, '\r\n'), 'utf8');
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '07-crlf');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '07-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '07-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 7: CRLF\n\n- [ ] Phase 7\n');
+
+    const result = runGsdTools('phase complete 7', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const after = fs.readFileSync(statePath, 'utf8');
+    assert.ok(
+      /\|\s*7\s*\|\s*1\s*\|/.test(after),
+      'By-Phase row for phase 7 must be upserted even on a CRLF STATE.md (#1658)',
+    );
+    assert.ok(
+      !/\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|/.test(after),
+      'placeholder row must be removed on CRLF STATE.md once a real row is upserted',
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
