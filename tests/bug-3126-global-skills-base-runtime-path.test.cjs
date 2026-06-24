@@ -10,7 +10,7 @@
 //   [agent-skills] WARNING: Global skill not found at "~/.cursor/skills/X/SKILL.md" — skipping
 //
 // Fix introduces gsd-core/bin/lib/runtime-homes.cjs with first-class
-// support for all 15 supported runtimes, including:
+// support for all 16 supported runtimes, including:
 //   - hermes: nested skills/gsd/<skillName>/ layout (#2841)
 //   - cline: rules-based, returns null (no skills directory)
 //   - CLAUDE_CONFIG_DIR env var for Claude (was missing)
@@ -58,6 +58,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     ['cline',       path.join(os.homedir(), '.cline')],
     ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
     ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
+    ['qoder',       path.join(os.homedir(), '.qoder')],
   ];
   for (const [runtime, expected] of defaults) {
     test(`${runtime} default configDir`, () => {
@@ -124,6 +125,12 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
           assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
         });
       });
+    });
+  });
+
+  test('qoder respects QODER_CONFIG_DIR', () => {
+    withEnv('QODER_CONFIG_DIR', '/custom/qoder', () => {
+      assert.strictEqual(getGlobalConfigDir('qoder'), '/custom/qoder');
     });
   });
 

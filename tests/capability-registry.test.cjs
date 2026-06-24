@@ -3964,9 +3964,9 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
 // ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
 
 describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
-  test('VALID_CONVERTER_NAMES has exactly 25 entries (16 command/skill/workflow + 9 agent converters)', () => {
+  test('VALID_CONVERTER_NAMES has exactly 27 entries (17 command/skill/workflow + 10 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 25, 'VALID_CONVERTER_NAMES must have exactly 25 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 27, 'VALID_CONVERTER_NAMES must have exactly 27 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -3988,6 +3988,7 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeCommandToTraeSkill',
       'convertClaudeCommandToWindsurfSkill',
       'convertClaudeCommandToWindsurfWorkflow',
+      'convertClaudeCommandToQoderSkill',
       // agent converters (#1173 — descriptor-driven agent conversion wiring)
       'convertClaudeAgentToCopilotAgent',
       'convertClaudeAgentToAntigravityAgent',
@@ -3997,6 +3998,7 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToTraeAgent',
       'convertClaudeAgentToCodebuddyAgent',
       'convertClaudeAgentToClineAgent',
+      'convertClaudeAgentToQoderAgent',
       'convertClaudeAgentToCodexAgent',
     ];
     for (const name of expected) {
@@ -4047,7 +4049,7 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
   });
 
   // Parity: all 16 runtime descriptors must have converters in the valid set (or null)
-  test('all 16 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
+  test('all 17 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors from real capabilities, got: ' + JSON.stringify(hardErrors));
@@ -4055,7 +4057,7 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
     const runtimeIds = [
       'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
       'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-      'codebuddy', 'cline', 'kimi', 'windsurf',
+      'codebuddy', 'cline', 'kimi', 'windsurf', 'qoder',
     ];
     for (const id of runtimeIds) {
       const cap = capMap.get(id);

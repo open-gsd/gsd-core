@@ -389,6 +389,7 @@ function convertedCommandsKind(
 //     copilot    — docs.github.com/en/copilot/concepts/agents/about-agent-skills
 //     windsurf   — docs.devin.ai/desktop/cascade/skills
 //     codebuddy  — codebuddy.ai/docs/cli/skills
+//     qoder      — https://docs.qoder.com/extensions/skills
 
 // ---------------------------------------------------------------------------
 // Descriptor-driven dispatch helpers (ADR-857 phase 5d)

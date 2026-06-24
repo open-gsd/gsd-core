@@ -1518,6 +1518,55 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "qoder": {
+    "id": "qoder",
+    "role": "runtime",
+    "version": "1.6.0-rc.3",
+    "title": "Qoder",
+    "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; profile-marker-only install surface; no hook surface; no hook events; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".qoder",
+        "env": [
+          "QODER_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
+    }
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -3533,6 +3582,55 @@ const runtimes = {
       "extendedHookEvents": []
     }
   },
+  "qoder": {
+    "id": "qoder",
+    "role": "runtime",
+    "version": "1.6.0-rc.3",
+    "title": "Qoder",
+    "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; profile-marker-only install surface; no hook surface; no hook events; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".qoder",
+        "env": [
+          "QODER_CONFIG_DIR"
+        ]
+      },
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": []
+    }
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -3858,6 +3956,7 @@ const _requiresGraph = {
     "research"
   ],
   "profile-pipeline": [],
+  "qoder": [],
   "qwen": [],
   "research": [],
   "schema-gate": [],
