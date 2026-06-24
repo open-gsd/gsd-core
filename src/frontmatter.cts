@@ -503,6 +503,24 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
   fm[field as string] = parsedValue as FrontmatterValue;
   const newContent = spliceFrontmatter(content, fm);
+  // #1660: a no-op set (newContent unchanged) with a dict-valued (object) field means the
+  // lossy frontmatter parser made the new value's projection equal the original's — the
+  // intended change did not apply. This bites object-list fields like must_haves, whose
+  // `{path, provides}` items flatten to scalar strings under extractFrontmatter. Refuse to
+  // silently report {updated:true}; surface an error directing the user to edit the file
+  // directly. Scalars and scalar arrays round-trip faithfully, so idempotent sets of those
+  // are NOT flagged (no false positive).
+  if (newContent === content && parsedValue !== null && typeof parsedValue === 'object' && !Array.isArray(parsedValue)) {
+    output(
+      {
+        error: `frontmatter set had no effect on "${field}" — the supplied value is equivalent to the existing field under the frontmatter parser, which cannot faithfully round-trip object-list fields like must_haves. Edit the file directly.`,
+        field,
+      },
+      raw,
+      undefined,
+    );
+    return;
+  }
   platformWriteSync(fullPath, newContent);
   output({ updated: true, field, value: parsedValue }, raw, 'true');
 }
