@@ -1,5 +1,0 @@
----
-type: Security
-pr: 1585
----
-**Prompt-injection defence extended to the untrusted-input surface (LLM-playbook principle 12)** — the read-injection scanner (a pattern-based pre-filter) now also scans WebFetch/WebSearch output (closing the largest untrusted channel at ingress), and the 10 research/doc-ingest agents (issue #1577 AC #2's named eight plus `gsd-ai-researcher` and `gsd-domain-researcher`, both web-ingress) isolate fetched/read content as data-not-instructions via a shared `untrusted-input-boundary` reference — this prompt-level boundary is what keeps an injection from being *followed*. An opt-in `security.injection_blocking` (registered config key; default advisory, unchanged) upgrades HIGH-confidence detections to a PostToolUse circuit-breaker: since the hook runs after the fetch, `decision: "block"` halts the agent's next step rather than redacting the already-fetched content (it is not a redactor). Based on arXiv 2506.05739 (PPA), 2507.15219 (PromptArmor), 2504.20472, 2503.00061.
