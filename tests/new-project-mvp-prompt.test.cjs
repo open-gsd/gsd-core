@@ -44,3 +44,127 @@ describe('new-project — MVP mode prompt', () => {
     assert.ok(contract.hasHorizontalStandardFallback, 'must specify fallback to standard template');
   });
 });
+
+// Bug #1516 — folded into the new-project owning module test (new top-level bug-NNNN
+// files are banned by lint-regression-test-names). /gsd-new-project's two AI Models
+// prompts (Step 2a auto-mode + Step 5 interactive) enumerated only 4 profiles
+// (Balanced/Quality/Budget/Inherit), omitting `adaptive` even though the model catalog
+// (model-catalog.json profiles) and docs/CONFIGURATION.md register 5. The fix mirrors
+// the #3784 two-question split already shipped for /gsd:settings. new-project.md has no
+// <step> tags, so blocks are located by the `header: "AI Models"` marker.
+
+describe('bug #1516: new-project AI Models prompt exposes all 5 model profiles', () => {
+  const content = fs.readFileSync(WORKFLOW, 'utf-8');
+
+  // Locate every `header: "AI Models"` AskUserQuestion block and grab a window large
+  // enough to include its conditional Q2 successor (the standard-tier picker).
+  function extractAiModelsBlocks(text) {
+    const blocks = [];
+    const headerRe = /header:\s*"AI Models"/g;
+    let m;
+    while ((m = headerRe.exec(text)) !== null) {
+      // Window from the header to the next ``` fence (closes the AskUserQuestion code block)
+      // or 60 lines, whichever comes first — captures Q1 + Q2 of the split.
+      const from = m.index;
+      const fenceAfter = text.indexOf('```', from + 1);
+      const windowEnd = fenceAfter === -1 ? from + 60 * 80 : Math.min(fenceAfter + 3, from + 60 * 80);
+      blocks.push(text.slice(from, windowEnd));
+    }
+    return blocks;
+  }
+
+  function labelsIn(block) {
+    const out = [];
+    const re = /label:\s*"([^"]+)"/g;
+    let mm;
+    while ((mm = re.exec(block)) !== null) out.push(mm[1].toLowerCase());
+    return out;
+  }
+
+  const aiModelsBlocks = extractAiModelsBlocks(content);
+
+  test('new-project has at least two AI Models prompts (Step 2a auto + Step 5 interactive)', () => {
+    assert.ok(
+      aiModelsBlocks.length >= 2,
+      `expected ≥2 AI Models prompts (auto-mode + interactive), found ${aiModelsBlocks.length}`,
+    );
+  });
+
+  test('each AI Models prompt makes adaptive reachable (#1516 — was omitted entirely)', () => {
+    assert.ok(aiModelsBlocks.length > 0, 'must find at least one AI Models block to assert against');
+    for (let i = 0; i < aiModelsBlocks.length; i++) {
+      const labels = labelsIn(aiModelsBlocks[i]);
+      assert.ok(
+        labels.some(l => l === 'adaptive' || l.startsWith('adaptive')),
+        `AI Models prompt #${i + 1} must include an "Adaptive" option (the #1516 regression — adaptive was missing). Got labels: [${labels.join(', ')}]`,
+      );
+    }
+  });
+
+  test('all 5 model profiles are reachable across the new-project model-selection surface', () => {
+    const surface = aiModelsBlocks.join('\n');
+    const labels = labelsIn(surface);
+    for (const profile of ['adaptive', 'quality', 'balanced', 'budget', 'inherit']) {
+      assert.ok(
+        labels.some(l => l === profile || l.startsWith(profile)),
+        `model profile "${profile}" must be reachable as a selectable option in the AI Models prompts. Got labels: [${labels.join(', ')}]`,
+      );
+    }
+  });
+
+  test('no options array in new-project.md exceeds the 4-option AskUserQuestion runtime cap', () => {
+    // Guards against a naive single 5-option block (which the AskUserQuestion runtime rejects).
+    const CAP = 4;
+    const optionsKeyRe = /\boptions\s*:\s*\[/g;
+    let match;
+    let questionIndex = 0;
+    let offender = null;
+    while ((match = optionsKeyRe.exec(content)) !== null) {
+      questionIndex++;
+      let depth = 0;
+      const start = match.index + match[0].length - 1;
+      let end = start;
+      for (let k = start; k < content.length; k++) {
+        if (content[k] === '[') depth++;
+        else if (content[k] === ']') { depth--; if (depth === 0) { end = k; break; } }
+      }
+      const optionsBody = content.slice(start, end + 1);
+      const labelMatches = optionsBody.match(/label:\s*"[^"]+"/g) || [];
+      if (labelMatches.length > CAP) { offender = { questionIndex, count: labelMatches.length }; break; }
+    }
+    assert.ok(
+      !offender,
+      offender
+        ? `options array #${offender.questionIndex} has ${offender.count} options — exceeds the AskUserQuestion runtime cap of ${CAP}. Split into multiple questions (as #3784 did for model_profile).`
+        : true,
+    );
+    assert.ok(questionIndex > 0, 'new-project.md must contain at least one AskUserQuestion options array');
+  });
+
+  test('both config-new-project example payloads list adaptive in the model_profile enum', () => {
+    // The two example payloads (Step 2a + Step 5) hard-coded "quality|balanced|budget|inherit"
+    // and must now include adaptive.
+    const enumRe = /model_profile"\s*:\s*"([^"]*)"/g;
+    let match;
+    const enums = [];
+    while ((match = enumRe.exec(content)) !== null) {
+      enums.push(match[1]);
+    }
+    assert.ok(enums.length >= 2, `expected >=2 config-new-project example payloads, found ${enums.length}`);
+    for (let i = 0; i < enums.length; i++) {
+      assert.ok(
+        enums[i].includes('adaptive'),
+        `config-new-project example payload #${i + 1} model_profile enum must include "adaptive". Got: "${enums[i]}"`,
+      );
+    }
+  });
+
+  test('new-project.md has balanced braces (regression guard, mirrors #3784 bd53925f)', () => {
+    let depth = 0;
+    for (const ch of content) {
+      if (ch === '{') depth++;
+      if (ch === '}') depth--;
+    }
+    assert.strictEqual(depth, 0, `new-project.md has unbalanced braces: net depth ${depth}`);
+  });
+});
