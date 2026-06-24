@@ -2097,6 +2097,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '02-next', '02');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -2145,6 +2146,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '02-next', '02');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
