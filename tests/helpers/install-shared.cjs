@@ -56,13 +56,13 @@ const RUNTIME_META = {
   opencode:     { localDir: '.opencode',         globalSuffix: path.join('.config', 'opencode') },
   qwen:         { localDir: '.qwen',             globalSuffix: '.qwen' },
   trae:         { localDir: '.trae',             globalSuffix: '.trae' },
-  windsurf:     { localDir: '.devin',             globalSuffix: path.join('.codeium', 'windsurf') },
+  windsurf:     { localDir: '.windsurf',          globalSuffix: path.join('.codeium', 'windsurf') },
 };
 
 // Runtimes that emit per-skill files under skills/ (not rules-based or commands-based)
 const SKILL_RUNTIMES = [
   'claude', 'opencode', 'gemini', 'kilo', 'codex', 'copilot', 'antigravity',
-  'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'codebuddy',
+  'cursor', 'augment', 'trae', 'qwen', 'codebuddy',
 ];
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ function runMinimalInstall({ runtime, scope, extraArgs = [] }) {
     const LOCAL_DIR_NAME = {
       claude: '.claude', opencode: '.opencode', gemini: '.gemini', kilo: '.kilo',
       codex: '.codex', copilot: '.github', antigravity: '.agents', cursor: '.cursor',
-      windsurf: '.devin', augment: '.augment', trae: '.trae', qwen: '.qwen',
+      windsurf: '.windsurf', augment: '.augment', trae: '.trae', qwen: '.qwen',
       codebuddy: '.codebuddy', cline: '.',
     };
     let configDir;

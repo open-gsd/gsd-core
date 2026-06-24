@@ -33,13 +33,12 @@ const { COMMANDS_GSD, ROUTER_STEMS, routerChildren } = require('./helpers/nested
 
 const NEST = [
   // Claude reverted to flat (#924: nested layout breaks Skill-tool discovery on Claude Code).
-  // Only the 6 runtimes below keep the nested layout.
+  // Only the 5 runtimes below keep the nested layout.
   { runtime: 'cline',       scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'qwen',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'hermes',      scope: 'global', skillsSub: 'skills/gsd', prefix: 'gsd-' }, // #947: restored canonical prefix
   { runtime: 'augment',     scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
   { runtime: 'trae',        scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
-  { runtime: 'antigravity', scope: 'global', skillsSub: 'skills',     prefix: 'gsd-' },
 ];
 
 const FLAT = [
@@ -49,10 +48,10 @@ const FLAT = [
   { runtime: 'cursor',    scope: 'global', skillsSub: 'skills' },
   { runtime: 'codex',     scope: 'global', skillsSub: 'skills' },
   { runtime: 'copilot',   scope: 'global', skillsSub: 'skills' },
-  { runtime: 'windsurf',  scope: 'global', skillsSub: 'skills' },
   { runtime: 'codebuddy', scope: 'global', skillsSub: 'skills' },
   { runtime: 'opencode',  scope: 'global', skillsSub: 'skills' },
   { runtime: 'kilo',      scope: 'global', skillsSub: 'skills' },
+  { runtime: 'antigravity', scope: 'global', skillsSub: 'skills' },
 ];
 
 // ---------------------------------------------------------------------------

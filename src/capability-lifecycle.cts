@@ -415,6 +415,21 @@ function shellSingleQuote(value: string): string {
 }
 
 /**
+ * #1634: build the emitted hook `command` for an ABSOLUTE confined script path. For `.js`-family
+ * hooks (`.js`/`.cjs`/`.mjs`) prefix with `node` so the hook runs regardless of the source's
+ * executable bit — a `git`/tarball source that lost `+x` would otherwise yield
+ * `/bin/sh: Permission denied` on every matching call (defect #2). This mirrors first-party hooks
+ * (`node "${CLAUDE_PLUGIN_ROOT}/hooks/x.js"`). The path stays POSIX single-quoted (#1460 (R) HIGH)
+ * so a space-containing install prefix cannot word-split or inject. Non-JS scripts (e.g. `.sh`)
+ * keep the bare single-quoted absolute path (unchanged) — they remain responsible for their own
+ * executability, exactly as before; per-runtime command projection is a separate concern (ADR-857 D8).
+ */
+const JS_HOOK_EXT_RE = /\.(?:js|cjs|mjs)$/;
+function runnableHookCommand(absScript: string): string {
+  return JS_HOOK_EXT_RE.test(absScript) ? 'node ' + shellSingleQuote(absScript) : shellSingleQuote(absScript);
+}
+
+/**
  * #1460 CONF-1: resolve a hook `script` (declared RELATIVE to the bundle) against the capability's
  * own install dir and CONFINE it via realpath, returning the ABSOLUTE confined path or null when it
  * escapes the bundle. Mirrors confinedSharedFile (realpath the FULL existing ancestor chain so an
@@ -609,6 +624,11 @@ function applyCapabilitySharedEdits(args: {
         const event = typeof rec['event'] === 'string' ? rec['event'] : '';
         const script = typeof rec['script'] === 'string' ? rec['script'] : '';
         if (!event || !script || isUnsafeKey(event)) continue;
+        // #1634: optional tool-scoping `matcher` (a settings.json concept — entry-level sibling of
+        // `hooks`). Absent => match-all (field OMITTED so the existing shipped capabilities' wiring
+        // is byte-for-byte unchanged, Hyrum's Law). The validator gates this to a non-empty string.
+        const matcherRaw = rec['matcher'];
+        const matcher = typeof matcherRaw === 'string' && matcherRaw.length > 0 ? matcherRaw : null;
         // #1460 CONF-1: resolve the declared (relative) script against the capability's OWN install
         // dir and CONFINE via realpath, then write the ABSOLUTE confined path as the hook command —
         // never the raw relative path (which would resolve against the CWD at hook-exec time and could
@@ -616,14 +636,17 @@ function applyCapabilitySharedEdits(args: {
         // through a symlinked subdir) return null and are SKIPPED, exactly as before.
         const absScript = confinedBundleScript(capDir(runtimeDir, capId), script);
         if (absScript === null) continue;
-        // #1460 (R) HIGH: the hook `command` is consumed by a shell (first-party hooks emit
-        // `node "${CLAUDE_PLUGIN_ROOT}/hooks/x.js"`). The absolute path begins with the
-        // (non-manifest) install-prefix, which commonly contains spaces — emit it POSIX
-        // single-quoted so the prefix cannot word-split or inject. The script BASENAME is
-        // already restricted to a shell-safe allowlist by isSafeHookScriptPath above.
-        const command = shellSingleQuote(absScript);
+        // #1460 (R) HIGH + #1634: the hook `command` is consumed by a shell. `runnableHookCommand`
+        // emits a `node`-prefixed POSIX-single-quoted absolute path for `.js`-family hooks (runs
+        // without `+x`; mirrors first-party) and a bare single-quoted path otherwise. Single-quoting
+        // keeps a space-containing install prefix as one shell token (cannot word-split or inject).
+        const command = runnableHookCommand(absScript);
         const arr = Array.isArray(hooksObj[event]) ? (hooksObj[event] as unknown[]) : [];
-        arr.push({ [CAP_MARKER]: capId, hooks: [{ type: 'command', command }] });
+        // #1634: stamp the marker so the entry is surgically strippable, and carry the declared
+        // `matcher` (entry-level sibling of `hooks`) only when the author declared one.
+        const entry: Record<string, unknown> = { [CAP_MARKER]: capId, hooks: [{ type: 'command', command }] };
+        if (matcher !== null) entry['matcher'] = matcher;
+        arr.push(entry);
         hooksObj[event] = arr;
         touched = true;
       }

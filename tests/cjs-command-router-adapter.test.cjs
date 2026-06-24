@@ -93,6 +93,58 @@ describe('cjs-command-router-adapter routeHubCommandFamily', () => {
     assert.equal(errorMessage, '--phase must be an integer');
   });
 
+  test('projects InvalidArgs exitReason as second error() arg when present (#1644)', () => {
+    let capturedMessage = null;
+    let capturedExitReason = null;
+    let callCount = 0;
+
+    routeHubCommandFamily({
+      family: 'unit',
+      args: ['unit', 'invalid'],
+      subcommands: ['invalid'],
+      handlers: {
+        invalid: () => makeInvalidArgs('--phase', '--phase must be an integer', 'USAGE'),
+      },
+      unknownMessage: () => 'should not be used',
+      error: (message, exitReason) => {
+        callCount += 1;
+        capturedMessage = message;
+        capturedExitReason = exitReason;
+      },
+      cwd: '/tmp/proj',
+      raw: false,
+    });
+
+    assert.equal(callCount, 1);
+    assert.equal(capturedMessage, '--phase must be an integer',
+      `error() message must be the InvalidArgs.reason; got: ${JSON.stringify(capturedMessage)}`);
+    assert.equal(capturedExitReason, 'USAGE',
+      `error() exitReason must be passed as second arg; got: ${JSON.stringify(capturedExitReason)}`);
+  });
+
+  test('omits second error() arg when InvalidArgs has no exitReason (byte-identical with prior behavior)', () => {
+    let capturedArgs = null;
+
+    routeHubCommandFamily({
+      family: 'unit',
+      args: ['unit', 'invalid'],
+      subcommands: ['invalid'],
+      handlers: {
+        invalid: () => makeInvalidArgs('--phase', '--phase must be an integer'),
+      },
+      unknownMessage: () => 'should not be used',
+      error: (...args) => {
+        capturedArgs = args;
+      },
+      cwd: '/tmp/proj',
+      raw: false,
+    });
+
+    assert.equal(capturedArgs.length, 1,
+      `error() must be called with EXACTLY one arg when exitReason absent (preserve byte-identical prior behavior); got ${capturedArgs.length} args`);
+    assert.equal(capturedArgs[0], '--phase must be an integer');
+  });
+
   test('projects thrown handler exceptions as HandlerFailure message', () => {
     let errorMessage = null;
 

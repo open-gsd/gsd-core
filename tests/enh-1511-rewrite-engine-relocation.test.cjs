@@ -91,6 +91,22 @@ describe('_computePathPrefix', () => {
     assert.equal(withWindows, '$HOME/.cursor/');
     assert.strictEqual(withWindows, withoutWindows);
   });
+
+  test('backslash-style resolvedTarget is normalized to forward slashes (#1615 regression)', () => {
+    // path.join on Windows produces backslashes; the returned prefix is
+    // substituted into markdown @-references which must use POSIX paths.
+    // Without normalization the backslashes leak into workflow file content
+    // and break substring checks on Windows CI.
+    const prefix = conversion._computePathPrefix({
+      isGlobal: false,
+      isOpencode: false,
+      isWindowsHost: true,
+      resolvedTarget: 'C:\\Users\\runner\\AppData\\Local\\Temp\\gsd-1615-windsurf',
+      homeDir: 'C:\\Users\\runner',
+    });
+    assert.strictEqual(prefix, 'C:/Users/runner/AppData/Local/Temp/gsd-1615-windsurf/');
+    assert.ok(!prefix.includes('\\'), `prefix must not contain backslashes: ${prefix}`);
+  });
 });
 
 // ---------------------------------------------------------------------------

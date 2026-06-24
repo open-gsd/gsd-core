@@ -307,7 +307,7 @@ test('upgrade: a changed executable set without consent aborts and leaves the OL
   assert.strictEqual(capManifestVersion(dir, 'e'), '1.0.0', 'old bundle untouched');
   assert.strictEqual(readLedgerEntry(dir, 'e').version, '1.0.0', 'old ledger untouched');
   // #1460 CONF-1/(R): command is the ABSOLUTE confined path inside the bundle (POSIX single-quoted), not the raw relative form.
-  assert.strictEqual(readSettings(dir).hooks.PostToolUse[0].hooks[0].command, shQuote(expectedBundleCommand(dir, 'e', 'hooks/a.js')));
+  assert.strictEqual(readSettings(dir).hooks.PostToolUse[0].hooks[0].command, nodeQuoted(expectedBundleCommand(dir, 'e', 'hooks/a.js')));
 });
 
 test('upgrade: a changed executable set WITH consent upgrades and re-derives shared edits', async () => {
@@ -324,7 +324,7 @@ test('upgrade: a changed executable set WITH consent upgrades and re-derives sha
   const hooks = readSettings(dir).hooks.PostToolUse;
   assert.strictEqual(hooks.length, 1);
   // #1460 CONF-1/(R): re-derived command is the ABSOLUTE confined path inside the bundle (POSIX single-quoted).
-  assert.strictEqual(hooks[0].hooks[0].command, shQuote(expectedBundleCommand(dir, 'e', 'hooks/b.js')), 'old shared edit stripped, new applied (quoted absolute confined path)');
+  assert.strictEqual(hooks[0].hooks[0].command, nodeQuoted(expectedBundleCommand(dir, 'e', 'hooks/b.js')), 'old shared edit stripped, new applied (node + quoted absolute confined path)');
 });
 
 // ---------------------------------------------------------------------------
@@ -348,6 +348,10 @@ function runtimeWithSpace() {
 /** POSIX single-quote a string the way applyCapabilitySharedEdits must. */
 function shQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'";
+}
+/** #1634: a `.js`-family hook command is emitted as `node ` + the POSIX-quoted absolute path. */
+function nodeQuoted(p) {
+  return 'node ' + shQuote(p);
 }
 
 test('#1460 (R): emitted hook command is single-quoted when the install prefix contains a space', async () => {
@@ -382,7 +386,7 @@ test('#1460 (R): a normal script under a normal prefix emits the quoted absolute
   assert.strictEqual(before.length, 1);
   assert.strictEqual(before[0][CAP_MARKER], 'e');
   // revert-fails: without quoting the control command is the bare absolute path.
-  assert.strictEqual(before[0].hooks[0].command, shQuote(expectedBundleCommand(dir, 'e', 'hooks/run.js')));
+  assert.strictEqual(before[0].hooks[0].command, nodeQuoted(expectedBundleCommand(dir, 'e', 'hooks/run.js')));
   // Strip is keyed on CAP_MARKER===capId, NOT the command string — quoting does not break it.
   const rem = await lifecycle.removeCapability('e', {
     runtimeDir: dir, hostVersion: '1.6.0', sharedFiles: ['settings.json'],
@@ -411,7 +415,88 @@ test('#1460 (R): idempotent strip-then-reapply yields the identical quoted comma
   const second = readSettings(dir).hooks.PostToolUse;
   assert.strictEqual(second.length, 1, 'idempotent: still exactly one stamped hook after strip+reapply');
   assert.strictEqual(second[0].hooks[0].command, first[0].hooks[0].command, 'identical quoted command on re-apply');
-  assert.strictEqual(second[0].hooks[0].command, shQuote(expectedBundleCommand(dir, capId, 'hooks/run.js')));
+  assert.strictEqual(second[0].hooks[0].command, nodeQuoted(expectedBundleCommand(dir, capId, 'hooks/run.js')));
+});
+
+// ---------------------------------------------------------------------------
+// #1634: a declared tool-scoping `matcher` must be honored, and a .js-family
+// hook command must run without relying on the source's executable bit.
+// ---------------------------------------------------------------------------
+test('#1634: a declared matcher is preserved on the emitted shared-config hook entry', () => {
+  const dir = runtime();
+  const capId = 'toolkit';
+  const capDirPath = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(path.join(capDirPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(capDirPath, 'hooks', 'genfile-guard.cjs'), '// guard\n', 'utf8');
+  const manifest = declarativeCap(capId, '1.0.0');
+  manifest.hooks = [{ event: 'PreToolUse', script: 'hooks/genfile-guard.cjs', matcher: 'Write|Edit' }];
+
+  lifecycle.applyCapabilitySharedEdits({ runtimeDir: dir, capId, manifest, sharedFiles: ['settings.json'] });
+
+  const entry = readSettings(dir).hooks.PreToolUse[0];
+  assert.strictEqual(entry[CAP_MARKER], capId, 'entry is stamped with the capability marker');
+  // revert-fails: matcher was dropped, so the hook fired on every tool (Bash/Read/Write/Edit).
+  assert.strictEqual(entry.matcher, 'Write|Edit', 'declared matcher is preserved so the hook is tool-scoped');
+});
+
+test('#1634: an absent matcher is omitted (match-all) so shipped capabilities stay unchanged', () => {
+  const dir = runtime();
+  const capId = 'plain';
+  const capDirPath = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(path.join(capDirPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(capDirPath, 'hooks', 'run.js'), '// x\n', 'utf8');
+  const manifest = declarativeCap(capId, '1.0.0');
+  manifest.hooks = [{ event: 'PostToolUse', script: 'hooks/run.js' }];
+
+  lifecycle.applyCapabilitySharedEdits({ runtimeDir: dir, capId, manifest, sharedFiles: ['settings.json'] });
+
+  const entry = readSettings(dir).hooks.PostToolUse[0];
+  assert.ok(!('matcher' in entry), 'no matcher declared => field omitted (match-all), preserving prior behavior');
+});
+
+test('#1634: a .cjs hook command is node-prefixed so it runs without the executable bit', () => {
+  const dir = runtime();
+  const capId = 'toolkit';
+  const capDirPath = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(path.join(capDirPath, 'hooks'), { recursive: true });
+  // Stage at 0644 (no +x) — a git/tarball source that lost the executable bit.
+  fs.writeFileSync(path.join(capDirPath, 'hooks', 'genfile-guard.cjs'), '// guard\n', { encoding: 'utf8', mode: 0o644 });
+  const manifest = declarativeCap(capId, '1.0.0');
+  manifest.hooks = [{ event: 'PreToolUse', script: 'hooks/genfile-guard.cjs' }];
+
+  lifecycle.applyCapabilitySharedEdits({ runtimeDir: dir, capId, manifest, sharedFiles: ['settings.json'] });
+
+  const command = readSettings(dir).hooks.PreToolUse[0].hooks[0].command;
+  // The executable bit is a POSIX concept; on Windows fs modes are not POSIX (a 0o644 write reads
+  // back as 0o666), so the precondition is checked on POSIX only. The node-prefix assertion below
+  // is the actual fix and is platform-independent.
+  if (process.platform !== 'win32') {
+    assert.strictEqual((fs.statSync(path.join(capDirPath, 'hooks', 'genfile-guard.cjs')).mode & 0o777), 0o644,
+      'precondition: file staged without +x');
+  }
+  // revert-fails: command was a bare single-quoted path -> /bin/sh: Permission denied on non-+x.
+  assert.ok(/^node '/.test(command), 'command is node-prefixed for a .cjs hook: ' + command);
+});
+
+test('#1634: matcher + node-prefix together; marker strip round-trip unaffected', () => {
+  const dir = runtime();
+  const capId = 'toolkit';
+  const capDirPath = path.join(dir, '.gsd', 'capabilities', capId);
+  fs.mkdirSync(path.join(capDirPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(capDirPath, 'hooks', 'genfile-guard.cjs'), '// guard\n', 'utf8');
+  const manifest = declarativeCap(capId, '1.0.0');
+  manifest.hooks = [{ event: 'PreToolUse', script: 'hooks/genfile-guard.cjs', matcher: 'Write|Edit' }];
+
+  const edits = lifecycle.applyCapabilitySharedEdits({ runtimeDir: dir, capId, manifest, sharedFiles: ['settings.json'] });
+  const before = readSettings(dir).hooks.PreToolUse[0];
+  assert.strictEqual(before.matcher, 'Write|Edit', 'matcher preserved on apply');
+  assert.ok(/^node '/.test(before.hooks[0].command), 'command node-prefixed on apply');
+
+  // Strip is keyed on CAP_MARKER, not command/matcher shape — must still remove the entry.
+  lifecycle.stripCapabilitySharedEdits({ runtimeDir: dir, capId, sharedEdits: edits });
+  const after = readSettings(dir);
+  assert.ok(!after || !after.hooks || !after.hooks.PreToolUse || after.hooks.PreToolUse.length === 0,
+    'marker-stamped entry is stripped regardless of matcher/command shape');
 });
 
 test('#1460 (R): confinedBundleScript returns null for an unsafe-char script (defense-in-depth)', () => {
@@ -955,11 +1040,11 @@ test('#1460 CONF-1: a relative hook script is emitted as the absolute path insid
   const s = readSettings(dir);
   const command = s.hooks.PostToolUse[0].hooks[0].command;
   const expectedAbs = path.join(fs.realpathSync(path.join(capDir, 'subdir')), 'run.js');
-  // #1460 (R): the emitted command is the absolute confined path, POSIX single-quoted.
-  assert.strictEqual(command, shQuote(expectedAbs), 'command must be the quoted absolute confined path inside capDir');
-  const unquoted = command.slice(1, -1); // strip the wrapping single quotes for the path-shape checks
-  assert.ok(path.isAbsolute(unquoted), 'command must be absolute (CWD-independent)');
-  assert.ok(unquoted.startsWith(fs.realpathSync(capDir) + path.sep), 'command must live inside the bundle');
+  // #1460 (R) + #1634: the emitted command is `node ` + the absolute confined path, POSIX single-quoted.
+  assert.strictEqual(command, nodeQuoted(expectedAbs), 'command must be node + the quoted absolute confined path inside capDir');
+  const unquoted = command.slice('node '.length + 1, -1); // drop `node ` prefix, strip the wrapping single quotes
+  assert.ok(path.isAbsolute(unquoted), 'command path must be absolute (CWD-independent)');
+  assert.ok(unquoted.startsWith(fs.realpathSync(capDir) + path.sep), 'command path must live inside the bundle');
 });
 
 test('#1460 CONF-1: a script resolving OUTSIDE capDir via a symlinked subdir is NOT written (skipped)', (t) => {

@@ -140,7 +140,7 @@ describe('installRuntimeArtifacts — consumes Runtime Artifact Install Plan Mod
 
 const SKILLS_RUNTIMES_LAYOUT = [
   'claude', 'cursor', 'codex', 'copilot', 'antigravity',
-  'windsurf', 'augment', 'trae', 'qwen', 'kimi', 'codebuddy',
+  'augment', 'trae', 'qwen', 'kimi', 'codebuddy',
 ];
 
 const ALL_RUNTIMES_LAYOUT = [
@@ -295,6 +295,47 @@ describe('installRuntimeArtifacts — cursor commands layout (#785)', () => {
     // Cursor commands are plain markdown — no YAML frontmatter
     const helpContent = fs.readFileSync(path.join(commandsDir, 'gsd-help.md'), 'utf8');
     assert.ok(!helpContent.startsWith('---'), 'cursor commands must not start with YAML frontmatter');
+  });
+});
+
+describe('installRuntimeArtifacts — windsurf workflows layout (#1615)', () => {
+  test('windsurf: local install writes workflow slash-command files, not skills', (t) => {
+    const configDir = createTempDir('gsd-ial-windsurf-');
+    t.after(() => cleanup(configDir));
+
+    installRuntimeArtifacts('windsurf', configDir, 'local', RESOLVED_CORE);
+
+    const workflowsDir = path.join(configDir, 'workflows');
+    assert.ok(fs.existsSync(workflowsDir), 'workflows/ must exist for Windsurf local install');
+    assert.ok(fs.existsSync(path.join(workflowsDir, 'gsd-help.md')),
+      'workflows/gsd-help.md must exist for /gsd-help');
+    assert.ok(!fs.existsSync(path.join(configDir, 'skills')),
+      'Windsurf must not install dead skills/ artifacts for slash commands');
+
+    const helpContent = fs.readFileSync(path.join(workflowsDir, 'gsd-help.md'), 'utf8');
+    assert.ok(!helpContent.startsWith('---'), 'Windsurf workflows must be plain markdown, not SKILL.md frontmatter');
+    assert.match(helpContent, /# gsd-help/, 'workflow should identify the slash command it backs');
+    assert.ok(helpContent.includes(`${configDir}/gsd-core/commands/gsd/help.md`.replace(/\\/g, '/')),
+      'workflow should reference the installed command body using the actual install target');
+
+    for (const fileName of fs.readdirSync(workflowsDir)) {
+      if (!fileName.endsWith('.md')) continue;
+      const workflowPath = path.join(workflowsDir, fileName);
+      const byteLength = Buffer.byteLength(fs.readFileSync(workflowPath, 'utf8'), 'utf8');
+      assert.ok(byteLength <= 12000, `${fileName} must respect Windsurf's 12,000-character workflow limit`);
+    }
+  });
+
+  test('windsurf: global install is explicit no-op for workflow artifacts', (t) => {
+    const configDir = createTempDir('gsd-ial-windsurf-global-');
+    t.after(() => cleanup(configDir));
+
+    installRuntimeArtifacts('windsurf', configDir, 'global', RESOLVED_CORE);
+
+    assert.ok(!fs.existsSync(path.join(configDir, 'workflows')),
+      'global Windsurf install must not write workflows under the config root');
+    assert.ok(!fs.existsSync(path.join(configDir, 'skills')),
+      'global Windsurf install must not write dead skills artifacts');
   });
 });
 

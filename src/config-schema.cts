@@ -79,4 +79,5 @@ export = {
   isCapabilityConfigKey,
   isCentralConfigKey,
   isValidConfigKey,
+  getCapabilityConfigSchema: _capabilityConfigSchema,
 };

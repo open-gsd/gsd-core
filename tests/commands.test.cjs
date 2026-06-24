@@ -1862,6 +1862,50 @@ describe('stats command', () => {
     assert.strictEqual(stats.plan_percent, 67);
   });
 
+  test('excludes Phase 0 and 999 sentinels from stats totals (#1580)', () => {
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    const p0 = path.join(tmpDir, '.planning', 'phases', '00-bootstrap');
+    const p999 = path.join(tmpDir, '.planning', 'phases', '999-backlog');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.mkdirSync(p0, { recursive: true });
+    fs.mkdirSync(p999, { recursive: true });
+
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(p1, 'VERIFICATION.md'), '---\nstatus: passed\n---\n# Verified');
+    fs.writeFileSync(path.join(p0, '00-01-PLAN.md'), '# Bootstrap sentinel plan');
+    fs.writeFileSync(path.join(p999, '999-01-PLAN.md'), '# Backlog sentinel plan');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Milestone v1.0',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal:** Real work',
+        '',
+        '### Phase 0: Bootstrap',
+        '**Goal:** Pre-milestone notes',
+        '',
+        '### Phase 999: Backlog',
+        '**Goal:** Deferred notes',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('stats', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const stats = JSON.parse(result.output);
+    assert.strictEqual(stats.phases_total, 1);
+    assert.strictEqual(stats.phases_completed, 1);
+    assert.strictEqual(stats.total_plans, 1);
+    assert.strictEqual(stats.total_summaries, 1);
+    assert.strictEqual(stats.percent, 100);
+    assert.deepStrictEqual(stats.phases.map((p) => p.number), ['01']);
+  });
+
   test('counts requirements from REQUIREMENTS.md', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),

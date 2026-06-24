@@ -26,6 +26,11 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
+// Phase 2 (#1646): route through the Hub per ADR-959 §III(B) line 75.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cjsCommandRouterAdapter = require('./cjs-command-router-adapter.cjs');
+
+const { routeHubCommandFamily } = cjsCommandRouterAdapter;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -71,28 +76,67 @@ function routeAuditUat({ args, cwd, raw, error, _uat }: RouteAuditUatOptions): v
   void error;
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const u: UatModule = _uat ?? require('./uat.cjs');
-  u.cmdAuditUat(cwd, raw);
+
+  // Phase 2 (#1646): routes through the Hub for uniform observability and
+  // HandlerFailure taxonomy. audit-uat has no subcommands — a synthetic 'run'
+  // defaultSubcommand gives the Hub a single-handler manifest. The dispatch is
+  // trivial but the observability seam (DispatchEvent, GSD_AUDIT=1 trace) is
+  // now consistent with graphify/intel/host routers.
+  routeHubCommandFamily({
+    family: 'audit-uat',
+    args,
+    subcommands: ['run'],
+    defaultSubcommand: 'run',
+    handlers: {
+      run: () => u.cmdAuditUat(cwd, raw),
+    },
+    unknownMessage: (subcommand: string) =>
+      `Unknown audit-uat subcommand: "${subcommand}". audit-uat takes no subcommands.`,
+    error,
+    cwd,
+    raw,
+  });
 }
 
 // ─── routeAuditOpen ──────────────────────────────────────────────────────────
 
 function routeAuditOpen({ args, cwd, raw, error, _audit, _core }: RouteAuditOpenOptions): void {
-  // Suppress unused-variable warning for error — audit-open has no subcommand
-  // dispatch that would call error(); only flag parsing occurs here.
-  void error;
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const a: AuditModule = _audit ?? require('./audit.cjs');
   const c: CoreModule = _core ?? io;
+
+  // Phase 2 (#1646): routes through the Hub for uniform observability.
+  // `--json` is a flag, not a subcommand — capture it in the closure and strip
+  // it from args before Hub dispatch so it isn't mistaken for a subcommand by
+  // the manifest check. The handler then branches on wantJson for the two
+  // output shapes (JSON object vs human-readable formatted report).
   const wantJson = args.includes('--json');
-  const result = a.auditOpenArtifacts(cwd);
-  if (wantJson) {
-    // io.output JSON-stringifies its first arg; pass the object directly.
-    c.output(result, raw);
-  } else {
-    // Human-readable report must bypass JSON encoding — use the rawValue
-    // form (third arg) which io.output emits verbatim.
-    c.output(null, true, a.formatAuditReport(result));
-  }
+  const hubArgs = wantJson ? args.filter((arg) => arg !== '--json') : args;
+
+  routeHubCommandFamily({
+    family: 'audit-open',
+    args: hubArgs,
+    subcommands: ['run'],
+    defaultSubcommand: 'run',
+    handlers: {
+      run: () => {
+        const result = a.auditOpenArtifacts(cwd);
+        if (wantJson) {
+          // io.output JSON-stringifies its first arg; pass the object directly.
+          c.output(result, raw);
+        } else {
+          // Human-readable report must bypass JSON encoding — use the rawValue
+          // form (third arg) which io.output emits verbatim.
+          c.output(null, true, a.formatAuditReport(result));
+        }
+      },
+    },
+    unknownMessage: (subcommand: string) =>
+      `Unknown audit-open subcommand: "${subcommand}". audit-open takes no subcommands (use --json for JSON output).`,
+    error,
+    cwd,
+    raw,
+  });
 }
 
 export = {

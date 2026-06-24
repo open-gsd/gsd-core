@@ -39,7 +39,7 @@ const RUNTIME_INSTALL_CONTRACTS = {
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
-  windsurf: { surface: 'flat-skills', settings: false, packageJson: false },
+  windsurf: { surface: 'global-artifacts-noop', settings: false, packageJson: false },
 };
 
 function sha256(content) {
@@ -261,9 +261,20 @@ function assertFreshInstallContract(runtime, targetDir) {
       /GSD workflows live in `gsd-core\/workflows\/`/,
       'Cline should install .clinerules/gsd.md guidance'
     );
+  } else if (contract.surface === 'global-artifacts-noop') {
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'skills')),
+      false,
+      `${runtime} should not install unsupported global skills artifacts`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'workflows')),
+      false,
+      `${runtime} should not install unsupported global workflow artifacts`
+    );
   }
 
-  if (contract.surface !== 'kimi-skills-agents') {
+  if (contract.surface !== 'kimi-skills-agents' && contract.surface !== 'global-artifacts-noop') {
     assert.ok(
       listDirNames(targetDir, 'agents').some((name) => name.startsWith('gsd-')),
       `${runtime} full install should install agents`

@@ -184,3 +184,69 @@ Execute: `/gsd:execute-phase {phase} --gaps-only`
 ## Checkpoint Reached / Revision Complete
 
 Follow templates in checkpoints and revision_mode sections respectively.
+
+---
+
+## Goal-Backward Worked Example
+
+### Step 2: Derive Observable Truths
+
+For "working chat interface":
+- User can see existing messages
+- User can type a new message
+- User can send the message
+- Sent message appears in the list
+- Messages persist across page refresh
+
+**Test:** Each truth verifiable by a human using the application.
+
+### Step 3: Derive Required Artifacts
+
+"User can see existing messages" requires:
+- Message list component (renders Message[])
+- Messages state (loaded from somewhere)
+- API route or data source (provides messages)
+- Message type definition (shapes the data)
+
+**Test:** Each artifact = a specific file or database object.
+
+### Step 4: Derive Required Wiring
+
+Message list component wiring:
+- Imports Message type (not using `any`)
+- Receives messages prop or fetches from API
+- Maps over messages to render (not hardcoded)
+- Handles empty state (not just crashes)
+
+### Step 5: Identify Key Links
+
+"Where is this most likely to break?" Key links = critical connections where breakage causes cascading failures.
+
+### Must-Haves Output Format
+
+```yaml
+must_haves:
+  truths:
+    - "User can see existing messages"
+    - "User can send a message"
+    - "Messages persist across refresh"
+  artifacts:
+    - path: "src/components/Chat.tsx"
+      provides: "Message list rendering"
+      min_lines: 30
+    - path: "src/app/api/chat/route.ts"
+      provides: "Message CRUD operations"
+      exports: ["GET", "POST"]
+    - path: "prisma/schema.prisma"
+      provides: "Message model"
+      contains: "model Message"
+  key_links:
+    - from: "src/components/Chat.tsx"
+      to: "src/app/api/chat/route.ts"
+      via: "fetch in useEffect — calls /api/chat endpoint"
+      pattern: "fetch.*api/chat"
+    - from: "src/app/api/chat/route.ts"
+      to: "prisma/schema.prisma"
+      via: "database query via prisma.message"
+      pattern: "prisma\\.message\\.(find|create)"
+```

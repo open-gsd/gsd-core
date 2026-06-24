@@ -21,7 +21,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, comparePhaseNum, extractPhaseToken } = phaseIdMod;
+const { normalizePhaseName, comparePhaseNum, extractPhaseToken, isMilestoneSentinelPhaseId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { getArchivedPhaseDirs, findPhaseInternal } = phaseLocatorMod;
@@ -1517,6 +1517,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
     const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:\s*([^\n]+)/gi;
     let match: RegExpExecArray | null;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
+      if (isMilestoneSentinelPhaseId(match[1])) continue;
       const key = normalizePhaseName(match[1]);
       phasesByNumber.set(key, {
         number: key,
@@ -1534,6 +1535,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       .filter(e => e.isDirectory())
       .map(e => e.name)
       .filter(isDirInMilestone)
+      .filter(d => !isMilestoneSentinelPhaseId(extractPhaseToken(d)))
       .sort((a, b) => comparePhaseNum(a, b));
 
     for (const dir of dirs) {

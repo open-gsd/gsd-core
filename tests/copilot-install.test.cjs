@@ -25,6 +25,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { parseFrontmatter, createTempDir, cleanup } = require('./helpers.cjs');
+const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
 const {
   getDirName,
@@ -857,10 +858,11 @@ describe('Copilot agent conversion - real files', () => {
   });
 
   test('all 18 agents convert without error', () => {
+    // Not the shared listAgentFiles() helper: this needs full `.md` filenames
+    // (not stripped basenames) to readFileSync each agent below.
     const agents = fs.readdirSync(agentsSrc)
       .filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
-    const expectedAgentCount = fs.readdirSync(agentsSrc)
-      .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
+    const expectedAgentCount = listAgentFiles(agentsSrc).length;
     assert.strictEqual(agents.length, expectedAgentCount, `expected ${expectedAgentCount} agents, got ${agents.length}`);
 
     for (const agentFile of agents) {
@@ -1350,8 +1352,8 @@ const crypto = require('crypto');
 const INSTALL_PATH = path.join(__dirname, '..', 'bin', 'install.js');
 const EXPECTED_SKILLS = fs.readdirSync(path.join(__dirname, '..', 'commands', 'gsd'))
   .filter(f => f.endsWith('.md')).length;
-const EXPECTED_AGENTS = fs.readdirSync(path.join(__dirname, '..', 'agents'))
-  .filter(f => f.startsWith('gsd-') && f.endsWith('.md')).length;
+// Source-roster count (gsd-*.md basenames) — shared helper.
+const EXPECTED_AGENTS = listAgentFiles().length;
 
 function runCopilotInstall(cwd) {
   const env = { ...process.env };

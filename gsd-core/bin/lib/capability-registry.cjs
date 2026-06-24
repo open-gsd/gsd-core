@@ -65,7 +65,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Antigravity",
-    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -93,7 +93,7 @@ const capabilities = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -103,7 +103,7 @@ const capabilities = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -645,7 +645,7 @@ const capabilities = {
     "role": "feature",
     "version": "1.6.0-rc.2",
     "title": "Drift detection gates",
-    "description": "Post-execution drift detection gates that run after each wave completes. Provides two gates at execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md).",
+    "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
     "tier": "full",
     "requires": [],
     "engines": {
@@ -679,6 +679,11 @@ const capabilities = {
         "type": "boolean",
         "default": true,
         "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+      },
+      "workflow.plan_drift_precheck": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
       }
     },
     "steps": [],
@@ -699,6 +704,15 @@ const capabilities = {
           "query": "verify.codebase-drift"
         },
         "when": "workflow.schema_drift_gate",
+        "blocking": false,
+        "onError": "skip"
+      },
+      {
+        "point": "plan:pre",
+        "check": {
+          "query": "verify.codebase-drift"
+        },
+        "when": "workflow.plan_drift_precheck",
         "blocking": false,
         "onError": "skip"
       }
@@ -1963,7 +1977,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Windsurf",
-    "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+    "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -1980,24 +1994,15 @@ const capabilities = {
       },
       "configFormat": "none",
       "artifactLayout": {
-        "global": [
-          {
-            "kind": "skills",
-            "destSubpath": "skills",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
-          }
-        ],
+        "global": [],
         "local": [
           {
-            "kind": "skills",
-            "destSubpath": "skills",
+            "kind": "commands",
+            "destSubpath": "workflows",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
+            "converter": "convertClaudeCommandToWindsurfWorkflow"
           }
         ]
       },
@@ -2228,6 +2233,16 @@ const byLoopPoint = {
       }
     ],
     "gates": [
+      {
+        "capId": "drift",
+        "point": "plan:pre",
+        "check": {
+          "query": "verify.codebase-drift"
+        },
+        "when": "workflow.plan_drift_precheck",
+        "blocking": false,
+        "onError": "skip"
+      },
       {
         "capId": "ui",
         "point": "plan:pre",
@@ -2480,6 +2495,7 @@ const configKeys = {
   "workflow.drift_threshold": "drift",
   "workflow.drift_action": "drift",
   "workflow.schema_drift_gate": "drift",
+  "workflow.plan_drift_precheck": "drift",
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
@@ -2552,6 +2568,12 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Enable the drift gates at execute:wave:post. When enabled, the schema drift gate blocks verification if schema-relevant files changed during execution but no database push command was executed; the codebase drift gate (non-blocking) warns when structural additions exceed the drift_threshold."
+  },
+  "workflow.plan_drift_precheck": {
+    "owner": "drift",
+    "type": "boolean",
+    "default": true,
+    "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
   },
   "workflow.post_planning_gaps": {
     "owner": "gap-analysis",
@@ -2723,7 +2745,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Antigravity",
-    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; nested skill layout; tier-1 support.",
+    "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -2751,7 +2773,7 @@ const runtimes = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -2761,7 +2783,7 @@ const runtimes = {
             "kind": "skills",
             "destSubpath": "skills",
             "prefix": "gsd-",
-            "nesting": "nested",
+            "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToAntigravitySkill"
           }
@@ -3625,7 +3647,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.6.0-rc.2",
     "title": "Windsurf",
-    "description": "Windsurf (Codeium) — nested under ~/.codeium/windsurf; skills-only artifact layout; no hook surface; no hook events; tier-2 support.",
+    "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -3642,24 +3664,15 @@ const runtimes = {
       },
       "configFormat": "none",
       "artifactLayout": {
-        "global": [
-          {
-            "kind": "skills",
-            "destSubpath": "skills",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
-          }
-        ],
+        "global": [],
         "local": [
           {
-            "kind": "skills",
-            "destSubpath": "skills",
+            "kind": "commands",
+            "destSubpath": "workflows",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToWindsurfSkill"
+            "converter": "convertClaudeCommandToWindsurfWorkflow"
           }
         ]
       },

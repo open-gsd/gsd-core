@@ -529,6 +529,28 @@ describe('init manager', () => {
     assert.strictEqual(activeRecs.length, 1, 'phase 1 should still be recommended');
   });
 
+  test('does not recommend or count Phase 0 sentinel as incomplete work (#1580)', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Foundation', complete: true },
+      { number: '0', name: 'Bootstrap Parking Lot' },
+    ]);
+    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const recommended = output.recommended_actions || [];
+    assert.strictEqual(
+      recommended.some((r) => r.phase === '0' || r.phase === '00'),
+      false,
+      'Phase 0 sentinel should not appear in recommended_actions',
+    );
+    assert.strictEqual(output.all_complete, true, 'Phase 0 sentinel should not block all_complete');
+    assert.strictEqual(output.completed_count, 1);
+  });
+
   test('output includes response_language when configured', () => {
     writeState(tmpDir);
     writeRoadmap(tmpDir, [{ number: '1', name: 'Test' }]);

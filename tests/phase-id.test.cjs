@@ -10,6 +10,7 @@
  *   - phaseMarkdownRegexSource
  *   - phaseMarkdownRegexSourceExact
  *   - getMilestoneFromPhaseId
+ *   - isMilestoneSentinelPhaseId
  *   - getPhaseDirFromPhaseId
  *   - core.cjs re-export shims resolve to the exact same functions (single instance)
  *
@@ -381,6 +382,36 @@ describe('getMilestoneFromPhaseId', () => {
   test('coerces non-string values', () => {
     // numeric doesn't match the milestone pattern — returns null
     assert.strictEqual(phaseId.getMilestoneFromPhaseId(42), null);
+  });
+});
+
+// ─── isMilestoneSentinelPhaseId ──────────────────────────────────────────────
+
+describe('isMilestoneSentinelPhaseId', () => {
+  test('matches only milestone sentinel phase ids (#1580)', () => {
+    const cases = [
+      ['0', true],
+      ['00', true],
+      ['000', true],
+      ['PROJ-0', true],
+      ['998', false],
+      ['999', true],
+      ['999.1', true],
+      ['PROJ-999', true],
+      ['1000', false],
+      ['1000.1', false],
+      ['00.1', false],
+      ['9990', false],
+      ['0001', false],
+    ];
+
+    for (const [input, expected] of cases) {
+      assert.strictEqual(
+        phaseId.isMilestoneSentinelPhaseId(input),
+        expected,
+        `${input} sentinel classification`,
+      );
+    }
   });
 });
 

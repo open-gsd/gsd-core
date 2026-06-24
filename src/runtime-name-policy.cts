@@ -133,7 +133,7 @@ export function getProjectInstructionFile(runtime: unknown): string {
 
 /**
  * Map a canonical runtime id to its on-disk local config directory name
- * (e.g. `cursor` -> `.cursor`, `windsurf` -> `.devin`). Unknown/empty inputs
+ * (e.g. `cursor` -> `.cursor`, `windsurf` -> `.windsurf`). Unknown/empty inputs
  * fall back to `.claude`.
  *
  * Pure runtime-identity projection. Relocated from `bin/install.js` per
@@ -149,7 +149,7 @@ export function getDirName(runtime: string): string {
   if (runtime === 'codex') return '.codex';
   if (runtime === 'antigravity') return '.agents';
   if (runtime === 'cursor') return '.cursor';
-  if (runtime === 'windsurf') return '.devin';
+  if (runtime === 'windsurf') return '.windsurf';
   if (runtime === 'augment') return '.augment';
   if (runtime === 'trae') return '.trae';
   if (runtime === 'qwen') return '.qwen';

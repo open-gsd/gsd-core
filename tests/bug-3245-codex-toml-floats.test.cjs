@@ -391,6 +391,8 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
     }
 
     // agents/ — GSD writes gsd-*.md and gsd-*.toml here. All must be absent.
+    // Not the shared listAgentFiles() helper: reads the INSTALLED Codex dest
+    // dir and is .toml-inclusive, so its semantics differ from the source roster.
     const agentsDir = path.join(codexHome, 'agents');
     if (fs.existsSync(agentsDir)) {
       const gsdAgents = fs.readdirSync(agentsDir)

@@ -18,6 +18,7 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const AGENTS_MD = path.join(ROOT, 'docs', 'AGENTS.md');
@@ -156,17 +157,6 @@ function parseInventoryMd(raw) {
   return result;
 }
 
-/**
- * List all agents/gsd-*.md basenames (without .md extension).
- */
-function listAgentFiles() {
-  return fs
-    .readdirSync(AGENTS_DIR)
-    .filter((f) => /^gsd-.*\.md$/.test(f))
-    .map((f) => f.replace(/\.md$/, ''))
-    .sort();
-}
-
 // ---------------------------------------------------------------------------
 // Load and parse
 // ---------------------------------------------------------------------------
@@ -176,7 +166,8 @@ const rawInventoryMd = fs.readFileSync(INVENTORY_MD, 'utf8');
 
 const { primaryHeadings, advancedHeadings } = parseAgentsMd(rawAgentsMd);
 const inventoryMap = parseInventoryMd(rawInventoryMd);
-const agentFiles = listAgentFiles();
+// Canonical source roster (sorted gsd-* basenames without .md) — shared helper.
+const agentFiles = listAgentFiles(AGENTS_DIR);
 
 // ---------------------------------------------------------------------------
 // Robustness guards — must pass before any assertion block runs

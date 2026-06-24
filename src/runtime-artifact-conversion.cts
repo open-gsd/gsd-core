@@ -941,20 +941,18 @@ function convertClaudeToWindsurfMarkdown(content) {
   // Replace subagent_type from Claude to Windsurf format
   converted = converted.replace(/subagent_type="general-purpose"/g, 'subagent_type="generalPurpose"');
   converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
-  // Replace project-level Claude conventions with Windsurf/Devin equivalents
-  // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
-  // Legacy .windsurf/ is still recognized on read but new installs use .devin/.
-  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.devin/rules`');
-  converted = converted.replace(/\.\/CLAUDE\.md/g, '.devin/rules');
-  converted = converted.replace(/`CLAUDE\.md`/g, '`.devin/rules`');
-  converted = converted.replace(/\bCLAUDE\.md\b/g, '.devin/rules');
-  converted = converted.replace(/\.claude\/skills\//g, '.devin/skills/');
-  converted = converted.replace(/\.\/\.claude\//g, './.devin/');
-  converted = converted.replace(/\.claude\//g, '.devin/');
+  // Replace project-level Claude conventions with Windsurf equivalents.
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.windsurf/rules`');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, '.windsurf/rules');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`.windsurf/rules`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, '.windsurf/rules');
+  converted = converted.replace(/\.claude\/skills\//g, '.windsurf/skills/');
+  converted = converted.replace(/\.\/\.claude\//g, './.windsurf/');
+  converted = converted.replace(/\.claude\//g, '.windsurf/');
   // Bare forms (no trailing slash) — after slash forms to avoid double-rewrite.
   // Use negative lookahead (?![\w-]) to preserve .claude-plugin and .claudeignore.
-  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.devin');
-  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.devin');
+  converted = converted.replace(/~\/\.claude(?![\w-])/g, '~/.windsurf');
+  converted = converted.replace(/\$HOME\/\.claude(?![\w-])/g, '$HOME/.windsurf');
   // Environment variable name rewrite
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'WINDSURF_CONFIG_DIR');
   // Remove Claude Code-specific bug workarounds before brand replacement
@@ -1006,6 +1004,33 @@ function convertClaudeCommandToWindsurfSkill(content, skillName) {
   const adapter = getWindsurfSkillAdapterHeader(skillName);
 
   return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
+}
+
+function convertClaudeCommandToWindsurfWorkflow(content, commandName) {
+  // #1615 security: commandName flows unsanitized into a markdown body that
+  // Windsurf loads as an LLM-readable workflow. Validate at entry to prevent
+  // (a) prompt injection via newlines / markdown structure in the filename,
+  // (b) path-component injection via .., /, \ in stem → @-reference target.
+  // Pattern: optional gsd- prefix + lowercase alphanumeric + dashes; rejects
+  // everything else. See DEFECT.PROMPT-INJECTION-SCAN-COLLISION and the
+  // PR #1622 security review.
+  if (typeof commandName !== 'string' || !/^(?:gsd-)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(commandName)) {
+    const preview = typeof commandName === 'string' ? JSON.stringify(commandName.slice(0, 60)) : String(commandName);
+    throw new Error(
+      `convertClaudeCommandToWindsurfWorkflow: rejected commandName ${preview}; ` +
+      'must match /^(?:gsd-)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/ (no slashes, backslashes, spaces, dots, trailing dash, or control chars — prevents prompt injection and path-component injection into the workflow body)'
+    );
+  }
+  const converted = convertClaudeToWindsurfMarkdown(content);
+  const { frontmatter } = extractFrontmatterAndBody(converted);
+  const description = frontmatter ? extractFrontmatterField(frontmatter, 'description') : '';
+  const stem = commandName.startsWith('gsd-') ? commandName.slice(4) : commandName;
+  const workflow = `# ${commandName}\n\n${toSingleLine(description || `Run ${commandName}.`)}\n\nRead and execute the GSD command at @~/.claude/gsd-core/commands/gsd/${stem}.md end-to-end. Treat the user's message after /${commandName} as the command arguments.`;
+  const byteLength = Buffer.byteLength(workflow, 'utf8');
+  if (byteLength > 12000) {
+    throw new Error(`Windsurf workflow ${commandName} exceeds 12000 bytes (${byteLength}); extract references before installing`);
+  }
+  return workflow;
 }
 
 // --- Augment converters ---
@@ -2158,10 +2183,18 @@ function convertClaudeCommandToKiloSkill(content, skillName) {
  * @private — exported as `_computePathPrefix` for tests.
  */
 function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost, resolvedTarget, homeDir }) {
-  if (isGlobal && resolvedTarget.startsWith(homeDir) && !isOpencode) {
-    return '$HOME' + resolvedTarget.slice(homeDir.length) + '/';
+  // #1615: normalize Windows backslashes to forward slashes. This prefix is
+  // substituted into markdown @-references (e.g. Windsurf workflow files),
+  // which use POSIX paths universally. Idempotent on POSIX (no backslashes).
+  // Without this, path.join on Windows produces a backslash prefix that
+  // leaks into markdown content and breaks cross-platform substring checks.
+  // See DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT in CONTEXT.md.
+  const posixTarget = String(resolvedTarget).replace(/\\/g, '/');
+  const posixHome = homeDir ? String(homeDir).replace(/\\/g, '/') : homeDir;
+  if (isGlobal && posixTarget.startsWith(posixHome) && !isOpencode) {
+    return '$HOME' + posixTarget.slice(posixHome.length) + '/';
   }
-  return `${resolvedTarget}/`;
+  return `${posixTarget}/`;
 }
 
 /**
@@ -2568,6 +2601,7 @@ export = {
   convertClaudeCommandToCursorCommand,
   convertClaudeToWindsurfMarkdown,
   convertClaudeCommandToWindsurfSkill,
+  convertClaudeCommandToWindsurfWorkflow,
   convertClaudeToAugmentMarkdown,
   convertClaudeCommandToAugmentSkill,
   convertClaudeToTraeMarkdown,

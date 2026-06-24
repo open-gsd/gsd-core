@@ -60,7 +60,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { normalizePhaseName, phaseTokenMatches } = phaseId;
+const { normalizePhaseName, phaseTokenMatches, isMilestoneSentinelPhaseId } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -1416,7 +1416,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   const recommendedActions: Record<string, unknown>[] = [];
   for (const phase of phases) {
     if (phase['disk_status'] === 'complete') continue;
-    if (/^999(?:\.|$)/.test(phase['number'] as string)) continue;
+    if (isMilestoneSentinelPhaseId(phase['number'])) continue;
 
     if (phase['disk_status'] === 'planned' && phase['deps_satisfied']) {
       recommendedActions.push({
@@ -1476,7 +1476,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     return true;
   });
 
-  const nonBacklogPhases = phases.filter((p) => !/^999(?:\.|$)/.test(p['number'] as string));
+  const nonBacklogPhases = phases.filter((p) => !isMilestoneSentinelPhaseId(p['number']));
   const completedCount = nonBacklogPhases.filter((p) => p['disk_status'] === 'complete').length;
 
   const sanitizeFlags = (rawVal: unknown): string => {

@@ -55,7 +55,7 @@ points.
 | `ai-integration` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
 | `audit` | feature | full | `>=1.6.0` | — | — | first-party |
 | `code-review` | feature | full | `>=1.6.0` | `execute:post` | step | first-party |
-| `drift` | feature | full | `>=1.6.0` | `execute:wave:post` | gate | first-party |
+| `drift` | feature | full | `>=1.6.0` | `plan:pre`, `execute:wave:post` | gate | first-party |
 | `gap-analysis` | feature | standard | `>=1.6.0` | `plan:post` | gate | first-party |
 | `graphify` | feature | full | `>=1.6.0` | — | — | first-party |
 | `intel` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
