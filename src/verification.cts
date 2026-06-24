@@ -102,6 +102,7 @@ const VERIFICATION_ROUTING_TABLE: Record<string, VerificationRoute> = {
 interface FsLike {
   readdirSync(dir: string): string[];
   readFileSync(filePath: string, encoding: 'utf-8'): string;
+  statSync(filePath: string): { mtimeMs: number };
 }
 
 interface StaleVerificationInfo {
@@ -135,27 +136,37 @@ interface VerificationStatusResult {
   next_command: string;
 }
 
-function findStaleVerificationSummary(phaseDir: string): StaleVerificationInfo | null {
-  const phaseFiles = fs.readdirSync(phaseDir);
-  const verificationFile = phaseFiles.filter((f) => f.endsWith('-VERIFICATION.md')).sort()[0];
-  if (!verificationFile) return null;
+function findStaleVerificationSummary(phaseDir: string, fsImpl: FsLike = fs): StaleVerificationInfo | null {
+  // FS errors (TOCTOU: a SUMMARY listed by scanPhasePlans then removed before statSync;
+  // unreadable dir; broken symlink; file->dir swap) must degrade to "not stale" rather
+  // than throw uncaught into callers that are NOT under the planning lock
+  // (init.manager / init.progress / uat-predicate). Mirrors readVerificationStatus's
+  // no-throw contract; `fsImpl` threads the same injectable-fs seam for parity/testing.
+  // (Review B1 on #1548.)
+  try {
+    const phaseFiles = fsImpl.readdirSync(phaseDir);
+    const verificationFile = phaseFiles.filter((f) => f.endsWith('-VERIFICATION.md')).sort()[0];
+    if (!verificationFile) return null;
 
-  const verificationMtimeMs = fs.statSync(path.join(phaseDir, verificationFile)).mtimeMs;
-  let newestStaleSummary: { summaryFile: string; mtimeMs: number } | null = null;
-  const summaryFiles = (scanPhasePlans(phaseDir) as { summaryFiles: string[] }).summaryFiles;
-  for (const summaryFile of summaryFiles.sort()) {
-    const summaryMtimeMs = fs.statSync(path.join(phaseDir, summaryFile)).mtimeMs;
-    if (summaryMtimeMs <= verificationMtimeMs) continue;
-    if (!newestStaleSummary || summaryMtimeMs > newestStaleSummary.mtimeMs) {
-      newestStaleSummary = { summaryFile, mtimeMs: summaryMtimeMs };
+    const verificationMtimeMs = fsImpl.statSync(path.join(phaseDir, verificationFile)).mtimeMs;
+    let newestStaleSummary: { summaryFile: string; mtimeMs: number } | null = null;
+    const summaryFiles = (scanPhasePlans(phaseDir) as { summaryFiles: string[] }).summaryFiles;
+    for (const summaryFile of summaryFiles.sort()) {
+      const summaryMtimeMs = fsImpl.statSync(path.join(phaseDir, summaryFile)).mtimeMs;
+      if (summaryMtimeMs <= verificationMtimeMs) continue;
+      if (!newestStaleSummary || summaryMtimeMs > newestStaleSummary.mtimeMs) {
+        newestStaleSummary = { summaryFile, mtimeMs: summaryMtimeMs };
+      }
     }
-  }
 
-  if (!newestStaleSummary) return null;
-  return {
-    verificationFile,
-    summaryFile: newestStaleSummary.summaryFile,
-  };
+    if (!newestStaleSummary) return null;
+    return {
+      verificationFile,
+      summaryFile: newestStaleSummary.summaryFile,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -232,7 +243,7 @@ function readVerificationStatus(
     };
   }
 
-  const staleVerification = findStaleVerificationSummary(phaseDir);
+  const staleVerification = findStaleVerificationSummary(phaseDir, fsImpl);
   if (staleVerification) {
     const entry = VERIFICATION_ROUTING_TABLE['stale'];
     return {
