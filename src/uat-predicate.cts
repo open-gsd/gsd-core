@@ -19,6 +19,9 @@ const { extractFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { stripFencedCode } = markdownSectionizer;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verification = require('./verification.cjs');
+const { readVerificationStatus } = verification;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,10 +55,8 @@ const BLOCKING_UAT_FM_STATUSES = new Set([
 // UAT file frontmatter `result` values that indicate failure
 const BLOCKING_UAT_FM_RESULTS = new Set(['pending', 'blocked', 'failed']);
 
-// VERIFICATION file frontmatter `status` values that indicate passing
-const PASSING_VERIFICATION_STATUSES = new Set([
-  'complete', 'verified', 'passed', 'human_passed',
-]);
+// Canonical VERIFICATION frontmatter `status` value that indicates passing.
+const PASSING_VERIFICATION_STATUSES = new Set(['passed']);
 
 // VERIFICATION file frontmatter `status` values that explicitly block
 const BLOCKING_VERIFICATION_FM_STATUSES = new Set([
@@ -309,8 +310,13 @@ function evaluateUatPassed(
   }
 
   // ── Policy: requireVerification ───────────────────────────────────────────
-  if (requireVerification && !hasPassingVerification) {
-    blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
+  if (requireVerification) {
+    const verificationStatus = readVerificationStatus(phaseFullDir).status;
+    if (verificationStatus === 'stale') {
+      blockers.push('policy: verification status=stale');
+    } else if (verificationStatus !== 'passed' || !hasPassingVerification) {
+      blockers.push('policy: verification required but no passing *-VERIFICATION.md found');
+    }
   }
 
   // ── Determine no_uat_artifacts and passed ─────────────────────────────────

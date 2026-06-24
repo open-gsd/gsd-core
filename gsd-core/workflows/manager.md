@@ -72,6 +72,7 @@ Build dashboard from JSON. Symbols: `✓` done, `◆` active, `○` pending, `·
 **Status mapping** (disk_status → D P E Status):
 
 - `complete` → `✓ ✓ ✓` `✓ Complete`
+- `executed` → `✓ ✓ ◆` `◆ Verification required`
 - `partial` → `✓ ✓ ◆` `◆ Executing...`
 - `planned` → `✓ ✓ ○` `○ Ready to execute`
 - `discussed` → `✓ ○ ·` `○ Ready to plan`
@@ -135,7 +136,7 @@ If `all_complete` is true:
 ║  MILESTONE COMPLETE                                          ║
 ╚══════════════════════════════════════════════════════════════╝
 
-All {phase_count} phases done. Ready for final steps:
+All {phase_count} phases verified complete. Ready for final steps:
   → /gsd:verify-work — run acceptance testing
   → /gsd:complete-milestone — archive and wrap up
 ```
@@ -158,8 +159,9 @@ Handle responses:
 **Building options:**
 
 1. Collect all background actions (execute and plan recommendations) — there can be multiple of each.
-2. Collect the inline action (discuss recommendation, if any — there will be at most one since discuss is sequential).
-3. Build compound options:
+2. Collect verification actions (`verify`) for implementation-complete phases whose canonical verification has not passed.
+3. Collect the inline action (discuss recommendation, if any — there will be at most one since discuss is sequential).
+4. Build compound options:
 
    **If there are ANY recommended actions (background, inline, or both):**
    Create ONE primary "Continue" option that dispatches ALL of them together:
@@ -169,10 +171,11 @@ Handle responses:
      Continue:
        → Execute Phase 32 (background)
        → Plan Phase 34 (background)
+       → Verify Phase 33
        → Discuss Phase 35 (inline)
      ```
-   - This dispatches all background agents first, then runs the inline discuss (if any).
-   - If there is no inline discuss, the dashboard refreshes after spawning background agents.
+   - This dispatches all background agents first, runs verification actions inline, then runs the inline discuss (if any).
+   - If there is no inline discuss, the dashboard refreshes after spawning background agents and inline verification.
 
    **Important:** The Continue option must include EVERY action from `recommended_actions` — not just 2. If there are 3 actions, list 3. If there are 5, list 5.
 
@@ -221,8 +224,15 @@ Go to exit step.
 
 When the user selects a compound option, behavior depends on the runtime — the Plan Phase N / Execute Phase N handlers below resolve it via `gsd_run query config-get runtime`:
 
-- **On Codex:** **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below — then run the inline discuss; the background agents continue while you discuss.
-- **Otherwise (Claude Code or any other non-Codex runtime):** a backgrounded agent cannot reliably nest the pipeline's subagents, so run the chosen plan/execute step(s) **inline** via their handlers below (in order), then run the inline discuss. There is no overlap.
+- **On Codex:** **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below — then run verification actions, then run the inline discuss; the background agents continue while you verify/discuss.
+- **On Claude Code or any other non-Codex runtime:** run the chosen plan/execute step(s) **inline** via their handlers below (in order), then run verification actions, then run the inline discuss. There is no overlap.
+
+Inline verification:
+
+For each verification recommendation, dispatch by the recommended action's `command`:
+- If `command` contains `execute-phase`, run `Skill(skill="gsd-execute-phase", args="{PHASE_NUM} {manager_flags.execute}")`.
+- If `command` contains `verify-work`, run `Skill(skill="gsd-verify-work", args="{PHASE_NUM}")`.
+- If `command` is missing or unrecognized, stop and show the recommendation row instead of guessing.
 
 Inline discuss:
 

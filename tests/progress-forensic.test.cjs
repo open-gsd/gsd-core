@@ -160,18 +160,32 @@ describe('#1107: progress routing consults verification.status before reporting 
       workflow.includes('verification_status'),
       'progress workflow must track a verification_status value for routing'
     );
+    assert.ok(
+      workflow.includes('stale verification'),
+      'progress workflow must document that verification.status projects stale verification'
+    );
   });
 
   test('routing table has gaps_found and human_needed rows BEFORE the generic complete row', () => {
     const workflow = readWorkflow();
+    const missingIdx = workflow.indexOf('verification_status = missing');
+    const unknownIdx = workflow.indexOf('verification_status = unknown');
+    const staleIdx = workflow.indexOf('verification_status = stale');
     const gapsIdx = workflow.indexOf('verification_status = gaps_found');
     const humanIdx = workflow.indexOf('verification_status = human_needed');
-    const completeIdx = workflow.indexOf('Phase complete (verification passed');
+    const completeIdx = workflow.indexOf('Phase complete (verification passed)');
+    assert.ok(missingIdx > -1, 'routing table must have a missing verification row');
+    assert.ok(unknownIdx > -1, 'routing table must have an unknown verification row');
+    assert.ok(staleIdx > -1, 'routing table must have a stale verification row');
     assert.ok(gapsIdx > -1, 'routing table must have a gaps_found row');
     assert.ok(humanIdx > -1, 'routing table must have a human_needed row');
     assert.ok(completeIdx > -1, 'routing table must keep a generic complete row');
     assert.ok(
-      gapsIdx < completeIdx && humanIdx < completeIdx,
+      missingIdx < completeIdx &&
+        unknownIdx < completeIdx &&
+        staleIdx < completeIdx &&
+        gapsIdx < completeIdx &&
+        humanIdx < completeIdx,
       'verification rows must precede the generic "summaries = plans" complete row (first-match-wins)'
     );
   });
@@ -204,11 +218,26 @@ describe('#1107: progress routing consults verification.status before reporting 
     );
   });
 
-  test('missing/passed verification still routes as complete (no false blocker)', () => {
+  test('stale verification routes to verify-work (Route V.stale)', () => {
+    const workflow = readWorkflow();
+    assert.ok(workflow.includes('**Route V.stale:'), 'must define a Route V.stale section');
+    const route = workflow.slice(
+      workflow.indexOf('**Route V.stale:'),
+      workflow.indexOf('**Route V.gaps:')
+    );
+    assert.ok(
+      route.includes('verify-work'),
+      'Route V.stale must route to /gsd:verify-work {phase}'
+    );
+  });
+
+  test('missing and unknown verification do not route as complete', () => {
     const workflow = readWorkflow();
     assert.ok(
-      workflow.includes('Phase complete (verification passed, missing, or n/a)'),
-      'the generic complete row must still cover passed/missing/unknown so unverified phases are not falsely blocked'
+      workflow.includes('Phase complete (verification passed)'),
+      'the generic complete row must only cover passed verification'
     );
+    assert.ok(!workflow.includes('verification passed, missing, or n/a'),
+      'missing or unknown verification must not be documented as complete');
   });
 });

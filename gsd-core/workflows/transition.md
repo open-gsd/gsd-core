@@ -77,26 +77,28 @@ cat .planning/config.json 2>/dev/null || true
 **Check for verification debt in this phase:**
 
 ```bash
-# Count outstanding items in current phase
-OUTSTANDING=""
-for f in .planning/phases/XX-current/*-UAT.md .planning/phases/XX-current/*-VERIFICATION.md; do
-  [ -f "$f" ] || continue
-  grep -q "result: pending\|result: blocked\|status: partial\|status: human_needed\|status: diagnosed" "$f" && OUTSTANDING="$OUTSTANDING\n$(basename $f)"
-done
+# Run a preliminary frontmatter check via awk — the runtime launcher is not yet
+# defined at this step, so avoid any runtime tool calls here.
+# awk extracts only the status: field between the two --- fences to avoid
+# false positives from historical body text (e.g. previous_status: gaps_found).
+VERIFY_STATUS=$(awk 'NR==1&&/^---$/{in_fm=1;next}in_fm&&/^---$/{exit}in_fm&&/^status: /{print $2}' \
+  .planning/phases/XX-current/*-VERIFICATION.md 2>/dev/null | head -1)
 ```
 
-**If OUTSTANDING is not empty:**
+**If VERIFY_STATUS is not `passed`:**
 
-Append to the completion confirmation message (regardless of mode):
+Stop before confirming:
 
 ```
-Outstanding verification items in this phase:
-{list filenames}
+Verification incomplete: ${VERIFY_STATUS:-missing}
 
-These will carry forward as debt. Review: `/gsd:audit-uat`
+Resolve before transition. Review: `/gsd:audit-uat`
 ```
 
-This does NOT block transition — it ensures the user sees the debt before confirming.
+This preliminary check blocks obviously unresolved verification before the
+launcher is available. `gsd-tools.cjs query phase.complete` remains the
+authoritative stale-aware gate and fail-closes unless canonical verification
+status is `passed`.
 
 **If all plans complete:**
 

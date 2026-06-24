@@ -55,6 +55,13 @@ function scaffoldPhase(tmpDir, num, opts = {}) {
   return dir;
 }
 
+function writePassedVerification(phaseDir, padded) {
+  fs.writeFileSync(
+    path.join(phaseDir, `${padded}-VERIFICATION.md`),
+    ['---', 'status: passed', '---', '', '# Verification', ''].join('\n')
+  );
+}
+
 describe('init manager', () => {
   let tmpDir;
 
@@ -110,8 +117,8 @@ describe('init manager', () => {
       { number: '5', name: 'Not Started' },
     ]);
 
-    // Phase 1: complete (plans + matching summaries)
-    scaffoldPhase(tmpDir, 1, { slug: 'complete-phase', context: true, plans: 2, summaries: 2 });
+    // Phase 1: complete (plans + matching summaries + passed verification)
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'complete-phase', context: true, plans: 2, summaries: 2 }), '01');
     // Phase 2: planned (plans, no summaries)
     scaffoldPhase(tmpDir, 2, { slug: 'planned-phase', context: true, plans: 3 });
     // Phase 3: discussed (context only)
@@ -158,7 +165,7 @@ describe('init manager', () => {
       { number: '1', name: 'Foundation', complete: true },
       { number: '2', name: 'Depends on 1', depends_on: 'Phase 1' },
     ]);
-    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 }), '01');
 
     const result = runGsdTools('init manager', tmpDir);
     const output = JSON.parse(result.output);
@@ -240,7 +247,7 @@ describe('init manager', () => {
       { number: '5', name: 'Polish' },
     ]);
 
-    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 }), '01');
     scaffoldPhase(tmpDir, 2, { slug: 'api-layer', context: true, plans: 2 }); // planned
     scaffoldPhase(tmpDir, 3, { slug: 'auth', context: true }); // discussed
 
@@ -269,7 +276,7 @@ describe('init manager', () => {
       { number: '4', name: 'Ready to Discuss' },
     ]);
 
-    scaffoldPhase(tmpDir, 1, { slug: 'complete', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'complete', plans: 1, summaries: 1 }), '01');
     scaffoldPhase(tmpDir, 2, { slug: 'ready-to-execute', context: true, plans: 2 });
     scaffoldPhase(tmpDir, 3, { slug: 'ready-to-plan', context: true });
 
@@ -306,14 +313,101 @@ describe('init manager', () => {
       { number: '1', name: 'Done', complete: true },
       { number: '2', name: 'Also Done', complete: true },
     ]);
-    scaffoldPhase(tmpDir, 1, { slug: 'done', plans: 1, summaries: 1 });
-    scaffoldPhase(tmpDir, 2, { slug: 'also-done', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'done', plans: 1, summaries: 1 }), '01');
+    writePassedVerification(scaffoldPhase(tmpDir, 2, { slug: 'also-done', plans: 1, summaries: 1 }), '02');
 
     const result = runGsdTools('init manager', tmpDir);
     const output = JSON.parse(result.output);
 
     assert.strictEqual(output.all_complete, true);
     assert.strictEqual(output.recommended_actions.length, 0);
+  });
+
+  test('implementation-complete phase without passed verification is not all_complete', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Implemented', complete: true },
+    ]);
+    scaffoldPhase(tmpDir, 1, { slug: 'implemented', plans: 1, summaries: 1 });
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.all_complete, false);
+    assert.strictEqual(output.completed_count, 0);
+    assert.strictEqual(output.phases[0].disk_status, 'executed');
+    assert.strictEqual(output.phases[0].implementation_complete, true);
+    assert.strictEqual(output.phases[0].verification_status, 'missing');
+    assert.strictEqual(output.phases[0].verification_passed, false);
+    assert.strictEqual(output.recommended_actions[0].action, 'verify');
+    assert.match(output.recommended_actions[0].command, /execute-phase 1/);
+  });
+
+  test('stale passed verification is not projected as complete', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Implemented', complete: true },
+    ]);
+    const phaseDir = scaffoldPhase(tmpDir, 1, { slug: 'implemented', plans: 1, summaries: 1 });
+    writePassedVerification(phaseDir, '01');
+    const verificationPath = path.join(phaseDir, '01-VERIFICATION.md');
+    const summaryPath = path.join(phaseDir, '01-01-SUMMARY.md');
+    const older = new Date('2025-01-01T00:00:00.000Z');
+    const newer = new Date('2025-01-01T00:01:00.000Z');
+    fs.utimesSync(verificationPath, older, older);
+    fs.utimesSync(summaryPath, newer, newer);
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.all_complete, false);
+    assert.strictEqual(output.completed_count, 0);
+    assert.strictEqual(output.phases[0].disk_status, 'executed');
+    assert.strictEqual(output.phases[0].implementation_complete, true);
+    assert.strictEqual(output.phases[0].verification_status, 'stale');
+    assert.strictEqual(output.phases[0].verification_passed, false);
+    assert.strictEqual(output.phases[0].phase_complete, false);
+    assert.strictEqual(output.recommended_actions[0].action, 'verify');
+    assert.match(output.recommended_actions[0].reason, /verification stale/);
+    assert.match(output.recommended_actions[0].command, /verify-work 1/);
+  });
+
+  test('checked unpadded roadmap token does not satisfy padded unverified dependency', () => {
+    writeState(tmpDir);
+    const roadmap = [
+      '# Roadmap',
+      '',
+      '## Progress',
+      '',
+      '- [x] **Phase 1: Foundation**',
+      '- [ ] **Phase 02: Followup**',
+      '',
+      '### Phase 01: Foundation',
+      '',
+      '**Goal:** Build foundation',
+      '',
+      '### Phase 02: Followup',
+      '',
+      '**Goal:** Build followup',
+      '**Depends on:** Phase 1',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+    scaffoldPhase(tmpDir, 1, { slug: 'foundation', plans: 1, summaries: 1 });
+
+    const result = runGsdTools('init manager', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const phase1 = output.phases.find(p => p.number === '01');
+    const phase2 = output.phases.find(p => p.number === '02');
+
+    assert.ok(phase1, 'Phase 01 should be in the output');
+    assert.strictEqual(phase1.phase_complete, false, 'Phase 01 is unverified and must not be complete');
+    assert.ok(phase2, 'Phase 02 should be in the output');
+    assert.strictEqual(phase2.deps_satisfied, false, 'Phase 02 dependency must wait for canonical Phase 01 verification');
   });
 
   test('WAITING.json detected when present', () => {
@@ -564,9 +658,9 @@ describe('init manager', () => {
     ]);
 
     // Scaffold completed phases on disk
-    scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 2, summaries: 2 });
-    scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 });
-    scaffoldPhase(tmpDir, 3, { slug: 'polish', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 2, summaries: 2 }), '01');
+    writePassedVerification(scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 }), '02');
+    writePassedVerification(scaffoldPhase(tmpDir, 3, { slug: 'polish', plans: 1, summaries: 1 }), '03');
 
     const result = runGsdTools('init manager', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -584,8 +678,8 @@ describe('init manager', () => {
       { number: '999.1', name: 'Backlog idea' },
     ]);
 
-    scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 1, summaries: 1 });
-    scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 });
+    writePassedVerification(scaffoldPhase(tmpDir, 1, { slug: 'setup', plans: 1, summaries: 1 }), '01');
+    writePassedVerification(scaffoldPhase(tmpDir, 2, { slug: 'core', plans: 1, summaries: 1 }), '02');
     // Phase 3 has no directory — should trigger discuss recommendation
 
     const result = runGsdTools('init manager', tmpDir);

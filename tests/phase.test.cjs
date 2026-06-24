@@ -24,6 +24,108 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const GSD_TOOLS_BIN = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
+function normalizePhaseToken(token) {
+  return String(token).replace(/\d+/g, (digits) => String(Number(digits)));
+}
+
+function phaseTokenFromDirName(name) {
+  const match = name.match(/^(?:[A-Z][A-Z0-9]*-)?(\d+[A-Z]?(?:\.\d+)*)/i);
+  return match ? match[1] : null;
+}
+
+function writePassedVerificationForPhase(tmpDir, phase) {
+  const phasesDir = path.join(tmpDir, '.planning', 'phases');
+  const wanted = normalizePhaseToken(phase);
+  const phaseDirName = fs.readdirSync(phasesDir)
+    .find((name) => normalizePhaseToken(phaseTokenFromDirName(name) || '') === wanted);
+
+  assert.ok(phaseDirName, `expected phase directory for Phase ${phase}`);
+
+  const phaseDir = path.join(phasesDir, phaseDirName);
+  fs.writeFileSync(
+    path.join(phaseDir, `${phase}-VERIFICATION.md`),
+    ['---', 'status: passed', '---', '', '# Verification', ''].join('\n'),
+  );
+}
+
+function runVerifiedPhaseComplete(args, tmpDir, env) {
+  const argv = Array.isArray(args)
+    ? args
+    : (args.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [])
+        .map((t) => t.replace(/"([^"]*)"/g, '$1').replace(/'([^']*)'/g, '$1'));
+  const completeIdx = argv.findIndex((token, index) => token === 'complete' && argv[index - 1] === 'phase');
+  assert.notEqual(completeIdx, -1, `expected phase complete command, got ${argv.join(' ')}`);
+  const phase = argv[completeIdx + 1];
+  assert.ok(phase, `expected phase number in command ${argv.join(' ')}`);
+  writePassedVerificationForPhase(tmpDir, phase);
+  return runGsdTools(args, tmpDir, env);
+}
+
+function writePhaseCompleteVerificationGateFixture(tmpDir, verificationStatus) {
+  const planningDir = path.join(tmpDir, '.planning');
+  const phase1Dir = path.join(planningDir, 'phases', '01-foundation');
+  const phase2Dir = path.join(planningDir, 'phases', '02-api');
+  fs.mkdirSync(phase1Dir, { recursive: true });
+  fs.mkdirSync(phase2Dir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(planningDir, 'ROADMAP.md'),
+    [
+      '# Roadmap',
+      '',
+      '- [ ] Phase 1: Foundation',
+      '- [ ] Phase 2: API',
+      '',
+      '### Phase 1: Foundation',
+      '**Goal:** Setup',
+      '**Plans:** 1 plans',
+      '',
+      '### Phase 2: API',
+      '**Goal:** Build API',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|----------------|--------|-----------|',
+      '| 01. Foundation | 0/1 | Not started | - |',
+      '| 02. API | 0/1 | Not started | - |',
+      '',
+    ].join('\n'),
+  );
+
+  fs.writeFileSync(
+    path.join(planningDir, 'STATE.md'),
+    [
+      '# State',
+      '',
+      '**Current Phase:** 01',
+      '**Current Phase Name:** Foundation',
+      '**Status:** In progress',
+      '**Current Plan:** 01-01',
+      '**Last Activity:** 2025-01-01',
+      '**Last Activity Description:** Working on phase 1',
+      '',
+    ].join('\n'),
+  );
+
+  fs.writeFileSync(path.join(phase1Dir, '01-01-PLAN.md'), '# Plan\n');
+  fs.writeFileSync(path.join(phase1Dir, '01-01-SUMMARY.md'), '# Summary\n');
+
+  if (verificationStatus !== null) {
+    fs.writeFileSync(
+      path.join(phase1Dir, '01-VERIFICATION.md'),
+      [
+        '---',
+        `status: ${verificationStatus}`,
+        '---',
+        '',
+        '# Verification',
+        '',
+      ].join('\n'),
+    );
+  }
+}
+
 describe('phases list command', () => {
   let tmpDir;
 
@@ -2098,6 +2200,82 @@ Plans:
 // phase complete command
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe('phase complete canonical verification gate (#1522)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  for (const [name, verificationStatus, expectedMessage] of [
+    ['missing verification report', null, /No verification report found/i],
+    ['unknown verification status', 'unexpected_value', /Unexpected verification status/i],
+    ['human-needed verification status', 'human_needed', /Human verification required/i],
+    ['gap-bearing verification status', 'gaps_found', /Gaps found/i],
+  ]) {
+    test(`blocks ${name} before mutating ROADMAP or STATE`, () => {
+      writePhaseCompleteVerificationGateFixture(tmpDir, verificationStatus);
+      const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+      const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+      const beforeRoadmap = fs.readFileSync(roadmapPath, 'utf-8');
+      const beforeState = fs.readFileSync(statePath, 'utf-8');
+
+      const result = runGsdTools(['--json-errors', 'phase', 'complete', '1'], tmpDir);
+
+      assert.equal(result.success, false, 'phase complete must fail when verification has not passed');
+      const errorPayload = JSON.parse(result.error);
+      assert.equal(errorPayload.reason, 'phase_verification_incomplete');
+      assert.match(errorPayload.message, expectedMessage);
+      assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), beforeRoadmap);
+      assert.equal(fs.readFileSync(statePath, 'utf-8'), beforeState);
+    });
+  }
+
+  test('allows passed verification to complete and advance the phase', () => {
+    writePhaseCompleteVerificationGateFixture(tmpDir, 'passed');
+
+    const result = runGsdTools(['phase', 'complete', '1'], tmpDir);
+
+    assert.equal(result.success, true, `phase complete failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.equal(output.completed_phase, '1');
+    assert.equal(output.next_phase, '02');
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.match(roadmap, /- \[x\] Phase 1: Foundation/);
+    assert.match(state, /\*\*Current Phase:\*\* 02/);
+  });
+
+  test('blocks stale passed verification when summaries changed later', () => {
+    writePhaseCompleteVerificationGateFixture(tmpDir, 'passed');
+    const roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    const summaryPath = path.join(tmpDir, '.planning', 'phases', '01-foundation', '01-01-SUMMARY.md');
+    const verificationPath = path.join(tmpDir, '.planning', 'phases', '01-foundation', '01-VERIFICATION.md');
+    const beforeRoadmap = fs.readFileSync(roadmapPath, 'utf-8');
+    const beforeState = fs.readFileSync(statePath, 'utf-8');
+
+    const older = new Date('2025-01-01T00:00:00.000Z');
+    const newer = new Date('2025-01-01T00:01:00.000Z');
+    fs.utimesSync(verificationPath, older, older);
+    fs.utimesSync(summaryPath, newer, newer);
+
+    const result = runGsdTools(['--json-errors', 'phase', 'complete', '1'], tmpDir);
+
+    assert.equal(result.success, false, 'phase complete must fail when verification is stale');
+    const errorPayload = JSON.parse(result.error);
+    assert.equal(errorPayload.reason, 'phase_verification_incomplete');
+    assert.match(errorPayload.message, /stale/i);
+    assert.match(errorPayload.message, /\/gsd:verify-work 0?1/);
+    assert.equal(fs.readFileSync(roadmapPath, 'utf-8'), beforeRoadmap);
+    assert.equal(fs.readFileSync(statePath, 'utf-8'), beforeState);
+  });
+});
 
 describe('phase complete command', () => {
   let tmpDir;
@@ -2137,7 +2315,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-api'), { recursive: true });
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2173,7 +2351,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -2238,7 +2416,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-api'), { recursive: true });
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const req = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
@@ -2311,7 +2489,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-api'), { recursive: true });
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const req = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
@@ -2367,7 +2545,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     // REQUIREMENTS.md should be unchanged
@@ -2398,7 +2576,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command should succeed even without REQUIREMENTS.md: ${result.error}`);
   });
 
@@ -2440,7 +2618,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.requirements_updated, true, 'requirements_updated should be true');
@@ -2486,7 +2664,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const req = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
@@ -2538,7 +2716,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-auth'), { recursive: true });
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     // Phase 1 has no Requirements field, so Phase 2's AUTH-01 should NOT be updated
@@ -2609,7 +2787,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p321, '03.2.1-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p321, '03.2.1-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 03.2.1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 03.2.1', tmpDir);
     assert.ok(result.success, `Command should not crash on regex metacharacters: ${result.error}`);
 
     const req = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
@@ -2644,7 +2822,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
@@ -2671,7 +2849,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
@@ -2715,7 +2893,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-api'), { recursive: true });
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
@@ -2755,7 +2933,7 @@ describe('phase complete command', () => {
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
@@ -2795,7 +2973,7 @@ Plans:
     fs.writeFileSync(path.join(p1, '01-02-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-02-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
@@ -2833,7 +3011,7 @@ Plans:
     fs.writeFileSync(path.join(p1, '01-02-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-02-SUMMARY.md'), '# Summary');
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
@@ -3033,7 +3211,7 @@ describe('phase complete milestone-scoped next-phase', () => {
     // Phase 6 — next phase in milestone
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '06-dashboard'), { recursive: true });
 
-    const result = runGsdTools('phase complete 5', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 5', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -3068,7 +3246,7 @@ describe('phase complete milestone-scoped next-phase', () => {
       fs.writeFileSync(path.join(phaseDir, `${padded}-01-SUMMARY.md`), '# Summary');
     }
 
-    const result = runGsdTools('phase complete 5', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 5', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -3204,7 +3382,7 @@ describe('phase complete updates Performance Metrics', () => {
       `# Roadmap\n\n## Phase 2: Core\n\n- [ ] Phase 2: Core Systems\n`
     );
 
-    const result = runGsdTools('phase complete 2', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 2', tmpDir);
     assert.ok(result.success, `phase complete failed: ${result.error}`);
 
     const stateAfter = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
@@ -3229,7 +3407,7 @@ describe('phase complete updates Performance Metrics', () => {
       `# Roadmap\n\n## Phase 1: Setup\n\n- [ ] Phase 1: Setup\n`
     );
 
-    const result = runGsdTools('phase complete 1', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
     assert.ok(result.success, `phase complete failed: ${result.error}`);
 
     const stateAfter = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
@@ -3310,7 +3488,7 @@ describe('phase complete excludes 999.x backlog from next-phase (#2129)', () => 
     // Backlog stub on disk — this is what triggers the bug
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '999.1-backlog-idea'), { recursive: true });
 
-    const result = runGsdTools('phase complete 2', tmpDir);
+    const result = runVerifiedPhaseComplete('phase complete 2', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
@@ -3390,6 +3568,7 @@ describe('bug #1962: normalizePhaseName preserves letter suffix case', () => {
  *     that may exit non-zero in these minimal fixtures.
  */
 function runPhaseComplete(tmpDir, { phase = '1', tolerateExit = false } = {}) {
+  writePassedVerificationForPhase(tmpDir, phase);
   try {
     return execFileSync('node', [GSD_TOOLS_BIN, 'phase', 'complete', phase], {
       cwd: tmpDir,
@@ -4138,6 +4317,9 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
 {
   function runSdkQuery(args, cwd) {
+    if (Array.isArray(args) && args[0] === 'phase.complete') {
+      writePassedVerificationForPhase(cwd, args[1]);
+    }
     const result = runGsdTools(args, cwd);
     if (!result.success) return { success: false, error: result.error };
     try {
@@ -4501,6 +4683,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
     test('prose-block STATE keeps next phase name without field-miss warnings (#1316)', () => {
       const { planningDir } = setupPhase1316Project(tmpDir);
+      writePassedVerificationForPhase(tmpDir, '32');
 
       const result = spawnSync(process.execPath, [GSD_TOOLS_BIN, 'phase', 'complete', '32'], {
         cwd: tmpDir,
@@ -4906,7 +5089,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       setupPhaseForAutoPrune(tmpDir, 6, 2);
 
-      const result = runGsdTools('phase complete 6', tmpDir);
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
 
       const newState = readStateMdForAutoPrune(tmpDir);
@@ -4946,7 +5129,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       setupPhaseForAutoPrune(tmpDir, 6, 2);
 
-      const result = runGsdTools('phase complete 6', tmpDir);
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
 
       const newState = readStateMdForAutoPrune(tmpDir);
@@ -4982,7 +5165,7 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
 
       setupPhaseForAutoPrune(tmpDir, 6, 2);
 
-      const result = runGsdTools('phase complete 6', tmpDir);
+      const result = runVerifiedPhaseComplete('phase complete 6', tmpDir);
       assert.ok(result.success, `Command failed: ${result.error}`);
 
       const newState = readStateMdForAutoPrune(tmpDir);

@@ -21,6 +21,14 @@ const repoRoot = path.resolve(__dirname, '..');
 const commandPath = path.join(repoRoot, 'commands', 'gsd', 'milestone-summary.md');
 const workflowPath = path.join(repoRoot, 'gsd-core', 'workflows', 'milestone-summary.md');
 
+function extractStep(content, stepName) {
+  const start = content.indexOf(`<step name="${stepName}">`);
+  assert.ok(start !== -1, `${stepName} step must exist`);
+  const end = content.indexOf('</step>', start);
+  assert.ok(end !== -1, `${stepName} step must close`);
+  return content.slice(start, end);
+}
+
 describe('milestone-summary command', () => {
   test('command file exists', () => {
     assert.ok(fs.existsSync(commandPath), 'commands/gsd/milestone-summary.md should exist');
@@ -404,6 +412,32 @@ describe('complete-milestone workflow has pre-close audit gate (#2158)', () => {
     assert.ok(
       completeMilestoneContent.includes('sanitiz') || completeMilestoneContent.includes('SECURITY'),
     );
+  });
+
+  test('complete-milestone distinguishes verified and override closeout (#1527)', () => {
+    assert.match(completeMilestoneContent, /all_phases_verified/);
+    assert.match(completeMilestoneContent, /closeout_type/);
+    assert.match(completeMilestoneContent, /verified_closeout/);
+    assert.match(completeMilestoneContent, /override_closeout/);
+    assert.match(completeMilestoneContent, /Known verification overrides/);
+  });
+
+  test('verified closeout uses init.manager canonical verification projection (#1522)', () => {
+    const readinessStep = extractStep(completeMilestoneContent, 'verify_readiness');
+
+    assert.match(readinessStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.ok(
+      readinessStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
+      'complete-milestone readiness must dereference large init.manager payloads before jq',
+    );
+    assert.match(readinessStep, /select\(\(\.number \| tostring \| test\("\^999/);
+    assert.match(readinessStep, /\| not\)\)/);
+    assert.match(readinessStep, /phase_complete === true/);
+    assert.match(readinessStep, /verification_status === 'passed'/);
+    assert.match(readinessStep, /If not all_phases_verified/);
+    assert.match(readinessStep, /verified_closeout must not proceed/);
+    assert.doesNotMatch(readinessStep, /ROADMAP=\$\(gsd_run query roadmap\.analyze\)/);
+    assert.doesNotMatch(readinessStep, /disk_status === 'complete'/);
   });
 });
 
