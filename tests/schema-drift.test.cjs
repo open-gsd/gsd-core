@@ -356,3 +356,68 @@ describe('verify schema-drift CLI command', () => {
     assert.strictEqual(output.blocking, false);
   });
 });
+
+describe('#1571 regression: verify schema-drift resolves the phase by token, not substring', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempGitProject('gsd-schema-drift-1571-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Why this matters: a bare `entry.name.includes(phaseArg)` let a non-existent
+  // phase silently match a *different* phase whose directory name merely contains
+  // the requested token — e.g. requesting phase "1" matched "11-expansion" and ran
+  // the drift gate against phase 11's migration files (a false positive on the wrong
+  // phase). The fix uses the canonical phaseTokenMatches, matching find-phase /
+  // verify phase-completeness. These assertions fail loudly if the matcher ever
+  // regresses back to substring containment.
+  function writePhase(dir) {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', dir);
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), [
+      '---',
+      'files_modified: [src/collections/Posts.ts]',
+      '---',
+      '',
+      'Plan content',
+    ].join('\n'));
+  }
+
+  test('requesting a non-existent phase whose token is a substring of an existing dir reports not found', () => {
+    // Only "11-expansion" exists. "1" is a substring of "11" but is NOT phase 1.
+    writePhase('11-expansion');
+
+    const result = runGsdTools(['verify', 'schema-drift', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    // Must NOT have matched 11-expansion. A wrong match yields an empty message and
+    // a drift verdict computed from phase 11's files; the correct behaviour is a
+    // "not found" message with no drift evaluation.
+    assert.strictEqual(output.message, 'Phase directory not found: 1');
+    assert.strictEqual(output.drift_detected, false);
+    assert.strictEqual(output.block, false);
+  });
+
+  test('requesting the real phase by its token still resolves and runs the gate', () => {
+    writePhase('11-expansion');
+
+    const result = runGsdTools(['verify', 'schema-drift', '11'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    // Resolved to a real phase → gate ran (no "not found" message).
+    assert.notStrictEqual(output.message, 'Phase directory not found: 11');
+  });
+
+  test('requesting the full directory name still resolves', () => {
+    writePhase('11-expansion');
+
+    const result = runGsdTools(['verify', 'schema-drift', '11-expansion'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.notStrictEqual(output.message, 'Phase directory not found: 11-expansion');
+  });
+});
