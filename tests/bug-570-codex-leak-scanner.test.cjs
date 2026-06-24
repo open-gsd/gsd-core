@@ -83,6 +83,8 @@ describe('#570 — Codex leak scanner sub-bugs', { concurrency: false }, () => {
     withCodexHome(codexHome, () => install(true, 'codex'));
 
     const agentsDir = path.join(codexHome, 'agents');
+    // Not the shared listAgentFiles() helper: this reads the INSTALLED Codex
+    // dest dir and filters .toml (not source .md), so its semantics differ.
     // Confirm that Codex actually wrote .toml agent files — if none exist the
     // test is vacuous and we should fail loudly.
     const tomlFiles = fs.existsSync(agentsDir)

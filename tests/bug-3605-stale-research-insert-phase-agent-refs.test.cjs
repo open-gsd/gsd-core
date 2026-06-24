@@ -33,6 +33,8 @@ const RETIRED_COMMANDS = [
   '/gsd-analyze-dependencies',
 ];
 
+// Not the shared listAgentFiles() helper: this returns ABSOLUTE paths (consumed
+// by scanForRetired below as readFileSync targets), not stripped basenames.
 function listAgentFiles() {
   return fs
     .readdirSync(AGENTS_DIR)

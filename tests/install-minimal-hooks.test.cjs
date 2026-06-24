@@ -393,6 +393,8 @@ describe('install: on-disk skill files match manifest for --minimal', () => {
           const onDisk = collectSkillBasenamesOnDisk(configDir);
           const inManifest = manifestSkillSet(manifest);
           assert.deepStrictEqual([...onDisk].sort(), [...inManifest].sort());
+          // Not the shared listAgentFiles() helper: asserts on the INSTALLED
+          // dest dir (must be empty in --minimal mode), not the source roster.
           const agentsDir = path.join(configDir, 'agents');
           if (fs.existsSync(agentsDir)) {
             const gsdAgents = fs.readdirSync(agentsDir)
