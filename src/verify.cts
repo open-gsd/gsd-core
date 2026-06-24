@@ -2056,17 +2056,18 @@ function cmdVerifySchemaDrift(
   }
 
   let phaseDir: string | null = null;
-  const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.includes(phaseArg)) {
-      phaseDir = path.join(phasesDir, entry.name);
-      break;
-    }
-  }
+  const exact = path.join(phasesDir, phaseArg);
+  if (fs.existsSync(exact)) phaseDir = exact;
 
   if (!phaseDir) {
-    const exact = path.join(phasesDir, phaseArg);
-    if (fs.existsSync(exact)) phaseDir = exact;
+    const normalizedPhase = normalizePhaseName(phaseArg);
+    const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && phaseTokenMatches(entry.name, normalizedPhase)) {
+        phaseDir = path.join(phasesDir, entry.name);
+        break;
+      }
+    }
   }
 
   if (!phaseDir) {
