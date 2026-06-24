@@ -13,6 +13,12 @@
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import commandRoutingHub = require('./command-routing-hub.cjs');
 const { createHub, ERROR_KINDS } = commandRoutingHub;
+// Phase 2 (#1646): import ERROR_REASON so the UnknownCommand translation can
+// pass `sdk_unknown_command` as the second arg to error(), preserving the
+// JSON-error envelope contract that capability routers' tests assert on.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import io = require('./io.cjs');
+const { ERROR_REASON } = io;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -140,7 +146,12 @@ function routeHubCommandFamily({
 
   if (result.ok) return;
   if (result.kind === ERROR_KINDS.UnknownCommand) {
-    error(unknownMessage(subcommand ?? '', available));
+    // Phase 2 (#1646): pass SDK_UNKNOWN_COMMAND as the second arg so the
+    // JSON-error envelope (GSD_JSON_ERRORS=1) preserves the typed reason
+    // for downstream consumers. Additive for host routers (their existing
+    // one-arg `error` callbacks ignore the second arg); required for
+    // capability routers whose tests assert on `reason === 'sdk_unknown_command'`.
+    error(unknownMessage(subcommand ?? '', available), ERROR_REASON.SDK_UNKNOWN_COMMAND);
     return;
   }
   if (result.kind === ERROR_KINDS.InvalidArgs) {

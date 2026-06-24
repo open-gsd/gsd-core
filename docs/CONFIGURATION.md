@@ -1517,7 +1517,7 @@ When `/gsd-new-project` creates a new `config.json`, it reads global defaults an
 
 ## Observability
 
-The Command Routing Hub emits a structured `DispatchEvent` after every dispatch. Default behaviour is **silent on success** and **one structured JSON line to stderr on error**.
+The Command Routing Hub emits a structured `DispatchEvent` after every dispatch — including capability commands (`graphify`, `intel`, `audit-uat`, `audit-open`) since #1646. Default behaviour is **silent on success** and **one structured JSON line to stderr on error**.
 
 ### Stderr error format
 
