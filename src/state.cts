@@ -2425,7 +2425,12 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
   const byPhaseMatch = content.match(byPhaseTablePattern);
   if (byPhaseMatch) {
     let tableBody = byPhaseMatch[2].trim();
-    const phaseRowPattern = new RegExp(`^\\|\\s*${escapeRegex(String(phaseNum))}\\s*\\|.*$`, 'm');
+    // Match the existing row for this phase, tolerating leading-zero padding in either
+    // direction (#1659): canonicalize a numeric phase to its integer form so a seeded
+    // "| 05 |" row is upserted (not duplicated) by `phase complete 5`, and vice-versa.
+    const phaseNumStr = String(phaseNum);
+    const canonCell = /^\d+$/.test(phaseNumStr) ? `0*${Number(phaseNumStr)}` : escapeRegex(phaseNumStr);
+    const phaseRowPattern = new RegExp(`^\\|\\s*${canonCell}\\s*\\|.*$`, 'm');
     const newRow = `| ${phaseNum} | ${summaryCount} | - | - |`;
 
     if (phaseRowPattern.test(tableBody)) {

@@ -2267,6 +2267,40 @@ describe('updatePerformanceMetricsSection', () => {
       'velocity total must update from the CRLF STATE.md body (proves CRLF content is processed)',
     );
   });
+
+  test('#1659 — completing an unpadded phase number upserts an existing zero-padded By-Phase row (no duplicate)', () => {
+    const content = [
+      '# Project State', '',
+      '**Current Phase:** 05', '**Status:** Executing Phase 5', '',
+      '## Performance Metrics', '',
+      '**Velocity:**', '- Total plans completed: 1', '- Average duration: N/A', '- Total execution time: 0 hours', '',
+      '**By Phase:**', '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| 05 | 1 | - | - |',   // seeded ZERO-PADDED row
+      '',
+      '## Accumulated Context', '',
+    ].join('\n');
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, content, 'utf8');
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-final');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '05-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '05-final', '05');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 5: Final\n\n- [ ] Phase 5\n');
+
+    // phase complete with the UNPADDED number "5" — must upsert the seeded "| 05 |" row,
+    // not append a duplicate "| 5 |".
+    const result = runGsdTools('phase complete 5', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const after = fs.readFileSync(statePath, 'utf8');
+    const rows05 = (after.match(/^\|\s*05\s*\|/gm) || []).length;
+    const rows5 = (after.match(/^\|\s*5\s*\|/gm) || []).length;
+    assert.equal(rows05 + rows5, 1, `phase 5 must appear exactly once in By Phase (got |05|=${rows05} |5|=${rows5}) — padded/unpadded must dedup (#1659)`);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
