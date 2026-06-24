@@ -452,9 +452,21 @@ Skills land in `~/.trae/`. GSD installs skills, agents, and rule references.
 npx @opengsd/gsd-core@latest --qoder --global
 ```
 
-Skills land in `~/.qoder/skills/`. GSD installs skills, agents, and rule references. Qoder uses `AGENTS.md` as its memory file.
+Skills land in `~/.qoder/skills/gsd-*/SKILL.md` (flat layout). Agents land in `~/.qoder/agents/`. Qoder uses `AGENTS.md` as its memory file. GSD rewrites `.claude/` → `.qoder/`, `CLAUDE.md` → `AGENTS.md`, and `/gsd:<cmd>` → `/gsd-<cmd>` automatically.
 
-Qoder uses the `profile-marker-only` install surface (same as Trae/Windsurf): no statusline, no hooks, no `package.json`, no shared `settings.json`/permission entries.
+**Qoder CN (China edition) — custom install directory**
+
+Qoder CN (the China edition) uses `~/.qoder-cn` as its config directory instead of `~/.qoder`. GSD does not auto-detect which edition is installed — you must specify the target directory explicitly via `QODER_CONFIG_DIR`:
+
+```bash
+# Install for Qoder CN
+QODER_CONFIG_DIR=~/.qoder-cn npx @opengsd/gsd-core@latest --qoder --global
+
+# Uninstall from Qoder CN
+QODER_CONFIG_DIR=~/.qoder-cn npx @opengsd/gsd-core@latest --qoder --global --uninstall
+```
+
+If both Qoder and Qoder CN are installed on the same machine, run the installer twice — once for each edition — each time with the correct `QODER_CONFIG_DIR`.
 
 ---
 
