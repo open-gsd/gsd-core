@@ -549,6 +549,17 @@ function assertEnumValue(parsedValue: unknown, rawVal: string, allowed: readonly
   }
 }
 
+function parsePositiveIntegerConfigValue(rawVal: string, keyPath: string): number {
+  if (!/^[1-9]\d*$/.test(rawVal)) {
+    error(`Invalid ${keyPath} '${rawVal}'. Must be a positive integer.`);
+  }
+  const parsed = Number(rawVal);
+  if (!Number.isSafeInteger(parsed)) {
+    error(`Invalid ${keyPath} '${rawVal}'. Must be a positive integer.`);
+  }
+  return parsed;
+}
+
 /**
  * Command to set a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
@@ -584,10 +595,12 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
 
   // Parse value (handle booleans, numbers, and JSON arrays/objects)
   let parsedValue: unknown = val;
-  if (val === 'true') parsedValue = true;
+  if (kp === 'project_code') parsedValue = val;
+  else if (kp === 'context_window') parsedValue = parsePositiveIntegerConfigValue(val, kp);
+  else if (val === 'true') parsedValue = true;
   else if (val === 'false') parsedValue = false;
   else if (!isNaN(Number(val)) && val !== '') parsedValue = Number(val);
-  else if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
+  else if (val.startsWith('[') || val.startsWith('{')) {
     try { parsedValue = JSON.parse(val); } catch { /* keep as string */ }
   }
 
