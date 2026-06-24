@@ -1,0 +1,672 @@
+{
+  "sonnet": {
+    "baseline": {
+      "overall": {
+        "n": 43,
+        "tp": 25,
+        "fn": 11,
+        "fp": 0,
+        "tn": 7,
+        "recall": 0.6944444444444444,
+        "precision": 1,
+        "falsePassRate": 0.3055555555555556,
+        "confidentFalsePassRate": 0.3055555555555556,
+        "truePassPrecision": 1
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 8,
+        "fn": 2,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.8,
+        "precision": 1,
+        "falsePassRate": 0.2,
+        "confidentFalsePassRate": 0.2,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 5,
+        "fn": 9,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.35714285714285715,
+        "precision": 1,
+        "falsePassRate": 0.6428571428571429,
+        "confidentFalsePassRate": 0.6428571428571429,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "tn": 7,
+        "recall": null,
+        "precision": null,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 1
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 13,
+        "fn": 11,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.5416666666666666,
+        "precision": 1,
+        "falsePassRate": 0.4583333333333333,
+        "confidentFalsePassRate": 0.4583333333333333,
+        "truePassPrecision": null
+      }
+    },
+    "disconfirmation": {
+      "overall": {
+        "n": 43,
+        "tp": 25,
+        "fn": 11,
+        "fp": 0,
+        "tn": 7,
+        "recall": 0.6944444444444444,
+        "precision": 1,
+        "falsePassRate": 0.3055555555555556,
+        "confidentFalsePassRate": 0.3055555555555556,
+        "truePassPrecision": 1
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 8,
+        "fn": 2,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.8,
+        "precision": 1,
+        "falsePassRate": 0.2,
+        "confidentFalsePassRate": 0.2,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 5,
+        "fn": 9,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.35714285714285715,
+        "precision": 1,
+        "falsePassRate": 0.6428571428571429,
+        "confidentFalsePassRate": 0.6428571428571429,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "tn": 7,
+        "recall": null,
+        "precision": null,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 1
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 13,
+        "fn": 11,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.5416666666666666,
+        "precision": 1,
+        "falsePassRate": 0.4583333333333333,
+        "confidentFalsePassRate": 0.4583333333333333,
+        "truePassPrecision": null
+      }
+    },
+    "exogenous": {
+      "overall": {
+        "n": 43,
+        "tp": 33,
+        "fn": 3,
+        "fp": 0,
+        "tn": 7,
+        "recall": 0.9166666666666666,
+        "precision": 1,
+        "falsePassRate": 0.08333333333333333,
+        "confidentFalsePassRate": 0.08333333333333333,
+        "truePassPrecision": 1
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 10,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 11,
+        "fn": 3,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.7857142857142857,
+        "precision": 1,
+        "falsePassRate": 0.21428571428571427,
+        "confidentFalsePassRate": 0.21428571428571427,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "tn": 7,
+        "recall": null,
+        "precision": null,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 1
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 21,
+        "fn": 3,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.875,
+        "precision": 1,
+        "falsePassRate": 0.125,
+        "confidentFalsePassRate": 0.125,
+        "truePassPrecision": null
+      }
+    },
+    "abstention": {
+      "overall": {
+        "n": 43,
+        "tp": 28,
+        "fn": 8,
+        "fp": 0,
+        "tn": 7,
+        "recall": 0.7777777777777778,
+        "precision": 1,
+        "falsePassRate": 0.2222222222222222,
+        "confidentFalsePassRate": 0.2222222222222222,
+        "truePassPrecision": 1
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 8,
+        "fn": 2,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.8,
+        "precision": 1,
+        "falsePassRate": 0.2,
+        "confidentFalsePassRate": 0.2,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 8,
+        "fn": 6,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.5714285714285714,
+        "precision": 1,
+        "falsePassRate": 0.42857142857142855,
+        "confidentFalsePassRate": 0.42857142857142855,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "tn": 7,
+        "recall": null,
+        "precision": null,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 1
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 16,
+        "fn": 8,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.6666666666666666,
+        "precision": 1,
+        "falsePassRate": 0.3333333333333333,
+        "confidentFalsePassRate": 0.3333333333333333,
+        "truePassPrecision": null
+      }
+    }
+  },
+  "haiku": {
+    "baseline": {
+      "overall": {
+        "n": 43,
+        "tp": 24,
+        "fn": 12,
+        "fp": 1,
+        "tn": 6,
+        "recall": 0.6666666666666666,
+        "precision": 0.96,
+        "falsePassRate": 0.3333333333333333,
+        "confidentFalsePassRate": 0.3333333333333333,
+        "truePassPrecision": 0.8571428571428571
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 6,
+        "fn": 4,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.6,
+        "precision": 1,
+        "falsePassRate": 0.4,
+        "confidentFalsePassRate": 0.4,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 6,
+        "fn": 8,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.42857142857142855,
+        "precision": 1,
+        "falsePassRate": 0.5714285714285714,
+        "confidentFalsePassRate": 0.5714285714285714,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 1,
+        "tn": 6,
+        "recall": null,
+        "precision": 0,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 0.8571428571428571
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 12,
+        "fn": 12,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.5,
+        "precision": 1,
+        "falsePassRate": 0.5,
+        "confidentFalsePassRate": 0.5,
+        "truePassPrecision": null
+      }
+    },
+    "disconfirmation": {
+      "overall": {
+        "n": 43,
+        "tp": 26,
+        "fn": 10,
+        "fp": 1,
+        "tn": 6,
+        "recall": 0.7222222222222222,
+        "precision": 0.9629629629629629,
+        "falsePassRate": 0.2777777777777778,
+        "confidentFalsePassRate": 0.2777777777777778,
+        "truePassPrecision": 0.8571428571428571
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 7,
+        "fn": 3,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.7,
+        "precision": 1,
+        "falsePassRate": 0.3,
+        "confidentFalsePassRate": 0.3,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 7,
+        "fn": 7,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.5,
+        "precision": 1,
+        "falsePassRate": 0.5,
+        "confidentFalsePassRate": 0.5,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 1,
+        "tn": 6,
+        "recall": null,
+        "precision": 0,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 0.8571428571428571
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 14,
+        "fn": 10,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.5833333333333334,
+        "precision": 1,
+        "falsePassRate": 0.4166666666666667,
+        "confidentFalsePassRate": 0.4166666666666667,
+        "truePassPrecision": null
+      }
+    },
+    "exogenous": {
+      "overall": {
+        "n": 43,
+        "tp": 32,
+        "fn": 4,
+        "fp": 0,
+        "tn": 7,
+        "recall": 0.8888888888888888,
+        "precision": 1,
+        "falsePassRate": 0.1111111111111111,
+        "confidentFalsePassRate": 0.1111111111111111,
+        "truePassPrecision": 1
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 10,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 10,
+        "fn": 4,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.7142857142857143,
+        "precision": 1,
+        "falsePassRate": 0.2857142857142857,
+        "confidentFalsePassRate": 0.2857142857142857,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "tn": 7,
+        "recall": null,
+        "precision": null,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 1
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 20,
+        "fn": 4,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.8333333333333334,
+        "precision": 1,
+        "falsePassRate": 0.16666666666666666,
+        "confidentFalsePassRate": 0.16666666666666666,
+        "truePassPrecision": null
+      }
+    },
+    "abstention": {
+      "overall": {
+        "n": 43,
+        "tp": 27,
+        "fn": 9,
+        "fp": 0,
+        "tn": 7,
+        "recall": 0.75,
+        "precision": 1,
+        "falsePassRate": 0.25,
+        "confidentFalsePassRate": 0.25,
+        "truePassPrecision": 1
+      },
+      "inferable": {
+        "n": 12,
+        "tp": 12,
+        "fn": 0,
+        "fp": 0,
+        "tn": 0,
+        "recall": 1,
+        "precision": 1,
+        "falsePassRate": 0,
+        "confidentFalsePassRate": 0,
+        "truePassPrecision": null
+      },
+      "domainKnowledge": {
+        "n": 10,
+        "tp": 6,
+        "fn": 4,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.6,
+        "precision": 1,
+        "falsePassRate": 0.4,
+        "confidentFalsePassRate": 0.4,
+        "truePassPrecision": null
+      },
+      "specSilent": {
+        "n": 14,
+        "tp": 9,
+        "fn": 5,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.6428571428571429,
+        "precision": 1,
+        "falsePassRate": 0.35714285714285715,
+        "confidentFalsePassRate": 0.35714285714285715,
+        "truePassPrecision": null
+      },
+      "clean": {
+        "n": 7,
+        "tp": 0,
+        "fn": 0,
+        "fp": 0,
+        "tn": 7,
+        "recall": null,
+        "precision": null,
+        "falsePassRate": null,
+        "confidentFalsePassRate": null,
+        "truePassPrecision": 1
+      },
+      "nonInferable": {
+        "n": 24,
+        "tp": 15,
+        "fn": 9,
+        "fp": 0,
+        "tn": 0,
+        "recall": 0.625,
+        "precision": 1,
+        "falsePassRate": 0.375,
+        "confidentFalsePassRate": 0.375,
+        "truePassPrecision": null
+      }
+    }
+  },
+  "flagEverything": {
+    "overall": {
+      "n": 43,
+      "tp": 36,
+      "fn": 0,
+      "fp": 7,
+      "tn": 0,
+      "recall": 1,
+      "precision": 0.8372093023255814,
+      "falsePassRate": 0,
+      "confidentFalsePassRate": 0,
+      "truePassPrecision": 0
+    },
+    "inferable": {
+      "n": 12,
+      "tp": 12,
+      "fn": 0,
+      "fp": 0,
+      "tn": 0,
+      "recall": 1,
+      "precision": 1,
+      "falsePassRate": 0,
+      "confidentFalsePassRate": 0,
+      "truePassPrecision": null
+    },
+    "domainKnowledge": {
+      "n": 10,
+      "tp": 10,
+      "fn": 0,
+      "fp": 0,
+      "tn": 0,
+      "recall": 1,
+      "precision": 1,
+      "falsePassRate": 0,
+      "confidentFalsePassRate": 0,
+      "truePassPrecision": null
+    },
+    "specSilent": {
+      "n": 14,
+      "tp": 14,
+      "fn": 0,
+      "fp": 0,
+      "tn": 0,
+      "recall": 1,
+      "precision": 1,
+      "falsePassRate": 0,
+      "confidentFalsePassRate": 0,
+      "truePassPrecision": null
+    },
+    "clean": {
+      "n": 7,
+      "tp": 0,
+      "fn": 0,
+      "fp": 7,
+      "tn": 0,
+      "recall": null,
+      "precision": 0,
+      "falsePassRate": null,
+      "confidentFalsePassRate": null,
+      "truePassPrecision": 0
+    },
+    "nonInferable": {
+      "n": 24,
+      "tp": 24,
+      "fn": 0,
+      "fp": 0,
+      "tn": 0,
+      "recall": 1,
+      "precision": 1,
+      "falsePassRate": 0,
+      "confidentFalsePassRate": 0,
+      "truePassPrecision": null
+    }
+  }
+}

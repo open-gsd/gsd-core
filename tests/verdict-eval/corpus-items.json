@@ -1,0 +1,389 @@
+[
+  {
+    "id": "inferable-0-0-missing-field-validation",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Returns 400 with a validation error if the request body is missing the 'email' field.",
+    "code": "async function createUser(req, res) {\n  const { email, name } = req.body;\n\n  if (!name) {\n    return res.status(400).json({ error: 'name is required' });\n  }\n\n  const user = await db.users.create({ email, name });\n  return res.status(201).json({ id: user.id, email, name });\n}",
+    "injectedDefect": "The function validates 'name' but never validates 'email'. A missing email field produces no 400 response; the user is created with email=undefined.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-0-1-wrong-status-on-not-foun",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Returns 404 when the requested resource does not exist.",
+    "code": "app.get('/items/:id', async (req, res) => {\n  const item = await db.items.findById(req.params.id);\n\n  if (!item) {\n    return res.status(403).json({ error: 'Item not found' });\n  }\n\n  return res.status(200).json(item);\n});",
+    "injectedDefect": "The code returns HTTP 403 (Forbidden) instead of 404 (Not Found) when the item does not exist, contradicting the claim.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-0-2-auth-check-after-mutatio",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Deletes the record only if the caller is the record owner; returns 403 otherwise.",
+    "code": "async function deleteRecord(req, res) {\n  const record = await db.records.findById(req.params.id);\n\n  if (!record) {\n    return res.status(404).json({ error: 'Not found' });\n  }\n\n  await db.records.delete(req.params.id);\n\n  if (record.ownerId !== req.user.id) {\n    return res.status(403).json({ error: 'Forbidden' });\n  }\n\n  return res.status(204).send();\n}",
+    "injectedDefect": "The ownership check happens AFTER the delete call. Any authenticated user can delete any record; the 403 is only returned after the record is already gone.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-0-3-pagination-returns-wrong",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Returns the Nth page of results (1-indexed) with the given page size.",
+    "code": "async function listProducts(req, res) {\n  const page = parseInt(req.query.page, 10) || 1;\n  const size = parseInt(req.query.size, 10) || 20;\n\n  const offset = page * size;\n\n  const products = await db.products.findAll({\n    limit: size,\n    offset,\n  });\n\n  return res.status(200).json({ page, size, products });\n}",
+    "injectedDefect": "For a 1-indexed API, page 1 should have offset 0 (i.e. (page - 1) * size). The code uses page * size, so page=1 skips the first 'size' records and page=0 returns the first page.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-0-4-error-swallowed-returns-",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Sends a confirmation email and returns 200 on success, or 500 if sending fails.",
+    "code": "async function sendConfirmation(req, res) {\n  const { userId } = req.body;\n  const user = await db.users.findById(userId);\n\n  try {\n    await emailService.send({\n      to: user.email,\n      template: 'confirmation',\n    });\n  } catch (err) {\n    console.error('Email send failed:', err);\n  }\n\n  return res.status(200).json({ sent: true });\n}",
+    "injectedDefect": "The catch block logs the error but does not return a 500 response. If the email fails, the function proceeds to return 200 with { sent: true }, silently hiding the failure.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-0-5-token-comparison-early-e",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Validates the API key from the Authorization header and returns 401 if it is missing or invalid.",
+    "code": "function requireApiKey(req, res, next) {\n  const authHeader = req.headers['authorization'];\n\n  if (!authHeader) {\n    return res.status(401).json({ error: 'Missing authorization header' });\n  }\n\n  const key = authHeader.replace('Bearer ', '');\n\n  if (key === process.env.API_KEY) {\n    return next();\n  }\n\n  next();\n}",
+    "injectedDefect": "When the key does NOT match, the final 'next()' is called unconditionally instead of returning a 401. Invalid keys are silently passed through to the next middleware.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-1-0-min-length-off-by-one",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Rejects passwords shorter than 8 characters with a 400 error; accepts passwords of 8 or more characters.",
+    "code": "app.post('/register', (req, res) => {\n  const { username, password } = req.body;\n  if (!username || !password) {\n    return res.status(400).json({ error: 'Missing required fields' });\n  }\n  if (password.length <= 8) {\n    return res.status(400).json({ error: 'Password too short' });\n  }\n  const hashed = bcrypt.hashSync(password, 10);\n  db.users.create({ username, password: hashed });\n  return res.status(201).json({ ok: true });\n});",
+    "injectedDefect": "Uses `<= 8` instead of `< 8`, so a password of exactly 8 characters is incorrectly rejected. The claim says 'shorter than 8' should be rejected, but the code rejects 8 as well.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-1-1-rate-limit-wrong-status",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Returns HTTP 429 when the caller exceeds the rate limit; returns HTTP 200 on success.",
+    "code": "function rateLimitMiddleware(req, res, next) {\n  const key = req.ip;\n  const now = Date.now();\n  const window = 60_000;\n  const limit = 100;\n\n  if (!requestLog.has(key)) {\n    requestLog.set(key, []);\n  }\n  const timestamps = requestLog.get(key).filter(t => now - t < window);\n  timestamps.push(now);\n  requestLog.set(key, timestamps);\n\n  if (timestamps.length > limit) {\n    return res.status(503).json({ error: 'Rate limit exceeded' });\n  }\n  next();\n}",
+    "injectedDefect": "Returns status 503 (Service Unavailable) on rate limit exceeded, but the claim states it should return 429 (Too Many Requests).",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-1-2-inclusive-range-check",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Returns true if the value is within the inclusive range [min, max], false otherwise.",
+    "code": "function isInRange(value, min, max) {\n  return value > min && value < max;\n}",
+    "injectedDefect": "Uses strict `>` and `<` instead of `>=` and `<=`, so values exactly equal to min or max are incorrectly excluded despite the claim specifying an inclusive range.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-1-3-sorted-descending-claim",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Returns the top 3 products sorted by price descending (highest price first).",
+    "code": "function getTopProducts(products) {\n  return products\n    .slice()\n    .sort((a, b) => a.price - b.price)\n    .slice(0, 3);\n}",
+    "injectedDefect": "The comparator `a.price - b.price` sorts ascending (lowest first), but the claim requires descending order. It should be `b.price - a.price`.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-1-4-delete-returns-wrong-sta",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Deletes the record by ID and returns 204 No Content on success; returns 404 if the record does not exist.",
+    "code": "app.delete('/items/:id', async (req, res) => {\n  const item = await db.items.findById(req.params.id);\n  if (!item) {\n    return res.status(404).json({ error: 'Not found' });\n  }\n  await db.items.deleteById(req.params.id);\n  return res.status(200).json({ deleted: true });\n});",
+    "injectedDefect": "Returns HTTP 200 with a body after deletion, but the claim specifies 204 No Content on success.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "inferable-1-5-missing-empty-array-guar",
+    "class": "inferable",
+    "groundTruth": "BLOCK",
+    "claim": "Computes the average of an array of numbers; returns 0 for an empty array.",
+    "code": "function average(numbers) {\n  const sum = numbers.reduce((acc, n) => acc + n, 0);\n  return sum / numbers.length;\n}",
+    "injectedDefect": "No guard for an empty array: when `numbers` is empty, `numbers.length` is 0 and the function returns `NaN` (0/0), not 0 as the claim states.",
+    "blindSpotHint": null
+  },
+  {
+    "id": "domain-knowledge-2-1-string-truncate-emoji",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Truncates a user-supplied display name to at most 20 characters, appending '...' if truncation occurs.",
+    "code": "function truncateDisplayName(name) {\n  const LIMIT = 20;\n  if (name.length <= LIMIT) {\n    return name;\n  }\n  return name.slice(0, LIMIT - 3) + '...';\n}\n\nmodule.exports = { truncateDisplayName };",
+    "injectedDefect": "String.prototype.length and String.prototype.slice operate on UTF-16 code units, not Unicode scalar values or grapheme clusters. Emoji and many non-BMP characters are encoded as surrogate pairs (2 code units). A name containing such characters can be sliced mid-surrogate-pair, producing a corrupt string with a dangling surrogate. The correct approach uses the Unicode segmenter API or spreads via [...name] to count/slice by code points.",
+    "blindSpotHint": "JS String.length counts UTF-16 code units; emoji are surrogate pairs (length 2 each), so slicing at a code-unit offset can split a surrogate pair and corrupt the output."
+  },
+  {
+    "id": "domain-knowledge-2-2-session-expiry-dst",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Creates a session token record with an expiry timestamp exactly 24 hours from the current time.",
+    "code": "function createSession(userId) {\n  const now = new Date();\n  const expiresAt = new Date(now);\n  expiresAt.setHours(expiresAt.getHours() + 24);\n  return {\n    userId,\n    createdAt: now.toISOString(),\n    expiresAt: expiresAt.toISOString(),\n  };\n}\n\nmodule.exports = { createSession };",
+    "injectedDefect": "setHours mutates the local-time hour field, which means that when a DST transition occurs in the 24-hour window (clocks spring forward 1 hour or fall back 1 hour in the server's local timezone), the resulting expiry is 23 or 25 hours away rather than exactly 24. The correct approach is to add milliseconds to the UTC timestamp: new Date(now.getTime() + 24 * 60 * 60 * 1000).",
+    "blindSpotHint": "setHours operates on local wall-clock time; a DST transition within the 24-hour window makes the interval 23 or 25 real hours instead of exactly 24."
+  },
+  {
+    "id": "domain-knowledge-2-3-percentage-banker-roundi",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Rounds a computed tax percentage to the nearest whole number for display in a financial report.",
+    "code": "function roundTaxRate(rate) {\n  return Math.round(rate);\n}\n\nmodule.exports = { roundTaxRate };",
+    "injectedDefect": "Math.round uses 'round half away from zero' (ties always round up), not banker's rounding (round half to even). Financial and statistical standards (IEEE 754 default, most accounting specs) require round-half-to-even so that repeated rounding of .5 values does not introduce systematic upward bias. For example Math.round(0.5)===1 and Math.round(1.5)===2, both rounding up, whereas banker's rounding yields 0 and 2 respectively.",
+    "blindSpotHint": "Math.round applies round-half-away-from-zero; financial/accounting contexts require round-half-to-even (banker's rounding) to avoid systematic upward bias on tie values."
+  },
+  {
+    "id": "domain-knowledge-2-4-locale-sort-unicode",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Sorts an array of user-supplied country names alphabetically and returns the sorted array.",
+    "code": "function sortCountryNames(names) {\n  return [...names].sort((a, b) => {\n    if (a < b) return -1;\n    if (a > b) return 1;\n    return 0;\n  });\n}\n\nmodule.exports = { sortCountryNames };",
+    "injectedDefect": "The < and > operators on strings perform comparison by UTF-16 code unit value, not by locale-aware collation rules. This produces incorrect alphabetical ordering for strings containing accented or non-ASCII characters (e.g. 'Österreich' sorts after 'Zimbabwe' in code-unit order, but before it in German locale alphabetical order). The correct approach is String.prototype.localeCompare or Intl.Collator.",
+    "blindSpotHint": "JS relational operators on strings sort by raw UTF-16 code unit value, not locale collation; accented characters (e.g. Ö, Å, ñ) sort after all ASCII letters rather than at their locale-correct position."
+  },
+  {
+    "id": "domain-knowledge-2-5-token-generation-math-ra",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Generates a random alphanumeric session token of 32 characters suitable for use as a secure authentication token.",
+    "code": "function generateSessionToken() {\n  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';\n  let token = '';\n  for (let i = 0; i < 32; i++) {\n    token += chars[Math.floor(Math.random() * chars.length)];\n  }\n  return token;\n}\n\nmodule.exports = { generateSessionToken };",
+    "injectedDefect": "Math.random() is a pseudo-random number generator seeded with a non-cryptographic algorithm (typically xorshift128+ in V8). It is not cryptographically secure and its output can be predicted by an attacker who observes enough outputs. Authentication tokens require a cryptographically secure source of randomness. The correct approach is crypto.randomBytes() or crypto.getRandomValues(), which use the OS CSPRNG.",
+    "blindSpotHint": "Math.random() uses a non-cryptographic PRNG (xorshift128+ in V8) whose state is predictable; security tokens require crypto.randomBytes() or crypto.getRandomValues() from the OS CSPRNG."
+  },
+  {
+    "id": "domain-knowledge-3-0-hmac-timing-attack",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Verifies that the provided request signature matches the expected HMAC-SHA256 digest of the payload, rejecting mismatches with a 401.",
+    "code": "const crypto = require('crypto');\n\nfunction verifyWebhookSignature(req, secret) {\n  const payload = req.rawBody;\n  const provided = req.headers['x-signature-sha256'];\n\n  if (!provided) {\n    return { valid: false, status: 401, reason: 'missing signature' };\n  }\n\n  const expected = crypto\n    .createHmac('sha256', secret)\n    .update(payload)\n    .digest('hex');\n\n  if (provided !== expected) {\n    return { valid: false, status: 401, reason: 'signature mismatch' };\n  }\n\n  return { valid: true, status: 200 };\n}",
+    "injectedDefect": "String equality `!==` is not constant-time; an attacker can exploit timing differences to recover the expected HMAC byte-by-byte. The correct approach is `crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected))`.",
+    "blindSpotHint": "HMAC comparison must use a constant-time equality function to prevent timing side-channel attacks; `===`/`!==` short-circuits on the first differing byte."
+  },
+  {
+    "id": "domain-knowledge-3-2-bitwise-int32-overflow",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Converts a raw byte array (up to 6 bytes) into a single numeric ID by interpreting the bytes as a big-endian unsigned integer.",
+    "code": "function bytesToId(bytes) {\n  if (!Array.isArray(bytes) || bytes.length === 0 || bytes.length > 6) {\n    throw new RangeError('bytes must be an array of 1–6 values');\n  }\n\n  let result = 0;\n  for (let i = 0; i < bytes.length; i++) {\n    result = (result << 8) | (bytes[i] & 0xff);\n  }\n\n  return result;\n}",
+    "injectedDefect": "JavaScript's `<<` (left-shift) operator coerces its left operand to a signed 32-bit integer before shifting. Once `result` exceeds 2^31-1 (after 4 bytes), the shift overflows into the sign bit and produces wrong negative values. For 5- or 6-byte inputs the result is silently corrupted. Should use `result = result * 256 + (bytes[i] & 0xff)` (safe floating-point arithmetic) or `BigInt`.",
+    "blindSpotHint": "JavaScript bitwise operators convert operands to signed 32-bit integers; left-shifting a value that already occupies the high bits silently wraps/corrupts values larger than 2^31-1."
+  },
+  {
+    "id": "domain-knowledge-3-3-redos-nested-quantifier",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Validates that a log line conforms to the expected format: one or more space-separated alphanumeric tokens followed by an optional bracketed code.",
+    "code": "const LOG_LINE_RE = /^([a-zA-Z0-9]+ *)+(?:\\[\\w+\\])?$/;\n\nfunction isValidLogLine(line) {\n  if (typeof line !== 'string') return false;\n  return LOG_LINE_RE.test(line);\n}",
+    "injectedDefect": "The pattern `([a-zA-Z0-9]+ *)+` contains nested quantifiers over overlapping character classes, causing catastrophic backtracking on inputs like 'aaa...!' that nearly match but ultimately fail. A string of ~25 non-matching characters can hang the event loop for seconds.",
+    "blindSpotHint": "Nested quantifiers where the inner group and the outer `+` can both consume the same characters produce exponential backtracking on near-miss inputs (ReDoS); the pattern `([a-zA-Z0-9]+ *)+` is a textbook example."
+  },
+  {
+    "id": "domain-knowledge-3-4-lexicographic-numeric-so",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Returns the top-N numeric metric values from an array of records, sorted in descending order.",
+    "code": "function topNMetrics(records, n) {\n  if (!Array.isArray(records) || n < 1) {\n    throw new TypeError('invalid arguments');\n  }\n\n  return records\n    .map(r => r.value)\n    .sort()\n    .reverse()\n    .slice(0, n);\n}",
+    "injectedDefect": "`Array.prototype.sort()` without a comparator converts elements to strings and sorts lexicographically; numeric values like [10, 9, 100] sort as ['10','100','9'] → reversed ['9','100','10'] instead of [100, 10, 9]. The comparator `(a, b) => b - a` is required for correct numeric descending order.",
+    "blindSpotHint": "JavaScript's default sort is lexicographic (Unicode code-point order), not numeric; `[10, 9, 100].sort().reverse()` yields [9, 100, 10], not [100, 10, 9]."
+  },
+  {
+    "id": "domain-knowledge-3-5-prng-token-generation",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Generates a URL-safe random token to be used as a single-use password-reset link identifier, returning a 32-character hex string.",
+    "code": "function generateResetToken() {\n  let token = '';\n  for (let i = 0; i < 32; i++) {\n    token += Math.floor(Math.random() * 16).toString(16);\n  }\n  return token;\n}",
+    "injectedDefect": "`Math.random()` is a non-cryptographic PRNG seeded with a predictable internal state; its output can be predicted from a small number of observed values, allowing an attacker to enumerate valid reset tokens. Password-reset tokens must use `crypto.randomBytes()` or `crypto.getRandomValues()` (CSPRNG).",
+    "blindSpotHint": "Security tokens must be generated with a cryptographically secure RNG; `Math.random()` is a deterministic PRNG whose future outputs are predictable once its internal state is partially observed."
+  },
+  {
+    "id": "spec-silent-4-0-pagination-index-base",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns a paginated slice of results given a page number and page size.",
+    "code": "function paginate(items, page, pageSize) {\n  const start = page * pageSize;\n  const end = start + pageSize;\n  return {\n    items: items.slice(start, end),\n    total: items.length,\n    page,\n    pageSize,\n  };\n}",
+    "injectedDefect": "Uses 0-based page indexing (page=0 is first page). If the spec requires 1-based indexing (page=1 is first page), callers passing page=1 get the second page, and page=0 returns nothing.",
+    "blindSpotHint": "The spec does not state whether page is 0-indexed or 1-indexed."
+  },
+  {
+    "id": "spec-silent-4-1-date-range-endpoint-incl",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Filters a list of events to those falling within the given date range.",
+    "code": "function filterByDateRange(events, startDate, endDate) {\n  return events.filter((event) => {\n    const ts = new Date(event.date).getTime();\n    const start = new Date(startDate).getTime();\n    const end = new Date(endDate).getTime();\n    return ts >= start && ts < end;\n  });\n}",
+    "injectedDefect": "The end boundary is exclusive (ts < end). If the spec requires an inclusive end boundary (ts <= end), events occurring exactly on endDate are incorrectly excluded.",
+    "blindSpotHint": "The spec says 'within the given date range' but does not specify whether the end date is inclusive or exclusive."
+  },
+  {
+    "id": "spec-silent-4-2-rank-tiebreak-order",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns the top N users sorted by score, highest first.",
+    "code": "function topUsers(users, n) {\n  return users\n    .slice()\n    .sort((a, b) => b.score - a.score)\n    .slice(0, n);\n}",
+    "injectedDefect": "When two users share the same score, their relative order is determined by the JS engine's sort stability (insertion order among equal elements). If the spec requires ties broken by user ID ascending, the output is wrong for tied scores.",
+    "blindSpotHint": "The spec says 'sorted by score, highest first' but does not define a tiebreaker when two users have equal scores."
+  },
+  {
+    "id": "spec-silent-4-3-clamp-boundary-inclusion",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Clamps a numeric value to a configuration-defined range, returning the nearest allowed value.",
+    "code": "function clampToRange(value, min, max) {\n  if (value < min) return min;\n  if (value > max) return max;\n  return value;\n}",
+    "injectedDefect": "The range boundaries are treated as inclusive on both ends. If the spec intends the max to be exclusive (value must be strictly less than max), values equal to max are returned as-is rather than being clamped or rejected.",
+    "blindSpotHint": "The spec says 'nearest allowed value' within the range but does not state whether the max boundary is inclusive or exclusive."
+  },
+  {
+    "id": "spec-silent-5-0-leaderboard-rank-tie-ord",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns the top-N users by score, ranked highest first.",
+    "code": "function getTopUsers(users, n) {\n  return users\n    .slice()\n    .sort((a, b) => b.score - a.score)\n    .slice(0, n)\n    .map((u, i) => ({ rank: i + 1, userId: u.id, score: u.score }));\n}",
+    "injectedDefect": "When two users share the same score, the sort is unstable with respect to insertion order (or any other tie-break). The spec says 'ranked highest first' but never specifies how ties are broken — the intended spec required secondary sort by userId ascending to make ranking deterministic, but that is not stated anywhere in the claim.",
+    "blindSpotHint": "Tie-break direction and key for equal-score users: the spec intended secondary ascending sort by userId, but states only 'highest first'."
+  },
+  {
+    "id": "spec-silent-5-1-search-tag-case-sensitiv",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Filters articles that contain the given tag.",
+    "code": "function filterByTag(articles, tag) {\n  return articles.filter(article =>\n    Array.isArray(article.tags) && article.tags.includes(tag)\n  );\n}",
+    "injectedDefect": "Tag matching is case-sensitive (Array.prototype.includes uses strict equality). The claim says 'contain the given tag' but never specifies whether matching should be case-insensitive. The intended spec required case-insensitive matching so that searching 'javascript' finds articles tagged 'JavaScript', but this is not stated in the claim.",
+    "blindSpotHint": "Case sensitivity of tag comparison: the spec intended case-insensitive matching but the claim only says 'contain the given tag' without specifying."
+  },
+  {
+    "id": "spec-silent-5-2-pagination-boundary-page",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns a page of results. Accepts a page number and page size.",
+    "code": "function paginate(items, page, pageSize) {\n  const start = page * pageSize;\n  return items.slice(start, start + pageSize);\n}",
+    "injectedDefect": "The function treats page as 0-indexed (page=0 returns the first page). The claim says 'accepts a page number' without specifying whether page numbering is 0-based or 1-based. The intended spec required 1-indexed pages (page=1 is the first page), so callers passing page=1 receive the second page of results.",
+    "blindSpotHint": "Page index origin: the spec intended 1-based page numbers but the claim says only 'accepts a page number' without specifying 0- or 1-based."
+  },
+  {
+    "id": "spec-silent-5-3-name-trim-interior-white",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Normalizes a user's display name by trimming whitespace.",
+    "code": "function normalizeDisplayName(name) {\n  if (typeof name !== 'string') return '';\n  return name.trim();\n}",
+    "injectedDefect": "The function trims only leading and trailing whitespace but leaves interior runs of whitespace intact (e.g. 'Alice  Bob' stays 'Alice  Bob'). The claim says 'trimming whitespace' which could reasonably mean only leading/trailing trim. The intended spec also required collapsing interior whitespace sequences to a single space, but this is not stated in the claim.",
+    "blindSpotHint": "Scope of 'trim': the spec intended collapsing interior whitespace runs in addition to leading/trailing trim, but the claim only says 'trimming whitespace'."
+  },
+  {
+    "id": "spec-silent-5-4-interval-overlap-touchin",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns true if two numeric intervals overlap.",
+    "code": "function intervalsOverlap(a, b) {\n  // a and b are objects with .start and .end (start <= end)\n  return a.start < b.end && b.start < a.end;\n}",
+    "injectedDefect": "The function uses strict less-than, so touching intervals such as [1,2] and [2,3] are not considered overlapping. The claim says 'overlap' without specifying whether intervals sharing only an endpoint count. The intended spec required touching endpoints to count as overlapping (using <= instead of <), but this boundary condition is not stated.",
+    "blindSpotHint": "Endpoint-touching semantics: the spec intended [1,2] and [2,3] to be considered overlapping (closed intervals), but the claim only says 'overlap' without specifying open vs closed boundary behavior."
+  },
+  {
+    "id": "spec-silent-6-0-subscription-end-date-in",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns true if the user's subscription is currently active based on their end date.",
+    "code": "function isSubscriptionActive(endDate: Date): boolean {\n  const now = new Date();\n  return now < endDate;\n}",
+    "injectedDefect": "Uses strict less-than (<), so a subscription whose endDate is today at midnight is already expired. The spec never stated whether the end date is inclusive (user has access through the entire end day) or exclusive (access expires at the start of the end date).",
+    "blindSpotHint": "The spec never states whether endDate is the last day of access (inclusive, through 23:59:59) or the first day of non-access (exclusive). A critic cannot determine which interpretation is required without the spec."
+  },
+  {
+    "id": "spec-silent-6-1-leaderboard-score-tie-or",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns the top N players sorted by score descending.",
+    "code": "function getTopPlayers(\n  players: Array<{ id: string; name: string; score: number }>,\n  n: number\n): Array<{ id: string; name: string; score: number }> {\n  return [...players]\n    .sort((a, b) => b.score - a.score)\n    .slice(0, n);\n}",
+    "injectedDefect": "When two players share the same score, their relative order is determined by the unstable sort (implementation-defined, varies across engines and input order). The spec says 'sorted by score descending' but never defines a tie-breaking rule (e.g., alphabetical by name, earlier registration, preserve insertion order).",
+    "blindSpotHint": "The claim says 'sorted by score descending' but gives no tie-break rule. A critic cannot determine whether the absence of a secondary sort key is a defect without knowing the intended tie-breaking behavior from the spec."
+  },
+  {
+    "id": "spec-silent-6-2-report-date-range-page-o",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Returns paginated events for a date range. Accepts a page number and returns 20 events per page.",
+    "code": "async function getEvents(\n  startDate: string,\n  endDate: string,\n  page: number\n): Promise<Event[]> {\n  const limit = 20;\n  const offset = page * limit;\n  return db.query(\n    `SELECT * FROM events\n     WHERE event_date >= $1 AND event_date <= $2\n     ORDER BY event_date ASC\n     LIMIT $3 OFFSET $4`,\n    [startDate, endDate, limit, offset]\n  );\n}",
+    "injectedDefect": "Pagination is 0-indexed (page=0 returns the first 20 records). If callers expect 1-indexed pagination (page=1 is first page), passing page=1 skips the first 20 records and page=0 returns the first page unexpectedly. The spec says 'accepts a page number' without specifying the base index.",
+    "blindSpotHint": "The spec says 'accepts a page number' but never specifies whether page numbering is 0-based or 1-based. A critic cannot determine which convention is required without the spec."
+  },
+  {
+    "id": "spec-silent-6-3-invoice-subtotal-roundin",
+    "class": "domain-knowledge",
+    "groundTruth": "BLOCK",
+    "claim": "Calculates the invoice subtotal by applying a percentage discount to the unit price and multiplying by quantity. Returns the result rounded to 2 decimal places.",
+    "code": "function calculateSubtotal(\n  unitPrice: number,\n  discountPercent: number,\n  quantity: number\n): number {\n  const discountedPrice = unitPrice * (1 - discountPercent / 100);\n  const raw = discountedPrice * quantity;\n  return Math.round(raw * 100) / 100;\n}",
+    "injectedDefect": "Uses round-half-up (standard Math.round). The spec says 'rounded to 2 decimal places' without specifying the rounding mode. For financial invoicing the required mode might be round-half-even (banker's rounding), round-half-down, or truncation — none of which is dictated by the claim or inferable from general domain knowledge alone, since 'rounded to 2 decimal places' is genuinely ambiguous across financial systems.",
+    "blindSpotHint": "The claim says 'rounded to 2 decimal places' but does not specify the rounding mode. Unlike general money arithmetic (where banker's rounding is a recognized convention), this is an invoicing context where the required rounding rule (half-up, half-even, truncate) is a business decision not stated in the spec."
+  },
+  {
+    "id": "spec-silent-6-4-session-expiry-window-bo",
+    "class": "spec-silent",
+    "groundTruth": "BLOCK",
+    "claim": "Checks whether a session token is still valid given its creation timestamp and a maximum session duration in minutes.",
+    "code": "function isSessionValid(\n  createdAt: Date,\n  maxDurationMinutes: number\n): boolean {\n  const expiresAt = new Date(\n    createdAt.getTime() + maxDurationMinutes * 60 * 1000\n  );\n  const now = new Date();\n  return now < expiresAt;\n}",
+    "injectedDefect": "A session created at exactly T and checked at exactly T + maxDuration*60*1000 ms is considered expired (now < expiresAt is false when they are equal). The spec says 'maximum session duration' but never states whether the boundary instant itself is valid (<=) or expired (<).",
+    "blindSpotHint": "The spec says 'maximum session duration' but never specifies whether a session is valid at exactly the expiry instant (i.e., whether the boundary is inclusive or exclusive). A critic cannot determine which is correct without the spec."
+  },
+  {
+    "id": "clean-7-0-debounce-trailing",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Returns a debounced version of the given function that fires after the specified delay has elapsed since the last invocation. Cancels any pending invocation when the returned function is called again before the delay expires.",
+    "code": "function debounce(fn, delayMs) {\n  let timerId = null;\n  return function debounced(...args) {\n    if (timerId !== null) {\n      clearTimeout(timerId);\n    }\n    timerId = setTimeout(() => {\n      timerId = null;\n      fn.apply(this, args);\n    }, delayMs);\n  };\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  },
+  {
+    "id": "clean-7-1-binary-search-integer",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Performs binary search on a sorted array of integers and returns the index of the target value, or -1 if not found.",
+    "code": "function binarySearch(arr, target) {\n  let lo = 0;\n  let hi = arr.length - 1;\n  while (lo <= hi) {\n    const mid = lo + Math.floor((hi - lo) / 2);\n    if (arr[mid] === target) return mid;\n    if (arr[mid] < target) lo = mid + 1;\n    else hi = mid - 1;\n  }\n  return -1;\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  },
+  {
+    "id": "clean-7-2-lru-cache-get-put",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Implements an LRU cache with a fixed capacity. get(key) returns the stored value or -1 if absent, and marks the entry as most-recently used. put(key, value) inserts or updates the entry and evicts the least-recently used entry when the cache is at capacity.",
+    "code": "class LRUCache {\n  constructor(capacity) {\n    this.capacity = capacity;\n    this.map = new Map();\n  }\n\n  get(key) {\n    if (!this.map.has(key)) return -1;\n    const value = this.map.get(key);\n    this.map.delete(key);\n    this.map.set(key, value);\n    return value;\n  }\n\n  put(key, value) {\n    if (this.map.has(key)) {\n      this.map.delete(key);\n    } else if (this.map.size >= this.capacity) {\n      const lruKey = this.map.keys().next().value;\n      this.map.delete(lruKey);\n    }\n    this.map.set(key, value);\n  }\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  },
+  {
+    "id": "clean-7-3-flatten-deep",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Recursively flattens a nested array to any depth, returning a new flat array containing all leaf values in depth-first order.",
+    "code": "function flattenDeep(arr) {\n  const result = [];\n  function walk(items) {\n    for (const item of items) {\n      if (Array.isArray(item)) {\n        walk(item);\n      } else {\n        result.push(item);\n      }\n    }\n  }\n  walk(arr);\n  return result;\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  },
+  {
+    "id": "clean-7-4-rate-limiter-token-bucke",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Implements a token-bucket rate limiter. consume(n) attempts to remove n tokens from the bucket. Returns true if the tokens were available and removes them; returns false without modifying the bucket if fewer than n tokens are currently available. The bucket refills at a constant rate up to its maximum capacity.",
+    "code": "class TokenBucket {\n  constructor(capacity, refillRatePerMs) {\n    this.capacity = capacity;\n    this.tokens = capacity;\n    this.refillRatePerMs = refillRatePerMs;\n    this.lastRefillTime = Date.now();\n  }\n\n  _refill() {\n    const now = Date.now();\n    const elapsed = now - this.lastRefillTime;\n    this.tokens = Math.min(\n      this.capacity,\n      this.tokens + elapsed * this.refillRatePerMs\n    );\n    this.lastRefillTime = now;\n  }\n\n  consume(n) {\n    this._refill();\n    if (this.tokens < n) return false;\n    this.tokens -= n;\n    return true;\n  }\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  },
+  {
+    "id": "clean-7-5-memoize-single-arg",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Returns a memoized version of a function that caches results by a single string or number key argument. Subsequent calls with the same argument return the cached result without invoking the original function.",
+    "code": "function memoize(fn) {\n  const cache = new Map();\n  return function memoized(key) {\n    if (cache.has(key)) {\n      return cache.get(key);\n    }\n    const result = fn.call(this, key);\n    cache.set(key, result);\n    return result;\n  };\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  },
+  {
+    "id": "clean-7-6-event-emitter-once",
+    "class": "clean",
+    "groundTruth": "PASS",
+    "claim": "Implements a minimal event emitter supporting on(event, listener), once(event, listener), off(event, listener), and emit(event, ...args). Listeners registered with once are called at most one time and then automatically removed.",
+    "code": "class EventEmitter {\n  constructor() {\n    this._listeners = new Map();\n  }\n\n  on(event, listener) {\n    if (!this._listeners.has(event)) this._listeners.set(event, []);\n    this._listeners.get(event).push({ fn: listener, once: false });\n    return this;\n  }\n\n  once(event, listener) {\n    if (!this._listeners.has(event)) this._listeners.set(event, []);\n    this._listeners.get(event).push({ fn: listener, once: true });\n    return this;\n  }\n\n  off(event, listener) {\n    if (!this._listeners.has(event)) return this;\n    this._listeners.set(\n      event,\n      this._listeners.get(event).filter(entry => entry.fn !== listener)\n    );\n    return this;\n  }\n\n  emit(event, ...args) {\n    if (!this._listeners.has(event)) return false;\n    const remaining = [];\n    for (const entry of this._listeners.get(event)) {\n      entry.fn(...args);\n      if (!entry.once) remaining.push(entry);\n    }\n    this._listeners.set(event, remaining);\n    return true;\n  }\n}",
+    "injectedDefect": null,
+    "blindSpotHint": null
+  }
+]

@@ -67,7 +67,7 @@ describe('verdict-eval: corpus validity gate (held-out-only property)', () => {
 });
 
 function loadVerdicts() {
-  const lines = fs.readFileSync(path.join(ROOT, 'seed-verdicts.tsv'), 'utf8').trim().split('\n');
+  const lines = fs.readFileSync(path.join(ROOT, 'seed-verdicts.tsv'), 'utf8').trim().split(/\r?\n/);
   const header = lines[0].split('\t');
   return lines.slice(1).map((line) => {
     const cells = line.split('\t');
