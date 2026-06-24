@@ -2450,10 +2450,12 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
     if (tableForSum) {
       let sum = 0;
       for (const row of tableForSum[2].split(/\r?\n/)) {
-        // Data rows look like `| <phase> | <plans> | … |`. Header (`| Phase | Plans | …`)
-        // and separator (`| --- | --- | …`) rows have a non-numeric second cell and are
-        // skipped; non-numeric cells contribute 0 (never NaN).
-        const cellMatch = row.match(/^\|\s*[^|]+\s*\|\s*(\d+)\s*\|/);
+        // Data rows look like `| <phase> | <plans> | … |`, optionally indented (the
+        // byPhaseTablePattern data-row capture allows `[ \t]*` leading whitespace, so the
+        // sum must too or hand-edited/legacy indented rows are silently skipped — #1582
+        // codex review). Header (`| Phase | Plans | …`) and separator (`| --- | --- | …`)
+        // rows have a non-numeric second cell and are skipped; non-numeric cells → 0.
+        const cellMatch = row.match(/^\s*\|\s*[^|]+\s*\|\s*(\d+)\s*\|/);
         if (cellMatch) sum += parseInt(cellMatch[1], 10);
       }
       content = content.replace(

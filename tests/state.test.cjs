@@ -2114,6 +2114,55 @@ describe('updatePerformanceMetricsSection', () => {
     );
   });
 
+  test('#1582 — velocity sums indented By-Phase data rows too (codex review: byPhaseTablePattern allows [ \\t]* leading whitespace, so the sum must match it)', () => {
+    // byPhaseTablePattern's data-row capture is `(?:[ \\t]*\\|...)*` — it ALLOWS leading
+    // whitespace. The derive sum must tolerate the same, or a hand-edited/legacy indented
+    // row is captured by the table but silently skipped by the sum (undercount).
+    const content = `# Project State
+
+**Current Phase:** 02
+**Status:** Executing Phase 2
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: N/A
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+  | 1 | 2 | - | - |
+
+## Accumulated Context
+`;
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-next');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n## Phase 2: Next\n\n- [ ] Phase 2: Next\n`
+    );
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const stateAfter = fs.readFileSync(statePath, 'utf-8');
+    // Indented phase-1 row (2) + new column-0 phase-2 row (1) = 3. A sum regex anchored
+    // at ^\\| would skip the indented row and report 1.
+    assert.ok(
+      stateAfter.match(/Total plans completed:\s*3\b/),
+      'velocity must sum indented By-Phase rows too (codex review, #1582): expected 3 (2 + 1)',
+    );
+  });
+
   test('byPhaseTablePattern behavior-lock (#320): By Phase table header preserved and phase row upserted after hoist to module scope', () => {
     // Exercises the byPhaseTablePattern match path directly: header must be preserved,
     // an existing phase row must be replaced (not duplicated), and a new phase row inserted.
