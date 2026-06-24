@@ -66,6 +66,6 @@ The `InstallPlan` is realized as the exported `resolveInstallPlan(runtime)` in `
 
 Qoder (`qodercli`) registered in the Runtime Config Adapter Registry:
 
-- `qoder: { installSurface: 'profile-marker-only', writesSharedSettings: false, finishPermissionWriter: null }`
+- `qoder: { installSurface: 'settings-json', writesSharedSettings: true, finishPermissionWriter: null }`
 
-Identical adapter shape to Trae and Windsurf. No new adapter logic needed — the `profile-marker-only` surface produces no settings writes and no permission entries. The registry entry exists solely so `resolveRuntimeConfigIntent('qoder')` resolves without throwing and the layout-driven install/uninstall pipelines include Qoder in their iteration.
+Uses the `settings-json` install surface (Claude Code-compatible `settings.json` hook registration). GSD-managed hooks (prompt-guard, context-monitor, read-injection-scanner, worktree-path-guard, etc.) are written to `~/.qoder/settings.json` (global) or `.qoder/settings.json` (local) via `applySettingsJsonHooks`. The `writesSharedSettings: true` flag gates the on-disk write in `finishInstall`. No new adapter logic needed beyond the existing `settings-json` surface; the registry entry exists so `resolveRuntimeConfigIntent('qoder')` resolves without throwing and the layout-driven install/uninstall pipelines include Qoder in their iteration.

@@ -1375,9 +1375,11 @@ function convertClaudeCommandToQoderSkill(content: string, skillName: string, _r
   const qoderBody = convertClaudeToQoderMarkdown(normalizedBody);
 
   // Extract description; fall back to a generic string if absent.
+  // Run through the converter so references like "Claude Code's ultraplan cloud"
+  // are rewritten to "Qoder's ultraplan cloud" in the frontmatter.
   let description = extractFrontmatterField(frontmatter, 'description');
   if (!description) description = `Run GSD workflow ${skillName}.`;
-  description = toSingleLine(description);
+  description = toSingleLine(convertClaudeToQoderMarkdown(description));
   const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
 
   const fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---`;

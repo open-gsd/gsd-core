@@ -515,6 +515,7 @@ function getConfigDirFromHome(runtime, isGlobal) {
   if (runtime === 'hermes') return "'.hermes'";
   if (runtime === 'codebuddy') return "'.codebuddy'";
   if (runtime === 'cline') return "'.cline'";
+  if (runtime === 'qoder') return "'.qoder'";
   if (runtime === 'kimi') return "'.config', 'agents'";
   return "'.claude'";
 }
@@ -7515,6 +7516,15 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       jsContent = jsContent.replace(/CLAUDE\.md/g, 'HERMES.md');
       jsContent = jsContent.replace(/\bClaude Code\b/g, 'Hermes Agent');
       fs.writeFileSync(destPath, jsContent);
+    } else if (isQoder && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
+      // Qoder: convert Claude references in bundled JS/CJS library files
+      // (.claude/→.qoder/, CLAUDE.md→AGENTS.md, Claude Code→Qoder).
+      let jsContent = fs.readFileSync(srcPath, 'utf8');
+      jsContent = jsContent.replace(/\.claude\/skills\//g, '.qoder/skills/');
+      jsContent = jsContent.replace(/\.claude\//g, '.qoder/');
+      jsContent = jsContent.replace(/CLAUDE\.md/g, 'AGENTS.md');
+      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Qoder');
+      fs.writeFileSync(destPath, jsContent);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
@@ -10243,6 +10253,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
             if (isHermes) {
               content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
               content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
+            }
+            if (isQoder) {
+              content = content.replace(/CLAUDE\.md/g, 'AGENTS.md');
+              content = content.replace(/\bClaude Code\b/g, 'Qoder');
             }
             // #376: rewrite gsd: → gsd- for hyphen-namespace runtimes
             if (shouldNormalizeHyphenNamespaceInAgentBody(runtime)) {

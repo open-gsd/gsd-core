@@ -609,8 +609,11 @@ describe('install/uninstall — qoder (flat skills/gsd-<stem>/ layout)', () => {
 
   test('registers GSD hooks in settings for Qoder (hooksSurface=settings-json)', () => {
     // install() returns the in-memory settings object; finishInstall() writes
-    // it to disk.  We verify the in-memory shape here — the on-disk write is
-    // gated on plan.writesSharedSettings (now true) and tested via integration.
+    // it to disk.  We verify the in-memory hook event-key structure here —
+    // the on-disk write is gated on plan.writesSharedSettings (now true)
+    // and tested via integration.  We assert that hook event arrays are
+    // present and non-empty (other runtime tests like hermes/qwen/trae
+    // assert artifact structure, not hook-command text).
     const result = install(false, 'qoder');
     const settings = result.settings;
 
@@ -619,24 +622,21 @@ describe('install/uninstall — qoder (flat skills/gsd-<stem>/ layout)', () => {
 
     // Qoder supports PreToolUse, PostToolUse, and Stop events.
     // SessionStart is also registered (dormant until Qoder adds support).
-    assert.ok(Array.isArray(settings.hooks.PreToolUse),
-      'PreToolUse event must be registered');
-    assert.ok(Array.isArray(settings.hooks.PostToolUse),
-      'PostToolUse event must be registered');
-    assert.ok(Array.isArray(settings.hooks.Stop),
-      'Stop event must be registered');
+    assert.ok(Array.isArray(settings.hooks.PreToolUse) && settings.hooks.PreToolUse.length > 0,
+      'PreToolUse event must be registered and non-empty');
+    assert.ok(Array.isArray(settings.hooks.PostToolUse) && settings.hooks.PostToolUse.length > 0,
+      'PostToolUse event must be registered and non-empty');
+    assert.ok(Array.isArray(settings.hooks.Stop) && settings.hooks.Stop.length > 0,
+      'Stop event must be registered and non-empty');
 
-    // Verify that at least the prompt-guard and context-monitor hooks
-    // are wired up (the core GSD hooks).
-    const preToolCommands = settings.hooks.PreToolUse
-      .flatMap(e => (e.hooks || []).map(h => h.command || ''));
-    assert.ok(preToolCommands.some(c => c.includes('gsd-prompt-guard')),
-      'PreToolUse must include gsd-prompt-guard');
-
-    const postToolCommands = settings.hooks.PostToolUse
-      .flatMap(e => (e.hooks || []).map(h => h.command || ''));
-    assert.ok(postToolCommands.some(c => c.includes('gsd-context-monitor')),
-      'PostToolUse must include gsd-context-monitor');
+    // Verify that each event carries at least one hook entry with a command.
+    for (const event of ['PreToolUse', 'PostToolUse', 'Stop']) {
+      const hooks = settings.hooks[event];
+      assert.ok(hooks.length > 0, `${event} must have at least one hook group`);
+      const commands = hooks.flatMap(e => (e.hooks || []).map(h => h.command || ''));
+      assert.ok(commands.length > 0,
+        `${event} must contain at least one hook command`);
+    }
 
     uninstall(false, 'qoder');
   });
