@@ -2046,15 +2046,72 @@ describe('updatePerformanceMetricsSection', () => {
     runGsdTools('phase complete 5', tmpDir);
     const afterSecond = fs.readFileSync(statePath, 'utf-8');
 
-    // Both should have same total plans count (idempotent update for same phase)
+    // #1582: the velocity total must be IDEMPOTENT across re-runs of the same phase.
+    // The old blind-add (prevTotal + summaryCount) double-counted on every re-run
+    // (1 -> 2 here); the fix derives the total from the By-Phase Plans column, so
+    // re-running the same phase upserts the same row and the sum stays stable.
     const firstCount = afterFirst.match(/Total plans completed:\s*(\d+)/);
     const secondCount = afterSecond.match(/Total plans completed:\s*(\d+)/);
     assert.ok(firstCount, 'First run should have total plans');
     assert.ok(secondCount, 'Second run should have total plans');
-    // Second run adds another completion for phase 5, so count increments
-    // The key is the By Phase row for phase 5 should be updated, not duplicated
+    assert.equal(
+      firstCount[1],
+      secondCount[1],
+      `velocity total must be idempotent across re-runs of phase 5 (#1582): first=${firstCount[1]} second=${secondCount[1]}`,
+    );
+    assert.equal(firstCount[1], '1', 'phase 5 has 1 plan, so the velocity total must be 1');
+    // The By Phase row for phase 5 should be updated, not duplicated.
     const phase5Rows = (afterSecond.match(/\|\s*5\s*\|/g) || []).length;
     assert.ok(phase5Rows <= 1, 'Phase 5 should appear at most once in By Phase table (no duplicates)');
+  });
+
+  test('#1582 — velocity self-heals a hand-inflated total down to the true By-Phase sum', () => {
+    // A hand-edited STATE.md whose velocity line says 99 but whose By-Phase table
+    // records the true completed plans. Completing a fresh phase must RECOMPUTE the
+    // total from the table (derive, not accumulate), correcting the inflated value
+    // downward rather than adding to it.
+    const content = `# Project State
+
+**Current Phase:** 02
+**Status:** Executing Phase 2
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 99
+- Average duration: 5 min
+- Total execution time: 0.1 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 1 | 2 | 10 min | 5 min |
+
+## Accumulated Context
+`;
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-next');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n## Phase 2: Next\n\n- [ ] Phase 2: Next\n`
+    );
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const stateAfter = fs.readFileSync(statePath, 'utf-8');
+    // True sum = phase 1 (2) + phase 2 (1) = 3. Old blind-add would yield 99 + 1 = 100.
+    assert.ok(
+      stateAfter.match(/Total plans completed:\s*3\b/),
+      'velocity total must self-heal to the true By-Phase sum (3), not accumulate from the inflated 99 (#1582)',
+    );
   });
 
   test('byPhaseTablePattern behavior-lock (#320): By Phase table header preserved and phase row upserted after hoist to module scope', () => {
@@ -2108,8 +2165,11 @@ describe('updatePerformanceMetricsSection', () => {
     const phase6Rows = (stateAfter.match(/\|\s*6\s*\|/g) || []).length;
     assert.strictEqual(phase6Rows, 1, 'Phase 6 row must appear exactly once in By Phase table (upsert, not append)');
 
-    // Total plans count updated correctly (1 pre-existing + 2 new summaries)
-    assert.ok(stateAfter.match(/Total plans completed:\s*3/), 'Total plans completed should be 3 after upsert');
+    // Total plans count = sum of the By-Phase Plans column after the upsert. Phase 6's
+    // row is upserted to its current summaryCount (2), and it is the only row, so the
+    // derived total is 2. (#1582: derived from the table, not blind-added onto the prior
+    // velocity — which previously produced 1+2=3 by double-counting phase 6.)
+    assert.ok(stateAfter.match(/Total plans completed:\s*2\b/), 'Total plans completed should equal the By-Phase Plans sum (2) after upsert (#1582)');
   });
 
   test('#1658 — By-Phase table row upserts on a CRLF STATE.md (byPhaseTablePattern must be CRLF-tolerant)', () => {

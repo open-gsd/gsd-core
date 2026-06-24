@@ -2417,16 +2417,11 @@ function cmdSignalResume(cwd: string, raw: boolean): void {
  * Returns modified content string.
  */
 function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum: string | number, planCount: number, summaryCount: number): string {
-  // Update Velocity: Total plans completed
-  const totalMatch = content.match(/Total plans completed:\s*(\d+|\[N\])/);
-  const prevTotal = totalMatch && totalMatch[1] !== '[N]' ? parseInt(totalMatch[1], 10) : 0;
-  const newTotal = prevTotal + summaryCount;
-  content = content.replace(
-    /Total plans completed:\s*(\d+|\[N\])/,
-    `Total plans completed: ${newTotal}`
-  );
-
-  // Update By Phase table — upsert row for this phase
+  // By Phase table — upsert the row for THIS phase FIRST. The velocity total is then
+  // DERIVED from the table's Plans column so it stays idempotent on re-run: completing
+  // the same phase again upserts the same row, so the column sum is stable. The previous
+  // blind-add (prevTotal + summaryCount) re-read the cumulative total each call and
+  // double-counted on every re-run. (#1582)
   const byPhaseMatch = content.match(byPhaseTablePattern);
   if (byPhaseMatch) {
     let tableBody = byPhaseMatch[2].trim();
@@ -2443,6 +2438,29 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
     }
 
     content = content.replace(byPhaseTablePattern, (_match, tableHeader: string) => `${tableHeader}${tableBody}\n`);
+  }
+
+  // Velocity: Total plans completed — DERIVED as the sum of the By-Phase Plans column
+  // (the second cell) across all data rows. Idempotent by construction (re-running phase
+  // complete upserts the same row → same sum) and self-healing (a hand-edited inflated
+  // total is corrected to the true sum on the next completion). When the By-Phase table
+  // is absent, leave the velocity total unchanged rather than guess. (#1582)
+  if (/Total plans completed:\s*(\d+|\[N\])/.test(content)) {
+    const tableForSum = content.match(byPhaseTablePattern);
+    if (tableForSum) {
+      let sum = 0;
+      for (const row of tableForSum[2].split(/\r?\n/)) {
+        // Data rows look like `| <phase> | <plans> | … |`. Header (`| Phase | Plans | …`)
+        // and separator (`| --- | --- | …`) rows have a non-numeric second cell and are
+        // skipped; non-numeric cells contribute 0 (never NaN).
+        const cellMatch = row.match(/^\|\s*[^|]+\s*\|\s*(\d+)\s*\|/);
+        if (cellMatch) sum += parseInt(cellMatch[1], 10);
+      }
+      content = content.replace(
+        /Total plans completed:\s*(\d+|\[N\])/,
+        `Total plans completed: ${sum}`,
+      );
+    }
   }
 
   return content;
