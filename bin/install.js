@@ -11323,9 +11323,12 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       let defaults = {};
       try { defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')); } catch { /* new file */ }
       // Three-valued domain: false/absent → aliases; true → full IDs; "omit" → ''.
-      // Only default absent/falsy → "omit"; preserve `true` and an existing "omit".
+      // Honor ONLY an explicit canonical `true` opt-in (full model IDs) and an existing
+      // "omit"; default everything else — absent, falsy, OR any non-canonical value — to
+      // "omit", the safe non-Claude default. Allowlist-based so malformed values
+      // (0, "", "yes", {}, …) don't leak Claude aliases the runtime can't resolve (#1569).
       const existing = defaults.resolve_model_ids;
-      const shouldDefaultToOmit = existing === undefined || existing === null || existing === false;
+      const shouldDefaultToOmit = existing !== true && existing !== 'omit';
       if (shouldDefaultToOmit) {
         defaults.resolve_model_ids = 'omit';
         fs.writeFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n');

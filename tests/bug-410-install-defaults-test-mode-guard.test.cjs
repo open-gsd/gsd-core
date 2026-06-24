@@ -190,6 +190,23 @@ describe('Bug #1569: non-Claude finishInstall preserves explicit resolve_model_i
     });
   });
 
+  test('non-canonical resolve_model_ids values (0, "", "yes", {}) default to "omit" — no Claude alias leak (#1569 codex review)', () => {
+    // The domain is true/false/"omit"/absent. Any OTHER value is malformed; the safe
+    // non-Claude default is "omit" (don't leak Claude aliases the runtime can't resolve).
+    withUserPath(() => {
+      for (const bad of [0, '', 'yes', {}]) {
+        seedDefaults({ runtime: 'codex', resolve_model_ids: bad });
+        callFinishInstallForRuntime('codex');
+        const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+        assert.equal(
+          after.resolve_model_ids,
+          'omit',
+          `non-canonical resolve_model_ids:${JSON.stringify(bad)} must default to "omit", not pass through`,
+        );
+      }
+    });
+  });
+
   test('already-"omit" is left unchanged (idempotent, no rewrite churn)', () => {
     withUserPath(() => {
       seedDefaults({ runtime: 'codex', resolve_model_ids: 'omit' });
