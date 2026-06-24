@@ -606,6 +606,40 @@ describe('install/uninstall — qoder (flat skills/gsd-<stem>/ layout)', () => {
     assert.strictEqual(leaks.length, 0, `Leaking agents: ${leaks.join(', ')}`);
     uninstall(false, 'qoder');
   });
+
+  test('registers GSD hooks in settings for Qoder (hooksSurface=settings-json)', () => {
+    // install() returns the in-memory settings object; finishInstall() writes
+    // it to disk.  We verify the in-memory shape here — the on-disk write is
+    // gated on plan.writesSharedSettings (now true) and tested via integration.
+    const result = install(false, 'qoder');
+    const settings = result.settings;
+
+    assert.ok(settings, 'install() must return a settings object for Qoder');
+    assert.ok(settings.hooks, 'settings must contain a hooks object');
+
+    // Qoder supports PreToolUse, PostToolUse, and Stop events.
+    // SessionStart is also registered (dormant until Qoder adds support).
+    assert.ok(Array.isArray(settings.hooks.PreToolUse),
+      'PreToolUse event must be registered');
+    assert.ok(Array.isArray(settings.hooks.PostToolUse),
+      'PostToolUse event must be registered');
+    assert.ok(Array.isArray(settings.hooks.Stop),
+      'Stop event must be registered');
+
+    // Verify that at least the prompt-guard and context-monitor hooks
+    // are wired up (the core GSD hooks).
+    const preToolCommands = settings.hooks.PreToolUse
+      .flatMap(e => (e.hooks || []).map(h => h.command || ''));
+    assert.ok(preToolCommands.some(c => c.includes('gsd-prompt-guard')),
+      'PreToolUse must include gsd-prompt-guard');
+
+    const postToolCommands = settings.hooks.PostToolUse
+      .flatMap(e => (e.hooks || []).map(h => h.command || ''));
+    assert.ok(postToolCommands.some(c => c.includes('gsd-context-monitor')),
+      'PostToolUse must include gsd-context-monitor');
+
+    uninstall(false, 'qoder');
+  });
 });
 
 // ─── Section 3: Uninstall skills cleanup — parameterised ─────────────────────

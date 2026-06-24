@@ -3192,7 +3192,7 @@ const {
 const RUNTIME_IDS = [
   'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
   'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-  'codebuddy', 'cline', 'kimi', 'windsurf',
+  'codebuddy', 'cline', 'kimi', 'windsurf', 'qoder',
 ];
 
 // Helper: build a minimal valid runtime capability object for fixture-based tests
@@ -3224,18 +3224,18 @@ function makeRuntimeCap(overrides) {
   };
 }
 
-// ── 24a. All 16 runtime ids appear in the runtimes index ─────────────────────
+// ── 24a. All 17 runtime ids appear in the runtimes index ─────────────────────
 
-describe('ADR-1016 phase 5a: all 16 runtimes in registry index', () => {
+describe('ADR-1016 phase 5a: all 17 runtimes in registry index', () => {
   let registry;
 
-  test('loadAndValidate + buildRegistry produces runtimes index with 16 entries', () => {
+  test('loadAndValidate + buildRegistry produces runtimes index with 17 entries', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
     registry = buildRegistry(capMap);
     const runtimeKeys = Object.keys(registry.runtimes).sort();
-    assert.strictEqual(runtimeKeys.length, 16, 'Expected 16 runtime entries, got: ' + runtimeKeys.join(', '));
+    assert.strictEqual(runtimeKeys.length, 17, 'Expected 17 runtime entries, got: ' + runtimeKeys.join(', '));
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -4048,7 +4048,7 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
     assert.deepEqual(converterErrors, [], 'converter: null must always be accepted, got: ' + JSON.stringify(converterErrors));
   });
 
-  // Parity: all 16 runtime descriptors must have converters in the valid set (or null)
+  // Parity: all 17 runtime descriptors must have converters in the valid set (or null)
   test('all 17 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
@@ -4192,12 +4192,12 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
     // runConfigFormatParityGate must not throw for the real registry
     assert.doesNotThrow(
       () => runConfigFormatParityGate(capMap),
-      'runConfigFormatParityGate must not throw for the real 16 runtime descriptors',
+      'runConfigFormatParityGate must not throw for the real 17 runtime descriptors',
     );
   });
 
   // buildRegistry must not throw for the real registry (end-to-end integration)
-  test('buildRegistry with real 16 runtime descriptors does not throw (parity gate integrated)', () => {
+  test('buildRegistry with real 17 runtime descriptors does not throw (parity gate integrated)', () => {
     const { capMap } = loadAndValidate(new Set());
     assert.doesNotThrow(
       () => buildRegistry(capMap),

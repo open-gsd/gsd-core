@@ -1523,7 +1523,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.6.0-rc.3",
     "title": "Qoder",
-    "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; profile-marker-only install surface; no hook surface; no hook events; tier-2 support.",
+    "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; settings-json hook surface (PreToolUse/PostToolUse/Stop); Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
     "runtime": {
@@ -1534,7 +1534,7 @@ const capabilities = {
           "QODER_CONFIG_DIR"
         ]
       },
-      "configFormat": "none",
+      "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
           {
@@ -1558,13 +1558,16 @@ const capabilities = {
         ]
       },
       "commandStyle": "slash-hyphen",
-      "hooksSurface": "none",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
       "sandboxTier": "none",
       "supportTier": 2,
-      "installSurface": "profile-marker-only",
-      "writesSharedSettings": false,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [
+        "Stop"
+      ]
     }
   },
   "qwen": {
@@ -3587,7 +3590,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.6.0-rc.3",
     "title": "Qoder",
-    "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; profile-marker-only install surface; no hook surface; no hook events; tier-2 support.",
+    "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; settings-json hook surface (PreToolUse/PostToolUse/Stop); Claude hook event dialect; tier-2 support.",
     "tier": "core",
     "requires": [],
     "runtime": {
@@ -3598,7 +3601,7 @@ const runtimes = {
           "QODER_CONFIG_DIR"
         ]
       },
-      "configFormat": "none",
+      "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
           {
@@ -3622,13 +3625,16 @@ const runtimes = {
         ]
       },
       "commandStyle": "slash-hyphen",
-      "hooksSurface": "none",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
       "sandboxTier": "none",
       "supportTier": 2,
-      "installSurface": "profile-marker-only",
-      "writesSharedSettings": false,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [
+        "Stop"
+      ]
     }
   },
   "qwen": {
