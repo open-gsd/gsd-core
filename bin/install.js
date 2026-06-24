@@ -11307,10 +11307,14 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     configureKiloPermissions(isGlobal, configDir);
   }
 
-  // For non-Claude runtimes, set resolve_model_ids: "omit" in ~/.gsd/defaults.json
-  // so resolveModelInternal() returns '' instead of Claude aliases (opus/sonnet/haiku)
-  // that the runtime can't resolve. Users can still use model_overrides for explicit IDs.
-  // See #1156. Guard matches the #130-class pattern on configureOpencodePermissions above.
+  // For non-Claude runtimes, DEFAULT resolve_model_ids to "omit" in ~/.gsd/defaults.json
+  // when it is absent or falsy, so resolveModelInternal() returns '' instead of Claude
+  // aliases (opus/sonnet/haiku) the runtime can't resolve. An explicit `true` opt-in
+  // (resolveModelInternal returns full materialized model IDs) MUST be preserved —
+  // rewriting it to "omit" would make generated agent manifests inherit the active
+  // chat model instead of pinning the resolved model. See #1156 (default-to-omit
+  // intent) and #1569 (preserve explicit true). Guard matches the #130-class pattern
+  // on configureOpencodePermissions above.
   if (runtime !== 'claude' && !process.env.GSD_TEST_MODE) {
     const gsdDir = path.join(os.homedir(), '.gsd');
     const defaultsPath = path.join(gsdDir, 'defaults.json');
@@ -11318,7 +11322,14 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       fs.mkdirSync(gsdDir, { recursive: true });
       let defaults = {};
       try { defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')); } catch { /* new file */ }
-      if (defaults.resolve_model_ids !== 'omit') {
+      // Three-valued domain: false/absent → aliases; true → full IDs; "omit" → ''.
+      // Honor ONLY an explicit canonical `true` opt-in (full model IDs) and an existing
+      // "omit"; default everything else — absent, falsy, OR any non-canonical value — to
+      // "omit", the safe non-Claude default. Allowlist-based so malformed values
+      // (0, "", "yes", {}, …) don't leak Claude aliases the runtime can't resolve (#1569).
+      const existing = defaults.resolve_model_ids;
+      const shouldDefaultToOmit = existing !== true && existing !== 'omit';
+      if (shouldDefaultToOmit) {
         defaults.resolve_model_ids = 'omit';
         fs.writeFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n');
         console.log(`  ${green}✓${reset} Set resolve_model_ids: "omit" in ~/.gsd/defaults.json`);
