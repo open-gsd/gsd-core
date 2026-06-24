@@ -274,3 +274,106 @@ body`;
     assert.ok(parsed.error, 'Should have error field');
   });
 });
+
+// ─── frontmatter set/merge: must_haves object-list preservation (#1572) ──────
+// `frontmatter set`/`merge` round-tripped the WHOLE frontmatter through the lossy
+// extractFrontmatter → reconstructFrontmatter pair, which flattens must_haves
+// object-list items ({path, provides} maps) to scalar strings and re-emits them as a
+// malformed inline array — destroying `provides:` whenever an UNRELATED field changed.
+// The fix preserves the original raw text for any structurally-unchanged top-level key.
+const { parseMustHavesBlock } = require('../gsd-core/bin/lib/frontmatter.cjs');
+
+describe('frontmatter set/merge preserves must_haves object-lists (#1572)', () => {
+  const ARTIFACTS_PLAN = [
+    '---',
+    'phase: 1',
+    'wave: 1',
+    'plan: 01-01',
+    'type: implementation',
+    'depends_on: []',
+    'files_modified: []',
+    'autonomous: true',
+    'must_haves:',
+    '  artifacts:',
+    '    - path: src/foo.ts',
+    '      provides: the foo',
+    '    - path: src/bar.ts',
+    '      provides: the bar',
+    '---',
+    '# body',
+    '',
+  ].join('\n');
+
+  const PROHIBITIONS_PLAN = [
+    '---',
+    'phase: 1',
+    'wave: 1',
+    'must_haves:',
+    '  prohibitions:',
+    '    - statement: no direct DB calls',
+    '      status: enforced',
+    '    - statement: no print statements',
+    '      status: pending',
+    '---',
+    '# body',
+    '',
+  ].join('\n');
+
+  function runAndParse(plan, cmdArgsForFile) {
+    const file = writeTempFile(plan);
+    runGsdTools(cmdArgsForFile(file));
+    const after = fs.readFileSync(file, 'utf-8');
+    return after;
+  }
+
+  test('set on an unrelated scalar preserves every must_haves.artifacts entry (path + provides)', () => {
+    const after = runAndParse(ARTIFACTS_PLAN, f => ['frontmatter', 'set', f, '--field', 'wave', '--value', '2']);
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'must_haves.artifacts object-list must survive a set on an unrelated field (#1572)',
+    );
+  });
+
+  test('merge of an unrelated field preserves every must_haves.artifacts entry', () => {
+    const after = runAndParse(ARTIFACTS_PLAN, f => ['frontmatter', 'merge', f, '--data', JSON.stringify({ wave: 2 })]);
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'must_haves.artifacts object-list must survive a merge of an unrelated field (#1572)',
+    );
+  });
+
+  test('must_haves.prohibitions object-list is preserved on an unrelated set (same code path)', () => {
+    const after = runAndParse(PROHIBITIONS_PLAN, f => ['frontmatter', 'set', f, '--field', 'wave', '--value', '2']);
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'prohibitions'),
+      [
+        { statement: 'no direct DB calls', status: 'enforced' },
+        { statement: 'no print statements', status: 'pending' },
+      ],
+      'must_haves.prohibitions object-list must survive a set on an unrelated field (#1572)',
+    );
+  });
+
+  test('round-trip is stable: setting wave twice still preserves artifacts (per-key preservation is idempotent)', () => {
+    const file = writeTempFile(ARTIFACTS_PLAN);
+    runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '2']);
+    runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '3']);
+    const after = fs.readFileSync(file, 'utf-8');
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'must_haves.artifacts must survive repeated sets on an unrelated field',
+    );
+  });
+});
