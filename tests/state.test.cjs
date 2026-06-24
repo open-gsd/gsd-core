@@ -2288,6 +2288,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '05-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '05-final', '05');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 5: Final\n\n- [ ] Phase 5\n');
 
     // phase complete with the UNPADDED number "5" — must upsert the seeded "| 05 |" row,
