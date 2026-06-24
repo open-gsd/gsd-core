@@ -582,6 +582,27 @@ function validateFeatureBody(cap) {
               'absolute path, or ".." segment) — it contains unsafe characters: ' + JSON.stringify(h.script),
             );
           }
+          // #1634: optional tool-scoping `matcher` (a settings.json concept — exact tool name,
+          // pipe-separated list, wildcard, or regex; e.g. "Write|Edit"). When present it must be a
+          // non-empty string without control characters; absent => match-all (omitted at projection
+          // so existing shipped capabilities are unchanged).
+          if (h.matcher !== undefined) {
+            if (typeof h.matcher !== 'string' || h.matcher.length === 0) {
+              errors.push('hooks[' + i + '].matcher must be a non-empty string when present');
+            } else {
+              // Reject ASCII control characters (0x00-0x1f and 0x7f DEL) via char codes — a literal
+              // control-char range regex trips ESLint's no-control-regex rule, and char codes are
+              // equally precise.
+              let hasControl = false;
+              for (let c = 0; c < h.matcher.length; c++) {
+                const code = h.matcher.charCodeAt(c);
+                if (code < 0x20 || code === 0x7f) { hasControl = true; break; }
+              }
+              if (hasControl) {
+                errors.push('hooks[' + i + '].matcher must not contain control characters');
+              }
+            }
+          }
         }
       }
     }

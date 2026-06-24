@@ -290,6 +290,57 @@ describe('validateCapability adversarial cases', () => {
       'Expected error about agentVerdict forcing blocking:false, got: ' + JSON.stringify(errors),
     );
   });
+
+  test('#1634: a valid tool-scoping matcher is accepted on a lifecycle hook', () => {
+    const cap = {
+      ...UI_CAP,
+      hooks: [{ event: 'PreToolUse', script: 'hooks/genfile-guard.cjs', matcher: 'Write|Edit' }],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      !errors.some((e) => e.includes('matcher')),
+      'A valid matcher must not produce a matcher error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: an absent matcher is accepted (match-all)', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PreToolUse', script: 'hooks/g.js' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      !errors.some((e) => e.includes('matcher')),
+      'An absent matcher must not error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: an empty-string matcher is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PreToolUse', script: 'hooks/g.js', matcher: '' }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('matcher') && e.includes('non-empty')),
+      'Expected a non-empty matcher error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: a non-string matcher is rejected', () => {
+    const cap = { ...UI_CAP, hooks: [{ event: 'PreToolUse', script: 'hooks/g.js', matcher: 42 }] };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('matcher')),
+      'Expected a matcher type error, got: ' + JSON.stringify(errors),
+    );
+  });
+
+  test('#1634: a matcher containing control characters is rejected', () => {
+    const cap = {
+      ...UI_CAP,
+      hooks: [{ event: 'PreToolUse', script: 'hooks/g.js', matcher: 'Write\n|Edit' }],
+    };
+    const errors = validateCapability(cap, 'ui');
+    assert.ok(
+      errors.some((e) => e.includes('matcher') && e.includes('control')),
+      'Expected a control-character matcher error, got: ' + JSON.stringify(errors),
+    );
+  });
 });
 
 describe('validateAgainstContract adversarial cases', () => {

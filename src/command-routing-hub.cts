@@ -76,6 +76,14 @@ interface InvalidArgsResult {
   kind: 'InvalidArgs';
   arg: string;
   reason: string;
+  // Optional ERROR_REASON enum value (e.g. 'USAGE'), carried separately from
+  // `reason` (the human-readable explanation). Added by amendment #1642 so
+  // routers migrating from direct `error(msg, ERROR_REASON.USAGE)` calls to
+  // `makeInvalidArgs(...)` Results can preserve ERROR_REASON granularity
+  // through the Hub Result → `error(msg, exitReason)` translation. Omitted by
+  // the factory when the third arg is absent, undefined, or empty string —
+  // preserves the strict-keys invariant tested at command-routing-hub.test.cjs:444.
+  exitReason?: string;
 }
 
 interface HandlerRefusalResult {
@@ -117,8 +125,14 @@ function makeUnknownCommand(command: string): Readonly<UnknownCommandResult> {
   return Object.freeze({ ok: false as const, kind: ERROR_KINDS.UnknownCommand, command });
 }
 
-function makeInvalidArgs(arg: string, reason: string): Readonly<InvalidArgsResult> {
-  return Object.freeze({ ok: false as const, kind: ERROR_KINDS.InvalidArgs, arg, reason });
+function makeInvalidArgs(arg: string, reason: string, exitReason?: string): Readonly<InvalidArgsResult> {
+  const obj: InvalidArgsResult = { ok: false as const, kind: ERROR_KINDS.InvalidArgs, arg, reason };
+  // Conditionally add exitReason only when truthy — preserves strict-keys
+  // invariant (2-arg callers must continue to produce a 4-key frozen result).
+  if (exitReason) {
+    obj.exitReason = exitReason;
+  }
+  return Object.freeze(obj);
 }
 
 function makeHandlerRefusal(reason: string): Readonly<HandlerRefusalResult> {
@@ -163,10 +177,11 @@ const _VARIANT_SCHEMA: Record<string, { required: string[]; allowed: Set<string>
     required: ['command'],
     allowed: new Set(['ok', 'kind', 'command']),
   },
-  InvalidArgs: {
-    required: ['arg', 'reason'],
-    allowed: new Set(['ok', 'kind', 'arg', 'reason']),
-  },
+ InvalidArgs: {
+  required: ['arg', 'reason'],
+  // Amendment #1642: exitReason? is allowed but not required.
+  allowed: new Set(['ok', 'kind', 'arg', 'reason', 'exitReason']),
+ },
   HandlerRefusal: {
     required: ['reason'],
     allowed: new Set(['ok', 'kind', 'reason']),
