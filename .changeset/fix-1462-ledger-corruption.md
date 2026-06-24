@@ -1,5 +1,0 @@
----
-type: Fixed
-pr: 1469
----
-**Capability ledger: fail closed on corruption, with durable atomic writes and a race-safe install lock.** A corrupt or unreadable `.gsd-capabilities.json` is now left in place and surfaced (not silently overwritten) — `install`/`update`/`remove`/`list`/`reconcile` fail closed and report it, so a corrupt ledger can no longer wipe prior capabilities' tracked files and shared-config fragments (which previously left unremovable orphans in `settings.json`/`hooks.json`). Ledger writes are atomic and crash-durable (exclusive temp file + `fsync` of file and directory + rename, with temp cleanup on failure). The per-capability lock is race-safe: a holder is identified by `(pid, process start-time, hostname)`, so a reused PID cannot deadlock recovery and a verifiably-live holder is never stolen, with a hard deadman timeout for unverifiable or cross-host holders. Untrusted ledger and lock reads are bounded (regular-file + size caps; FIFOs/devices rejected) and validated through a single shared entry validator (prototype-safe ids, DoS length caps). (#1462, ADR-1244.)
