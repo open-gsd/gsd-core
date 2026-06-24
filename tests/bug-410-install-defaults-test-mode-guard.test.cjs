@@ -115,3 +115,125 @@ describe('Bug #410: finishInstall non-Claude runtime + GSD_TEST_MODE side-effect
     }
   });
 });
+
+// Bug #1569 folded here (sibling on the SAME finishInstall resolve_model_ids block):
+// the #1156 default-to-"omit" step keyed its write on `!== "omit"`, so an explicit
+// `resolve_model_ids: true` opt-in (resolveModelInternal returns full materialized
+// model IDs) was silently clobbered across all 14 non-Claude runtimes. The fix
+// preserves `true` and only defaults absent/falsy → "omit". Reuses the #410 harness.
+
+describe('Bug #1569: non-Claude finishInstall preserves explicit resolve_model_ids:true', () => {
+  function seedDefaults(obj) {
+    fs.mkdirSync(GSD_DIR, { recursive: true });
+    fs.writeFileSync(DEFAULTS_PATH, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+  }
+
+  function withUserPath(fn) {
+    const saved = process.env.GSD_TEST_MODE;
+    delete process.env.GSD_TEST_MODE;
+    try {
+      return fn();
+    } finally {
+      process.env.GSD_TEST_MODE = saved;
+    }
+  }
+
+  test('explicit resolve_model_ids:true survives a codex global install (the reported case)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: 'codex', model_profile: 'balanced', resolve_model_ids: true });
+      callFinishInstallForRuntime('codex');
+      const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+      assert.equal(
+        after.resolve_model_ids,
+        true,
+        'explicit resolve_model_ids:true must be preserved across a codex install, not clobbered to "omit"',
+      );
+    });
+  });
+
+  // The clobber guard is runtime-agnostic (`runtime !== 'claude'`); parameterize
+  // across a representative slice of non-Claude runtimes.
+  for (const runtime of ['codex', 'opencode', 'gemini']) {
+    test(`explicit resolve_model_ids:true survives a ${runtime} global install`, () => {
+      withUserPath(() => {
+        seedDefaults({ runtime, resolve_model_ids: true });
+        callFinishInstallForRuntime(runtime);
+        const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+        assert.equal(
+          after.resolve_model_ids,
+          true,
+          `explicit resolve_model_ids:true must be preserved for ${runtime}`,
+        );
+      });
+    });
+  }
+
+  test('absent resolve_model_ids still defaults to "omit" (preserves #1156 intent)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: 'codex' });
+      callFinishInstallForRuntime('codex');
+      const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+      assert.equal(
+        after.resolve_model_ids,
+        'omit',
+        'absent resolve_model_ids must still default to "omit" for non-Claude runtimes',
+      );
+    });
+  });
+
+  test('explicit resolve_model_ids:false still defaults to "omit"', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: 'codex', resolve_model_ids: false });
+      callFinishInstallForRuntime('codex');
+      const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.resolve_model_ids, 'omit', 'false must still be normalized to "omit"');
+    });
+  });
+
+  test('already-"omit" is left unchanged (idempotent, no rewrite churn)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: 'codex', resolve_model_ids: 'omit' });
+      const beforeMtime = fs.statSync(DEFAULTS_PATH).mtimeMs;
+      // fs mtime resolution can be coarse; wait briefly so an accidental rewrite is detectable.
+      const start = Date.now();
+      while (Date.now() - start < 20) { /* spin briefly */ }
+      callFinishInstallForRuntime('codex');
+      const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+      const afterMtime = fs.statSync(DEFAULTS_PATH).mtimeMs;
+      assert.equal(after.resolve_model_ids, 'omit');
+      assert.equal(
+        afterMtime,
+        beforeMtime,
+        'defaults.json must not be rewritten when resolve_model_ids is already "omit" (idempotent)',
+      );
+    });
+  });
+
+  test('claude runtime never touches resolve_model_ids (cross-runtime parity)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: 'claude', resolve_model_ids: true });
+      callFinishInstallForRuntime('claude');
+      const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+      assert.equal(
+        after.resolve_model_ids,
+        true,
+        'claude install must never rewrite resolve_model_ids',
+      );
+    });
+  });
+
+  test('malformed defaults.json does not crash — still defaults to "omit"', () => {
+    withUserPath(() => {
+      fs.mkdirSync(GSD_DIR, { recursive: true });
+      fs.writeFileSync(DEFAULTS_PATH, '{ not valid json }', 'utf8');
+      // Must not throw.
+      callFinishInstallForRuntime('codex');
+      const after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
+      assert.equal(
+        after.resolve_model_ids,
+        'omit',
+        'malformed defaults.json must be recovered to a valid state with resolve_model_ids:omit',
+      );
+    });
+  });
+});
