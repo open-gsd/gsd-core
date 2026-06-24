@@ -503,26 +503,33 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
   fm[field as string] = parsedValue as FrontmatterValue;
   const newContent = spliceFrontmatter(content, fm);
-  // #1660: a no-op set (newContent unchanged) with a dict-valued (object) field means the
-  // lossy frontmatter parser made the new value's projection equal the original's — the
-  // intended change did not apply. This bites object-list fields like must_haves, whose
-  // `{path, provides}` items flatten to scalar strings under extractFrontmatter. Refuse to
-  // silently report {updated:true}; surface an error directing the user to edit the file
-  // directly. Scalars and scalar arrays round-trip faithfully, so idempotent sets of those
-  // are NOT flagged (no false positive).
-  if (newContent === content && parsedValue !== null && typeof parsedValue === 'object' && !Array.isArray(parsedValue)) {
-    output(
-      {
-        error: `frontmatter set had no effect on "${field}" — the supplied value is equivalent to the existing field under the frontmatter parser, which cannot faithfully round-trip object-list fields like must_haves. Edit the file directly.`,
-        field,
-      },
-      raw,
-      undefined,
-    );
+  // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
+  // frontmatter parser made the new value's projection equal the original's — the change
+  // did not apply (bites object-list fields like must_haves). Detection lives in the pure
+  // exported helper noOpObjectListSetError so the mutation gate (property/unit set) covers
+  // it — the cmd path itself is not in that set.
+  const noOpErr = noOpObjectListSetError(content, newContent, parsedValue);
+  if (noOpErr) {
+    output({ error: noOpErr, field }, raw, undefined);
     return;
   }
   platformWriteSync(fullPath, newContent);
   output({ updated: true, field, value: parsedValue }, raw, 'true');
+}
+
+/**
+ * #1660: detect a frontmatter `set` that would be a silent no-op on a dict-valued field.
+ * Returns an error message when the splice produced no content change but the new value
+ * is a dict (object-list fields like must_haves, whose `{path, provides}` items flatten to
+ * scalar strings under extractFrontmatter so a replacement can deep-equal the original's
+ * projection), else null. Scalars and scalar arrays round-trip faithfully, so idempotent
+ * sets of those are intentionally NOT flagged. Pure and unit-tested directly (the cmd path
+ * is not in Stryker's property/unit set, so the detection must be testable in isolation).
+ */
+function noOpObjectListSetError(originalContent: string, newContent: string, parsedValue: unknown): string | null {
+  if (newContent !== originalContent) return null;
+  if (parsedValue === null || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return null;
+  return 'frontmatter set had no effect — the supplied value is equivalent to the existing field under the frontmatter parser, which cannot faithfully round-trip object-list fields like must_haves. Edit the file directly.';
 }
 
 function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undefined, raw: boolean): void {
@@ -561,6 +568,7 @@ export = {
   parseFrontmatter: extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
+  noOpObjectListSetError,
   parseMustHavesBlock,
   FRONTMATTER_SCHEMAS,
   cmdFrontmatterGet,

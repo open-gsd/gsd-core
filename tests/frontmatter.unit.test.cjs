@@ -20,6 +20,7 @@ const {
   extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
+  noOpObjectListSetError,
   parseMustHavesBlock,
   FRONTMATTER_SCHEMAS,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
@@ -1200,5 +1201,31 @@ describe('reconstructFrontmatter: nested subval plain string', () => {
   test('nested subval with hash quoted', () => {
     const result = reconstructFrontmatter({ meta: { tag: 'issue#42' } });
     assert.equal(result, 'meta:\n  tag: "issue#42"');
+  });
+});
+
+// noOpObjectListSetError (#1660) — pure detection helper, unit-tested directly because the
+// cmdFrontmatterSet path is not in Stryker's property/unit set.
+describe('noOpObjectListSetError (#1660)', () => {
+  const ORIG = '---\nphase: 1\n---\n';
+  test('changed content (real update) → null', () => {
+    assert.equal(noOpObjectListSetError(ORIG, ORIG + 'x', { must_haves: 1 }), null);
+  });
+  test('scalar value no-op → null (idempotent scalar sets are fine)', () => {
+    for (const v of [1, 'str', true, 0, '']) assert.equal(noOpObjectListSetError(ORIG, ORIG, v), null, `scalar ${JSON.stringify(v)}`);
+  });
+  test('scalar-array value no-op → null (scalar arrays round-trip faithfully)', () => {
+    assert.equal(noOpObjectListSetError(ORIG, ORIG, ['a', 'b']), null);
+    assert.equal(noOpObjectListSetError(ORIG, ORIG, []), null);
+  });
+  test('null value no-op → null', () => {
+    assert.equal(noOpObjectListSetError(ORIG, ORIG, null), null);
+  });
+  test('dict value no-op → error message naming the object-list round-trip limit', () => {
+    const msg = noOpObjectListSetError(ORIG, ORIG, { artifacts: [{ path: 'p' }] });
+    assert.equal(typeof msg, 'string');
+    assert.ok(msg.includes('had no effect'), msg);
+    assert.ok(msg.includes('object-list'), msg);
+    assert.ok(msg.includes('Edit the file directly'), msg);
   });
 });

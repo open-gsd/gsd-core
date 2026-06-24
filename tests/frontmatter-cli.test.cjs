@@ -400,6 +400,9 @@ describe('frontmatter set/merge preserves must_haves object-lists (#1572)', () =
       ],
       'the original must_haves.artifacts must be intact after the refused set',
     );
+  });
+});
+
 // Bug #1660 — frontmatter set of an object-list field (e.g. must_haves) is a silent no-op
 // when the new value's lossy parse projection equals the original's. Folded into the owning
 // frontmatter-cli test (no new top-level bug-NNNN file).
