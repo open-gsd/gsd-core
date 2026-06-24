@@ -1,0 +1,12 @@
+{
+  "task": "02-merge-intervals",
+  "fn": "mergeIntervals",
+  "defect_class": "non-inferable",
+  "slice": "truly-spec-silent",
+  "slice_basis": "Whether closed intervals that touch at an endpoint merge is a free definitional choice with no correct answer absent the spec; no amount of model knowledge resolves it — only an external hint (the #1154 exogenous arm) closes it.",
+  "omitted_edge": "Whether touching intervals ([1,2],[2,3]) count as overlapping.",
+  "planted_defect": "Strict-< overlap test leaves touching intervals separate.",
+  "seed_recorded": true,
+  "disputed": true,
+  "disputed_note": "N17 (abstention mechanism) recovered this slice (verifier NOTICES the ambiguity and abstains); the disconfirmation-mechanism run on #1637 MISSED it. The two seed datasets disagree on direction — the powered run adjudicates."
+}

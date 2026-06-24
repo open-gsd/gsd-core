@@ -1,0 +1,12 @@
+{
+  "task": "02b-merge-intervals-inferable",
+  "fn": "mergeIntervals",
+  "defect_class": "inferable",
+  "slice": "inferable",
+  "slice_basis": "The violated rule (sorted by start) is written in the spec — fully determined, catchable from spec + general knowledge. Correct verdict = catch; abstaining = over-abstention.",
+  "omitted_edge": null,
+  "planted_defect": "Output not sorted by start (violates stated must_have #2).",
+  "role": "precision-guard (over-abstention control)",
+  "seed_recorded": true,
+  "disputed": false
+}

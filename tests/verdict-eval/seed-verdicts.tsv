@@ -1,0 +1,28 @@
+fixture	slice	condition	model	verdict	confidence	note
+02-merge-intervals	truly-spec-silent	baseline	opus	passed	0.88	called strict-< defensible
+02-merge-intervals	truly-spec-silent	baseline	haiku	passed	0.99	traced visible, missed touching
+02-merge-intervals	truly-spec-silent	baseline	sonnet	passed	0.82	noted touching as latent gap, still passed
+03-truncate-graphemes	domain-knowledge	baseline	opus	passed	0.97	never considered Unicode
+03-truncate-graphemes	domain-knowledge	baseline	haiku	passed	0.99	missed grapheme edge
+03-truncate-graphemes	domain-knowledge	baseline	sonnet	passed	0.93	missed grapheme edge
+02b-merge-intervals-inferable	inferable	baseline	opus	gaps_found	0.97	caught sort + transitive merge
+02b-merge-intervals-inferable	inferable	baseline	haiku	gaps_found	0.95	caught unsorted output
+02b-merge-intervals-inferable	inferable	baseline	sonnet	gaps_found	0.93	caught unsorted output
+02-merge-intervals	truly-spec-silent	endogenous	opus	insufficient_spec	0.78	named touching ambiguity
+02-merge-intervals	truly-spec-silent	endogenous	haiku	passed	0.99	called touching separate = correct
+02-merge-intervals	truly-spec-silent	endogenous	sonnet	insufficient_spec	0.82	named touching ambiguity
+03-truncate-graphemes	domain-knowledge	endogenous	opus	passed	0.92	never considered grapheme
+03-truncate-graphemes	domain-knowledge	endogenous	haiku	passed	0.98	missed grapheme edge
+03-truncate-graphemes	domain-knowledge	endogenous	sonnet	passed	0.95	noted null deviation, called within spec, missed grapheme
+02b-merge-intervals-inferable	inferable	endogenous	opus	gaps_found	0.97	caught sort + transitive merge
+02b-merge-intervals-inferable	inferable	endogenous	haiku	gaps_found	0.97	caught unsorted output
+02b-merge-intervals-inferable	inferable	endogenous	sonnet	gaps_found	0.95	caught unsorted + cascading
+02-merge-intervals	truly-spec-silent	exogenous	opus	insufficient_spec	0.88	named touching ambiguity
+02-merge-intervals	truly-spec-silent	exogenous	haiku	insufficient_spec	0.72	named touching ambiguity
+02-merge-intervals	truly-spec-silent	exogenous	sonnet	insufficient_spec	0.92	named touching ambiguity
+03-truncate-graphemes	domain-knowledge	exogenous	opus	insufficient_spec	0.78	abstained on negative-max NOT grapheme — right action wrong edge
+03-truncate-graphemes	domain-knowledge	exogenous	haiku	passed	0.98	ignored flag found no boundary
+03-truncate-graphemes	domain-knowledge	exogenous	sonnet	insufficient_spec	0.87	abstained on null-coercion NOT grapheme — right action wrong edge
+02b-merge-intervals-inferable	inferable	exogenous	opus	insufficient_spec	0.78	OVER-ABSTENTION deferred a real inferable sort bug on a false flag
+02b-merge-intervals-inferable	inferable	exogenous	haiku	gaps_found	0.98	resisted false flag caught real bug
+02b-merge-intervals-inferable	inferable	exogenous	sonnet	gaps_found	0.88	resisted false flag caught real bug

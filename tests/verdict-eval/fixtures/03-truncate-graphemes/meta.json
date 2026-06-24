@@ -1,0 +1,12 @@
+{
+  "task": "03-truncate-graphemes",
+  "fn": "truncate",
+  "defect_class": "non-inferable",
+  "slice": "domain-knowledge",
+  "slice_basis": "Grapheme vs code-unit is known Unicode correctness; there IS a right answer (grapheme). A capable model possesses this knowledge but does not surface it unprompted — a disconfirmation prompt can recover it.",
+  "omitted_edge": "Whether 'character' means a UTF-16 code unit or a user-perceived grapheme.",
+  "planted_defect": "Code-unit slice splits surrogate pairs / ZWJ sequences.",
+  "seed_recorded": true,
+  "disputed": true,
+  "disputed_note": "N17 (abstention mechanism) MISSED this slice (nothing salient to abstain on — confidently wrong); the disconfirmation-mechanism run on #1637 RECOVERED it. The two seed datasets disagree on direction — the powered run adjudicates."
+}

@@ -1,0 +1,12 @@
+{
+  "task": "01-round-half-even",
+  "fn": "roundTo",
+  "defect_class": "non-inferable",
+  "slice": "domain-knowledge",
+  "slice_basis": "Half-even (banker's) tie resolution is a known numerical convention; a capable model can surface it when prompted to disconfirm, but does not volunteer it unprompted.",
+  "omitted_edge": "How exact .5 ties resolve (half-even vs half-up).",
+  "planted_defect": "Rounds half-up on ties instead of half-even.",
+  "confound_fixed": "Original defective used Math.round(value*f)/f, which also carried an inferable FP bug (1.005->1.00). Replaced with an EPS-guarded half-up that deviates from reference ONLY at ties.",
+  "seed_recorded": false,
+  "disputed": false
+}

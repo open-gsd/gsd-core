@@ -37,6 +37,10 @@ export default tseslint.config(
       '.claude/**',
       'coverage/**',
       '**/*.generated.cjs',
+      // #1637 behavioral-eval corpus: deliberately-defective SUT fixtures + their ESM probe suites
+      // are DATA, not production code (the orchestrating harness is the linted .cjs test).
+      'tests/verdict-eval/fixtures/**',
+
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
       'gsd-core/bin/lib/capability-loader.cjs',
