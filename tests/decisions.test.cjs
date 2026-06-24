@@ -791,3 +791,40 @@ describe('FIX D: gap-checker surfaces decision could-not-parse even when require
     );
   });
 });
+
+// ─── Regression #1639: titled-colon bullet form '- **D-NN: Title.** body' ─────
+// Both bulletColonRe (':**' anchor) and bulletEmDashRe (em-dash) miss the form where a
+// title sits between the colon and the closing **, so it was dropped by the parse-miss
+// guard and check.decision-coverage-plan passed vacuously when all decisions were titled.
+describe('parseDecisions — titled-colon bullet form (#1639)', () => {
+  test('titled-colon bullet is parsed, not dropped', () => {
+    const md = '## Locked decisions\n- **D-01: Default sandbox ON.** body\n- **D-02: Reject unsigned.** body two\n';
+    const out = parseDecisions(md);
+    assert.equal(out.length, 2, 'should extract both titled-colon decisions (not 0)');
+    assert.equal(out[0].id, 'D-01');
+    assert.equal(out[1].id, 'D-02');
+  });
+
+  test('titled-colon coexists with colon-immediate and em-dash forms', () => {
+    const md = '## Locked decisions\n- **D-01:** plain colon\n- **D-02 — emdash** body\n- **D-03: Titled.** body\n';
+    const out = parseDecisions(md);
+    assert.equal(out.length, 3);
+    assert.deepEqual(out.map((d) => d.id), ['D-01', 'D-02', 'D-03']);
+  });
+
+  test('titled-colon with [tags] still parses id and tags', () => {
+    const md = '## Locked decisions\n- **D-01 [informational]: Title.** body\n';
+    const out = parseDecisions(md);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].id, 'D-01');
+    assert.ok(out[0].tags.includes('informational'), `tags should include informational, got ${JSON.stringify(out[0].tags)}`);
+  });
+
+  test('all-titled CONTEXT.md parses every decision (no vacuous 0)', () => {
+    // The reporter case: 13 decisions all titled → previously all dropped → gate passed vacuously.
+    let md = '## Locked decisions\n';
+    for (let i = 1; i <= 13; i++) md += `- **D-${String(i).padStart(2, '0')}: Decision ${i}.** body\n`;
+    const out = parseDecisions(md);
+    assert.equal(out.length, 13, 'all 13 titled-colon decisions must parse (not vacuously 0)');
+  });
+});
