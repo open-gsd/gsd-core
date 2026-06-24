@@ -2256,15 +2256,22 @@ describe('updatePerformanceMetricsSection', () => {
     assert.ok(result.success, `phase complete failed: ${result.error}`);
 
     const after = fs.readFileSync(statePath, 'utf8');
-    // #1658 fixed byPhaseTablePattern to be CRLF-tolerant. This integration test proves the
-    // CRLF STATE.md is processed end-to-end (phase complete succeeds under #1522's
-    // verification gate and the velocity total updates from the CRLF body). The By-Phase
-    // *row* upsert on CRLF has a separate downstream bug in phase complete's table-write
-    // path (the pattern matches CRLF — verified directly — but the row isn't persisted on
-    // CRLF while it is on LF); that is tracked separately and intentionally not asserted here.
+    // #1658: byPhaseTablePattern is CRLF-tolerant. #1668 (By-Phase row not persisted on a
+    // CRLF STATE.md even though the pattern matches CRLF) was resolved by #1655's
+    // restructure of updatePerformanceMetricsSection (table upsert now runs before the
+    // velocity manipulation). Assert the full contract: row present, placeholder removed,
+    // velocity derived — all on a CRLF STATE.md.
+    assert.ok(
+      /\|\s*7\s*\|\s*1\s*\|/.test(after),
+      'By-Phase row for phase 7 must be upserted even on a CRLF STATE.md (#1658/#1668)',
+    );
+    assert.ok(
+      !/\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|/.test(after),
+      'placeholder row must be removed on CRLF STATE.md once a real row is upserted',
+    );
     assert.ok(
       /Total plans completed:\s*1\b/.test(after),
-      'velocity total must update from the CRLF STATE.md body (proves CRLF content is processed)',
+      'velocity total must derive from the CRLF By-Phase table (1 plan)',
     );
   });
 
