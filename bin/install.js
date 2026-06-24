@@ -11322,6 +11322,14 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       fs.mkdirSync(gsdDir, { recursive: true });
       let defaults = {};
       try { defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')); } catch { /* new file */ }
+      // Recover a malformed (valid-JSON-but-non-object) defaults.json to a fresh object so
+      // the write below succeeds and the file is no longer broken. Without this, `null` /
+      // `[]` / a number / a string bypass the parse catch and either throw a TypeError on
+      // property access (swallowed by the outer try/catch, leaving the file broken) or get
+      // a property set that won't round-trip through JSON.stringify. (#1657)
+      if (defaults === null || typeof defaults !== 'object' || Array.isArray(defaults)) {
+        defaults = {};
+      }
       // Three-valued domain: false/absent → aliases; true → full IDs; "omit" → ''.
       // Honor ONLY an explicit canonical `true` opt-in (full model IDs) and an existing
       // "omit"; default everything else — absent, falsy, OR any non-canonical value — to

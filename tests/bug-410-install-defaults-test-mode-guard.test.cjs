@@ -254,3 +254,40 @@ describe('Bug #1569: non-Claude finishInstall preserves explicit resolve_model_i
     });
   });
 });
+
+// Bug #1657 — finishInstall reads ~/.gsd/defaults.json with JSON.parse but did not
+// validate the result is a plain object. A valid-JSON-but-non-object value (null, [],
+// 42, "str") bypassed the catch and flowed through, leaving the malformed file on disk
+// unrecovered (and, for null, throwing a TypeError swallowed by the outer try/catch).
+// Folded into the owning install-defaults test (no new top-level bug-NNNN file).
+describe('Bug #1657: finishInstall recovers a malformed (non-object) defaults.json', () => {
+  function seedDefaultsRaw(raw) {
+    fs.mkdirSync(GSD_DIR, { recursive: true });
+    fs.writeFileSync(DEFAULTS_PATH, raw, 'utf8');
+  }
+  function runAndRead(runtime) {
+    const saved = process.env.GSD_TEST_MODE;
+    delete process.env.GSD_TEST_MODE;
+    const log = console.log; console.log = () => {};
+    let threw = null;
+    try {
+      installModule.finishInstall(SETTINGS_PATH, {}, null, false, runtime, true, null);
+    } catch (e) { threw = e.message; } finally { console.log = log; process.env.GSD_TEST_MODE = saved; }
+    let after = null;
+    try { after = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8')); } catch (e) { after = 'UNPARSEABLE: ' + e.message; }
+    return { threw, after };
+  }
+
+  for (const [label, raw] of [['null', 'null'], ['array', '[]'], ['number', '42'], ['string', '"oops"']]) {
+    test(`seed ${label} (${raw}) recovers to a valid object with resolve_model_ids:omit`, () => {
+      seedDefaultsRaw(raw);
+      const { threw, after } = runAndRead('codex');
+      assert.equal(threw, null, `must not throw for seed ${label} (got: ${threw})`);
+      assert.equal(
+        after !== null && typeof after === 'object' && !Array.isArray(after) && after.resolve_model_ids === 'omit',
+        true,
+        `seed ${label} must recover to { resolve_model_ids: 'omit' }, got: ${JSON.stringify(after)}`,
+      );
+    });
+  }
+});
