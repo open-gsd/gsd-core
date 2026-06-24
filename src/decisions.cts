@@ -76,9 +76,13 @@ const bulletEmDashRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+
  * A title sits between the colon and the closing `**` (so the `:**` anchor of
  * bulletColonRe fails, and there is no em-dash for bulletEmDashRe). This is a strict
  * superset of the colon-immediate form, so it MUST be checked AFTER bulletColonRe and
- * bulletEmDashRe — it only catches bullets those two miss. (#1639)
+ * bulletEmDashRe — it only catches bullets those two miss. The title run is `[^:*]*` (no
+ * colon, no `*`) so a genuinely-malformed bullet with a colon in the pre-separator run
+ * (e.g. `D-07 ratio 3:1:**`) still fails the anchor and falls through to the parse-miss
+ * guard — matching bulletColonRe's `[^:*]*` discipline that the separator colon is the
+ * only colon permitted before `**`. (#1639)
  */
-const bulletTitledColonRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^:*]*:[^*]*\*\*\s*(.*)$/;
+const bulletTitledColonRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^:*]*:[^:*]*\*\*\s*(.*)$/;
 
 interface ParseDecisionLinesResult {
   decisions: Decision[];
