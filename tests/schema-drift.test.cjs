@@ -338,6 +338,25 @@ describe('verify schema-drift CLI command', () => {
     assert.strictEqual(output.blocking, false);
   });
 
+  test('does not resolve phase by substring match', () => {
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '11-expansion');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '11-01-PLAN.md'), [
+      '---',
+      'files_modified: [supabase/migrations/0001_init.sql]',
+      '---',
+      '',
+      'Plan content',
+    ].join('\n'));
+
+    const result = runGsdTools(['verify', 'schema-drift', '1'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.drift_detected, false);
+    assert.strictEqual(output.blocking, false);
+    assert.strictEqual(output.message, 'Phase directory not found: 1');
+  });
+
   test('respects skip flag', () => {
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-setup');
     fs.mkdirSync(phaseDir, { recursive: true });
