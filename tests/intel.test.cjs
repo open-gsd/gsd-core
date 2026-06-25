@@ -1134,7 +1134,7 @@ describe('#1000 regression: gsd-intel-updater emits canonical intel filenames', 
       // Guard against substring false-positives (e.g. 'files.json' inside 'file-roles.json'):
       // canonical long names never contain these short tokens, verified by the canonical set.
       const offendingLines = agentPrompt
-        .split('\n')
+        .split(/\r?\n/)
         .filter((line) => line.includes(shortName));
       assert.strictEqual(
         offendingLines.length,

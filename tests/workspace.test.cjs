@@ -331,7 +331,7 @@ describe('workspace command files', () => {
     const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
     assert.ok(fmMatch, `${path.basename(filePath)} must start with a YAML frontmatter block`);
     const fm = {};
-    for (const rawLine of fmMatch[1].split('\n')) {
+    for (const rawLine of fmMatch[1].split(/\r?\n/)) {
       // Explicit \r strip: split('\n') on CRLF content leaves a trailing
       // \r on every line, which the value regex pulls into `kv[2]` and trim
       // is enough for most values — but be defensive so future keys with
@@ -358,7 +358,7 @@ describe('workspace command files', () => {
       .map((m) => m[1]);
     const targets = [];
     for (const blk of blocks) {
-      for (const line of blk.split('\n')) {
+      for (const line of blk.split(/\r?\n/)) {
         const t = line.trim();
         if (!t.startsWith('@')) continue;
         // Normalize away the home-prefix and the `.claude/gsd-core/` root

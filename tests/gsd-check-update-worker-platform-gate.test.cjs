@@ -41,7 +41,7 @@ const PROJECTION_PATH = path.join(
 function codeOnly(file) {
   return fs.readFileSync(file, 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    .replace(/(^|[^:])\/\/[^\r\n]*/g, '$1');
 }
 
 describe('execNpm: Windows npm spawn platform gate (PR #3102, relocated #498)', () => {

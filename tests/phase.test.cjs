@@ -2826,7 +2826,7 @@ describe('phase complete command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    const rowMatch = roadmap.match(/^\|[^\n]*1\. Foundation[^\n]*$/m);
+    const rowMatch = roadmap.match(/^\|[^\r\n]*1\. Foundation[^\r\n]*$/m);
     assert.ok(rowMatch, 'table row should exist');
     const cells = rowMatch[0].split('|').slice(1, -1).map(c => c.trim());
     assert.strictEqual(cells.length, 5, 'should have 5 columns');
@@ -2897,7 +2897,7 @@ describe('phase complete command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    const rowMatch = roadmap.match(/^\|[^\n]*1\. Foundation[^\n]*$/m);
+    const rowMatch = roadmap.match(/^\|[^\r\n]*1\. Foundation[^\r\n]*$/m);
     assert.ok(rowMatch, 'table row should exist');
     const cells = rowMatch[0].split('|').slice(1, -1).map(c => c.trim());
     assert.strictEqual(cells.length, 4, 'should have 4 columns');
@@ -2937,7 +2937,7 @@ describe('phase complete command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    const rowMatch = roadmap.match(/^\|[^\n]*1\. Foundation[^\n]*$/m);
+    const rowMatch = roadmap.match(/^\|[^\r\n]*1\. Foundation[^\r\n]*$/m);
     assert.ok(rowMatch, 'table row should exist');
     const cells = rowMatch[0].split('|').slice(1, -1).map(c => c.trim());
     assert.strictEqual(cells.length, 5, 'should have 5 columns');
@@ -4223,12 +4223,12 @@ describe('bug-3287 — init plan-phase exposes expected_phase_dir with project_c
   }
 
   function containsBareTemplateMkdir(content) {
-    return /mkdir[^`\n]*\.planning\/phases\/\{[A-Z0-9]+\}-\{/.test(content);
+    return /mkdir[^`\r\n]*\.planning\/phases\/\{[A-Z0-9]+\}-\{/.test(content);
   }
 
   function containsBareShellVarMkdir(content) {
-    return /mkdir[^`\n]*\.planning\/phases\/"\$\{(?:NEXT|NN|PHASE)[^}]*\}-/.test(content)
-      || /mkdir[^`\n]*\.planning\/phases\/\$\{(?:NEXT|NN|PHASE)[^}]*\}-/.test(content);
+    return /mkdir[^`\r\n]*\.planning\/phases\/"\$\{(?:NEXT|NN|PHASE)[^}]*\}-/.test(content)
+      || /mkdir[^`\r\n]*\.planning\/phases\/\$\{(?:NEXT|NN|PHASE)[^}]*\}-/.test(content);
   }
 
   describe('bug-3298 — plan-milestone-gaps.md must not construct bare {NN}-{name} phase dirs', () => {

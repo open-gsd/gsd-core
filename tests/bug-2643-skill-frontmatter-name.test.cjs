@@ -123,9 +123,9 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
     const input = '---\nname: old\ndescription: test\n---\n\nBody.';
     const result = convertClaudeCommandToClaudeSkill(input, 'gsd-execute-phase');
     // Parse the frontmatter block structurally: extract the name: field value.
-    const frontmatterMatch = result.match(/^---\n([\s\S]*?)\n---/);
+    const frontmatterMatch = result.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     assert.ok(frontmatterMatch, 'output must have a frontmatter block delimited by ---');
-    const frontmatterLines = frontmatterMatch[1].split('\n');
+    const frontmatterLines = frontmatterMatch[1].split(/\r?\n/);
     const nameEntry = frontmatterLines.find((l) => l.startsWith('name:'));
     assert.ok(nameEntry, 'frontmatter must contain a name: field');
     const nameValue = nameEntry.replace(/^name:\s*/, '').trim();
@@ -185,7 +185,7 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
       const skillDirName = 'gsd-' + base;
       const src = fs.readFileSync(path.join(COMMANDS_DIR, cmd), 'utf-8');
       const out = convertClaudeCommandToClaudeSkill(src, skillDirName);
-      const m = out.match(/^---\nname:\s*(.+)$/m);
+      const m = out.match(/^---\r?\nname:\s*(.+)$/m);
       if (m) emitted.add(m[1].trim());
     }
 

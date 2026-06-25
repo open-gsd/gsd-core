@@ -83,7 +83,7 @@ test('no hardcoded @opengsd/gsd-core literals in runtime non-comment code lines 
     if (path.resolve(file) === path.resolve(IDENTITY_MODULE)) continue;
 
     const content = fs.readFileSync(file, 'utf-8');
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];

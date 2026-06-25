@@ -13,6 +13,10 @@ const { cleanup } = require('./helpers.cjs');
 const { installerEnv } = require('./helpers/install-shared.cjs');
 
 const ROOT = path.join(__dirname, '..');
+
+// Cross-platform temp paths for test fixtures (avoids hardcoded /tmp)
+const KIMI_CFG = path.join(os.tmpdir(), 'gsd-kimi-config-test').replace(/\\/g, '/');
+const XDG_HOME = path.join(os.tmpdir(), 'gsd-xdg-home-test');
 const INSTALL_SCRIPT = path.join(ROOT, 'bin', 'install.js');
 
 const {
@@ -101,20 +105,21 @@ describe('Kimi runtime homes', () => {
   });
 
   test('KIMI_CONFIG_DIR can select the brand-specific ~/.kimi-code root', () => {
-    withEnv({ KIMI_CONFIG_DIR: '/tmp/custom-kimi-code', XDG_CONFIG_HOME: undefined }, () => {
-      assert.strictEqual(String(getGlobalConfigDir('kimi')).replace(/\\/g, '/'), '/tmp/custom-kimi-code');
+    const customKimiDir = path.join(os.tmpdir(), 'custom-kimi-code');
+    withEnv({ KIMI_CONFIG_DIR: customKimiDir, XDG_CONFIG_HOME: undefined }, () => {
+      assert.strictEqual(String(getGlobalConfigDir('kimi')).replace(/\\/g, '/'), customKimiDir.replace(/\\/g, '/'));
       assert.strictEqual(
         getGlobalSkillsBase('kimi'),
-        path.join('/tmp/custom-kimi-code', 'skills'),
+        path.join(customKimiDir, 'skills'),
       );
-      assert.strictEqual(String(getGlobalDir('kimi')).replace(/\\/g, '/'), '/tmp/custom-kimi-code');
+      assert.strictEqual(String(getGlobalDir('kimi')).replace(/\\/g, '/'), customKimiDir.replace(/\\/g, '/'));
     });
   });
 
   test('XDG_CONFIG_HOME does not change Kimi default root', () => {
     const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-home-xdg-'));
     try {
-      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: '/tmp/xdg-home', HOME: tmpHome, USERPROFILE: tmpHome }, () => {
+      withEnv({ KIMI_CONFIG_DIR: undefined, XDG_CONFIG_HOME: XDG_HOME, HOME: tmpHome, USERPROFILE: tmpHome }, () => {
         assert.strictEqual(
           getGlobalConfigDir('kimi'),
           path.join(tmpHome, '.config', 'agents'),
@@ -166,9 +171,9 @@ describe('Kimi runtime homes', () => {
 
 describe('Kimi runtime artifact layout', () => {
   test('global layout stages Kimi skills and agents while local layout remains guarded', () => {
-    const globalLayout = resolveRuntimeArtifactLayout('kimi', '/tmp/kimi-config', 'global');
+    const globalLayout = resolveRuntimeArtifactLayout('kimi', KIMI_CFG, 'global');
     assert.strictEqual(globalLayout.runtime, 'kimi');
-    assert.strictEqual(globalLayout.configDir, '/tmp/kimi-config');
+    assert.strictEqual(String(globalLayout.configDir).replace(/\\/g, '/'), KIMI_CFG);
     assert.strictEqual(globalLayout.kinds.length, 2);
     assert.strictEqual(globalLayout.kinds[0].kind, 'skills');
     assert.strictEqual(globalLayout.kinds[0].destSubpath, 'skills');
@@ -179,7 +184,7 @@ describe('Kimi runtime artifact layout', () => {
     assert.strictEqual(globalLayout.kinds[1].prefix, 'gsd');
     assert.strictEqual(typeof globalLayout.kinds[1].stage, 'function');
 
-    const localLayout = resolveRuntimeArtifactLayout('kimi', '/tmp/kimi-config', 'local');
+    const localLayout = resolveRuntimeArtifactLayout('kimi', KIMI_CFG, 'local');
     assert.strictEqual(localLayout.runtime, 'kimi');
     assert.deepStrictEqual(localLayout.kinds, []);
   });

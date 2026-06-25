@@ -103,7 +103,7 @@ describe('map-codebase workflow references configurable timeout (#1472)', () => 
     const content = fs.readFileSync(workflowPath, 'utf8');
 
     // The timeout line should reference the config variable, not a hardcoded value
-    const timeoutLines = content.split('\n').filter(l => l.includes('timeout:'));
+    const timeoutLines = content.split(/\r?\n/).filter(l => l.includes('timeout:'));
     for (const line of timeoutLines) {
       assert.ok(
         !line.match(/timeout:\s*300000\s*$/),

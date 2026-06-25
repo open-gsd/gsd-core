@@ -40,7 +40,7 @@ const SNIPPET_FILE = path.join(WORKFLOWS_DIR, '_runtime-launcher.snippet.sh');
  */
 function expectedPreamble() {
   const raw = fs.readFileSync(SNIPPET_FILE, 'utf8');
-  const lines = raw.split('\n');
+  const lines = raw.split(/\r?\n/);
   // Strip trailing empty element produced by a trailing newline.
   const content = lines[lines.length - 1] === '' ? lines.slice(0, -1) : lines;
   assert.ok(content.length >= 1, `_runtime-launcher.snippet.sh must not be empty`);
@@ -55,7 +55,7 @@ function expectedPreamble() {
  * Handles both column-0 fences (```bash) and indented fences (   ```bash).
  */
 function extractShellBlocks(content) {
-  const allLines = content.split('\n');
+  const allLines = content.split(/\r?\n/);
   const blocks = [];
   let inBlock = false;
   let blockLang = null;
@@ -521,7 +521,7 @@ describe('runtime-launcher-parity (#373)', () => {
       `_runtime-launcher.snippet.sh must not contain the literal "/gsd-tools" substring. ` +
         `Use bin/\${_GSD_SHIM_NAME} indirection to keep the /gsd[:-] scanner from ` +
         `misreading it as a slash-command stub. Found in snippet:\n` +
-        snippetContent.split('\n').filter((l) => l.includes('/gsd-tools')).join('\n'),
+        snippetContent.split(/\r?\n/).filter((l) => l.includes('/gsd-tools')).join('\n'),
     );
 
     // (F2) workflows/do.md must not contain the literal substring /gsd-tools
@@ -533,7 +533,7 @@ describe('runtime-launcher-parity (#373)', () => {
     const doMdPath = path.join(WORKFLOWS_DIR, 'do.md');
     const doMdContent = fs.readFileSync(doMdPath, 'utf8');
     const offendingLines = doMdContent
-      .split('\n')
+      .split(/\r?\n/)
       .filter((l) => /\/gsd-tools/.test(l));
     assert.deepStrictEqual(
       offendingLines,

@@ -116,7 +116,7 @@ function assertNoDraftRootKeys(content) {
 function assertUsesOnlyEol(content, eol) {
   if (eol === '\r\n') {
     assert.ok(content.includes('\r\n'), 'contains CRLF line endings');
-    assert.ok(!content.replace(/\r\n/g, '').includes('\n'), 'does not contain bare LF line endings');
+    assert.ok(!content.replace(/\r\r?\n/g, '').includes('\n'), 'does not contain bare LF line endings');
     return;
   }
   assert.ok(!content.includes('\r\n'), 'does not contain CRLF line endings');
@@ -124,7 +124,7 @@ function assertUsesOnlyEol(content, eol) {
 
 function assertNoCodexBareGsdToolsInvocation(content, label) {
   const patterns = [
-    /(^|\n)[ \t]*gsd-tools\s/,
+    /(^|\r?\n)[ \t]*gsd-tools\s/,
     /\$\(\s*gsd-tools\s/,
     /`\s*gsd-tools\s/,
     /(?:&&|\|\||[;|])\s*gsd-tools\s/,
@@ -1379,7 +1379,7 @@ describe('mergeCodexConfig', () => {
     assert.ok(content.includes('[agents.custom-agent]'), 'preserves non-GSD agent section');
     assert.strictEqual(gsdStructCount, 1, 'keeps exactly one [agents.gsd-executor] struct entry');
     assert.strictEqual(markerCount, 1, 'adds exactly one marker block');
-    assert.ok(!/\n{3,}# GSD Agent Configuration/.test(content), 'does not leave extra blank lines before marker block');
+    assert.ok(!/\r?\n{3,}# GSD Agent Configuration/.test(content), 'does not leave extra blank lines before marker block');
   });
 
   test('idempotent: re-merge produces same result', () => {
@@ -1693,11 +1693,11 @@ describe('codex features section safety', () => {
     // causes "invalid type: string, expected a boolean in features"
     const configContent = `[features]\ncodex_hooks = true\n\nmodel = "gpt-5.4"\nmodel_reasoning_effort = "medium"\n\n[agents.gsd-executor]\ndescription = "test"\n`;
 
-    const featuresMatch = configContent.match(/\[features\]\n([\s\S]*?)(?=\n\[|$)/);
+    const featuresMatch = configContent.match(/\[features\]\r?\n([\s\S]*?)(?=\n\[|$)/);
     assert.ok(featuresMatch, 'features section found');
 
     const featuresBody = featuresMatch[1];
-    const nonBooleanKeys = featuresBody.split('\n')
+    const nonBooleanKeys = featuresBody.split(/\r?\n/)
       .filter(line => line.match(/^\s*\w+\s*=/) && !line.match(/=\s*(true|false)\s*(#.*)?$/))
       .map(line => line.trim());
 
@@ -1709,9 +1709,9 @@ describe('codex features section safety', () => {
   test('boolean keys under [features] are NOT flagged', () => {
     const configContent = `[features]\ncodex_hooks = true\nmulti_agent = false\n`;
 
-    const featuresMatch = configContent.match(/\[features\]\n([\s\S]*?)(?=\n\[|$)/);
+    const featuresMatch = configContent.match(/\[features\]\r?\n([\s\S]*?)(?=\n\[|$)/);
     const featuresBody = featuresMatch[1];
-    const nonBooleanKeys = featuresBody.split('\n')
+    const nonBooleanKeys = featuresBody.split(/\r?\n/)
       .filter(line => line.match(/^\s*\w+\s*=/) && !line.match(/=\s*(true|false)\s*(#.*)?$/))
       .map(line => line.trim());
 
@@ -1793,7 +1793,7 @@ describe('Codex install hook configuration (e2e)', () => {
     const content = readCodexConfig(codexHome);
     const agentsDir = path.join(codexHome, 'agents').replace(/\\/g, '/');
     // All config_file values should use absolute paths
-    const configFileLines = content.split('\n').filter(l => l.startsWith('config_file = '));
+    const configFileLines = content.split(/\r?\n/).filter(l => l.startsWith('config_file = '));
     assert.ok(configFileLines.length > 0, 'has config_file entries');
     for (const line of configFileLines) {
       assert.ok(line.includes(agentsDir), `absolute path in: ${line}`);
@@ -1831,10 +1831,10 @@ describe('Codex install hook configuration (e2e)', () => {
     assert.ok(reasoningIndex < featuresIndex, 'model_reasoning_effort= relocated before [features]');
 
     // [features] should only contain boolean keys
-    const featuresMatch = content.match(/\[features\]\n([\s\S]*?)(?=\n\[|$)/);
+    const featuresMatch = content.match(/\[features\]\r?\n([\s\S]*?)(?=\n\[|$)/);
     assert.ok(featuresMatch, 'features section found');
     const featuresBody = featuresMatch[1];
-    const nonBooleanKeys = featuresBody.split('\n')
+    const nonBooleanKeys = featuresBody.split(/\r?\n/)
       .filter(line => line.match(/^\s*\w+\s*=/) && !line.match(/=\s*(true|false)\s*(#.*)?$/));
     assert.strictEqual(nonBooleanKeys.length, 0, 'no non-boolean keys under [features]');
 
@@ -1895,10 +1895,10 @@ describe('Codex install hook configuration (e2e)', () => {
     assert.ok(reasoningIndex < featuresIndex, 'model_reasoning_effort= stays before [features]');
 
     // [features] should only contain boolean keys
-    const featuresMatch = content.match(/\[features\]\n([\s\S]*?)(?=\n\[|$)/);
+    const featuresMatch = content.match(/\[features\]\r?\n([\s\S]*?)(?=\n\[|$)/);
     assert.ok(featuresMatch, 'features section found');
     const featuresBody = featuresMatch[1];
-    const nonBooleanKeys = featuresBody.split('\n')
+    const nonBooleanKeys = featuresBody.split(/\r?\n/)
       .filter(line => line.match(/^\s*\w+\s*=/) && !line.match(/=\s*(true|false)\s*(#.*)?$/));
     assert.strictEqual(nonBooleanKeys.length, 0, 'no non-boolean keys under [features]');
 
@@ -2572,7 +2572,7 @@ describe('Codex uninstall symmetry for hook-enabled configs', () => {
       runCodexInstall(codexHome);
 
       const cleaned = stripGsdFromCodexConfig(readCodexConfig(codexHome));
-      assert.strictEqual(cleaned, initialContent, `preserves short-circuited root features assignment: ${initialContent.split('\n')[0]}`);
+      assert.strictEqual(cleaned, initialContent, `preserves short-circuited root features assignment: ${initialContent.split(/\r?\n/)[0]}`);
 
       cleanup(codexHome);
       fs.mkdirSync(codexHome, { recursive: true });
@@ -2588,7 +2588,7 @@ describe('Codex uninstall symmetry for hook-enabled configs', () => {
       '[model]',
       'name = "o3"',
       '',
-    ].join('\r\n').replace(/^# first line wins\r\n/, '# first line wins\n');
+    ].join('\r\n').replace(/^# first line wins\r\r?\n/, '# first line wins\n');
 
     writeCodexConfig(codexHome, initialContent);
     runCodexInstall(codexHome);

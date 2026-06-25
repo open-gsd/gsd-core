@@ -431,7 +431,7 @@ describe('test.yml changes job contract (#837)', () => {
   test('changes job checkout step sets fetch-depth: 0 (required for three-dot diff merge-base)', () => {
     const workflowPath = path.join(WORKFLOWS_DIR, 'test.yml');
     const text = fs.readFileSync(workflowPath, 'utf8');
-    const lines = text.split('\n');
+    const lines = text.split(/\r?\n/);
 
     // Locate the `changes:` job (two-space-indented top-level job key).
     const jobStart = lines.findIndex(l => /^ {2}changes:\s*$/.test(l));

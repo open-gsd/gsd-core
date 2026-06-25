@@ -18,6 +18,10 @@ import noAdhocMarkdownParsing from './eslint-rules/no-adhoc-markdown-parsing.cjs
 import noPathLiteralInAssert from './eslint-rules/no-path-literal-in-assert.cjs';
 import noPosixModeBitAssert from './eslint-rules/no-posix-mode-bit-assert.cjs';
 import noUnguardedNonportableExec from './eslint-rules/no-unguarded-nonportable-exec.cjs';
+import noCrlfFragileSplit from './eslint-rules/no-crlf-fragile-split.cjs';
+import noHardcodedTmp from './eslint-rules/no-hardcoded-tmp.cjs';
+import noBareNpmExec from './eslint-rules/no-bare-npm-exec.cjs';
+import requireUserprofileWithHome from './eslint-rules/require-userprofile-with-home.cjs';
 
 const localPlugin = {
   rules: {
@@ -30,6 +34,10 @@ const localPlugin = {
     'no-path-literal-in-assert': noPathLiteralInAssert,
     'no-posix-mode-bit-assert': noPosixModeBitAssert,
     'no-unguarded-nonportable-exec': noUnguardedNonportableExec,
+    'no-crlf-fragile-split': noCrlfFragileSplit,
+    'no-hardcoded-tmp': noHardcodedTmp,
+    'no-bare-npm-exec': noBareNpmExec,
+    'require-userprofile-with-home': requireUserprofileWithHome,
   },
 };
 
@@ -277,6 +285,14 @@ export default tseslint.config(
       'local/no-posix-mode-bit-assert': 'error',
       // Ban unguarded chmod exec-bit + sh/bash -c combos (fails on Windows Git Bash)
       'local/no-unguarded-nonportable-exec': 'error',
+      // Ban CRLF-fragile file-content splits and regex patterns (ADR-1703 Phase 4)
+      'local/no-crlf-fragile-split': 'error',
+      // Ban hardcoded /tmp/ paths in fs.* calls (ADR-1703 Phase 4)
+      'local/no-hardcoded-tmp': 'error',
+      // Ban bare npm exec without shell:true (ADR-1703 Phase 4)
+      'local/no-bare-npm-exec': 'error',
+      // Require USERPROFILE alongside HOME assignments (ADR-1703 Phase 4)
+      'local/require-userprofile-with-home': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',
