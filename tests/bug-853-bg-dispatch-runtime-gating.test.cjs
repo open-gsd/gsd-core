@@ -44,36 +44,44 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
     // Background path uses FLATTEN is false
     // allow-test-rule: source-text-is-the-product
     assert.match(MANAGER, /If `FLATTEN` is `false`[\s\S]{0,400}?run_in_background=true/);
-    // Inline is the default/else branch for plan — anchored on the explicit non-Codex label
+    // Inline is the default/else branch for plan — anchored on FLATTEN=true language (not runtime name)
     assert.match(
       MANAGER,
-      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/,
+      /Otherwise[\s\S]{0,100}?`FLATTEN`[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/,
     );
-    // Inline is the default/else branch for execute — anchored on the explicit non-Codex label
+    // Inline is the default/else branch for execute — anchored on FLATTEN=true language (not runtime name)
     assert.match(
       MANAGER,
-      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
+      /Otherwise[\s\S]{0,100}?`FLATTEN`[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
     );
   });
 
-  test('manager.md compound actions only background plan/execute on Codex', () => {
+  test('manager.md compound action preamble uses FLATTEN language (not hardcoded runtime names)', () => {
     // allow-test-rule: source-text-is-the-product
     const compoundActionSection = MANAGER.match(
       /### Compound Action \(background \+ inline\)[\s\S]*?Inline verification:/,
     );
     assert.ok(compoundActionSection, 'manager.md must document compound action runtime dispatch');
 
+    // Must gate on FLATTEN being false (not runtime name)
     assert.match(
       compoundActionSection[0],
-      /On Codex:[\s\S]{0,260}?Spawn all background agents first[\s\S]{0,220}?plan\/execute/,
+      /If `FLATTEN` is `false`[\s\S]{0,400}?Spawn all background agents first[\s\S]{0,300}?plan\/execute/,
     );
+    // Otherwise / inline branch must reference FLATTEN being true
     assert.match(
       compoundActionSection[0],
-      /On Claude Code or any other non-Codex runtime:[\s\S]{0,260}?inline/,
+      /Otherwise[\s\S]{0,260}?`FLATTEN`[\s\S]{0,260}?`true`[\s\S]{0,260}?inline/,
     );
+    // Must NOT still hardcode "On Codex:" in this section
     assert.doesNotMatch(
       compoundActionSection[0],
-      /On other runtimes:[\s\S]{0,260}?Spawn all background agents first/,
+      /\*\*On Codex:\*\*/,
+    );
+    // Must NOT still hardcode "On Claude Code or any other non-Codex runtime:"
+    assert.doesNotMatch(
+      compoundActionSection[0],
+      /On Claude Code or any other non-Codex runtime:/,
     );
   });
 
@@ -92,15 +100,15 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
     assert.match(AUTONOMOUS, /If `FLATTEN` is `false`[\s\S]{0,1200}?run_in_background=true[\s\S]{0,600}?gsd-plan-phase/);
     // Background block: run_in_background=true appears within the FLATTEN=false branch and gsd-execute-phase is nearby
     assert.match(AUTONOMOUS, /If `FLATTEN` is `false`[\s\S]{0,3000}?run_in_background=true[\s\S]{0,200}?gsd-execute-phase/);
-    // Inline is the otherwise/else branch for plan — anchored on the explicit non-Codex label
+    // Inline is the otherwise/else branch for plan — anchored on FLATTEN=true language (not runtime name)
     assert.match(
       AUTONOMOUS,
-      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/,
+      /Otherwise[\s\S]{0,100}?`FLATTEN`[\s\S]{0,400}?Skill\(skill="gsd-plan-phase"/,
     );
-    // Inline is the otherwise/else branch for execute — anchored on the explicit non-Codex label
+    // Inline is the otherwise/else branch for execute — anchored on FLATTEN=true language (not runtime name)
     assert.match(
       AUTONOMOUS,
-      /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
+      /Otherwise[\s\S]{0,100}?`FLATTEN`[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
     );
   });
 });
@@ -202,18 +210,18 @@ describe('dispatch-should-flatten query — behavioral', () => {
         JSON.stringify({ runtime: 'codex' }),
         'utf-8',
       );
-      // Clear GSD_RUNTIME so config.runtime is the deciding factor.
-      const env = { ...process.env };
-      delete env['GSD_RUNTIME'];
+      // Override GSD_RUNTIME to '' (empty string) so any ambient value is cleared.
+      // resolveRuntimeNameFromCandidates treats empty string as absent (normalizes
+      // to '' which is falsy → skipped → falls through to config.runtime=codex).
+      // This is the only way to suppress an ambient GSD_RUNTIME since runGsdTools
+      // merges { ...process.env, ...TEST_ENV_BASE, ...env } — passing '' as the
+      // override overwrites the ambient value at the correct merge position.
       const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
-        GSD_RUNTIME: '', // explicitly empty to override any ambient GSD_RUNTIME
+        GSD_RUNTIME: '',
       });
-      // When GSD_RUNTIME is empty, resolveRuntimeNameFromCandidates returns null
-      // and falls through to config.runtime=codex → false.
-      // Note: if ambient GSD_RUNTIME is non-empty, it may override this — the
-      // important assertion is that the query succeeds and produces a valid boolean.
+      // config.runtime=codex with GSD_RUNTIME cleared → codex backgrounds → shouldFlatten=false
       assert.ok(result.success, `Expected success, got error: ${result.error}`);
-      assert.match(result.output, /^(true|false)$/, `Expected true or false, got: ${result.output}`);
+      assert.strictEqual(result.output, 'false', `config.runtime=codex (GSD_RUNTIME cleared) should return false (may background), got: ${result.output}`);
     } finally {
       cleanupDir(tmpDir);
     }

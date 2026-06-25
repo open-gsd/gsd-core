@@ -68,6 +68,7 @@ function makeMinimalRuntimeCap(overrides = {}) {
           maxDepth: 1,
           background: false,
           subagentToolkit: 'full',
+          backgroundDispatch: false,
         },
       },
       ...overrides,
@@ -213,6 +214,7 @@ describe('ADR-1239 validator behavioral: undocumented sentinel passes, bogus fai
           maxDepth: 'undocumented',
           background: 'undocumented',
           subagentToolkit: 'undocumented',
+          backgroundDispatch: 'undocumented',
         },
       },
     });
@@ -283,12 +285,22 @@ describe('ADR-1239 validator behavioral: undocumented sentinel passes, bogus fai
       `bogus value "zzz" for backgroundDispatch must produce a validator error`);
   });
 
-  test('dispatch without backgroundDispatch key → ZERO validator errors (optional field)', () => {
-    const cap = makeMinimalRuntimeCap();
+  test('dispatch without backgroundDispatch key → validator error (required field — all 16 descriptors carry it)', () => {
+    // backgroundDispatch is now REQUIRED (matches sibling fields namedDispatch/nested/background/subagentToolkit/maxDepth).
+    const cap = makeMinimalRuntimeCap({
+      hostIntegration: {
+        ...makeMinimalRuntimeCap().runtime.hostIntegration,
+        dispatch: (() => {
+          const d = { ...makeMinimalRuntimeCap().runtime.hostIntegration.dispatch };
+          delete d.backgroundDispatch;
+          return d;
+        })(),
+      },
+    });
     const errors = validateCapability(cap, 'test-runtime');
     const bdErrors = errors.filter((e) => e.includes('backgroundDispatch'));
-    assert.strictEqual(bdErrors.length, 0,
-      `Missing backgroundDispatch (optional field) must produce no errors; got: ${bdErrors.join(', ')}`);
+    assert.ok(bdErrors.length > 0,
+      `Missing backgroundDispatch (required field) must produce a validator error`);
   });
 });
 
@@ -331,6 +343,7 @@ describe('Fix 3: reserved-key guard on hostIntegration and hostIntegration.dispa
           maxDepth: 5,
           background: true,
           subagentToolkit: 'full',
+          backgroundDispatch: true,
         },
         modelMode: 'passive',
         hookBus: 'host',

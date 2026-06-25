@@ -496,11 +496,18 @@ function negotiateHostCapabilities(
  * explicitly `true`. Any other value (false, missing, 'undocumented') fails
  * closed to inline (the always-safe path).
  *
- * This graduates the #853 prose rule (was `RUNTIME === 'codex'`) to a typed,
- * documentation-sourced decision; see
+ * This graduates the #853 prose rule (originally `RUNTIME === 'codex'`, then
+ * extended to cursor) to a typed, documentation-sourced decision; codex AND
+ * cursor are both background-eligible in the registry. See
  * docs/reference/host-integration-capability-matrix.md.
+ *
+ * Null-safety: if dispatch is null, undefined, or not an object, returns true
+ * (inline, fail-closed) instead of throwing.
  */
-function shouldFlattenDispatch(dispatch: Partial<DispatchCapability>): boolean {
+type UnvalidatedDispatch = (Partial<DispatchCapability> & { background?: unknown; backgroundDispatch?: unknown }) | null | undefined;
+
+function shouldFlattenDispatch(dispatch: UnvalidatedDispatch): boolean {
+  if (!dispatch || typeof dispatch !== 'object') return true;
   const canBackground = dispatch.background === true && dispatch.backgroundDispatch === true;
   return !canBackground;
 }

@@ -888,6 +888,22 @@ describe('Phase B: shouldFlattenDispatch — contract pin', () => {
       'background missing → not === true → flatten=true');
   });
 
+  // M1: null-safety — null/undefined/non-object dispatch must fail-closed (not throw)
+  test('null dispatch → true (fail-closed, no throw)', () => {
+    assert.strictEqual(shouldFlattenDispatch(null), true,
+      'null dispatch must fail-closed to true');
+  });
+
+  test('undefined dispatch → true (fail-closed, no throw)', () => {
+    assert.strictEqual(shouldFlattenDispatch(undefined), true,
+      'undefined dispatch must fail-closed to true');
+  });
+
+  test('string dispatch → true (fail-closed, no throw)', () => {
+    assert.strictEqual(shouldFlattenDispatch('x'), true,
+      'non-object dispatch (string) must fail-closed to true');
+  });
+
   // #853 codex-like profile: full dispatch including backgroundDispatch:true → background OK
   test('#853 codex-like: {namedDispatch:true,nested:true,maxDepth:1,background:true,subagentToolkit:"full",backgroundDispatch:true} → false (background OK)', () => {
     assert.strictEqual(

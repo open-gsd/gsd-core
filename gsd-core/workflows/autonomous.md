@@ -61,7 +61,7 @@ fi
 
 When `--only` is set, also set `FROM_PHASE` to the same value so existing filter logic applies.
 
-When `--interactive` is set, discuss runs inline with questions. On Codex, where a backgrounded agent can still spawn subagents, plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. On every other runtime (Claude Code and all other non-Codex runtimes), backgrounded agents cannot reliably nest subagents, so plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
+When `--interactive` is set, discuss runs inline with questions. When `dispatch-should-flatten` returns `false` (e.g. codex, cursor — runtimes where a backgrounded agent can still spawn subagents), plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. When `dispatch-should-flatten` returns `true` (e.g. claude and other runtimes where backgrounded agents cannot reliably nest subagents), plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
 
 When `PLAN_STRATEGY=converge`, the planning step MUST invoke the plan-review convergence workflow instead of `gsd-plan-phase`. `--cross-ai` is an alias for `--converge`. Forward `CONVERGENCE_ARGS` exactly as parsed so reviewer flags and `--max-cycles N` retain the same meaning as they have on `/gsd:plan-review-convergence`.
 
@@ -388,7 +388,7 @@ FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true"
 
   Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
 
-- **Otherwise (Claude Code or any other non-Codex runtime):** Run plan **inline** (do NOT background; `FLATTEN` is `true` or non-`false`) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
+- **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
 
   - If `PLAN_STRATEGY=converge`:
 
@@ -438,7 +438,7 @@ Agent(
 
   Store the agent task_id. The workflow can now start discussing the next phase while this phase executes in the background. Before starting post-execution routing for this phase, wait for the execute agent to complete.
 
-- **Otherwise (Claude Code or any other non-Codex runtime):** Run execute **inline** (do NOT background; `FLATTEN` is `true` or non-`false`) so worktree isolation and verification run:
+- **Otherwise (`FLATTEN` is `true` — run inline):** Run execute **inline** (do NOT background) so worktree isolation and verification run:
 
 ```
 Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
