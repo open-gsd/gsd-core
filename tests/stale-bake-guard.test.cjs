@@ -135,17 +135,21 @@ describe('stale-bake-guard.resolveRuntimeFromConfig', () => {
 });
 
 describe('stale-bake-guard.resolveAgentDir (env-var aware)', () => {
+  // Expected paths are built with path.join so they match the platform's
+  // separator (Windows → backslashes). resolveAgentDir itself uses path.join,
+  // so both sides stay in sync; hardcoding forward-slash literals made these
+  // 4 assertions fail on windows-latest CI.
   test('opencode default lands under ~/.config/opencode/agent', () => {
-    assert.equal(resolveAgentDir('opencode', { env: {}, homedir: () => '/H' }), '/H/.config/opencode/agent');
+    assert.equal(resolveAgentDir('opencode', { env: {}, homedir: () => '/H' }), path.join('/H', '.config', 'opencode', 'agent'));
   });
   test('opencode honors OPENCODE_CONFIG_DIR', () => {
-    assert.equal(resolveAgentDir('opencode', { env: { OPENCODE_CONFIG_DIR: '/custom/oc' }, homedir: () => '/H' }), '/custom/oc/agent');
+    assert.equal(resolveAgentDir('opencode', { env: { OPENCODE_CONFIG_DIR: '/custom/oc' }, homedir: () => '/H' }), path.join('/custom/oc', 'agent'));
   });
   test('codex default lands under ~/.codex/agents', () => {
-    assert.equal(resolveAgentDir('codex', { env: {}, homedir: () => '/H' }), '/H/.codex/agents');
+    assert.equal(resolveAgentDir('codex', { env: {}, homedir: () => '/H' }), path.join('/H', '.codex', 'agents'));
   });
   test('codex honors CODEX_HOME', () => {
-    assert.equal(resolveAgentDir('codex', { env: { CODEX_HOME: '/custom/cx' }, homedir: () => '/H' }), '/custom/cx/agents');
+    assert.equal(resolveAgentDir('codex', { env: { CODEX_HOME: '/custom/cx' }, homedir: () => '/H' }), path.join('/custom/cx', 'agents'));
   });
   test('unsupported runtime → null', () => {
     assert.equal(resolveAgentDir('gemini', { env: {}, homedir: () => '/H' }), null);
