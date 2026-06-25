@@ -32,7 +32,7 @@ const { globSync } = require('glob');
 const PROTECTED_RULES = [
   'no-path-literal-in-assert',
   'no-posix-mode-bit-assert',
-  // Future phases: add new local/ portability rules here.
+  'no-unguarded-nonportable-exec',
 ];
 
 // ── Detect disable directives via the comment text ───────────────────────────

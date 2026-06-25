@@ -17,6 +17,7 @@ import noTautologicalAssert from './eslint-rules/no-tautological-assert.cjs';
 import noAdhocMarkdownParsing from './eslint-rules/no-adhoc-markdown-parsing.cjs';
 import noPathLiteralInAssert from './eslint-rules/no-path-literal-in-assert.cjs';
 import noPosixModeBitAssert from './eslint-rules/no-posix-mode-bit-assert.cjs';
+import noUnguardedNonportableExec from './eslint-rules/no-unguarded-nonportable-exec.cjs';
 
 const localPlugin = {
   rules: {
@@ -28,6 +29,7 @@ const localPlugin = {
     'no-adhoc-markdown-parsing': noAdhocMarkdownParsing,
     'no-path-literal-in-assert': noPathLiteralInAssert,
     'no-posix-mode-bit-assert': noPosixModeBitAssert,
+    'no-unguarded-nonportable-exec': noUnguardedNonportableExec,
   },
 };
 
@@ -273,6 +275,8 @@ export default tseslint.config(
       'local/no-path-literal-in-assert': 'error',
       // Ban POSIX mode-bit assertions compared to octal literals (fails on Windows)
       'local/no-posix-mode-bit-assert': 'error',
+      // Ban unguarded chmod exec-bit + sh/bash -c combos (fails on Windows Git Bash)
+      'local/no-unguarded-nonportable-exec': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',

@@ -74,7 +74,6 @@ Replace all three with a single coherent mechanism: **AST-based ESLint rules in 
 | `no-hardcoded-tmp` | `DEFECT.WINDOWS-TEST-PORTABILITY` (G4) | tests |
 | `no-bare-npm-exec` | `DEFECT.WINDOWS-TEST-PORTABILITY` (G5) | tests |
 | `require-userprofile-with-home` | `DEFECT.WINDOWS-TEST-PORTABILITY` (G6) | tests |
-| `no-oversized-test-argv` | `DEFECT.WINDOWS-ARGV-OVERFLOW` | tests |
 | `normalize-path-in-content` | `DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT` (`RULESET.CONTENT-PATH-NORMALIZATION`) | `src/**/*.cts` |
 | `require-fs-op-fallback` | `DEFECT.WINDOWS-FS-OPS` | `src/**/*.cts`, build/install |
 
@@ -85,11 +84,13 @@ fence-match shape — covered by `no-crlf-fragile-split`; and (b) feeding a Wind
 path into a Git Bash glob / `bash -c` — covered jointly by `no-hardcoded-tmp` (steer tmp usage)
 and `no-unguarded-nonportable-exec` (require a platform guard on `bash -c`). The residual runtime
 Git-Bash path-translation behavior is not fully statically decidable; the rules catch the source
-shapes that produce it, not the runtime outcome. `DEFECT.WINDOWS-ARGV-OVERFLOW` (a test assembling an argv that exceeds the
-Windows command-length limit) is detected heuristically by `no-oversized-test-argv` — it flags
-very large `.repeat(N)`/concatenated literals passed to a `child_process` exec call; because the
-true limit is a runtime property, this rule is an over-approximation tripwire, documented as
-such, landing in Phase 3.
+shapes that produce it, not the runtime outcome. `DEFECT.WINDOWS-ARGV-OVERFLOW` is deliberately
+**not** in this catalog: it is a *runtime* argv-length property (the args-array size is not
+statically knowable — e.g. `execFileSync('node', [...N runtime paths])`), so no AST rule can
+soundly detect it. Phase 3 evaluated a `no-oversized-test-argv` heuristic and **dropped it as
+unsound** (it could only catch a contrived literal `.repeat(N)` command string, never the
+canonical array overflow). The class is addressed at the source: the production `run-tests.cjs`
+argv chunking under `RUN_TESTS_MAX_CMDLINE_CHARS`, with its anchor `tests/run-tests-harness.test.cjs`.
 
 ### Architecture
 
@@ -175,9 +176,11 @@ phasing (one rule at a time, each independently reviewed and shipped) and by the
   they are first needed.
 - **Phase 4** the G1–G6 rules + fix all grandfathered offenders + delete the ratchet test.
 - **Phase 5–6** production `normalize-path-in-content`, `require-fs-op-fallback`.
-- **Phase 7** teardown: delete the regex script + allowlist-ratchet usage + the opt-out convention;
-  rewrite `CONTEXT.md` `DEFECT.WINDOWS-*` predicates to point at the rules; the forward
-  architecture guide ("how to add a portability rule").
+- **Phase 7** teardown: delete the `windows-test-parity-guard` ratchet + `allowlist-ratchet` usage
+  for these classes + sweep any residual `// windows-portability-ok:` comments; finalize the
+  `CONTEXT.md` `DEFECT.WINDOWS-*` predicate rewrite; the forward architecture guide ("how to add a
+  portability rule"). (The regex script `scripts/lint-windows-test-portability.cjs` was retired
+  earlier — in Phase 3 — as its `no-unguarded-nonportable-exec` replacement landed.)
 
 Each implementation phase runs the full engineering directive (rubber-duck → laws → architecture
 → qa-test-architect → strict TDD via `RuleTester` → codex adversarial → Diátaxis → rebase+PR)
