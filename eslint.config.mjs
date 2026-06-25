@@ -22,6 +22,7 @@ import noCrlfFragileSplit from './eslint-rules/no-crlf-fragile-split.cjs';
 import noHardcodedTmp from './eslint-rules/no-hardcoded-tmp.cjs';
 import noBareNpmExec from './eslint-rules/no-bare-npm-exec.cjs';
 import requireUserprofileWithHome from './eslint-rules/require-userprofile-with-home.cjs';
+import normalizePathInContent from './eslint-rules/normalize-path-in-content.cjs';
 
 const localPlugin = {
   rules: {
@@ -38,6 +39,7 @@ const localPlugin = {
     'no-hardcoded-tmp': noHardcodedTmp,
     'no-bare-npm-exec': noBareNpmExec,
     'require-userprofile-with-home': requireUserprofileWithHome,
+    'normalize-path-in-content': normalizePathInContent,
   },
 };
 
@@ -216,6 +218,12 @@ export default tseslint.config(
       // ADR-1372 T7: enforce use of the markdown-sectionizer seam; grandfather
       // pre-migration sites with // allow-adhoc-markdown: <reason>
       'local/no-adhoc-markdown-parsing': 'error',
+      // ADR-1703 Phase 5: flag path-returning calls interpolated into content
+      // (markdown @-references, workflow files, generated docs) without POSIX
+      // normalization. Promoted to 'error' after precision review (path.basename
+      // excluded; content heuristic tightened to genuine reference/config-dir
+      // markers). See RULESET.CONTENT-PATH-NORMALIZATION in CONTEXT.md.
+      'local/normalize-path-in-content': 'error',
     },
   },
 
