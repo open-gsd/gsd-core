@@ -743,6 +743,108 @@ describe('Fix 1: degradationFor dispatch fails closed on non-full subagentToolki
 });
 
 // ---------------------------------------------------------------------------
+// New fixes: M1 maxDepth NaN, M2 struct consistency, L1 SAFE_DEFAULTS,
+// L2 protocolVersion warn, N1 undocumented dispatch warnings
+// ---------------------------------------------------------------------------
+
+describe('Fix M1: maxDepth NaN bypasses number guard', () => {
+  test('negotiate with dispatch.maxDepth NaN → effective.dispatch.maxDepth === 0 AND warning about maxDepth AND Number.isFinite', () => {
+    const result = negotiateHostCapabilities({
+      dispatch: { namedDispatch: true, nested: false, maxDepth: NaN, background: false, subagentToolkit: 'full' },
+    });
+    const d = result.effective.dispatch;
+    assert.strictEqual(d.maxDepth, 0, 'NaN maxDepth must be normalized to 0');
+    assert.ok(Number.isFinite(d.maxDepth), 'effective.dispatch.maxDepth must be finite (Number.isFinite)');
+    const warnText = result.warnings.join(' ');
+    assert.ok(warnText.includes('maxDepth'), `Expected a warning about maxDepth; got: ${warnText}`);
+  });
+
+  test('degradationFor dispatch with maxDepth NaN → level "degraded" (not NaN-dependent, not "full")', () => {
+    const r = degradationFor('dispatch', {
+      dispatch: { namedDispatch: true, nested: true, maxDepth: NaN, subagentToolkit: 'full' },
+    });
+    // After fix: depth=(NaN not finite)→0; NaN===0 is false so initial check doesn't fire;
+    // isUnbounded=false; isFullDepth = false || (nested:true && 0>=2) = false → 'degraded' (flat)
+    assert.strictEqual(r.level, 'degraded',
+      `NaN maxDepth with nested:true must yield 'degraded' (depth=0, not full-depth); got: ${r.level}`);
+    assert.notStrictEqual(r.level, 'full', 'NaN maxDepth must NOT yield "full"');
+  });
+});
+
+describe('Fix M2: cap nested/background when namedDispatch is false', () => {
+  test('negotiate with namedDispatch:"undocumented" → namedDispatch false, nested false, background false, maxDepth 0; warnings include namedDispatch undocumented note', () => {
+    const result = negotiateHostCapabilities({
+      dispatch: { namedDispatch: 'undocumented', nested: true, background: true, maxDepth: 5, subagentToolkit: 'full' },
+    });
+    const d = result.effective.dispatch;
+    assert.strictEqual(d.namedDispatch, false, 'namedDispatch must be false');
+    assert.strictEqual(d.nested, false, 'nested must be false when namedDispatch is false');
+    assert.strictEqual(d.background, false, 'background must be false when namedDispatch is false');
+    assert.strictEqual(d.maxDepth, 0, 'maxDepth must be 0 when namedDispatch is false');
+    const warnText = result.warnings.join(' ');
+    assert.ok(warnText.includes('namedDispatch') || warnText.includes('dispatch.namedDispatch'),
+      `Expected a warning about namedDispatch being undocumented; got: ${warnText}`);
+  });
+});
+
+describe('Fix L1: SAFE_DEFAULTS.dispatch.subagentToolkit is read-only', () => {
+  // CONTRACT: negotiate({}) uses SAFE_DEFAULTS for each axis; dispatch uses its floor
+  test('negotiate({}) → effective axes match documented SAFE_DEFAULTS (CONTRACT)', () => {
+    const result = negotiateHostCapabilities({});
+    const eff = result.effective;
+    assert.strictEqual(eff.embeddingMode, 'declarative');
+    assert.strictEqual(eff.commandSurface, 'prose-only');
+    assert.strictEqual(eff.modelMode, 'passive');
+    assert.strictEqual(eff.hookBus, 'none');
+    assert.strictEqual(eff.stateIO, 'session-log-append');
+    assert.strictEqual(eff.transport, 'mcp');
+    assert.strictEqual(eff.runtime, 'node');
+    assert.strictEqual(eff.dispatch.subagentToolkit, 'read-only',
+      'SAFE_DEFAULTS dispatch floor must be read-only');
+  });
+});
+
+describe('Fix L2: warn on present-but-non-number protocolVersion', () => {
+  test('negotiate with protocolVersion:"beta" → warnings include protocolVersion note; result.protocolVersion === engine default (1)', () => {
+    const result = negotiateHostCapabilities({
+      embeddingMode: 'declarative',
+      commandSurface: 'slash-file',
+      modelMode: 'passive',
+      hookBus: 'host',
+      stateIO: 'filesystem',
+      transport: 'mcp',
+      runtime: 'node',
+      dispatch: { namedDispatch: true, nested: false, maxDepth: 1, background: false, subagentToolkit: 'full' },
+      protocolVersion: 'beta',
+    });
+    const warnText = result.warnings.join(' ');
+    assert.ok(warnText.includes('protocolVersion'),
+      `Expected a warning about protocolVersion being non-finite/non-number; got: ${warnText}`);
+    assert.strictEqual(result.protocolVersion, 1,
+      'result.protocolVersion must fall back to engine default (1)');
+  });
+});
+
+describe('Fix N1: symmetric observability warnings for undocumented dispatch fields', () => {
+  test('dispatch.subagentToolkit:"undocumented" → warning includes "dispatch.subagentToolkit is undocumented"', () => {
+    const result = negotiateHostCapabilities({
+      dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'undocumented' },
+    });
+    const warnText = result.warnings.join(' ');
+    assert.ok(warnText.includes('subagentToolkit') && warnText.includes('undocumented'),
+      `Expected warning about dispatch.subagentToolkit undocumented; got: ${warnText}`);
+  });
+});
+
+describe('Fix: degradationFor unknown point → {level:"absent", unknown:true}', () => {
+  test('degradationFor("totally-unknown-point", {}) → {level:"absent", unknown:true}', () => {
+    const r = degradationFor('totally-unknown-point', {});
+    assert.strictEqual(r.level, 'absent', 'unknown point must return absent');
+    assert.strictEqual(r.unknown, true, 'unknown point must have unknown:true');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fix 2: negotiateHostCapabilities — host omitting 'dispatch' → subagentToolkit 'read-only'
 // ---------------------------------------------------------------------------
 

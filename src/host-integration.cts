@@ -97,7 +97,7 @@ interface DegradationResult {
 const SAFE_DEFAULTS: HostIntegrationAxes = {
   embeddingMode:  'declarative',
   commandSurface: 'prose-only',
-  dispatch: { namedDispatch: false, nested: false, maxDepth: 0, background: false, subagentToolkit: 'full' },
+  dispatch: { namedDispatch: false, nested: false, maxDepth: 0, background: false, subagentToolkit: 'read-only' },
   modelMode:      'passive',
   hookBus:        'none',
   stateIO:        'session-log-append',
@@ -173,8 +173,8 @@ function degradationFor(point: InterfacePoint, axes: Partial<HostIntegrationAxes
         return { level: 'absent', fallback: 'single-agent inline / SDK sub-session' };
       }
       // maxDepth < 0 means unbounded
-      const isUnbounded = typeof disp.maxDepth === 'number' && disp.maxDepth < 0;
-      const depth = typeof disp.maxDepth === 'number' ? disp.maxDepth : 0;
+      const isUnbounded = typeof disp.maxDepth === 'number' && Number.isFinite(disp.maxDepth) && disp.maxDepth < 0;
+      const depth = (typeof disp.maxDepth === 'number' && Number.isFinite(disp.maxDepth)) ? disp.maxDepth : 0;
       const isFullDepth = isUnbounded || (disp.nested === true && depth >= 2);
       if (isFullDepth) {
         // Fail-closed: return 'full' ONLY when subagentToolkit is explicitly 'full';
@@ -295,7 +295,11 @@ function negotiateHostCapabilities(
 ): NegotiationResult {
   const warnings: string[] = [];
   const h = host as Record<string, unknown>;
-  const hostPV = typeof h.protocolVersion === 'number' ? h.protocolVersion : engine.protocolVersion;
+  // Warn if protocolVersion is present but not a finite number
+  if (h.protocolVersion !== undefined && (typeof h.protocolVersion !== 'number' || !Number.isFinite(h.protocolVersion))) {
+    warnings.push(`host protocolVersion is not a finite number — using engine version ${engine.protocolVersion}`);
+  }
+  const hostPV = (typeof h.protocolVersion === 'number' && Number.isFinite(h.protocolVersion)) ? h.protocolVersion : engine.protocolVersion;
   const enginePV = engine.protocolVersion;
 
   // Warn if host declares a newer protocol version
@@ -376,6 +380,20 @@ function negotiateHostCapabilities(
     effectiveSubagentToolkit = 'read-only';
     effectiveMaxDepth       = 0;
   } else {
+    // N1: observability warnings for 'undocumented' sentinel on dispatch fields
+    if (hostDispatch.namedDispatch === 'undocumented') {
+      warnings.push(`dispatch.namedDispatch is undocumented — degraded closed`);
+    }
+    if (hostDispatch.nested === 'undocumented') {
+      warnings.push(`dispatch.nested is undocumented — degraded closed`);
+    }
+    if (hostDispatch.background === 'undocumented') {
+      warnings.push(`dispatch.background is undocumented — degraded closed`);
+    }
+    if (hostDispatch.subagentToolkit === 'undocumented') {
+      warnings.push(`dispatch.subagentToolkit is undocumented — degraded closed (read-only)`);
+    }
+
     effectiveNamedDispatch = (hostDispatch.namedDispatch === true) && engineDispatch.namedDispatch;
     effectiveNested        = (hostDispatch.nested === true) && engineDispatch.nested;
     effectiveBackground    = (hostDispatch.background === true) && engineDispatch.background;
@@ -386,9 +404,9 @@ function negotiateHostCapabilities(
     const engineToolkit = engineDispatch.subagentToolkit === 'read-only' ? 'read-only' : 'full';
     effectiveSubagentToolkit = (hostToolkit === 'read-only' || engineToolkit === 'read-only') ? 'read-only' : 'full';
 
-    // maxDepth: missing/non-number → 0 + warning
+    // maxDepth: missing/non-number/non-finite → 0 + warning
     let hostMaxDepth: number;
-    if (typeof hostDispatch.maxDepth !== 'number') {
+    if (typeof hostDispatch.maxDepth !== 'number' || !Number.isFinite(hostDispatch.maxDepth)) {
       warnings.push(`host dispatch.maxDepth is missing or not a number — treating as 0`);
       hostMaxDepth = 0;
     } else {
@@ -401,9 +419,11 @@ function negotiateHostCapabilities(
     const minDepth  = Math.min(hDepthNum, eDepthNum);
     effectiveMaxDepth = minDepth === Infinity ? -1 : minDepth;
 
-    // If namedDispatch is false, cap maxDepth to 0
+    // If namedDispatch is false, cap maxDepth/nested/background to 0/false/false (struct consistency)
     if (!effectiveNamedDispatch) {
-      effectiveMaxDepth = 0;
+      effectiveMaxDepth  = 0;
+      effectiveNested    = false;
+      effectiveBackground = false;
     }
   }
 
