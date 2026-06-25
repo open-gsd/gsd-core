@@ -439,6 +439,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `graphify.cjs` | Knowledge-graph build/query/status/diff for `/gsd-graphify` |
 | `graphify-command-router.cjs` | ADR-959 capability command router for `gsd-tools graphify` — dispatches build/query/status/diff subcommands; first real capability command cutover (phase 4d-impl-2) |
 | `gsd2-import.cjs` | External-plan ingest for `/gsd-import --from-gsd2` |
+| `host-integration.cjs` | Host-Integration Interface (ADR-1239 Phase A) — negotiated capability contract over the six host-integration points; `negotiateHostCapabilities` fail-closes on undeclared/unknown/`undocumented` values, typed degradation ladder, host-capability profiles; the 8 `runtime.hostIntegration` axes are validated in `capability-validator.cjs` and sourced per-CLI in `docs/reference/host-integration-capability-matrix.md` |
 | `init-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools init` |
 | `init.cjs` | Compound context loading for each workflow type |
 | `install-profiles.cjs` | Install profile allowlist + skill staging for `--minimal` install (#2762); single source of truth for which `gsd-*` skills/agents land in runtime config dirs |

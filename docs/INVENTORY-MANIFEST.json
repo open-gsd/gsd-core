@@ -329,6 +329,7 @@
       "graphify-command-router.cjs",
       "graphify.cjs",
       "gsd2-import.cjs",
+      "host-integration.cjs",
       "init-command-router.cjs",
       "init.cjs",
       "install-profiles.cjs",
