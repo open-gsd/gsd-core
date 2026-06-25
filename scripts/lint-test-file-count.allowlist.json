@@ -184,6 +184,14 @@
         "fix-1464-docs-manifest-validation.test.cjs"
       ],
       "issue": "1496"
+    },
+    "host-integration": {
+      "files": [
+        "host-integration.test.cjs",
+        "host-integration-validator-parity.test.cjs",
+        "host-integration-descriptors.test.cjs"
+      ],
+      "issue": "1684"
     }
   }
 }

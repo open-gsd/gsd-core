@@ -67,6 +67,7 @@ build/
 # by `npm run build:lib`). Source of truth is src/; these are emitted, never edited.
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /tsconfig.build.tsbuildinfo
+/gsd-core/bin/lib/host-integration.cjs
 /gsd-core/bin/lib/capability-loader.cjs
 /gsd-core/bin/lib/capability-source.cjs
 /gsd-core/bin/lib/capability-ledger.cjs
