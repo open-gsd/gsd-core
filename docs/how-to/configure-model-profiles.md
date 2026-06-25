@@ -61,6 +61,8 @@ Valid values: `opus`, `sonnet`, `haiku`, `inherit`, or any fully-qualified model
 npx @opengsd/gsd-core@latest --codex --global   # or --opencode, --kilo, etc.
 ```
 
+GSD will also warn you if you forget: workflow entry commands (`gsd init plan-phase`, `gsd init execute-phase`, etc.) detect when `.planning/config.json` or `~/.gsd/defaults.json` is newer than your installed agent files and print a one-line stderr reminder naming the changed file and the re-install command. The check is read-only and runs only on `codex` and `opencode`; Claude Code resolves models at spawn time and is unaffected. (#1688)
+
 ---
 
 ## Per-phase-type models (`models`)

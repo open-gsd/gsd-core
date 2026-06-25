@@ -386,6 +386,7 @@
       "security.cjs",
       "semver-compare.cjs",
       "shell-command-projection.cjs",
+      "stale-bake-guard.cjs",
       "state-command-router.cjs",
       "state-document.cjs",
       "state.cjs",

@@ -227,6 +227,10 @@ const evalMod = require('./lib/eval.cjs');
 const { routeVerificationCommand } = require('./lib/verification-command-router.cjs');
 const verification = require('./lib/verification.cjs');
 const { routeInitCommand } = require('./lib/init-command-router.cjs');
+// Stale-bake guard (#1688): warns once when model config changed since agents
+// were last baked on static-frontmatter runtimes (codex/opencode). Lazy-required
+// here, invoked from case 'init' below.
+const { warnIfStaleBake } = require('./lib/stale-bake-guard.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
 const capabilityState = require('./lib/capability-state.cjs');
 const capabilityWriter = require('./lib/capability-writer.cjs');
@@ -1414,6 +1418,10 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     }
 
     case 'init': {
+      // #1688: warn (at most once per process) if the user edited model_overrides
+      // without re-running `gsd install <runtime>` on a static-frontmatter runtime.
+      // Best-effort, stderr-only, swallowed errors — never blocks the command.
+      try { warnIfStaleBake(cwd); } catch { /* guard must never break init */ }
       routeInitCommand({
         init,
         args,
