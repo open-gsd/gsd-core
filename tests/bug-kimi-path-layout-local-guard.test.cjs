@@ -102,12 +102,12 @@ describe('Kimi runtime homes', () => {
 
   test('KIMI_CONFIG_DIR can select the brand-specific ~/.kimi-code root', () => {
     withEnv({ KIMI_CONFIG_DIR: '/tmp/custom-kimi-code', XDG_CONFIG_HOME: undefined }, () => {
-      assert.strictEqual(getGlobalConfigDir('kimi'), '/tmp/custom-kimi-code');
+      assert.strictEqual(String(getGlobalConfigDir('kimi')).replace(/\\/g, '/'), '/tmp/custom-kimi-code');
       assert.strictEqual(
         getGlobalSkillsBase('kimi'),
         path.join('/tmp/custom-kimi-code', 'skills'),
       );
-      assert.strictEqual(getGlobalDir('kimi'), '/tmp/custom-kimi-code');
+      assert.strictEqual(String(getGlobalDir('kimi')).replace(/\\/g, '/'), '/tmp/custom-kimi-code');
     });
   });
 

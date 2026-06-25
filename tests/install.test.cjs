@@ -207,7 +207,7 @@ describe('getGlobalConfigDir — explicit configDir overrides env for all runtim
     const savedHome = process.env.HERMES_HOME;
     process.env.HERMES_HOME = '~/from-env';
     try {
-      assert.strictEqual(getGlobalConfigDir('hermes', '/explicit/hermes'), '/explicit/hermes');
+      assert.strictEqual(String(getGlobalConfigDir('hermes', '/explicit/hermes')).replace(/\\/g, '/'), '/explicit/hermes');
     } finally {
       if (savedHome !== undefined) process.env.HERMES_HOME = savedHome;
       else delete process.env.HERMES_HOME;
@@ -218,7 +218,7 @@ describe('getGlobalConfigDir — explicit configDir overrides env for all runtim
     const saved = process.env.KILO_CONFIG_DIR;
     process.env.KILO_CONFIG_DIR = '~/from-env';
     try {
-      assert.strictEqual(getGlobalConfigDir('kilo', '/explicit/kilo'), '/explicit/kilo');
+      assert.strictEqual(String(getGlobalConfigDir('kilo', '/explicit/kilo')).replace(/\\/g, '/'), '/explicit/kilo');
     } finally {
       if (saved !== undefined) process.env.KILO_CONFIG_DIR = saved;
       else delete process.env.KILO_CONFIG_DIR;
