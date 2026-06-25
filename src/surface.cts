@@ -45,6 +45,9 @@ import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
 const { findInstallSourceRoot } = runtimeArtifactLayout;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import runtimeArtifactInstallPlan = require('./runtime-artifact-install-plan.cjs');
+const { assertDestWithinConfigHome } = runtimeArtifactInstallPlan;
 
 const SURFACE_FILE_NAME = '.gsd-surface.json';
 
@@ -341,7 +344,7 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
           tempDirsToClean.push(rewritten);
         }
       }
-      const dest = path.join(layout.configDir, kind.destSubpath);
+      const dest = assertDestWithinConfigHome(layout.configDir, kind.destSubpath);
       _syncGsdDir(staged, dest, kind, skillManifest);
     }
   } finally {

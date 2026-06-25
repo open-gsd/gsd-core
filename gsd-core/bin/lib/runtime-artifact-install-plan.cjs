@@ -9,6 +9,30 @@
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require = require;
 const path = _require('node:path');
+/**
+ * Asserts that `destSubpath` resolves to a path inside `configDir`.
+ *
+ * Rejects any path that escapes the configDir root (e.g. "../../etc") and any
+ * path containing a NUL byte. This is a security gate for Phase B of
+ * ADR-1239: third-party descriptors must never be able to write outside the
+ * designated config home directory.
+ *
+ * @param configDir - The root config directory (e.g. ~/.claude).
+ * @param destSubpath - The relative path declared by the runtime descriptor.
+ * @returns The resolved absolute path under configDir.
+ * @throws {Error} if destSubpath escapes configDir or contains a NUL byte.
+ */
+function assertDestWithinConfigHome(configDir, destSubpath) {
+    if (destSubpath.includes('\0')) {
+        throw new Error(`destSubpath "${destSubpath}" contains a NUL byte and is not valid`);
+    }
+    const root = path.resolve(configDir);
+    const resolved = path.resolve(configDir, destSubpath);
+    if (resolved === root || !resolved.startsWith(root + path.sep)) {
+        throw new Error(`destSubpath "${destSubpath}" must be a strict subpath of configHome "${configDir}" — not configHome itself or outside it (escapes configHome)`);
+    }
+    return resolved;
+}
 function errorMessage(err) {
     if (err instanceof Error)
         return err.message;
@@ -61,7 +85,7 @@ function createRuntimeArtifactInstallPlan(args) {
         items.push({
             kind: kind.kind,
             sourceDir,
-            destDir: path.join(layout.configDir, kind.destSubpath),
+            destDir: assertDestWithinConfigHome(layout.configDir, kind.destSubpath),
         });
     }
     return { ok: true, plan: { items, cleanupDirs } };
@@ -70,8 +94,8 @@ function createRuntimeArtifactUninstallPlan(layout) {
     return {
         items: layout.kinds.map((kind) => ({
             kind: kind.kind,
-            destDir: path.join(layout.configDir, kind.destSubpath),
+            destDir: assertDestWithinConfigHome(layout.configDir, kind.destSubpath),
         })),
     };
 }
-module.exports = { createRuntimeArtifactInstallPlan, createRuntimeArtifactUninstallPlan };
+module.exports = { assertDestWithinConfigHome, createRuntimeArtifactInstallPlan, createRuntimeArtifactUninstallPlan };
