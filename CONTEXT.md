@@ -361,6 +361,31 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 
 ---
 
+## Probe family — spec-completeness probes (machine-oriented predicates)
+
+> Glossary prose for these modules lives above (Probe Core / Edge Probe / Prohibition Probe / Verification Tier / Verification substrate). These are the greppable one-line predicates ADR-550's Consequences promised alongside the glossary. Research-derived numbers (N17/N18 rates) are deliberately kept out of this machine-canon and live hedged in `docs/design/verifier-reach.md`. (That design note and `docs/adr/1606` are co-delivered sibling PRs of epic #1605; predicate refs to them below resolve once the batch lands.)
+
+`PROBE.principle=verifier-reach-equals-spec-reach (a goal-backward verifier only checks assertions that exist; probes make omitted assertions exist before code) — ADR-857 verification-substrate boundary; docs/design/verifier-reach.md`
+`PROBE.family=edge-probe(shape-axis)+prohibition-probe(must-NOT-axis), shared probe-core, run as spec-phase soft gates (ADR-550 D7)`
+`PROBE.protocol=recall(adversarial over-generate)->precision(drop routine-engineering); dismissals require a non-empty reason`
+`PROBE.core.seam=analyzeCoverage(items,resolutions?,validators) ingests ALREADY-proposed items; does NOT assume deterministic propose (ADR-550 D7b)`
+`PROBE.item.axes=status{resolved|dismissed|unresolved} x verification{<probe-defined>|null} — orthogonal; the lifecycle enum carries no verification fact (ADR-550 D7a)`
+`PROBE.edge.verification=explicit|backstop`
+`PROBE.prohib.verification=test|judgment`
+`PROBE.ci.surface=the contract (parse/validate, projection round-trip, fail-closed guards), NEVER the LLM judgment (ADR-550 D5)`
+`PROHIB.recall=LLM-prose; no compiled prohibition-probe recall engine (only the schema/projection layer is code, ADR-550 D7b)`
+`PROHIB.canon-referral=OWASP/GDPR/fairness-canon are REFERRED to /gsd:secure-phase+eslint, never minted as prohibitions (ADR-550 D6)`
+`PROHIB.enforce.green-rule=passed iff provenFailFirst===true && run.passed===true (runProhibitionEnforcement); every miss/fail/un-provable HARD-GATES both modes via dispositionForProhibition's fail-closed default`
+`PROHIB.enforce.kinds=node-test (non-vacuous red via isNonVacuousNodeTestRed; pass-side vacuity via isNonVacuousNodeTestPass) | lint-rule (eslint --format json filtered by ruleId)`
+`PROHIB.enforce.failfirst=MACHINE-PROVEN against an author-supplied violation fixture (#1279); caller failFirst attestation DEMOTED to a non-authoritative hint (FF-08)`
+`PROHIB.enforce.causation=opt-in clean-fixture control proves the red is content-caused not env-var-set (#1346); absent=documented residual`
+`PROHIB.descriptor.shape=5 FLAT scalars (check_kind,check_target,check_rule,check_violation_fixture,check_clean_fixture) — NEVER a nested check:{} (parseMustHavesBlock is a flat parser, src/frontmatter.cts)`
+`PROHIB.rail=core verify rail, non-toggleable (ADR-857 verification-substrate boundary / decision #6); the verifier<->predicate contract is NOT an off-by-default capability`
+`PROHIB.judgment-tier=never-silent / never-hard-halt soft gate; autonomous emits "unverified-prohibition — human review recommended" (exogenous grading, ADR-550 D4)`
+`PROHIB.enforce.adr=docs/adr/1606 (verify-time enforcement seam) + docs/adr/550 (spec-phase contract)`
+
+---
+
 ## Test rules and lint
 
 `RULESET.TESTS.no-source-grep=scripts/lint-no-source-grep.cjs rejects readFileSync source + .includes()/.match()/.startsWith() on the bound var; CI hard-fail`
