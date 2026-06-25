@@ -98,6 +98,10 @@ ALLOWLIST=(
   # contain shell-exec command strings (exec("sh -c …"), execFileSync('bash',['-c',…]))
   # as test DATA the rule must lint — not attack vectors. ADR-1703 Phase 3 (#1720).
   'tests/no-unguarded-nonportable-exec.rule.test.cjs'
+  # RuleTester fixtures for the local/no-bare-npm-exec ESLint rule contain npm
+  # exec command strings (execFileSync('npm', ['install'])) as test DATA the rule
+  # must lint — not attack vectors. ADR-1703 Phase 4 (#1726).
+  'tests/no-bare-npm-exec.rule.test.cjs'
 )
 
 is_allowlisted() {

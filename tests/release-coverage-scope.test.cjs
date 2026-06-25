@@ -13,7 +13,7 @@ const RELEASE_WORKFLOW = path.join(__dirname, '..', '.github', 'workflows', 'rel
 
 describe('release-coverage-scope', () => {
   test('release.yml uses test:coverage:unit (not full suite) in both rc and finalize gates', () => {
-    const lines = fs.readFileSync(RELEASE_WORKFLOW, 'utf8').split('\n').map(l => l.trim());
+    const lines = fs.readFileSync(RELEASE_WORKFLOW, 'utf8').split(/\r?\n/).map(l => l.trim());
     const bareCount = lines.filter(l => l === 'npm run test:coverage').length;
     const unitCount = lines.filter(l => l === 'npm run test:coverage:unit').length;
     assert.strictEqual(bareCount, 0,

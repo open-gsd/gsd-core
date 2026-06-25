@@ -81,7 +81,7 @@ describe('buildStateFrontmatter cache invalidation (#1967)', () => {
 
     // Read back and parse frontmatter to verify it reflects 2 phases, not 1
     const result = fs.readFileSync(statePath, 'utf-8');
-    const fmMatch = result.match(/^---\n([\s\S]*?)\n---/);
+    const fmMatch = result.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     assert.ok(fmMatch, 'STATE.md should have frontmatter after writeStateMd');
 
     const fm = fmMatch[1];

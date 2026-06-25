@@ -230,7 +230,9 @@ describe('generate-claude-md skills section', () => {
     );
 
     const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
     process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
 
     try {
       const result = runGsdTools('generate-claude-md', tmpDir);
@@ -241,7 +243,10 @@ describe('generate-claude-md skills section', () => {
       assert.ok(content.includes('Project Codex skill'));
       assert.ok(!content.includes('import-only'));
     } finally {
-      process.env.HOME = originalHome;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
       cleanup(homeDir);
     }
   });

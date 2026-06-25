@@ -87,7 +87,7 @@ describe('detectConfigDir runtime behavior (#1860)', () => {
     const hookSource = fs.readFileSync(CHECK_UPDATE_PATH, 'utf8');
 
     // Extract detectConfigDir function body (from 'function detectConfigDir' to the closing brace)
-    const fnMatch = hookSource.match(/(function detectConfigDir\(baseDir\)\s*\{[\s\S]*?\n\})/);
+    const fnMatch = hookSource.match(/(function detectConfigDir\(baseDir\)\s*\{[\s\S]*?\r?\n\})/);
     assert.ok(fnMatch, 'should be able to extract detectConfigDir function from hook source');
     const fnSource = fnMatch[1];
 
@@ -124,7 +124,7 @@ describe('detectConfigDir runtime behavior (#1860)', () => {
     fs.writeFileSync(path.join(openCodeVersionDir, 'VERSION'), '1.0.0\n');
 
     const hookSource = fs.readFileSync(CHECK_UPDATE_PATH, 'utf8');
-    const fnMatch = hookSource.match(/(function detectConfigDir\(baseDir\)\s*\{[\s\S]*?\n\})/);
+    const fnMatch = hookSource.match(/(function detectConfigDir\(baseDir\)\s*\{[\s\S]*?\r?\n\})/);
     assert.ok(fnMatch, 'should be able to extract detectConfigDir function from hook source');
     const fnSource = fnMatch[1];
 

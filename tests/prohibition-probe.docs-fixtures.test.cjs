@@ -24,7 +24,7 @@ const fixturesRoot = path.join(__dirname, '..', 'gsd-core', 'references', 'prohi
 // Extract fenced blocks tagged ```json prohibition-probe:<dir>/<file> from the doc, keyed by ref.
 // The \n? before the closing fence allows blocks whose closing fence has no preceding newline.
 function taggedJsonBlocks(md) {
-  const re = /```json prohibition-probe:([^\n]+)\n([\s\S]*?)\n?```/g;
+  const re = /```json prohibition-probe:([^\r\n]+)\r?\n([\s\S]*?)\r?\n?```/g;
   const out = {};
   let m;
   while ((m = re.exec(md))) out[m[1].trim()] = m[2];

@@ -33,6 +33,11 @@ const PROTECTED_RULES = [
   'no-path-literal-in-assert',
   'no-posix-mode-bit-assert',
   'no-unguarded-nonportable-exec',
+  // ADR-1703 Phase 4 rules (issue #1726)
+  'no-crlf-fragile-split',
+  'no-hardcoded-tmp',
+  'no-bare-npm-exec',
+  'require-userprofile-with-home',
 ];
 
 // ── Detect disable directives via the comment text ───────────────────────────

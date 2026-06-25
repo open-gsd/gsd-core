@@ -73,7 +73,7 @@ describe('bug #619 — codebase-drift-gate resolves gsd-tools via the runtime sh
 
   test('exactly one canonical launcher preamble, in the drift-check block, before any launcher call (#619)', () => {
     const content = readGate();
-    const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8').replace(/\n$/, '');
+    const snippet = fs.readFileSync(SNIPPET_FILE, 'utf8').replace(/\r?\n$/, '');
 
     // Count canonical preamble occurrences across the whole file (parity: exactly one).
     let count = 0;

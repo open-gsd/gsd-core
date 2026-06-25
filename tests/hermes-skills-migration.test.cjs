@@ -176,7 +176,7 @@ describe('Hermes Agent: installRuntimeArtifacts', () => {
     assert.ok(fm.description && fm.description.length > 0, 'description present and non-empty');
     assert.strictEqual(fm.version, pkg.version,
       `Hermes SKILL.md must declare version (got ${JSON.stringify(fm.version)})`);
-    assert.ok(/^allowed-tools:\s*\n(?:\s+-\s+\S+\n?)+/m.test(content),
+    assert.ok(/^allowed-tools:\s*\r?\n(?:\s+-\s+\S+\r?\n?)+/m.test(content),
       'allowed-tools rendered as YAML block list');
     assert.ok(content.includes('<objective>'), 'body content preserved');
   });
@@ -316,7 +316,7 @@ describe('Hermes Agent: SKILL.md format validation', () => {
     assert.strictEqual(fm.version, pkg.version, 'version matches package.json');
     assert.strictEqual(fm.agent, 'gsd-code-reviewer', 'agent preserved');
     assert.strictEqual(fm['argument-hint'], '[PR number or branch]', 'argument-hint preserved and unquoted');
-    assert.ok(/^allowed-tools:\s*\n(?:\s+-\s+\S+\n?)+/m.test(result),
+    assert.ok(/^allowed-tools:\s*\r?\n(?:\s+-\s+\S+\r?\n?)+/m.test(result),
       'allowed-tools rendered as YAML block list');
   });
 

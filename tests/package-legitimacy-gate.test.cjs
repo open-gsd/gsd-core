@@ -18,7 +18,7 @@ const PLANNER = path.join(AGENTS, 'gsd-planner.md');
 const EXECUTOR = path.join(AGENTS, 'gsd-executor.md');
 
 function parseSections(md) {
-  const lines = md.split('\n');
+  const lines = md.split(/\r?\n/);
   const sections = [];
   let current = { heading: '__preamble__', body: [] };
   let inFence = false;
@@ -39,7 +39,7 @@ function parseSections(md) {
 
 function extractCodeBlocks(text) {
   const blocks = [];
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   let inside = false;
   let buf = [];
 
@@ -59,7 +59,7 @@ function extractCodeBlocks(text) {
 }
 
 function extractResearchTemplate(content) {
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   let inside = false;
   let isMarkdownFence = false;
   let buf = [];
@@ -182,7 +182,7 @@ function readModel(filePath) {
   const text = fs.readFileSync(filePath, 'utf-8');
   return {
     text,
-    lines: text.split('\n'),
+    lines: text.split(/\r?\n/),
     sections: parseSections(text),
     codeBlocks: extractCodeBlocks(text),
   };
@@ -388,7 +388,7 @@ describe('gsd-planner.md — supply-chain row in threat_model template', () => {
   });
 
   test('threat_model template includes supply-chain row with mitigate disposition', () => {
-    const tables = parseMarkdownTables(threatModelBlock.split('\n'));
+    const tables = parseMarkdownTables(threatModelBlock.split(/\r?\n/));
     const strideTable = tables.find((table) => table.headers.includes('Threat ID'));
     assert.ok(strideTable, 'threat_model must include STRIDE threat register table');
 

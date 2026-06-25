@@ -92,7 +92,7 @@ describe('security scan scripts exist and are executable', () => {
     });
 
     test(`${name} script has bash shebang`, () => {
-      const firstLine = fs.readFileSync(scriptPath, 'utf-8').split('\n')[0];
+      const firstLine = fs.readFileSync(scriptPath, 'utf-8').split(/\r?\n/)[0];
       assert.ok(
         firstLine.startsWith('#!/usr/bin/env bash') || firstLine.startsWith('#!/bin/bash'),
         `${scriptPath} missing bash shebang: ${firstLine}`
@@ -563,7 +563,7 @@ describe('security-scan.yml workflow', () => {
   test('workflow does not use direct github context in run commands', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Extract only run: blocks and check they don't contain ${{ }}
-    const runBlocks = content.match(/run:\s*\|?\s*\n([\s\S]*?)(?=\n\s*-|\n\s*\w+:|Z)/g) || [];
+    const runBlocks = content.match(/run:\s*\|?\s*\r?\n([\s\S]*?)(?=\r?\n\s*-|\r?\n\s*\w+:|Z)/g) || [];
     for (const block of runBlocks) {
       assert.ok(
         !block.includes('${{'),

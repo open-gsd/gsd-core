@@ -84,7 +84,7 @@ describe('product name purity (#1777)', () => {
 
     for (const file of README_FILES) {
       const content = fs.readFileSync(path.join(ROOT, file), 'utf-8');
-      const lines = content.split('\n');
+      const lines = content.split(/\r?\n/);
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];

@@ -137,7 +137,7 @@ describe('bug #3290 — Group B: layout-detection verdict has no downstream cons
         const src = fs.readFileSync(file, 'utf-8');
         if (src.includes('Layout detection returned')) {
           // Collect matching lines for the error message
-          const lines = src.split('\n')
+          const lines = src.split(/\r?\n/)
             .map((l, i) => ({ line: l, n: i + 1 }))
             .filter(({ line }) => line.includes('Layout detection returned'));
           matches.push({ rel, lines });

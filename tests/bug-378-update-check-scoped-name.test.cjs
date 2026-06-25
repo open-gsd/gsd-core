@@ -55,7 +55,7 @@ function workerCodeOnly() {
   const src = fs.readFileSync(WORKER_PATH, 'utf8');
   return src
     .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    .replace(/(^|[^:])\/\/[^\r\n]*/g, '$1');
 }
 
 describe('bug #378 / #498: update worker queries the scoped name via the seam', () => {

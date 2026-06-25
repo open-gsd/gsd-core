@@ -19,8 +19,12 @@ running outside ESLint, fails the build if you try). Legitimately platform-speci
 | `local/no-path-literal-in-assert` | An `assert.equal`/`strictEqual`/`deepEqual`/`deepStrictEqual` or `expect(...).toBe`/`toEqual`/`toStrictEqual` where one operand is a **path-returning function call** and the other is a **hardcoded `/`-string literal** not normalized to POSIX. | `tests/**/*.test.cjs` |
 | `local/no-posix-mode-bit-assert` | An equality assertion comparing a file **`.mode`** (e.g. `statSync(p).mode & 0o777`) to an **octal literal** — Windows reports `0o666`/`0o444`, never the requested mode. | `tests/**/*.test.cjs` |
 | `local/no-unguarded-nonportable-exec` | A file that **both** sets a chmod exec-bit (`chmod`/`chmodSync` with `0oNNN & 0o111 !== 0`) **and** invokes `sh`/`bash` with a `-c` flag (`execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync`) without a Windows platform guard — Windows Git Bash ignores the exec bit for extension-less PATH-executed scripts. | `tests/**/*.test.cjs` |
+| `local/no-crlf-fragile-split` | A `.split('\n')` or `.split("\n")` call on `readFileSync` content, **or** a regex literal containing a bare `\n` used against `readFileSync` content — Windows `git-autocrlf` yields `\r\n` line endings so a literal `\n` split or regex will mismatch. | `tests/**/*.test.cjs` |
+| `local/no-hardcoded-tmp` | A hardcoded `/tmp/` string passed as the first argument to an `fs.*` function or `path.join` — `/tmp` does not exist on Windows. Use `os.tmpdir()` instead. | `tests/**/*.test.cjs` |
+| `local/no-bare-npm-exec` | An `execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync` call with `"npm"` as the command and no `{ shell: true }` option (or a platform-guarded equivalent) — `npm` is a `.cmd` batch wrapper on Windows and will not be found without a shell. | `tests/**/*.test.cjs` |
+| `local/require-userprofile-with-home` | A `process.env.HOME = <x>` assignment in a test file with no corresponding `process.env.USERPROFILE` reference anywhere in the file — Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. | `tests/**/*.test.cjs` |
 
-(More rules land per the epic — see ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702).)
+(See ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702) for the full phase history.)
 
 The set of path-returning functions is single-sourced in
 [`eslint-rules/lib/portability-vocab.cjs`](../../eslint-rules/lib/portability-vocab.cjs) as
@@ -125,6 +129,97 @@ binding-aware (a reassigned or `false`-initialized variable is not trusted), and
 > **Note:** the `node:test` `test(name, { skip: isWindows ? … : false }, fn)` *option* object is
 > NOT recognized as a platform guard. To scope a POSIX-only assertion use an
 > `if (process.platform !== 'win32')` guard (or early-return) **inside** the callback.
+
+## How-to — fix a `no-crlf-fragile-split` violation
+
+Windows `git-autocrlf=true` (the default on Windows) rewrites `\n` to `\r\n` in checked-out files.
+A test that reads a file with `readFileSync` and then splits on `'\n'` (or uses a regex with a bare
+`\n`) will silently miscalculate line counts on Windows.
+
+**Fix: use `/\r?\n/` everywhere you split or match lines in file content:**
+
+```js
+// ❌ flagged
+const lines = fs.readFileSync(p, 'utf8').split('\n');
+assert.match(content, /^---\n/m);
+assert.match(content, /```bash\n/);
+
+// ✅ CRLF-safe
+const lines = fs.readFileSync(p, 'utf8').split(/\r?\n/);
+assert.match(content, /^---\r?\n/m);
+assert.match(content, /```bash\r?\n/);
+```
+
+The `/\r?\n/` form is a no-op on POSIX (matches only `\n`) and correct on Windows (matches `\r\n`).
+
+## How-to — fix a `no-hardcoded-tmp` violation
+
+`/tmp` does not exist on Windows. Use `os.tmpdir()` to get the platform-appropriate temp directory:
+
+```js
+// ❌ flagged
+const dir = path.join('/tmp/my-test-dir', 'sub');
+env.MY_VAR = '/tmp/custom-dir';
+
+// ✅ portable
+const dir = path.join(os.tmpdir(), 'my-test-dir', 'sub');
+const customDir = path.join(os.tmpdir(), 'custom-dir');
+env.MY_VAR = customDir;
+```
+
+When the same `/tmp/...` value is used both as a fixture env var and in an assertion, update both
+sides consistently so they still match:
+
+```js
+// ❌ fragile — assertion tied to /tmp/ literal
+const customDir = path.join(os.tmpdir(), 'custom-dir');
+env.MY_VAR = customDir;
+assert.strictEqual(String(fn()).replace(/\\/g, '/'), '/tmp/custom-dir'); // ← still wrong
+
+// ✅ assertion uses the same derived constant
+assert.strictEqual(String(fn()).replace(/\\/g, '/'), customDir.replace(/\\/g, '/'));
+```
+
+## How-to — fix a `no-bare-npm-exec` violation
+
+On Windows, `npm` is installed as `npm.cmd` (a CMD batch script). Without `{ shell: true }`,
+`execFileSync('npm', ...)` fails because the OS cannot find an executable named `npm` (no `.cmd`
+extension). Add `shell: true` or gate the call behind a platform check:
+
+```js
+// ❌ flagged
+execFileSync('npm', ['ci'], { cwd: dir });
+
+// ✅ shell: true — works on all platforms
+execFileSync('npm', ['ci'], { cwd: dir, shell: true });
+
+// ✅ platform-guarded alternative
+execFileSync('npm', ['ci'], { cwd: dir, shell: process.platform === 'win32' });
+```
+
+## How-to — fix a `require-userprofile-with-home` violation
+
+Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. Whenever a test
+sets `process.env.HOME`, it must also set `process.env.USERPROFILE` to the same value (so that
+code under test that calls `os.homedir()` or reads `process.env.USERPROFILE` gets the isolated
+directory on Windows too). Mirror the teardown as well:
+
+```js
+// ❌ flagged — Windows code-under-test reads USERPROFILE, not HOME
+const origHome = process.env.HOME;
+process.env.HOME = isolatedDir;
+// …
+process.env.HOME = origHome;   // restore
+
+// ✅ set and restore both
+const origHome = process.env.HOME;
+const origUserProfile = process.env.USERPROFILE;
+process.env.HOME = isolatedDir;
+process.env.USERPROFILE = isolatedDir;
+// …
+if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
+if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
+```
 
 ## How-to — add a new path resolver
 

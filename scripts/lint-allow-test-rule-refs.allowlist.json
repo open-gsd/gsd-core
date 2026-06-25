@@ -313,7 +313,6 @@
   "tests/verify-test-quality.test.cjs :: source-text-is-the-product",
   "tests/verify-work-auto-transition.test.cjs :: source-text-is-the-product",
   "tests/windows-robustness.test.cjs :: source-text-is-the-product",
-  "tests/windows-test-parity-guard.test.cjs :: structural-regression-guard",
   "tests/workflow-compat.test.cjs :: source-text-is-the-product",
   "tests/workflow-guard-registration.test.cjs :: structural-regression-guard",
   "tests/workflow-maintainer-skip.test.cjs :: source-text-is-the-product",

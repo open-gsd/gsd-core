@@ -150,7 +150,7 @@ describe('bug #3678 — executor must respect commit_docs:false', () => {
       );
       const stagedAll = git(['diff', '--cached', '--name-only'], tmpDir);
       const stagedPlanning = stagedAll
-        .split('\n')
+        .split(/\r?\n/)
         .map(s => s.trim())
         .filter(s => s.startsWith('.planning/'));
       assert.deepStrictEqual(
@@ -178,7 +178,7 @@ describe('bug #3678 — executor must respect commit_docs:false', () => {
   test('checklist carve-out preserved for intentional skip', () => {
     const body = fs.readFileSync(EXECUTOR_AGENT, 'utf-8');
     const checklistLine = body
-      .split('\n')
+      .split(/\r?\n/)
       .find(line => /Final metadata commit made/.test(line));
     assert.ok(
       checklistLine,
@@ -205,7 +205,7 @@ describe('bug #3678 — executor must respect commit_docs:false', () => {
           if (entry.isDirectory()) { walk(full); continue; }
           if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
           const body = fs.readFileSync(full, 'utf-8');
-          const lines = body.split('\n');
+          const lines = body.split(/\r?\n/);
           const danger = lines.filter((line) => {
             if (!/git\s+add\s+(-f|--force)\b/.test(line)) return false;
             // Allow prohibition / warning sentences and code-fence prose that

@@ -380,7 +380,7 @@ describe('SECURE: VALIDATION.md security columns', () => {
   test('both columns appear in the Per-Task Verification Map table', () => {
     const content = fs.readFileSync(valPath, 'utf-8');
     // Find the table header row containing both columns
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
     const headerLine = lines.find(
       line => line.includes('Threat Ref') && line.includes('Secure Behavior')
     );
@@ -516,7 +516,7 @@ describe('SECURE: per-threat severity gate (#1626)', () => {
     // The old unconditional language said "phase must not ship" without a severity qualifier.
     // After the fix, every "phase must not ship" must be paired with a severity condition.
     // Find all occurrences of "must not ship" and verify none appear without "severity" nearby.
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
     for (const line of lines) {
       if (line.includes('must not ship') && !line.includes('severity')) {
         assert.fail(

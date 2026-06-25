@@ -31,7 +31,7 @@ describe('execute-phase command: --wave flag', () => {
 
   test('argument-hint includes --wave, --gaps-only, and --interactive', () => {
     const content = fs.readFileSync(COMMAND_PATH, 'utf-8');
-    const hintLine = content.split('\n').find(l => l.includes('argument-hint'));
+    const hintLine = content.split(/\r?\n/).find(l => l.includes('argument-hint'));
     assert.ok(hintLine, 'should have argument-hint line');
     assert.ok(hintLine.includes('--wave N'), 'argument-hint should include --wave N');
     assert.ok(hintLine.includes('--gaps-only'), 'argument-hint should keep --gaps-only');

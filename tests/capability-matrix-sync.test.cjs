@@ -31,8 +31,8 @@ describe('capability-matrix drift guard (ADR-1244 Phase 6)', () => {
   });
 
   test('buildMatrix(registry) equals the committed file byte-for-byte (modulo line endings)', () => {
-    const generated = buildMatrix(registry).replace(/\r\n/g, '\n').replace(/\n+$/, '\n');
-    const committed = fs.readFileSync(MATRIX, 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '\n');
+    const generated = buildMatrix(registry).replace(/\r\r?\n/g, '\n').replace(/\r?\n+$/, '\n');
+    const committed = fs.readFileSync(MATRIX, 'utf8').replace(/\r\r?\n/g, '\n').replace(/\r?\n+$/, '\n');
     assert.equal(committed, generated);
   });
 
@@ -53,7 +53,7 @@ describe('capability-matrix drift guard (ADR-1244 Phase 6)', () => {
     // rendered row reflects it.
     const shipPreGates = (registry.byLoopPoint['ship:pre'] && registry.byLoopPoint['ship:pre'].gates) || [];
     assert.ok(shipPreGates.some((g) => g.capId === 'security'), 'precondition: security registers a ship:pre gate in the registry');
-    const securityRow = md.split('\n').find((l) => l.includes('`security`') && l.includes('|'));
+    const securityRow = md.split(/\r?\n/).find((l) => l.includes('`security`') && l.includes('|'));
     assert.ok(securityRow && securityRow.includes('`ship:pre`'), 'security row must list its real ship:pre extension point');
   });
 });

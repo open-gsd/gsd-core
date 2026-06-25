@@ -69,7 +69,7 @@ describe('bug #2516: executor_model "inherit" must not be passed literally to Ta
         content.includes('omit `model=`') ||
         content.includes('omit model=')
       );
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
     const hasLiteralInheritInTask = lines.some(line => {
       if (!/model\s*=\s*["']inherit["']/.test(line)) return false;
       // Exclude instructional/explanatory lines that document what NOT to do

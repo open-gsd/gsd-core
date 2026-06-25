@@ -81,9 +81,9 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
       const skillContent = convertClaudeCommandToClaudeSkill(src, skillDirName);
 
       // Parse frontmatter structurally: extract name: line from the --- block.
-      const fmMatch = skillContent.match(/^---\n([\s\S]*?)\n---/);
+      const fmMatch = skillContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
       assert.ok(fmMatch, `${cmd}: generated skill content must have a frontmatter block`);
-      const fmLines = fmMatch[1].split('\n');
+      const fmLines = fmMatch[1].split(/\r?\n/);
       const nameEntry = fmLines.find((l) => l.startsWith('name:'));
       assert.ok(nameEntry, `${cmd}: generated SKILL.md is missing required name: field`);
 
@@ -108,7 +108,7 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
       // gsd:sdk and gsd:tools are intentionally excluded: they are not slash commands
       // (no commands/gsd/sdk.md or tools.md exist), so the transformer correctly leaves
       // them alone. They are benign and should not trigger this assertion.
-      const bodyContent = skillContent.replace(/^---\n[\s\S]*?\n---\n?/, '');
+      const bodyContent = skillContent.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, '');
       const colonRefs = (bodyContent.match(/\bgsd:[a-z][a-z0-9-]*\b/g) || [])
         .filter(r => !/gsd:(sdk|tools)/.test(r));
       assert.strictEqual(
@@ -144,7 +144,7 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
       // Scan each line for Skill() calls using the colon form.
       // Parsing line-by-line is more precise than a multi-line regex
       // and avoids false positives from incidental matches in prose.
-      for (const line of stripped.split('\n')) {
+      for (const line of stripped.split(/\r?\n/)) {
         // Tolerate whitespace around the parenthesis, the `skill` keyword,
         // and the `=` so variants like `Skill( skill = "gsd:foo" )` are still
         // flagged. Without the `\s*` allowances, drift slips through this guard.
@@ -213,9 +213,9 @@ describe('bug-2808: SKILL.md name: uses hyphen form', () => {
       const skillContent = fs.readFileSync(skillMdPath, 'utf-8');
       // Scope the name: lookup to the YAML frontmatter block so a stray
       // `name:` line in the body cannot satisfy the assertion.
-      const fmMatch = skillContent.match(/^---\n([\s\S]*?)\n---/);
+      const fmMatch = skillContent.match(/^---\r?\n([\s\S]*?)\r?\n---/);
       assert.ok(fmMatch, `${relPath}: generated SKILL.md must include frontmatter`);
-      const nameLine = fmMatch[1].split('\n').find((l) => /^name:\s*/.test(l));
+      const nameLine = fmMatch[1].split(/\r?\n/).find((l) => /^name:\s*/.test(l));
       assert.ok(nameLine, `${relPath}: generated SKILL.md is missing name: frontmatter`);
       const name = nameLine.replace(/^name:\s*/, '').trim();
       assert.ok(name.startsWith('gsd-'), `${relPath}: autocomplete name must start with gsd-, got ${name}`);

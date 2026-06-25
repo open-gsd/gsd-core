@@ -33,9 +33,9 @@ function readMdFiles(dir, prefix) {
 }
 
 function extractFrontmatterTools(content) {
-  const fm = content.match(/^---\n([\s\S]*?)\n---/);
+  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fm) return [];
-  const toolsMatch = fm[1].match(/^allowed-tools:\s*\n((?:[ \t]+-[^\n]*\n?)*)/m) ||
+  const toolsMatch = fm[1].match(/^allowed-tools:\s*\r?\n((?:[ \t]+-[^\n]*\n?)*)/m) ||
                      fm[1].match(/^tools:\s*(.+)$/m);
   if (!toolsMatch) return [];
   const toolsBlock = toolsMatch[1];
@@ -79,7 +79,7 @@ describe('#3168 — workflows: prose must use Agent( not Task( for dispatcher ca
 
   for (const wf of workflows) {
     test(`${wf.name}: must not contain dispatcher Task( calls`, () => {
-      const lines = wf.content.split('\n');
+      const lines = wf.content.split(/\r?\n/);
       const violations = [];
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
