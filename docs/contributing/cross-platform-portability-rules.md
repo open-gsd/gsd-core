@@ -18,6 +18,7 @@ running outside ESLint, fails the build if you try). Legitimately platform-speci
 |---|---|---|
 | `local/no-path-literal-in-assert` | An `assert.equal`/`strictEqual`/`deepEqual`/`deepStrictEqual` or `expect(...).toBe`/`toEqual`/`toStrictEqual` where one operand is a **path-returning function call** and the other is a **hardcoded `/`-string literal** not normalized to POSIX. | `tests/**/*.test.cjs` |
 | `local/no-posix-mode-bit-assert` | An equality assertion comparing a file **`.mode`** (e.g. `statSync(p).mode & 0o777`) to an **octal literal** — Windows reports `0o666`/`0o444`, never the requested mode. | `tests/**/*.test.cjs` |
+| `local/no-unguarded-nonportable-exec` | A file that **both** sets a chmod exec-bit (`chmod`/`chmodSync` with `0oNNN & 0o111 !== 0`) **and** invokes `sh`/`bash` with a `-c` flag (`execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync`) without a Windows platform guard — Windows Git Bash ignores the exec bit for extension-less PATH-executed scripts. | `tests/**/*.test.cjs` |
 
 (More rules land per the epic — see ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702).)
 
@@ -70,6 +71,34 @@ assert.match(hookCommand, /^node /); // behavioral assertion — runs everywhere
 ```
 
 Prefer asserting the *behavior* (command shape, runnability) over the raw mode bit where you can.
+
+## How-to — fix a `no-unguarded-nonportable-exec` violation
+
+Why it fails on Windows: Windows Git Bash (msys2) does not honour Node's chmod exec bit for
+extension-less scripts that are invoked by searching PATH. A test that makes a fixture executable
+with `chmodSync(p, 0o755)` and then runs it with `execFileSync('bash', ['-c', '...'])` passes on
+macOS/Linux but fails only on the `windows-latest` CI lane (DEFECT.WINDOWS-TEST-PORTABILITY).
+
+**Fix option A: gate the `sh`/`bash -c` invocation behind a platform check**
+
+```js
+// ❌ flagged
+fs.chmodSync(fixture, 0o755);
+execFileSync('bash', ['-c', './fixture run']);
+
+// ✅ platform-guarded
+fs.chmodSync(fixture, 0o755);
+if (process.platform !== 'win32') {
+  execFileSync('bash', ['-c', './fixture run']);
+}
+```
+
+**Fix option B: invoke the script with an explicit interpreter (no -c flag)**
+
+```js
+// ✅ passes the script path directly — exec bit not needed
+execFileSync('sh', [fixturePath]);
+```
 
 ## Platform guards (the only "escape" — by structure, not annotation)
 
