@@ -364,6 +364,7 @@ const {
   resolveRuntimeArtifactLayout,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-layout.cjs'));
 const {
+  assertDestWithinConfigHome,
   createRuntimeArtifactInstallPlan,
   createRuntimeArtifactUninstallPlan,
 } = require(path.join(_gsdLibDir, 'runtime-artifact-install-plan.cjs'));
@@ -6633,13 +6634,20 @@ function migrateLegacyDevPreferencesToSkill(targetDir, saved, runtime, scope = '
     const skillsKindEntry = layout.kinds.find((k) => k.kind === 'skills');
     if (!skillsKindEntry) return false; // runtime has no skills layout at this scope (e.g. cline local)
     const stemName = skillsKindEntry.prefix === '' ? 'dev-preferences' : 'gsd-dev-preferences';
-    skillDir = path.join(targetDir, skillsKindEntry.destSubpath, stemName);
+    skillDir = path.join(assertDestWithinConfigHome(targetDir, skillsKindEntry.destSubpath), stemName);
   } else {
     // Legacy fallback for callers that have not yet been updated to pass runtime
-    skillDir = path.join(targetDir, 'skills', 'gsd-dev-preferences');
+    skillDir = path.join(assertDestWithinConfigHome(targetDir, 'skills'), 'gsd-dev-preferences');
   }
   const skillFile = path.join(skillDir, 'SKILL.md');
   if (fs.existsSync(skillFile)) return false;
+  // Symlink-escape guard: reject if any path component between targetDir and
+  // skillDir is a symlink that would redirect writes outside the config root.
+  if (hasExistingSymlinkBetween(path.resolve(targetDir), skillDir)) {
+    throw new Error(
+      `migrateLegacyDevPreferencesToSkill: skillDir "${skillDir}" contains a symlink escaping the install root "${targetDir}" — refusing to write`,
+    );
+  }
   try {
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(skillFile, saved.get('dev-preferences.md'), 'utf8');
@@ -6726,7 +6734,26 @@ const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaude
  *   - agents: write as-is (files already carry their own `gsd-` prefix).
  * For kimi-agents kind: recursively copy generated YAML/prompt files.
  */
-function _copyStaged(stagedDir, destDir, kind) {
+function _copyStaged(stagedDir, destDir, kind, configDir) {
+  // Defense-in-depth: verify destDir is within the install root even if the
+  // upstream assertDestWithinConfigHome check was somehow bypassed. This guards
+  // the actual write site against any future call-site drift.
+  if (configDir !== undefined) {
+    const resolvedDest = path.resolve(destDir);
+    const resolvedRoot = path.resolve(configDir);
+    if (resolvedDest === resolvedRoot || !resolvedDest.startsWith(resolvedRoot + path.sep)) {
+      throw new Error(
+        `_copyStaged: destDir "${destDir}" must be strictly inside the install root "${configDir}", not the root itself — refusing to write`,
+      );
+    }
+    // Symlink-escape guard: reject if any path component between configDir and
+    // destDir is a symlink that would redirect writes outside configDir.
+    if (hasExistingSymlinkBetween(resolvedRoot, resolvedDest)) {
+      throw new Error(
+        `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${configDir}" — refusing to write`,
+      );
+    }
+  }
   if (!fs.existsSync(stagedDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
 
@@ -7040,6 +7067,14 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
       const kind = kindsByName.get(item.kind);
       if (!kind) throw new Error(`Install plan returned unknown artifact kind: ${item.kind}`);
       const dest = item.destDir;
+      // Symlink-escape guard: reject before mkdir if dest (or any component
+      // between configDir and dest) is a symlink pointing outside configDir.
+      // mkdirSync follows symlinks, so this must run BEFORE the mkdir call.
+      if (hasExistingSymlinkBetween(path.resolve(configDir), dest)) {
+        throw new Error(
+          `installRuntimeArtifacts: destDir "${dest}" contains a symlink escaping the install root "${configDir}" — refusing to create`,
+        );
+      }
       fs.mkdirSync(dest, { recursive: true });
       if (kind.kind === 'skills' && fs.existsSync(dest)) {
         // Pre-prune: snapshot user-owned content before _removeGsdEntries wipes it,
@@ -7066,7 +7101,7 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         }
 
         _removeGsdEntries(dest, kind);
-        _copyStaged(item.sourceDir, dest, kind);
+        _copyStaged(item.sourceDir, dest, kind, configDir);
 
         // Restore user-owned dirs after the prune+copy
         for (const [dirName, snap] of toPreserve) {
@@ -7076,7 +7111,7 @@ function installRuntimeArtifacts(runtime, configDir, scope, resolvedProfile) {
         // For non-skills kinds (commands, agents): no user content to preserve;
         // just prune stale gsd-* entries and copy new ones.
         _removeGsdEntries(dest, kind);
-        _copyStaged(item.sourceDir, dest, kind);
+        _copyStaged(item.sourceDir, dest, kind, configDir);
       }
     }
   } finally {
@@ -7140,7 +7175,14 @@ function installOpencodeFamilySkills(runtime, targetDir, rawCommandsDir, pathPre
     ? convertClaudeCommandToKiloSkill
     : convertClaudeCommandToOpencodeSkill;
 
-  const dest = path.join(targetDir, skillsKindEntry.destSubpath);
+  const dest = assertDestWithinConfigHome(targetDir, skillsKindEntry.destSubpath);
+  // Symlink-escape guard: reject if any path component between targetDir and
+  // dest is a symlink that would redirect writes outside the config root.
+  if (hasExistingSymlinkBetween(path.resolve(targetDir), dest)) {
+    throw new Error(
+      `installOpencodeFamilySkills: destDir "${dest}" contains a symlink escaping the install root "${targetDir}" — refusing to write`,
+    );
+  }
   fs.mkdirSync(dest, { recursive: true });
 
   // Preserve user-owned GSD-prefixed skill dirs across the gsd-* prune.
@@ -12322,6 +12364,7 @@ module.exports = {
     // runtimeArtifactConversion spread (#1559).
     processAttribution,
     applyRuntimeContentRewritesForCommandsInPlace,
+    _copyStaged,
   };
 
 // Main logic — only run when not loaded as a module for testing
