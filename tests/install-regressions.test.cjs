@@ -37,7 +37,12 @@ try {
   else process.env.GSD_TEST_MODE = savedTestMode;
 }
 
-const { install, installRuntimeArtifacts, uninstallRuntimeArtifacts, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
+const { install, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
+
+const {
+  installRuntimeArtifacts,
+  uninstallRuntimeArtifacts,
+} = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const INSTALL_SCRIPT = path.join(__dirname, '..', 'bin', 'install.js');
 const HOOKS_SRC = path.join(__dirname, '..', 'hooks');

@@ -95,6 +95,7 @@
   "gsd-core/bin/lib/host-integration.cjs": "5050b73b4c50fc79",
   "gsd-core/bin/lib/init-command-router.cjs": "5f6b583acaba1037",
   "gsd-core/bin/lib/init.cjs": "bcbe3af4720cb769",
+  "gsd-core/bin/lib/install-engine.cjs": "a374408e68871294",
   "gsd-core/bin/lib/install-profiles.cjs": "8c5d1318f4940307",
   "gsd-core/bin/lib/installer-migration-authoring.cjs": "050285a34b4b0b22",
   "gsd-core/bin/lib/installer-migration-report.cjs": "6c5861bed23b6bc3",

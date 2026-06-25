@@ -26,7 +26,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const { installRuntimeArtifacts } = require('../bin/install.js');
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 const { parseFrontmatter, cleanup } = require('./helpers.cjs');
 const {
   loadSkillsManifest,

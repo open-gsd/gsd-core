@@ -16,7 +16,7 @@ const os = require('node:os');
 
 const {
   installRuntimeArtifacts,
-} = require('../bin/install.js');
+} = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const { cleanup } = require('./helpers.cjs');
 
