@@ -70,6 +70,7 @@ interface DispatchCapability {
   maxDepth: number;
   background: boolean;
   subagentToolkit: SubagentToolkit;
+  backgroundDispatch: boolean;
 }
 
 interface HostIntegrationAxes {
@@ -97,7 +98,7 @@ interface DegradationResult {
 const SAFE_DEFAULTS: HostIntegrationAxes = {
   embeddingMode:  'declarative',
   commandSurface: 'prose-only',
-  dispatch: { namedDispatch: false, nested: false, maxDepth: 0, background: false, subagentToolkit: 'read-only' },
+  dispatch: { namedDispatch: false, nested: false, maxDepth: 0, background: false, subagentToolkit: 'read-only', backgroundDispatch: false },
   modelMode:      'passive',
   hookBus:        'none',
   stateIO:        'session-log-append',
@@ -110,7 +111,7 @@ const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' 
     'programmatic-cli': Object.freeze({
       embeddingMode:  'imperative',
       commandSurface: 'slash-file',
-      dispatch: Object.freeze({ namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' }),
+      dispatch: Object.freeze({ namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: true }),
       modelMode:      'passive',
       hookBus:        'host',
       stateIO:        'filesystem',
@@ -120,7 +121,7 @@ const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' 
     'declarative-cli': Object.freeze({
       embeddingMode:  'declarative',
       commandSurface: 'slash-file',
-      dispatch: Object.freeze({ namedDispatch: true, nested: false, maxDepth: 1, background: false, subagentToolkit: 'full' }),
+      dispatch: Object.freeze({ namedDispatch: true, nested: false, maxDepth: 1, background: false, subagentToolkit: 'full', backgroundDispatch: false }),
       modelMode:      'passive',
       hookBus:        'host',
       stateIO:        'filesystem',
@@ -130,7 +131,7 @@ const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' 
     'ide': Object.freeze({
       embeddingMode:  'imperative',
       commandSurface: 'palette',
-      dispatch: Object.freeze({ namedDispatch: true, nested: true, maxDepth: 5, background: true, subagentToolkit: 'full' }),
+      dispatch: Object.freeze({ namedDispatch: true, nested: true, maxDepth: 5, background: true, subagentToolkit: 'full', backgroundDispatch: true }),
       modelMode:      'active',
       hookBus:        'engine',
       stateIO:        'sandboxed-storage',
@@ -255,7 +256,7 @@ const DEFAULT_ENGINE: EngineCapabilities = {
   axes: {
     embeddingMode:  'imperative',
     commandSurface: 'slash-file',
-    dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+    dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: true },
     modelMode:      'active',
     hookBus:        'host',
     stateIO:        'filesystem',
@@ -368,17 +369,19 @@ function negotiateHostCapabilities(
   let effectiveNamedDispatch: boolean;
   let effectiveNested: boolean;
   let effectiveBackground: boolean;
+  let effectiveBackgroundDispatch: boolean;
   let effectiveSubagentToolkit: SubagentToolkit;
   let effectiveMaxDepth: number;
 
   if (hostDispatch === null) {
     // Host didn't declare dispatch at all — fail-closed to most-restrictive values
     warnings.push(`host did not declare 'dispatch'`);
-    effectiveNamedDispatch  = false;
-    effectiveNested         = false;
-    effectiveBackground     = false;
-    effectiveSubagentToolkit = 'read-only';
-    effectiveMaxDepth       = 0;
+    effectiveNamedDispatch      = false;
+    effectiveNested             = false;
+    effectiveBackground         = false;
+    effectiveBackgroundDispatch = false;
+    effectiveSubagentToolkit    = 'read-only';
+    effectiveMaxDepth           = 0;
   } else {
     // N1: observability warnings for 'undocumented' sentinel on dispatch fields
     if (hostDispatch.namedDispatch === 'undocumented') {
@@ -393,10 +396,14 @@ function negotiateHostCapabilities(
     if (hostDispatch.subagentToolkit === 'undocumented') {
       warnings.push(`dispatch.subagentToolkit is undocumented — degraded closed (read-only)`);
     }
+    if (hostDispatch.backgroundDispatch === 'undocumented') {
+      warnings.push(`dispatch.backgroundDispatch is undocumented — degraded closed`);
+    }
 
-    effectiveNamedDispatch = (hostDispatch.namedDispatch === true) && engineDispatch.namedDispatch;
-    effectiveNested        = (hostDispatch.nested === true) && engineDispatch.nested;
-    effectiveBackground    = (hostDispatch.background === true) && engineDispatch.background;
+    effectiveNamedDispatch      = (hostDispatch.namedDispatch === true) && engineDispatch.namedDispatch;
+    effectiveNested             = (hostDispatch.nested === true) && engineDispatch.nested;
+    effectiveBackground         = (hostDispatch.background === true) && engineDispatch.background;
+    effectiveBackgroundDispatch = (hostDispatch.backgroundDispatch === true) && engineDispatch.backgroundDispatch;
 
     // subagentToolkit: fail closed to read-only unless explicitly 'full'
     // (an 'undocumented' or 'read-only' value → read-only)
@@ -419,20 +426,22 @@ function negotiateHostCapabilities(
     const minDepth  = Math.min(hDepthNum, eDepthNum);
     effectiveMaxDepth = minDepth === Infinity ? -1 : minDepth;
 
-    // If namedDispatch is false, cap maxDepth/nested/background to 0/false/false (struct consistency)
+    // If namedDispatch is false, cap maxDepth/nested/background/backgroundDispatch to 0/false/false/false (struct consistency)
     if (!effectiveNamedDispatch) {
-      effectiveMaxDepth  = 0;
-      effectiveNested    = false;
-      effectiveBackground = false;
+      effectiveMaxDepth           = 0;
+      effectiveNested             = false;
+      effectiveBackground         = false;
+      effectiveBackgroundDispatch = false;
     }
   }
 
   const effectiveDispatch: DispatchCapability = {
-    namedDispatch:   effectiveNamedDispatch,
-    nested:          effectiveNested,
-    maxDepth:        effectiveMaxDepth,
-    background:      effectiveBackground,
-    subagentToolkit: effectiveSubagentToolkit,
+    namedDispatch:      effectiveNamedDispatch,
+    nested:             effectiveNested,
+    maxDepth:           effectiveMaxDepth,
+    background:         effectiveBackground,
+    subagentToolkit:    effectiveSubagentToolkit,
+    backgroundDispatch: effectiveBackgroundDispatch,
   };
 
   // ---------------------------------------------------------------------------
@@ -475,6 +484,28 @@ function negotiateHostCapabilities(
 }
 
 // ---------------------------------------------------------------------------
+// shouldFlattenDispatch — ADR-1239 Phase B / #1708
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when the orchestrator MUST run inline (flatten); false when it
+ * may be backgrounded.
+ *
+ * A host may background only if it can reliably background a nesting-capable
+ * orchestrator — i.e. both `background` AND `backgroundDispatch` are
+ * explicitly `true`. Any other value (false, missing, 'undocumented') fails
+ * closed to inline (the always-safe path).
+ *
+ * This graduates the #853 prose rule (was `RUNTIME === 'codex'`) to a typed,
+ * documentation-sourced decision; see
+ * docs/reference/host-integration-capability-matrix.md.
+ */
+function shouldFlattenDispatch(dispatch: Partial<DispatchCapability>): boolean {
+  const canBackground = dispatch.background === true && dispatch.backgroundDispatch === true;
+  return !canBackground;
+}
+
+// ---------------------------------------------------------------------------
 // Module export (CommonJS — matches existing src/*.cts pattern)
 // ---------------------------------------------------------------------------
 
@@ -488,4 +519,5 @@ export = {
   degradationFor,
   profileOf,
   negotiateHostCapabilities,
+  shouldFlattenDispatch,
 };

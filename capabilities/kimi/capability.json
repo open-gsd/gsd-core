@@ -55,7 +55,7 @@
     "hostIntegration": {
       "embeddingMode": "imperative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": true, "subagentToolkit": "undocumented" },
+      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": true, "subagentToolkit": "undocumented", "backgroundDispatch": false },
       "modelMode": "passive",
       "hookBus": "host",
       "stateIO": "filesystem",

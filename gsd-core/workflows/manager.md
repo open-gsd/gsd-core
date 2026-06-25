@@ -222,7 +222,7 @@ Go to exit step.
 
 ### Compound Action (background + inline)
 
-When the user selects a compound option, behavior depends on the runtime — the Plan Phase N / Execute Phase N handlers below resolve it via `gsd_run query config-get runtime`:
+When the user selects a compound option, behavior depends on whether the runtime supports background dispatch of nesting-capable orchestrators — the Plan Phase N / Execute Phase N handlers below resolve it via `gsd_run query dispatch-should-flatten` (#1708):
 
 - **On Codex:** **Spawn all background agents first** (plan/execute) — dispatch them in parallel using the Plan Phase N / Execute Phase N handlers below — then run verification actions, then run the inline discuss; the background agents continue while you verify/discuss.
 - **On Claude Code or any other non-Codex runtime:** run the chosen plan/execute step(s) **inline** via their handlers below (in order), then run verification actions, then run the inline discuss. There is no overlap.
@@ -254,13 +254,13 @@ After discuss completes, loop back to dashboard step.
 
 ### Plan Phase N
 
-Planning runs autonomously. **First resolve the runtime.** Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). Among supported runtimes only **Codex** (`spawn_agent`) can do this; Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except Codex, which is dispatched in the background.
+Planning runs autonomously. **First resolve whether background dispatch is safe.** Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). This is determined from the documentation-sourced dispatch capability in the registry (#1708); Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except where `dispatch-should-flatten` returns `false`.
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
+FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
 ```
 
-**If `RUNTIME` is `codex`:** Spawn a background agent that delegates to the Skill pipeline with any configured flags:
+**If `FLATTEN` is `false`:** Spawn a background agent that delegates to the Skill pipeline with any configured flags:
 
 ```
 Agent(
@@ -282,7 +282,7 @@ Important: You are running in the background. Do NOT use AskUserQuestion — mak
 )
 ```
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above with `run_in_background=true`, do NOT do any planning work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume planning-related work when the subagent result is available.
+> **ORCHESTRATOR RULE — BACKGROUND DISPATCH**: After calling Agent() above with `run_in_background=true`, do NOT do any planning work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume planning-related work when the subagent result is available.
 
 Display:
 
@@ -308,13 +308,13 @@ Then loop back to dashboard step.
 
 ### Execute Phase N
 
-Execution runs autonomously. **First resolve the runtime.** Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). Among supported runtimes only **Codex** (`spawn_agent`) can do this; Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except Codex, which is dispatched in the background.
+Execution runs autonomously. **First resolve whether background dispatch is safe.** Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). This is determined from the documentation-sourced dispatch capability in the registry (#1708); Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except where `dispatch-should-flatten` returns `false`.
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
+FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
 ```
 
-**If `RUNTIME` is `codex`:** Spawn a background agent that delegates to the Skill pipeline with any configured flags:
+**If `FLATTEN` is `false`:** Spawn a background agent that delegates to the Skill pipeline with any configured flags:
 
 ```
 Agent(
@@ -336,7 +336,7 @@ Important: You are running in the background. Do NOT use AskUserQuestion — mak
 )
 ```
 
-> **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above with `run_in_background=true`, do NOT do any execution work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume execution-related work when the subagent result is available.
+> **ORCHESTRATOR RULE — BACKGROUND DISPATCH**: After calling Agent() above with `run_in_background=true`, do NOT do any execution work for this phase independently. Return to the dashboard immediately and wait for the background agent to report back. Only resume execution-related work when the subagent result is available.
 
 Display:
 
@@ -346,7 +346,7 @@ Display:
 
 Loop back to dashboard step.
 
-**Otherwise (Claude Code or any other non-Codex runtime):** Run execute inline so worktree isolation and the verifier actually run — do NOT wrap it in `Agent(run_in_background=true, …)`:
+**Otherwise (Claude Code or any other non-Codex runtime):** Run execute inline so worktree isolation and the verifier actually run — do NOT wrap it in `Agent(run_in_background=true, …)` — `FLATTEN` is `true` (or non-`false`):
 
 ```
 Skill(skill="gsd-execute-phase", args="{N} {manager_flags.execute}")

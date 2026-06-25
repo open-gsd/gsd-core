@@ -845,6 +845,139 @@ describe('Fix: degradationFor unknown point → {level:"absent", unknown:true}',
 });
 
 // ---------------------------------------------------------------------------
+// Phase B: shouldFlattenDispatch — ADR-1239 Phase B / #1708
+// ---------------------------------------------------------------------------
+
+describe('Phase B: shouldFlattenDispatch — contract pin', () => {
+  const { shouldFlattenDispatch } = hi;
+
+  test('shouldFlattenDispatch is exported as a function', () => {
+    assert.strictEqual(typeof shouldFlattenDispatch, 'function',
+      'shouldFlattenDispatch must be exported from host-integration module');
+  });
+
+  test('{background:true, backgroundDispatch:true} → false (background OK)', () => {
+    assert.strictEqual(shouldFlattenDispatch({ background: true, backgroundDispatch: true }), false,
+      'canBackground=true when both background===true AND backgroundDispatch===true → flatten=false');
+  });
+
+  test('{background:true, backgroundDispatch:false} → true (must flatten)', () => {
+    assert.strictEqual(shouldFlattenDispatch({ background: true, backgroundDispatch: false }), true,
+      'backgroundDispatch===false → canBackground=false → flatten=true');
+  });
+
+  test('{background:true, backgroundDispatch:"undocumented"} → true (undocumented is not === true)', () => {
+    assert.strictEqual(shouldFlattenDispatch({ background: true, backgroundDispatch: 'undocumented' }), true,
+      '"undocumented" is not === true → canBackground=false → flatten=true');
+  });
+
+  test('{background:false, backgroundDispatch:true} → true (background is false)', () => {
+    assert.strictEqual(shouldFlattenDispatch({ background: false, backgroundDispatch: true }), true,
+      'background===false → canBackground=false → flatten=true');
+  });
+
+  test('{} (empty) → true (missing fields → fail-closed)', () => {
+    assert.strictEqual(shouldFlattenDispatch({}), true,
+      'empty dispatch → canBackground=false → flatten=true');
+  });
+
+  test('missing fields individually', () => {
+    assert.strictEqual(shouldFlattenDispatch({ background: true }), true,
+      'backgroundDispatch missing → not === true → flatten=true');
+    assert.strictEqual(shouldFlattenDispatch({ backgroundDispatch: true }), true,
+      'background missing → not === true → flatten=true');
+  });
+
+  // #853 codex-like profile: full dispatch including backgroundDispatch:true → background OK
+  test('#853 codex-like: {namedDispatch:true,nested:true,maxDepth:1,background:true,subagentToolkit:"full",backgroundDispatch:true} → false (background OK)', () => {
+    assert.strictEqual(
+      shouldFlattenDispatch({ namedDispatch: true, nested: true, maxDepth: 1, background: true, subagentToolkit: 'full', backgroundDispatch: true }),
+      false,
+      'codex-like dispatch with backgroundDispatch:true must be background-OK (flatten=false)',
+    );
+  });
+
+  // #853 claude-like profile: backgroundDispatch:false → must flatten
+  test('#853 claude-like: {...,background:true,backgroundDispatch:false} → true (inline)', () => {
+    assert.strictEqual(
+      shouldFlattenDispatch({ namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false }),
+      true,
+      'claude-like dispatch with backgroundDispatch:false must flatten inline',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B: negotiateHostCapabilities — backgroundDispatch field
+// ---------------------------------------------------------------------------
+
+describe('Phase B: negotiateHostCapabilities — backgroundDispatch', () => {
+  test('host dispatch.backgroundDispatch:true against DEFAULT_ENGINE → effective.dispatch.backgroundDispatch===true', () => {
+    const result = negotiateHostCapabilities({
+      ...PROFILE_BASELINES['programmatic-cli'],
+      dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: true },
+    });
+    assert.strictEqual(result.effective.dispatch.backgroundDispatch, true,
+      'backgroundDispatch:true on host AND engine must yield effective backgroundDispatch===true');
+  });
+
+  test('host dispatch.backgroundDispatch:"undocumented" → effective.dispatch.backgroundDispatch===false + warning', () => {
+    const result = negotiateHostCapabilities({
+      ...PROFILE_BASELINES['programmatic-cli'],
+      dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: 'undocumented' },
+    });
+    assert.strictEqual(result.effective.dispatch.backgroundDispatch, false,
+      '"undocumented" must fail-closed to false');
+    const warnText = result.warnings.join(' ');
+    assert.ok(warnText.includes('backgroundDispatch') && warnText.includes('undocumented'),
+      `Expected warning about backgroundDispatch being undocumented; got: ${warnText}`);
+  });
+
+  test('host dispatch.backgroundDispatch:false → effective.dispatch.backgroundDispatch===false', () => {
+    const result = negotiateHostCapabilities({
+      ...PROFILE_BASELINES['programmatic-cli'],
+      dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
+    });
+    assert.strictEqual(result.effective.dispatch.backgroundDispatch, false);
+  });
+
+  test('host dispatch without backgroundDispatch key → effective.dispatch.backgroundDispatch===false (fail-closed)', () => {
+    const result = negotiateHostCapabilities({
+      ...PROFILE_BASELINES['programmatic-cli'],
+      dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+    });
+    assert.strictEqual(result.effective.dispatch.backgroundDispatch, false,
+      'Missing backgroundDispatch key must fail-closed to false');
+  });
+
+  test('negotiateHostCapabilities({}) → effective.dispatch.backgroundDispatch===false', () => {
+    const result = negotiateHostCapabilities({});
+    assert.strictEqual(result.effective.dispatch.backgroundDispatch, false,
+      'Empty host must produce backgroundDispatch===false (SAFE_DEFAULTS)');
+  });
+
+  test('SAFE_DEFAULTS.dispatch.backgroundDispatch is false', () => {
+    // Verified via negotiation with empty host
+    const result = negotiateHostCapabilities({});
+    assert.strictEqual(result.effective.dispatch.backgroundDispatch, false);
+  });
+
+  test('DEFAULT_ENGINE.axes.dispatch.backgroundDispatch is true', () => {
+    assert.strictEqual(DEFAULT_ENGINE.axes.dispatch.backgroundDispatch, true,
+      'DEFAULT_ENGINE (full engine) must declare backgroundDispatch:true');
+  });
+
+  test('existing dispatch tests still pass — effective.dispatch.namedDispatch present alongside backgroundDispatch', () => {
+    const result = negotiateHostCapabilities(PROFILE_BASELINES['programmatic-cli']);
+    const d = result.effective.dispatch;
+    assert.ok('namedDispatch' in d, 'namedDispatch must still be present');
+    assert.ok('backgroundDispatch' in d, 'backgroundDispatch must be present');
+    assert.ok('nested' in d && 'maxDepth' in d && 'background' in d && 'subagentToolkit' in d,
+      'all original dispatch fields must still be present');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Fix 2: negotiateHostCapabilities — host omitting 'dispatch' → subagentToolkit 'read-only'
 // ---------------------------------------------------------------------------
 

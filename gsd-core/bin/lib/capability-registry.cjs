@@ -126,7 +126,8 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -248,7 +249,8 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -330,7 +332,8 @@ const capabilities = {
           "nested": true,
           "maxDepth": 5,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -389,7 +392,8 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "read-only"
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -535,7 +539,8 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -604,7 +609,8 @@ const capabilities = {
           "nested": true,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -673,7 +679,8 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -758,7 +765,8 @@ const capabilities = {
           "nested": true,
           "maxDepth": 2,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -950,7 +958,8 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": "undocumented",
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -1060,7 +1069,8 @@ const capabilities = {
           "nested": true,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "read-only"
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -1203,7 +1213,8 @@ const capabilities = {
           "nested": true,
           "maxDepth": -1,
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -1275,7 +1286,8 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -1585,7 +1597,8 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": false,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -1789,7 +1802,8 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -2107,7 +2121,8 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "engine",
@@ -2262,7 +2277,8 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": "undocumented",
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3062,7 +3078,8 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3147,7 +3164,8 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3229,7 +3247,8 @@ const runtimes = {
           "nested": true,
           "maxDepth": 5,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3288,7 +3307,8 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "read-only"
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -3373,7 +3393,8 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3442,7 +3463,8 @@ const runtimes = {
           "nested": true,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3511,7 +3533,8 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3596,7 +3619,8 @@ const runtimes = {
           "nested": true,
           "maxDepth": 2,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3669,7 +3693,8 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": "undocumented",
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3738,7 +3763,8 @@ const runtimes = {
           "nested": true,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "read-only"
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -3829,7 +3855,8 @@ const runtimes = {
           "nested": true,
           "maxDepth": -1,
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -3901,7 +3928,8 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -3987,7 +4015,8 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": false,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "active",
         "hookBus": "host",
@@ -4060,7 +4089,8 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "full"
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
         },
         "modelMode": "passive",
         "hookBus": "host",
@@ -4128,7 +4158,8 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "engine",
@@ -4188,7 +4219,8 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": "undocumented",
-          "subagentToolkit": "undocumented"
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
         "hookBus": "host",

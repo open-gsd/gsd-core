@@ -52,7 +52,7 @@
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": true, "nested": true, "maxDepth": 1, "background": true, "subagentToolkit": "full" },
+      "dispatch": { "namedDispatch": true, "nested": true, "maxDepth": 1, "background": true, "subagentToolkit": "full", "backgroundDispatch": true },
       "modelMode": "passive",
       "hookBus": "host",
       "stateIO": "filesystem",

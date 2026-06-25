@@ -17,6 +17,7 @@ const path = require('node:path');
 const {
   negotiateHostCapabilities,
   profileOf,
+  shouldFlattenDispatch,
 } = require(path.join(__dirname, '../gsd-core/bin/lib/host-integration.cjs'));
 
 const registry = require(path.join(__dirname, '../gsd-core/bin/lib/capability-registry.cjs'));
@@ -27,8 +28,8 @@ const {
 
 // All 8 scalar hostIntegration axis keys
 const SCALAR_AXES = ['embeddingMode', 'commandSurface', 'modelMode', 'hookBus', 'stateIO', 'transport', 'runtime'];
-// All 5 dispatch sub-keys
-const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'subagentToolkit'];
+// All 6 dispatch sub-keys (includes backgroundDispatch added in feat/1679-dispatch-flatten)
+const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'subagentToolkit', 'backgroundDispatch'];
 
 // All 16 runtime IDs (ordered alphabetically)
 const RUNTIME_IDS = [
@@ -95,7 +96,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
       });
 
       // (ii) hostIntegration object is present with all required keys
-      test('(ii) cap.runtime.hostIntegration is present with all 8 axis keys and 5 dispatch sub-keys', () => {
+      test('(ii) cap.runtime.hostIntegration is present with all 8 axis keys and 6 dispatch sub-keys', () => {
         assert.ok(
           hi !== undefined && hi !== null && typeof hi === 'object',
           id + ': cap.runtime.hostIntegration must be a non-null object',
@@ -223,6 +224,77 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     assert.strictEqual(counts['programmatic-cli'], 9, 'Must have exactly 9 programmatic-cli runtimes');
     assert.strictEqual(counts['declarative-cli'], 7, 'Must have exactly 7 declarative-cli runtimes');
     assert.strictEqual(counts['ide'], 0, 'Must have exactly 0 ide runtimes');
+  });
+
+  // ─── backgroundDispatch presence ─────────────────────────────────────────────
+
+  test('every runtime descriptor has dispatch.backgroundDispatch (boolean or "undocumented")', () => {
+    for (const id of RUNTIME_IDS) {
+      const cap = registry.runtimes[id];
+      const dispatch = cap && cap.runtime && cap.runtime.hostIntegration && cap.runtime.hostIntegration.dispatch;
+      assert.ok(
+        dispatch !== null && typeof dispatch === 'object',
+        id + ': hostIntegration.dispatch must be an object',
+      );
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(dispatch, 'backgroundDispatch'),
+        id + ': dispatch must have a backgroundDispatch key',
+      );
+      const v = dispatch.backgroundDispatch;
+      assert.ok(
+        v === true || v === false || v === 'undocumented',
+        id + ': dispatch.backgroundDispatch must be true, false, or "undocumented", got: ' + JSON.stringify(v),
+      );
+    }
+  });
+
+  // ─── shouldFlattenDispatch per-host (#853 discriminator) ─────────────────────
+
+  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 14.
+  const EXPECTED_FLATTEN = {
+    antigravity: true,
+    augment:     true,
+    claude:      true,
+    cline:       true,
+    codebuddy:   true,
+    codex:       false,
+    copilot:     true,
+    cursor:      false,
+    gemini:      true,
+    hermes:      true,
+    kilo:        true,
+    kimi:        true,
+    opencode:    true,
+    qwen:        true,
+    trae:        true,
+    windsurf:    true,
+  };
+
+  for (const id of RUNTIME_IDS) {
+    test('shouldFlattenDispatch(' + id + ') === ' + EXPECTED_FLATTEN[id], () => {
+      const cap = registry.runtimes[id];
+      const dispatch = cap && cap.runtime && cap.runtime.hostIntegration && cap.runtime.hostIntegration.dispatch;
+      assert.ok(dispatch, id + ': dispatch must exist');
+      const result = shouldFlattenDispatch(dispatch);
+      assert.strictEqual(
+        result,
+        EXPECTED_FLATTEN[id],
+        id + ': shouldFlattenDispatch must return ' + EXPECTED_FLATTEN[id] + ' (got: ' + result + ')',
+      );
+    });
+  }
+
+  test('contract-pin: exactly 2 hosts are background-eligible (shouldFlattenDispatch === false): codex and cursor', () => {
+    const eligible = RUNTIME_IDS.filter((id) => {
+      const cap = registry.runtimes[id];
+      const dispatch = cap && cap.runtime && cap.runtime.hostIntegration && cap.runtime.hostIntegration.dispatch;
+      return dispatch && shouldFlattenDispatch(dispatch) === false;
+    });
+    assert.deepEqual(
+      eligible.slice().sort(),
+      ['codex', 'cursor'],
+      'Exactly codex and cursor must be background-eligible, got: ' + JSON.stringify(eligible.sort()),
+    );
   });
 
   test('contract-pin: spot-check claude→programmatic-cli, codex→declarative-cli, opencode→programmatic-cli, gemini→declarative-cli', () => {

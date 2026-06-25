@@ -59,7 +59,7 @@
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": "undocumented", "nested": "undocumented", "maxDepth": "undocumented", "background": true, "subagentToolkit": "undocumented" },
+      "dispatch": { "namedDispatch": "undocumented", "nested": "undocumented", "maxDepth": "undocumented", "background": true, "subagentToolkit": "undocumented", "backgroundDispatch": "undocumented" },
       "modelMode": "passive",
       "hookBus": "host",
       "stateIO": "filesystem",

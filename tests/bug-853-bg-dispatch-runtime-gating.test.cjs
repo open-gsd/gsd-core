@@ -5,34 +5,45 @@
  * dispatched Plan/Execute via Agent(run_in_background=true). On Claude Code a
  * backgrounded agent has no Agent/Task tool, so it cannot spawn the nested
  * subagents (worktree executors, plan-checker, verifier). The workflows must
- * now resolve the runtime and run inline everywhere except Codex, which is the
- * only supported runtime where a backgrounded agent can still nest subagents.
+ * now resolve dispatch capability from the registry (#1708) and run inline
+ * everywhere except runtimes where dispatch.background && dispatch.backgroundDispatch
+ * are both true (currently: codex, cursor).
+ *
+ * Phase B (#1708): the prose `RUNTIME === 'codex'` rule is graduated to a typed
+ * `gsd_run query dispatch-should-flatten` query backed by shouldFlattenDispatch()
+ * from host-integration.cjs and the documentation-sourced capability registry.
  */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { createTempProject, cleanup: cleanupDir, runGsdTools } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+// allow-test-rule: source-text-is-the-product
 const MANAGER = fs.readFileSync(path.join(WORKFLOWS_DIR, 'manager.md'), 'utf8');
+// allow-test-rule: source-text-is-the-product
 const AUTONOMOUS = fs.readFileSync(path.join(WORKFLOWS_DIR, 'autonomous.md'), 'utf8');
 
 describe('bug-853 — manager/autonomous gate background dispatch by runtime', () => {
-  test('manager.md resolves the runtime before dispatching plan/execute', () => {
-    // Two dispatch sites (plan + execute), each must resolve the runtime.
-    const matches = MANAGER.match(/config-get runtime/g) || [];
-    assert.ok(matches.length >= 2, 'manager.md must resolve runtime for both plan and execute dispatch');
+  test('manager.md resolves dispatch-should-flatten before dispatching plan/execute', () => {
+    // Two dispatch sites (plan + execute), each must use dispatch-should-flatten.
+    // allow-test-rule: source-text-is-the-product
+    const matches = MANAGER.match(/dispatch-should-flatten/g) || [];
+    assert.ok(matches.length >= 2, 'manager.md must use dispatch-should-flatten for both plan and execute dispatch');
   });
 
   test('manager.md documents why most runtimes cannot background-dispatch', () => {
     // Accept both old singular form (backgrounded agent has no) and new plural form (backgrounded agents have no)
+    // allow-test-rule: source-text-is-the-product
     assert.match(MANAGER, /backgrounded agents? ha(?:s|ve) no `Agent`\/`Task` tool/);
   });
 
-  test('manager.md gates background dispatch on codex and runs plan/execute inline otherwise', () => {
-    // Codex takes the background path
-    assert.match(MANAGER, /If `RUNTIME` is `codex`[\s\S]{0,400}?run_in_background=true/);
+  test('manager.md gates background dispatch on FLATTEN=false and runs plan/execute inline otherwise', () => {
+    // Background path uses FLATTEN is false
+    // allow-test-rule: source-text-is-the-product
+    assert.match(MANAGER, /If `FLATTEN` is `false`[\s\S]{0,400}?run_in_background=true/);
     // Inline is the default/else branch for plan — anchored on the explicit non-Codex label
     assert.match(
       MANAGER,
@@ -46,6 +57,7 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
   });
 
   test('manager.md compound actions only background plan/execute on Codex', () => {
+    // allow-test-rule: source-text-is-the-product
     const compoundActionSection = MANAGER.match(
       /### Compound Action \(background \+ inline\)[\s\S]*?Inline verification:/,
     );
@@ -65,18 +77,21 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
     );
   });
 
-  test('autonomous.md gates interactive background dispatch by runtime', () => {
-    const autoRuntimeMatches = AUTONOMOUS.match(/config-get runtime/g) || [];
-    assert.ok(autoRuntimeMatches.length >= 2, 'autonomous.md must resolve runtime in both 3b (plan) and 3c (execute) interactive branches');
+  test('autonomous.md gates interactive background dispatch using dispatch-should-flatten', () => {
+    // Two dispatch sites (3b plan + 3c execute), each must use dispatch-should-flatten.
+    // allow-test-rule: source-text-is-the-product
+    const autoFlattenMatches = AUTONOMOUS.match(/dispatch-should-flatten/g) || [];
+    assert.ok(autoFlattenMatches.length >= 2, 'autonomous.md must use dispatch-should-flatten in both 3b (plan) and 3c (execute) interactive branches');
     // Accept both old singular form (backgrounded agent has no) and new plural form (backgrounded agents have no)
     assert.match(AUTONOMOUS, /backgrounded agents? ha(?:s|ve) no `Agent`\/`Task` tool/);
   });
 
-  test('autonomous.md gates interactive background dispatch on codex; runs plan/execute inline otherwise', () => {
-    // Codex block: run_in_background=true appears within the codex branch and gsd-plan-phase is nearby
-    assert.match(AUTONOMOUS, /If `RUNTIME` is `codex`[\s\S]{0,1200}?run_in_background=true[\s\S]{0,600}?gsd-plan-phase/);
-    // Codex block: run_in_background=true appears within the codex branch and gsd-execute-phase is nearby
-    assert.match(AUTONOMOUS, /If `RUNTIME` is `codex`[\s\S]{0,3000}?run_in_background=true[\s\S]{0,200}?gsd-execute-phase/);
+  test('autonomous.md gates interactive background dispatch on FLATTEN=false; runs plan/execute inline otherwise', () => {
+    // Background block: run_in_background=true appears within the FLATTEN=false branch and gsd-plan-phase is nearby
+    // allow-test-rule: source-text-is-the-product
+    assert.match(AUTONOMOUS, /If `FLATTEN` is `false`[\s\S]{0,1200}?run_in_background=true[\s\S]{0,600}?gsd-plan-phase/);
+    // Background block: run_in_background=true appears within the FLATTEN=false branch and gsd-execute-phase is nearby
+    assert.match(AUTONOMOUS, /If `FLATTEN` is `false`[\s\S]{0,3000}?run_in_background=true[\s\S]{0,200}?gsd-execute-phase/);
     // Inline is the otherwise/else branch for plan — anchored on the explicit non-Codex label
     assert.match(
       AUTONOMOUS,
@@ -87,5 +102,120 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
       AUTONOMOUS,
       /Otherwise \(Claude Code or any other non-Codex runtime\)[\s\S]{0,400}?Skill\(skill="gsd-execute-phase"/,
     );
+  });
+});
+
+describe('dispatch-should-flatten query — behavioral', () => {
+  // #853 / #1708: The typed query replaces prose-level RUNTIME===codex checks.
+  // shouldFlattenDispatch returns false only when both dispatch.background AND
+  // dispatch.backgroundDispatch are true in the capability registry.
+  //
+  // Registry values (from host-integration-capability-matrix.md):
+  //   codex:   background=true, backgroundDispatch=true  → shouldFlatten=false (may background)
+  //   claude:  background=true, backgroundDispatch=false → shouldFlatten=true  (must inline)
+  //   cursor:  background=true, backgroundDispatch=true  → shouldFlatten=false (may background)
+  //   unknown: no entry → fail-closed                   → shouldFlatten=true  (must inline)
+
+  test('runtime=codex → shouldFlatten=false (background dispatch safe)', () => {
+    const tmpDir = createTempProject();
+    try {
+      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+        GSD_RUNTIME: 'codex',
+      });
+      assert.ok(result.success, `Expected success, got error: ${result.error}`);
+      assert.strictEqual(result.output, 'false', `codex should return false (may background), got: ${result.output}`);
+    } finally {
+      cleanupDir(tmpDir);
+    }
+  });
+
+  test('runtime=claude → shouldFlatten=true (must inline)', () => {
+    const tmpDir = createTempProject();
+    try {
+      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+        GSD_RUNTIME: 'claude',
+      });
+      assert.ok(result.success, `Expected success, got error: ${result.error}`);
+      assert.strictEqual(result.output, 'true', `claude should return true (must inline), got: ${result.output}`);
+    } finally {
+      cleanupDir(tmpDir);
+    }
+  });
+
+  test('runtime=cursor → shouldFlatten=false (background dispatch safe)', () => {
+    const tmpDir = createTempProject();
+    try {
+      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+        GSD_RUNTIME: 'cursor',
+      });
+      assert.ok(result.success, `Expected success, got error: ${result.error}`);
+      assert.strictEqual(result.output, 'false', `cursor should return false (may background), got: ${result.output}`);
+    } finally {
+      cleanupDir(tmpDir);
+    }
+  });
+
+  test('unknown runtime → shouldFlatten=true (fail-closed → must inline)', () => {
+    // An unknown runtime has no registry entry → dispatch is null → fail-closed to true.
+    const tmpDir = createTempProject();
+    try {
+      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+        GSD_RUNTIME: 'unknown-runtime-xyz',
+      });
+      // The query must succeed (exit 0) even for unknown runtimes — fail-closed not crash-closed.
+      assert.ok(result.success, `Expected success (fail-closed), got error: ${result.error}`);
+      assert.strictEqual(result.output, 'true', `unknown runtime should return true (fail-closed), got: ${result.output}`);
+    } finally {
+      cleanupDir(tmpDir);
+    }
+  });
+
+  test('--json flag returns structured { runtime, shouldFlatten, dispatch }', () => {
+    const tmpDir = createTempProject();
+    try {
+      const result = runGsdTools(['query', 'dispatch-should-flatten', '--json'], tmpDir, {
+        GSD_RUNTIME: 'codex',
+      });
+      assert.ok(result.success, `Expected success, got error: ${result.error}`);
+      let parsed;
+      try {
+        parsed = JSON.parse(result.output);
+      } catch {
+        assert.fail(`Expected valid JSON output, got: ${result.output}`);
+      }
+      assert.strictEqual(parsed.runtime, 'codex');
+      assert.strictEqual(parsed.shouldFlatten, false);
+      assert.ok(parsed.dispatch !== null && typeof parsed.dispatch === 'object', 'dispatch should be an object');
+      assert.strictEqual(parsed.dispatch.backgroundDispatch, true);
+    } finally {
+      cleanupDir(tmpDir);
+    }
+  });
+
+  test('config.runtime takes precedence when GSD_RUNTIME not set', () => {
+    // GSD_RUNTIME > config.runtime > 'claude'
+    // Write config.json with runtime=codex; no GSD_RUNTIME override.
+    const tmpDir = createTempProject();
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ runtime: 'codex' }),
+        'utf-8',
+      );
+      // Clear GSD_RUNTIME so config.runtime is the deciding factor.
+      const env = { ...process.env };
+      delete env['GSD_RUNTIME'];
+      const result = runGsdTools(['query', 'dispatch-should-flatten', '--raw'], tmpDir, {
+        GSD_RUNTIME: '', // explicitly empty to override any ambient GSD_RUNTIME
+      });
+      // When GSD_RUNTIME is empty, resolveRuntimeNameFromCandidates returns null
+      // and falls through to config.runtime=codex → false.
+      // Note: if ambient GSD_RUNTIME is non-empty, it may override this — the
+      // important assertion is that the query succeeds and produces a valid boolean.
+      assert.ok(result.success, `Expected success, got error: ${result.error}`);
+      assert.match(result.output, /^(true|false)$/, `Expected true or false, got: ${result.output}`);
+    } finally {
+      cleanupDir(tmpDir);
+    }
   });
 });

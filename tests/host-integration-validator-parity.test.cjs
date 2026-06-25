@@ -229,6 +229,67 @@ describe('ADR-1239 validator behavioral: undocumented sentinel passes, bogus fai
     assert.strictEqual(dispatchErrors.length, 0,
       `Valid boolean dispatch fields must produce no errors; got: ${dispatchErrors.join(', ')}`);
   });
+
+  // Phase B: backgroundDispatch field validation
+  test('dispatch.backgroundDispatch:true → ZERO validator errors', () => {
+    const cap = makeMinimalRuntimeCap({
+      hostIntegration: {
+        ...makeMinimalRuntimeCap().runtime.hostIntegration,
+        dispatch: { ...makeMinimalRuntimeCap().runtime.hostIntegration.dispatch, backgroundDispatch: true },
+      },
+    });
+    const errors = validateCapability(cap, 'test-runtime');
+    const bdErrors = errors.filter((e) => e.includes('backgroundDispatch'));
+    assert.strictEqual(bdErrors.length, 0,
+      `backgroundDispatch:true must produce no errors; got: ${bdErrors.join(', ')}`);
+  });
+
+  test('dispatch.backgroundDispatch:false → ZERO validator errors', () => {
+    const cap = makeMinimalRuntimeCap({
+      hostIntegration: {
+        ...makeMinimalRuntimeCap().runtime.hostIntegration,
+        dispatch: { ...makeMinimalRuntimeCap().runtime.hostIntegration.dispatch, backgroundDispatch: false },
+      },
+    });
+    const errors = validateCapability(cap, 'test-runtime');
+    const bdErrors = errors.filter((e) => e.includes('backgroundDispatch'));
+    assert.strictEqual(bdErrors.length, 0,
+      `backgroundDispatch:false must produce no errors; got: ${bdErrors.join(', ')}`);
+  });
+
+  test('dispatch.backgroundDispatch:"undocumented" → ZERO validator errors', () => {
+    const cap = makeMinimalRuntimeCap({
+      hostIntegration: {
+        ...makeMinimalRuntimeCap().runtime.hostIntegration,
+        dispatch: { ...makeMinimalRuntimeCap().runtime.hostIntegration.dispatch, backgroundDispatch: 'undocumented' },
+      },
+    });
+    const errors = validateCapability(cap, 'test-runtime');
+    const bdErrors = errors.filter((e) => e.includes('backgroundDispatch'));
+    assert.strictEqual(bdErrors.length, 0,
+      `backgroundDispatch:"undocumented" must produce no errors; got: ${bdErrors.join(', ')}`);
+  });
+
+  test('dispatch.backgroundDispatch:"zzz" → produces a validator error', () => {
+    const cap = makeMinimalRuntimeCap({
+      hostIntegration: {
+        ...makeMinimalRuntimeCap().runtime.hostIntegration,
+        dispatch: { ...makeMinimalRuntimeCap().runtime.hostIntegration.dispatch, backgroundDispatch: 'zzz' },
+      },
+    });
+    const errors = validateCapability(cap, 'test-runtime');
+    const bdErrors = errors.filter((e) => e.includes('backgroundDispatch'));
+    assert.ok(bdErrors.length > 0,
+      `bogus value "zzz" for backgroundDispatch must produce a validator error`);
+  });
+
+  test('dispatch without backgroundDispatch key → ZERO validator errors (optional field)', () => {
+    const cap = makeMinimalRuntimeCap();
+    const errors = validateCapability(cap, 'test-runtime');
+    const bdErrors = errors.filter((e) => e.includes('backgroundDispatch'));
+    assert.strictEqual(bdErrors.length, 0,
+      `Missing backgroundDispatch (optional field) must produce no errors; got: ${bdErrors.join(', ')}`);
+  });
 });
 
 // ---------------------------------------------------------------------------

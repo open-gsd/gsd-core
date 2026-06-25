@@ -1188,6 +1188,14 @@ function validateRuntimeBody(cap) {
           'runtime.hostIntegration.dispatch.maxDepth must be an integer >= -1 or "undocumented" (got: ' + JSON.stringify(d.maxDepth) + ')',
         );
       }
+
+      // backgroundDispatch — optional; when present must be boolean or 'undocumented'
+      if (Object.prototype.hasOwnProperty.call(d, 'backgroundDispatch') &&
+          typeof d.backgroundDispatch !== 'boolean' && d.backgroundDispatch !== 'undocumented') {
+        errors.push(
+          'runtime.hostIntegration.dispatch.backgroundDispatch must be a boolean or "undocumented" (got: ' + JSON.stringify(d.backgroundDispatch) + ')',
+        );
+      }
     }
   }
 
