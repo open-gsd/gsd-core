@@ -7,6 +7,36 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+describe('bug #1716: resume_from_file routes to complete_session when no [pending] tests remain', () => {
+  test('resume_from_file step contains guard clause for zero-pending (all-blocked) case', () => {
+    const workflow = fs.readFileSync(
+      path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md'),
+      'utf8',
+    );
+
+    const stepStart = workflow.indexOf('<step name="resume_from_file">');
+    assert.ok(stepStart !== -1, 'resume_from_file step must exist');
+
+    const stepEnd = workflow.indexOf('</step>', stepStart);
+    const stepBody = workflow.slice(stepStart, stepEnd);
+
+    // Guard must appear immediately after the find-pending instruction.
+    // Without it, all-blocked sessions (pending_count==0, blocked_count>0)
+    // silently terminate and never reach complete_session (#1716).
+    const findIdx = stepBody.indexOf("Find first test with `result: [pending]`.");
+    const guardIdx = stepBody.indexOf("If no `[pending]` test found → go to `complete_session`.");
+
+    assert.ok(findIdx !== -1, 'find-pending instruction must be present');
+    assert.ok(guardIdx !== -1, 'guard clause for zero-pending case must be present');
+    assert.ok(guardIdx > findIdx, 'guard must appear after find-pending instruction');
+
+    const between = stepBody
+      .slice(findIdx + "Find first test with `result: [pending]`.".length, guardIdx)
+      .trim();
+    assert.strictEqual(between, '', 'guard must be the next non-whitespace line after find-pending');
+  });
+});
+
 describe('bug #3381: verify-work forwards workstream context', () => {
   test('workflow forwards ${GSD_WS} to workstream-sensitive SDK queries', () => {
     const workflow = fs.readFileSync(
