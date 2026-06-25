@@ -23,6 +23,7 @@ import commandRoster = require('./command-roster.cjs');
 const { readGsdCommandNames, transformContentToHyphen } = commandRoster;
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 const { getDirName } = runtimeNamePolicy;
+import capabilityRegistry = require('./capability-registry.cjs');
 
 // #1383: resolve GSD's version WITHOUT a top-level
 // `require('../../../package.json')`. That require ran at module load on every
@@ -2199,16 +2200,15 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
 
 /**
  * Canonical list of every non-Claude runtime that gsd-core emits artifacts for.
- * Exported so test files can import this single source of truth rather than
- * maintaining divergent hand-rolled arrays (#1521).
- *
- * Keep in sync with the runtime flags in bin/install.js and getDirName().
+ * DERIVED from the capability registry (ADR-1239 Phase B, #1679) — the registry's
+ * `runtimes` map is the single source of truth for runtime identity, so the
+ * non-Claude set is its key set minus 'claude'. This replaces a hand-maintained
+ * literal that had to be kept in sync with bin/install.js and getDirName(), and
+ * can no longer drift from the registry. Exported so tests import one source (#1521).
  */
-const NON_CLAUDE_RUNTIMES: string[] = [
-  'codex', 'opencode', 'kilo', 'gemini', 'copilot', 'antigravity',
-  'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'kimi',
-  'codebuddy', 'cline',
-];
+const NON_CLAUDE_RUNTIMES: string[] = Object.keys(capabilityRegistry.runtimes)
+  .filter((id) => id !== 'claude')
+  .sort();
 
 /**
  * #1521: Every non-Claude runtime resolves its own runtime identity from a
