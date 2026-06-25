@@ -1,0 +1,565 @@
+# Host Integration Capability Matrix
+
+This document is the maintainer-facing source of truth for the `hostIntegration` block in every
+`capabilities/<cli>/capability.json` runtime descriptor. Every per-CLI axis value is either:
+
+- **documented** — backed by a cited authoritative source and evidence quote, or
+- **`undocumented`** — the explicit fail-closed sentinel used when the CLI's public documentation
+  does not state a value for that axis. `undocumented` validates in the registry but never
+  propagates into effective axes: negotiation degrades closed to the safe default.
+
+Values are generated from per-CLI documentation research (Context7 + official docs). They are
+consumed verbatim by `gen:capability-registry` and validated by `capability-validator.cjs`.
+
+---
+
+## Axes legend
+
+| Axis | Meaning |
+|---|---|
+| `embeddingMode` | Whether the CLI exposes an in-process programmatic API (`imperative`) or integrates purely through configuration files (`declarative`). |
+| `commandSurface` | How slash commands are registered: `slash-file` (markdown), `slash-toml` (TOML), `slash-programmatic` (code API), `palette`, `prose-only`. |
+| `modelMode` | Whether extensions can programmatically request or supply a model (`active`) or select only by config (`passive`). |
+| `hookBus` | Who owns the hook lifecycle: `host` (the CLI fires hooks), `engine` (VS Code/Electron extension host), `none`. |
+| `stateIO` | Filesystem access model: `filesystem` (full local FS), `sandboxed-storage`, `session-log-append`. |
+| `transport` | Integration transport: `mcp` (Model Context Protocol), `native-extension`. |
+| `runtime` | Plugin/extension execution runtime: `node`, `bun`, `python`, `go`, `rust`, `electron`, `sandboxed-web`, `other`. |
+
+### dispatch sub-axes
+
+| Sub-axis | Meaning |
+|---|---|
+| `namedDispatch` | Whether agents can be invoked by name (true/false/`undocumented`). |
+| `nested` | Whether subagents can themselves spawn subagents (true/false/`undocumented`). |
+| `maxDepth` | Maximum nesting depth (integer; -1 = unbounded; `undocumented`). |
+| `background` | Whether subagents can run asynchronously in the background (true/false/`undocumented`). |
+| `subagentToolkit` | Tool surface available to subagents: `full`, `read-only`, or `undocumented`. |
+
+### Interface points
+
+| Point | Meaning |
+|---|---|
+| `command` | Slash-command routing and invocation capability. |
+| `dispatch` | Subagent/multi-agent dispatch capability. |
+| `model` | Programmatic model selection capability. |
+| `hooks` | Lifecycle hook registration capability. |
+| `state` | Filesystem/state I/O capability. |
+| `artifact` | Artifact delivery (skills, commands) surface capability. |
+
+---
+
+## claude
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://code.claude.com/docs/en/agent-sdk/overview | "The Agent SDK offers hooks to execute custom code at critical points within the agent's lifecycle. These callback functions enable developer" |
+| commandSurface | slash-file | https://code.claude.com/docs/en/agent-sdk/slash-commands | "Each custom command is a markdown file where the filename (without the `.md` extension) becomes the command name. The file content defines w" |
+| modelMode | passive | https://code.claude.com/docs/en/agent-sdk/typescript | "setModel(model?: string): Changes the model (only available in streaming input mode) ... model overrides the default model for this subagent" |
+| hookBus | host | https://code.claude.com/docs/en/agent-sdk/python | "HookEvent = Literal['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SubagentStop', 'PreCompact', 'Notificati" |
+| stateIO | filesystem | https://code.claude.com/docs/en/sandboxing | "The sandboxed Bash tool restricts file system access, granting read and write access to the current working directory and session temp direc" |
+| transport | mcp | https://code.claude.com/docs/en/mcp | "Project-Scoped MCP Server Configuration in .mcp.json ... This JSON structure illustrates the format for a project-scoped MCP server configur" |
+| runtime | node | https://code.claude.com/docs/en/agent-sdk/typescript | "import { query } from \"@anthropic-ai/claude-agent-sdk\"; ... pathToClaudeCodeExecutable (string) - Specifies the path to the Claude Code CLI" |
+| dispatch.namedDispatch | true | https://code.claude.com/docs/en/agent-sdk/subagents | "agents: { 'code-reviewer': AgentDefinition({ description: 'Expert code reviewer.', ... }) } ... subagent_type: block.inp" |
+| dispatch.nested | true | https://code.claude.com/docs/en/sub-agents | "As of Claude Code v2.1.172, a subagent can spawn its own subagents, allowing delegated tasks to split into parallel subt" |
+| dispatch.maxDepth | 5 | https://code.claude.com/docs/en/sub-agents | "foreground subagents can spawn at any depth, blocking their parent until completion. Background subagents are limited to" |
+| dispatch.background | true | https://code.claude.com/docs/en/sub-agents | "Subagents can run in the foreground, blocking the main conversation and passing permission prompts to you, or in the bac" |
+| dispatch.subagentToolkit | full | https://code.claude.com/docs/en/sub-agents | "If all tools remain selected, the subagent inherits all tools available to the main conversation." |
+
+Sources consulted:
+- https://code.claude.com/docs/en/sub-agents
+- https://code.claude.com/docs/en/agent-sdk/slash-commands
+- https://code.claude.com/docs/en/agent-sdk/subagents
+- https://code.claude.com/docs/en/agent-sdk/python
+- https://code.claude.com/docs/en/agent-sdk/typescript
+- https://code.claude.com/docs/en/agent-sdk/overview
+- https://code.claude.com/docs/en/mcp
+- https://code.claude.com/docs/en/sandboxing
+- Context7 /websites/code_claude
+- Context7 /llmstxt/code_claude_llms_txt
+
+---
+
+## codex
+
+> **Note:** ADR-1239's host matrix lists Codex as `prose-only`; current OpenAI Codex dev docs document slash-commands, so `commandSurface` is `slash-file` here (docs are the source of truth).
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://developers.openai.com/codex/plugins/build | "No in-process programmatic API exists. Plugins integrate through: External command execution (hooks), MCP server processes, Configuration fi" |
+| commandSurface | slash-file | https://github.com/openai/codex/blob/main/codex-rs/core-skills/src/loader.rs | "const SKILLS_FILENAME: &str = \"SKILL.md\"; ... Each skill is a folder with a SKILL.md file containing YAML frontmatter with name and descript" |
+| modelMode | passive | https://github.com/openai/codex/blob/main/codex-rs/config/src/config_toml.rs | "pub model_provider: Option<String> ... model is selected by config field; no programmatic model request API" |
+| hookBus | host | https://github.com/openai/codex/blob/main/codex/codex-rs/hooks/src/lib.rs | "pub const HOOK_EVENT_NAMES: [&str; 10] = [\"PreToolUse\", \"PermissionRequest\", \"PostToolUse\", \"PreCompact\", \"PostCompact\", \"SessionStart\", \"Us" |
+| stateIO | filesystem | https://developers.openai.com/codex/concepts/sandboxing | "workspace-write: The default mode allowing Codex to read files, edit within the workspace, and run routine local commands inside that bounda" |
+| transport | mcp | https://github.com/openai/codex/blob/main/codex-rs/config/src/config_toml.rs | "pub mcp_servers: HashMap<String, McpServerConfig> ... Definition for MCP servers that Codex can reach out to for tool calls." |
+| runtime | node | https://github.com/openai/codex/blob/main/codex-cli/package.json | "\"engines\": {\"node\": \">=16\"} ... The npm-distributed CLI wrapper is a Node.js script (#!/usr/bin/env node)" |
+| dispatch.namedDispatch | true | https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_spec.rs | "\"agent_type\".to_string(), JsonSchema::string(Some(agent_type_description.to_string())) ... apply_role_to_config(&mut con" |
+| dispatch.nested | true | https://developers.openai.com/codex/multi-agent | "agents.max_depth defaults to 1, which allows a direct child agent to spawn but prevents deeper nesting." |
+| dispatch.maxDepth | 1 | https://developers.openai.com/codex/config-reference | "agents.max_depth: Maximum nesting depth allowed for spawned agent threads (root sessions start at depth 0; default: 1)" |
+| dispatch.background | true | https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_spec.rs | "spawn_agent returns the spawned agent id immediately; a separate wait_agent tool polls for final status." |
+| dispatch.subagentToolkit | full | https://developers.openai.com/codex/multi-agent | "Subagents inherit the sandbox policy and tool surface from the parent session." |
+
+Sources consulted:
+- https://github.com/openai/codex (repo via gh CLI)
+- /openai/codex (Context7 library ID)
+- https://github.com/openai/codex/blob/main/codex-rs/config/src/config_toml.rs
+- https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/multi_agents_spec.rs
+- https://github.com/openai/codex/blob/main/codex-rs/core-skills/src/loader.rs
+- https://developers.openai.com/codex/config-reference
+- https://developers.openai.com/codex/plugins/build
+- https://developers.openai.com/codex/multi-agent
+- https://developers.openai.com/codex/cli/slash-commands
+
+Documentation gaps:
+- dispatch.maxDepth is configurable (Option<i32> with no documented upper bound); the documented default is 1 but the actual enforced maximum is not stated.
+- dispatch.subagentToolkit: docs say subagents 'inherit the tool surface' but do not enumerate whether any tools are excluded.
+- runtime: the Node.js entry point is a thin launcher shim; the actual agent execution runtime is a compiled Rust binary — axis classification is ambiguous.
+
+---
+
+## gemini
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://github.com/google-gemini/gemini-cli/blob/main/packages/sdk/SDK_DESIGN.md | "This feature is currently not implemented. (repeated for both extension and subagent SDK APIs; all actual integration is via files: TOML com" |
+| commandSurface | slash-toml | https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/custom-commands.md | "Custom commands in Gemini CLI are defined in TOML format with the .toml file extension … Commands are invoked as slash commands in the CLI." |
+| modelMode | passive | https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md | "BeforeModel Hook: Fires before sending a request to the LLM … hookSpecificOutput.llm_request (object) — An object that overrides parts of th" |
+| hookBus | host | https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md | "Hooks function as host-fired events … The CLI fires events at predetermined lifecycle points [BeforeAgent, AfterAgent, BeforeTool, AfterTool" |
+| stateIO | filesystem | https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md | "Local access by default with gitignore/geminiignore respect … Set to a boolean to enable or disable the sandbox" |
+| transport | mcp | https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md | "Configure a Node.js MCP server using stdio … { \"mcpServers\": { \"nodeServer\": { \"command\": \"node\", \"args\": [\"dist/server.js\"] } } }" |
+| runtime | node | https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md | "References to node-pty and child_process indicate JavaScript/Node.js execution environment" |
+| dispatch.namedDispatch | true | https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md | "Example of a custom subagent definition file (.gemini/agents/security-auditor.md) … name: security-auditor" |
+| dispatch.nested | false | https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md | "Each subagent operates in an isolated context loop … This isolation also includes recursion protection, preventing subag" |
+| dispatch.maxDepth | 1 | https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md | "To prevent infinite loops and excessive token usage, subagents cannot call other subagents. … The architecture enforces" |
+| dispatch.background | undocumented | no authoritative doc — searched: https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md, /google-gemini/gemini-cli (Context7 library) | — |
+| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md, /google-gemini/gemini-cli (Context7 library) | — |
+
+Sources consulted:
+- https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/custom-commands.md
+- https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md
+- https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md
+- https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md
+- https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md
+- https://github.com/google-gemini/gemini-cli/blob/main/packages/sdk/SDK_DESIGN.md
+- /google-gemini/gemini-cli (Context7 library)
+
+Documentation gaps:
+- dispatch.background — docs describe subagents as operating in isolated context loops but do not state whether they execute synchronously or asynchronously.
+- dispatch.subagentToolkit — subagents have a configurable tool grant model but no single fixed value of 'full' or 'read-only' is stated as the architecture-level constraint.
+
+---
+
+## opencode
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://opencode.ai/docs/plugins | "Plugins are JavaScript/TypeScript modules that export plugin functions; they register hooks via `import type { Plugin } from '@opencode-ai/p'" |
+| commandSurface | slash-file | https://opencode.ai/docs/commands | "\"Create markdown files in the `commands/` directory to define custom commands.\" and \"The markdown file name becomes the command name." |
+| modelMode | active | /anomalyco/opencode (Context7) — packages/plugin/src/v2/promise/README.md | "`ctx.aisdk.sdk(async (event) => { ... event.sdk = mod.createXai(event.options) })` and `ctx.aisdk.language((event) => { ... event.language =" |
+| hookBus | host | https://opencode.ai/docs/plugins | "Host fires events including: `tool.execute.before`, `tool.execute.after`, `session.created`, `session.compacted`, `session.deleted`" |
+| stateIO | filesystem | https://opencode.ai/docs/plugins | "Plugin context includes `directory` (working directory path), `worktree` (git worktree path), and `$` (\"Bun's shell API\")" |
+| transport | mcp | https://opencode.ai/docs/mcp-servers | "\"OpenCode supports both local and remote servers.\" and \"Once added, MCP tools are automatically available to the LLM\"" |
+| runtime | bun | https://opencode.ai/docs/plugins | "\"$\": Bun's shell API for executing commands\" (plugin context property); \"OpenCode runs `bun install` at startup\"" |
+| dispatch.namedDispatch | true | https://opencode.ai/docs/agents | "\"Subagents can be invoked: Automatically by primary agents for specialized tasks based on their descriptions. Manually b" |
+| dispatch.nested | undocumented | no authoritative doc — searched: https://opencode.ai/docs/agents | — |
+| dispatch.maxDepth | undocumented | no authoritative doc — searched: https://opencode.ai/docs/agents | — |
+| dispatch.background | false | https://github.com/sst/opencode/issues/5887 | "\"Currently, sub-agent delegation in `opencode` appears to be synchronous or modal... There is no native 'fire-and-forget'" |
+| dispatch.subagentToolkit | full | https://opencode.ai/docs/agents | "The 'general' subagent \"Has full tool access (except todo), so it can make file changes when needed.\"" |
+
+Sources consulted:
+- https://opencode.ai/docs/plugins
+- https://opencode.ai/docs/agents
+- https://opencode.ai/docs/commands
+- https://opencode.ai/docs/mcp-servers
+- /websites/opencode_ai_plugins (Context7)
+- /anomalyco/opencode (Context7)
+- https://github.com/sst/opencode/issues/5887
+
+Documentation gaps:
+- dispatch.nested
+- dispatch.maxDepth
+
+---
+
+## cursor
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://cursor.com/docs/sdk/typescript | "local.customTools where you define tool functions that execute 'in your process, so it can reach anything your code can'; Agent.create()" |
+| commandSurface | slash-file | https://cursor.com/docs/enterprise/llm-safety-and-controls | "Commands are reusable prompts invoked via slash commands (e.g., /test), while workflows enable multi-step processes" |
+| modelMode | passive | https://cursor.com/docs/sdk/python | "The model used for a run can be overridden by passing a ModelSelection object in SendOptions to agent.send()." |
+| hookBus | host | https://cursor.com/docs/hooks | "Agent hooks: sessionStart, sessionEnd, preToolUse, postToolUse, subagentStart, subagentStop, beforeShellExecution, afterShellExecution" |
+| stateIO | filesystem | https://cursor.com/docs/reference/sandbox | "Local agents run with sandbox options disabled by default." |
+| transport | mcp | https://cursor.com/docs/mcp | "The Model Context Protocol (MCP) allows Cursor to connect to external tools and data sources." |
+| runtime | node | https://cursor.com/docs/sdk/typescript | "The SDK runs on Node.js. It requires Node.js 22.13 or later and is described as a Node-first package." |
+| dispatch.namedDispatch | true | https://cursor.com/docs/subagents | "Invoke specific subagents using slash commands in your prompt. This allows for direct control over which agent performs" |
+| dispatch.nested | true | https://cursor.com/docs/sdk/typescript | "The top-level agent and its direct subagents can launch subagents, but a subagent launched by another subagent can't lau" |
+| dispatch.maxDepth | 2 | https://cursor.com/docs/sdk/typescript | "The top-level agent and its direct subagents can launch subagents, but a subagent launched by another subagent can't lau" |
+| dispatch.background | true | https://cursor.com/docs/subagents | "Background, which returns immediately while the subagent works independently, best for long-running tasks or parallel wo" |
+| dispatch.subagentToolkit | full | https://cursor.com/docs/subagents | "Subagents can utilize MCP tools, inheriting all tools available to their parent agent, including those from configured s" |
+
+Sources consulted:
+- https://cursor.com/docs/subagents
+- https://cursor.com/docs/hooks
+- https://cursor.com/docs/sdk/typescript
+- https://cursor.com/docs/sdk/python
+- https://cursor.com/docs/mcp
+- https://cursor.com/docs/reference/sandbox
+- https://cursor.com/docs/enterprise/llm-safety-and-controls
+- /websites/cursor (Context7)
+
+---
+
+## cline
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/docs/sdk/plugins.mdx | "Implement the AgentPlugin interface to register tools, hooks, and configuration. The setup function is used for registering capabilities." |
+| commandSurface | slash-file | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/cline/apps/vscode/src/test/slash-commands.test.ts | "workflow markdown files (with .md, .markdown, or .txt extensions) are invoked as slash commands using their filename." |
+| modelMode | active | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/sdk/packages/llms/README.md | "The Runtime API, accessible via createLlmsRuntime(...), allows for the creation of a registry that manages configured providers and their de" |
+| hookBus | host | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/sdk/README.md | "Package agent capabilities as extensions (plugins) that can register tools, observe lifecycle events, and modify agent behavior." |
+| stateIO | filesystem | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/cline/sdk/packages/shared/src/storage/paths.ts | "resolveClineDir() returns ~/.cline; resolveDocumentsExtensionPath('Workflows') returns ~/Documents/Cline/Workflows." |
+| transport | mcp | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/docs/mcp/mcp-overview.mdx | "MCP (Model Context Protocol) enables Cline to interact with external tools and data sources" |
+| runtime | node | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/sdk/examples/plugins/typescript-lsp/README.md | "Installs a portable subagent plugin ... cp examples/plugins/agents-squad/index.ts ~/.cline/plugins/portable-subagents.ts." |
+| dispatch.namedDispatch | true | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/sdk/examples/plugins/agents-squad/README.md | "parent → start_subagent(preset: \"phantom\", task: \"Map the auth module\") → phantom: save_handoff(...)" |
+| dispatch.nested | false | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/docs/features/subagents.mdx | "subagents are restricted from editing files, using the browser, accessing MCP servers, or creating nested subagents." |
+| dispatch.maxDepth | 1 | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/docs/features/subagents.mdx | "They are explicitly prohibited from ... spawning other subagents." |
+| dispatch.background | true | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/docs/features/subagents.mdx | "Commands executed by subagents run in the background and are strictly limited to read-only operations" |
+| dispatch.subagentToolkit | read-only | /cline/cline (Context7) — https://github.com/cline/cline/blob/main/docs/features/subagents.mdx | "Subagents are equipped with tools for read-only operations, including reading file contents (read_file), listing directo" |
+
+Sources consulted:
+- https://github.com/cline/cline/blob/main/docs/sdk/plugins.mdx
+- https://github.com/cline/cline/blob/main/sdk/README.md
+- https://github.com/cline/cline/blob/main/sdk/packages/agents/README.md
+- https://github.com/cline/cline/blob/main/sdk/examples/plugins/agents-squad/README.md
+- https://github.com/cline/cline/blob/main/docs/features/subagents.mdx
+- https://github.com/cline/cline/blob/main/docs/mcp/mcp-overview.mdx
+- https://github.com/cline/cline/blob/main/sdk/packages/llms/README.md
+- /cline/cline (Context7)
+
+---
+
+## hermes
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin | "ctx.register_tool() puts your tool in the registry — the model sees it immediately" |
+| commandSurface | slash-programmatic | https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin | "ctx.register_command('mystatus', handler=_handle_status, description='Show plugin status') — The command appears in autocomplete, /help output" |
+| modelMode | active | https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin | "register_provider(ProviderProfile(name=..., aliases=(...), display_name=..., env_vars=(...), base_url=..., auth_type=..., default_aux_model=" |
+| hookBus | host | https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks | "Hermes owns and manages the entire hook infrastructure. At runtime, HookRegistry.discover_and_load() scans ~/.hermes/hooks/" |
+| stateIO | filesystem | https://hermes-agent.nousresearch.com/docs/user-guide/configuration | "The agent has the same filesystem access as your user account." |
+| transport | mcp | https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp | "MCP support ships with the standard install — no extra step needed." |
+| runtime | python | Context7 /nousresearch/hermes-agent | "The plugin and agent runtime is Python (confirmed by register(ctx) in __init__.py, importlib.import_module, run_agent.py, tools/registry.py)" |
+| dispatch.namedDispatch | false | https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation | "The documentation contains no mention of named agents. Subagents are identified only by role ('leaf' or 'orchestrator')" |
+| dispatch.nested | true | /nousresearch/hermes-agent (Context7) — configuration.md | "max_spawn_depth: 1 — Delegation tree depth cap (1-3, clamped). 1 = flat (default): parent spawns leaves that cannot dele" |
+| dispatch.maxDepth | 1 | /nousresearch/hermes-agent (Context7) — configuration.md | "max_spawn_depth: 1 # Delegation tree depth cap (1-3, clamped). 1 = flat (default): parent spawns leaves that cannot dele" |
+| dispatch.background | true | https://github.com/NousResearch/hermes-agent/releases/tag/v2026.6.19 | "delegate_task(background=true) dispatches a subagent that runs in the background and returns a handle immediately" |
+| dispatch.subagentToolkit | read-only | https://hermes-agent.nousresearch.com/docs/guides/delegation-patterns | "Nested delegation is opt-in; by default, leaf subagents cannot call delegate_task, clarify, memory, send_message, or exe" |
+
+Sources consulted:
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/hooks
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp
+- https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+- https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin
+- https://hermes-agent.nousresearch.com/docs/guides/delegation-patterns
+- https://github.com/NousResearch/hermes-agent/releases/tag/v2026.6.19
+- /nousresearch/hermes-agent (Context7)
+
+Documentation gaps:
+- runtime — Hermes plugins and agent core run in Python, but this was confirmed by code inspection rather than explicit docs statement.
+- dispatch.namedDispatch — docs explicitly confirm no named-agent dispatch in delegate_task; Kanban has named profiles but that is a separate board system not a dispatch mechanism.
+
+---
+
+## antigravity
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://github.com/alphaperseii3000/google-antigravity-docs/blob/master/google-antigravity-docs.md | "Skills require a SKILL.md file; Workflows are saved as markdown files; Rules are manually defined constraints — all configuration-file-based" |
+| commandSurface | slash-file | https://github.com/alphaperseii3000/google-antigravity-docs/blob/master/google-antigravity-docs.md | "Workflows are saved as markdown files, providing a repeatable method for executing key processes. They can be invoked in the Agent using a s" |
+| modelMode | passive | https://dev.to/arindam_1729/antigravity-cli-a-hands-on-guide-to-googles-terminal-coding-agent-5bc7 | "Selection occurs via `-m` flag or `/model` command inside the TUI. No programmatic model request API is documented for extensions/skills" |
+| hookBus | host | https://www.aibuilderclub.com/blog/antigravity-cli-guide | "The CLI fires hooks, not the engine. These are JSON lifecycle interceptors (before tool call, after file edit, on session start)." |
+| stateIO | filesystem | https://www.explainx.ai/blog/antigravity-cli-features-sandbox-plugins-subagents-2026 | "Plugin staging at ~/.gemini/antigravity-cli/plugins/<name>/; skills at ~/.gemini/antigravity-cli/skills/" |
+| transport | mcp | https://dev.to/arindam_1729/antigravity-cli-a-hands-on-guide-to-googles-terminal-coding-agent-5bc7 | "Both local (stdio) and remote (HTTP) Model Context Protocol servers are supported" |
+| runtime | go | https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/ | "Built in Go, Antigravity CLI is snappier and more responsive." |
+| dispatch.namedDispatch | undocumented | no authoritative doc — searched: https://www.aibuilderclub.com/blog/antigravity-cli-guide, https://antigravity.google/docs/agents | — |
+| dispatch.nested | undocumented | no authoritative doc — searched: https://antigravity.google/docs/agents | — |
+| dispatch.maxDepth | undocumented | no authoritative doc — searched: https://antigravity.google/docs/agents | — |
+| dispatch.background | true | https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/ | "Antigravity CLI orchestrates multiple agents for complex tasks in the background" |
+| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://www.explainx.ai/blog/antigravity-cli-features-sandbox-plugins-subagents-2026 | — |
+
+Sources consulted:
+- https://github.com/alphaperseii3000/google-antigravity-docs/blob/master/google-antigravity-docs.md
+- https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/
+- https://dev.to/arindam_1729/antigravity-cli-a-hands-on-guide-to-googles-terminal-coding-agent-5bc7
+- https://www.explainx.ai/blog/antigravity-cli-features-sandbox-plugins-subagents-2026
+- https://www.aibuilderclub.com/blog/antigravity-cli-guide
+- https://antigravity.google/docs/agents
+- https://antigravity.google/docs/hooks
+
+Documentation gaps:
+- dispatch.namedDispatch — docs describe dynamic plain-English goal dispatch where agent names subagents at runtime; no pre-registered named sub-agent API documented.
+- dispatch.nested — no documentation found on whether subagents can themselves spawn further subagents.
+- dispatch.maxDepth — no documented depth limit or explicit unbounded statement found.
+- dispatch.subagentToolkit — docs describe a permissions approval model but do not explicitly state 'full' vs 'read-only' toolkit scope for subagents.
+
+---
+
+## augment
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://docs.augmentcode.com/cli/plugins | "Plugins can provide several types of components, including Custom Commands defined in Markdown files within the `commands/` directory... Hoo" |
+| commandSurface | slash-file | https://docs.augmentcode.com/cli/plugins | "Slash commands are Markdown files in the `commands/` directory. The filename becomes the command name" |
+| modelMode | passive | https://docs.augmentcode.com/cli/subagents | "| model | No | Model to use for the agent. If not specified, the CLI default model is used." |
+| hookBus | host | https://docs.augmentcode.com/cli/hooks | "Hook event types: PreToolUse (before a tool executes), PostToolUse (immediately after a tool completes), Stop (when the agent stops respondi" |
+| stateIO | filesystem | https://github.com/augmentcode/auggie | "Node.js 22+ required. Hook configurations use `${AUGMENT_PLUGIN_ROOT}`" |
+| transport | mcp | https://docs.augmentcode.com/cli/plugins | "Auggie supports a plugin system that allows you to extend its functionality with... MCP server integrations." |
+| runtime | node | https://github.com/augmentcode/auggie | "Node.js 22+ required" |
+| dispatch.namedDispatch | true | https://docs.augmentcode.com/cli/subagents | "| **name** | Yes | Name of the agent | ... you can trigger it by sending a message that references the agent name." |
+| dispatch.nested | undocumented | no authoritative doc — searched: https://docs.augmentcode.com/cli/subagents | — |
+| dispatch.maxDepth | undocumented | no authoritative doc — searched: https://docs.augmentcode.com/cli/subagents | — |
+| dispatch.background | true | https://docs.augmentcode.com/cli/subagents | "Subagents run in parallel with other subagents... will show a summary of their current progress in the main thread." |
+| dispatch.subagentToolkit | full | https://docs.augmentcode.com/cli/subagents | "If neither [tools nor disabled_tools] is specified, the subagent has access to all tools (default behavior)." |
+
+Sources consulted:
+- https://docs.augmentcode.com/cli/plugins
+- https://docs.augmentcode.com/cli/hooks
+- https://docs.augmentcode.com/cli/subagents
+- https://docs.augmentcode.com/cli/sdk-typescript
+- https://docs.augmentcode.com/setup-augment/mcp
+- https://github.com/augmentcode/auggie
+- /llmstxt/augmentcode_llms-full_txt (Context7)
+
+Documentation gaps:
+- dispatch.nested
+- dispatch.maxDepth
+
+---
+
+## qwen
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://qwenlm.github.io/qwen-code-docs/en/developers/channel-plugins | "Your entry point exports a ChannelPlugin object... this.registerCommand('mycommand', async (envelope, args) => { ... }); ... plugins load at startup as extensions." |
+| commandSurface | slash-file | https://qwenlm.github.io/qwen-code-docs/en/users/extension/introduction | "Extensions can provide custom commands by placing Markdown files in a commands/ subdirectory" |
+| modelMode | passive | https://qwenlm.github.io/qwen-code-docs/en/developers/channel-plugins | "The documentation does not expose a direct API for plugins to invoke the LLM or model directly." |
+| hookBus | host | https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks | "Qwen Code provides 14 distinct hook events: PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd, Stop" |
+| stateIO | filesystem | https://qwenlm.github.io/qwen-code-docs/en/developers/channel-plugins | "Runtime Environment: Node.js only. The architecture uses standard Node.js APIs: import, async/await, file I/O (writeFileSync), OS utilities" |
+| transport | mcp | https://qwenlm.github.io/qwen-code-docs/en/developers/tools/mcp-server | "Qwen Code integrates with MCP servers through a sophisticated discovery and execution system" |
+| runtime | node | https://qwenlm.github.io/qwen-code-docs/en/developers/channel-plugins | "Language: Node.js (TypeScript/JavaScript). Execution model: In-process — plugins load at startup as extensions." |
+| dispatch.namedDispatch | true | https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/ | "Named subagents are invoked when the AI identifies tasks matching their specialization... Users can also explicitly requ" |
+| dispatch.nested | false | https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/ | "Fork children cannot create further forks. This is enforced at runtime — if a fork attempts to spawn another fork, it re" |
+| dispatch.maxDepth | 1 | https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/ | "Fork children cannot create further forks. This is enforced at runtime" |
+| dispatch.background | true | https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/ | "Runs in background, parent continues immediately... Forks run parallel to the parent; the main conversation continues im" |
+| dispatch.subagentToolkit | full | https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/ | "When omitted, the subagent inherits all available tools from the parent session." |
+
+Sources consulted:
+- https://qwenlm.github.io/qwen-code-docs/en/developers/channel-plugins
+- https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents/
+- https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks
+- https://qwenlm.github.io/qwen-code-docs/en/users/extension/introduction
+- https://qwenlm.github.io/qwen-code-docs/en/developers/tools/mcp-server
+- /websites/qwenlm_github_io_qwen-code-docs_en (Context7)
+- /qwenlm/qwen-code (Context7)
+
+Documentation gaps:
+- dispatch.nested — docs only restrict fork-type sub-agents from nesting; whether named sub-agents can themselves spawn named sub-agents is not stated.
+- dispatch.maxDepth — depth=1 is documented only for fork sub-agents; depth for named sub-agent chains is undocumented.
+
+---
+
+## codebuddy
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://www.codebuddy.ai/docs/cli/plugins-reference | "Commands are 'plain Markdown file[s]' located in commands/ by default ... a skill is a directory containing a SKILL.md ... The documentation" |
+| commandSurface | slash-file | https://www.codebuddy.ai/docs/cli/plugins-reference | "Commands are 'plain Markdown file[s]' located in commands/ by default ... Skills are prefixed with this (e.g., /my-first-plugin:hello)" |
+| modelMode | passive | https://www.codebuddy.ai/docs/cli/sdk | "The SDK is not for building plugins that run inside CodeBuddy. It's an external SDK for standalone applications" |
+| hookBus | host | https://www.codebuddy.ai/docs/cli/hooks | "Full support for the hook event family (27+ events), covering tool lifecycle (PreToolUse / PostToolUse / PostToolUseFailure)" |
+| stateIO | filesystem | https://www.codebuddy.ai/docs/cli/settings | "Storage operates in non-sandboxed mode by default ... Default: Full filesystem access governed by permission rules" |
+| transport | mcp | https://www.codebuddy.ai/docs/cli/cli-reference | "MCP (Model Context Protocol) is built-in as a core feature ... codebuddy mcp command to 'Configure Model Context Protocol (MCP) servers'" |
+| runtime | node | https://www.codebuddy.ai/docs/cli/sdk | "TypeScript/JavaScript: Node.js >= 18.20 ... npm install @tencent-ai/agent-sdk" |
+| dispatch.namedDispatch | true | https://www.codebuddy.ai/docs/cli/sub-agents | "Sub-agents can be invoked explicitly by name: 'Request a specific sub-agent by mentioning it in your command'" |
+| dispatch.nested | false | https://www.codebuddy.ai/docs/cli/sub-agents | "This prevents infinite nesting of agents (sub-agents cannot spawn other sub-agents)" |
+| dispatch.maxDepth | 1 | https://www.codebuddy.ai/docs/cli/sub-agents | "The architecture enforces exactly one level of nesting — only the main CodeBuddy Code instance can invoke sub-agents." |
+| dispatch.background | true | https://www.codebuddy.ai/docs/cli/sub-agents | "Launch a background agent using the run_in_background: true parameter ... Tasks return immediately with an ID" |
+| dispatch.subagentToolkit | full | https://www.codebuddy.ai/docs/cli/sub-agents | "By default, sub-agents inherit all tools when the tools field is omitted ... Sub-agents can access MCP tools from config" |
+
+Sources consulted:
+- https://www.codebuddy.ai/docs/cli/plugins
+- https://www.codebuddy.ai/docs/cli/plugins-reference
+- https://www.codebuddy.ai/docs/cli/sub-agents
+- https://www.codebuddy.ai/docs/cli/hooks
+- https://www.codebuddy.ai/docs/cli/sdk
+- https://www.codebuddy.ai/docs/cli/settings
+- /websites/codebuddy_cn (Context7)
+
+---
+
+## copilot
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://docs.github.com/en/copilot/concepts/agents/copilot-cli/comparing-cli-features | "Declarative elements include custom instructions, skills, custom agents, and plugin configurations—all defined through configuration files" |
+| commandSurface | slash-file | https://docs.github.com/en/copilot/concepts/agents/copilot-cli/comparing-cli-features | "Skills: Markdown files with instructions for specific contexts. Users can invoke via slash commands (e.g., /Markdown-Checker check README.md)" |
+| modelMode | passive | https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md | "Model selection via config: model: 'gpt-4.1', provider: { type: 'openai', ... }." |
+| hookBus | host | https://docs.github.com/en/copilot/reference/hooks-reference | "Hooks allow you to extend and customize the behavior of GitHub Copilot agents by executing custom shell commands at key points during agent" |
+| stateIO | filesystem | https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers | "Configuration file Location: ~/.copilot/mcp-config.json. Hook config files stored in .github/hooks/*.json" |
+| transport | mcp | https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers | "Copilot CLI comes with the GitHub MCP server already configured. STDIO is the standard transport." |
+| runtime | undocumented | no authoritative doc — searched: https://github.com/github/copilot-cli/blob/main/README.md, https://github.com/github/copilot-sdk/blob/main/nodejs/README.md | — |
+| dispatch.namedDispatch | true | https://github.com/github/copilot-sdk/blob/main/docs/features/custom-agents.md | "A custom agent is a named agent configuration that includes its own prompt and tool set. A sub-agent is a custom agent i" |
+| dispatch.nested | false | https://awesome-copilot.github.com/learning-hub/agents-and-subagents/ | "By default, subagents do not keep spawning additional subagents." |
+| dispatch.maxDepth | 1 | https://awesome-copilot.github.com/learning-hub/agents-and-subagents/ | "Depth counts how many agents are nested within one another. When the depth limit is reached, the innermost agent cannot" |
+| dispatch.background | true | https://docs.github.com/en/copilot/how-tos/copilot-cli/speed-up-task-completion | "Allow Copilot to use subagents and work autonomously to implement the plan without any further input." |
+| dispatch.subagentToolkit | full | https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli | "By default, custom agents have access to all tools. If you restrict an agent's access, a tools specification is added" |
+
+Sources consulted:
+- https://github.com/github/copilot-cli/blob/main/README.md (via Context7 /github/copilot-cli)
+- https://github.com/github/copilot-sdk/blob/main/docs/features/custom-agents.md (via Context7 /github/copilot-sdk)
+- https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
+- https://docs.github.com/en/copilot/reference/hooks-reference
+- https://docs.github.com/en/copilot/concepts/agents/copilot-cli/comparing-cli-features
+- https://awesome-copilot.github.com/learning-hub/agents-and-subagents/
+
+Documentation gaps:
+- runtime — docs describe the CLI binary and the SDK (Node.js/Go/Python/Rust) but do not state what runtime the CLI host itself or its plugin/extension loader executes in.
+- dispatch.nested exact authoritative source is awesome-copilot.github.com (community docs) not docs.github.com.
+
+---
+
+## kilo
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://kilo.ai/docs/automate/extending/plugins | "Plugins extend Kilo by hooking into events and adding functionality. They can: add custom tools the model can call (like read, write, bash)" |
+| commandSurface | slash-file | https://kilo.ai/docs/customize/workflows | "Workflows, also known as slash commands, allow users to automate repetitive tasks by defining step-by-step instructions" |
+| modelMode | active | https://kilo.ai/docs/automate/extending/plugins | "provider — dynamically supply model catalogs. auth — register OAuth or API-key flows for model providers. chat.params — Mutate temperature" |
+| hookBus | host | https://kilo.ai/docs/automate/extending/plugins | "event — fires for every internal bus event. Session: session.created, session.updated, session.idle, session.error, session.deleted" |
+| stateIO | filesystem | https://kilo.ai/docs/contributing/architecture | "Local execution and hosted execution are separate boundaries. Local runtime instances are Directory-keyed runtime context" |
+| transport | mcp | https://kilo.ai/docs/automate/mcp/what-is-mcp | "Kilo Code implements the Model Context Protocol to connect to both local and remote MCP servers" |
+| runtime | bun | https://kilo.ai/docs/automate/extending/plugins | "npm plugins are installed automatically at startup using Bun. Plugin context includes $ (Bun shell). Plugins are TypeScript or JavaScript mo" |
+| dispatch.namedDispatch | true | https://kilo.ai/docs/customize/custom-subagents | "Configured subagents can be invoked automatically by primary agents (like the Orchestrator) using the Task tool" |
+| dispatch.nested | true | https://github.com/Kilo-Org/kilocode/issues/7055 | "A subagent can still call the task tool if its merged permissions contain an explicit task rule, which enables nested su" |
+| dispatch.maxDepth | -1 | https://github.com/Kilo-Org/kilocode/issues/8637 | "there is no maximum nesting depth and the system relies entirely on permission gating" |
+| dispatch.background | true | https://kilo.ai/docs/code-with-ai/agents/orchestrator-mode | "Agents are also capable of launching multiple subagent sessions concurrently to facilitate parallel processing." |
+| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://kilo.ai/docs/customize/custom-subagents | — |
+
+Sources consulted:
+- https://kilo.ai/docs/automate/extending/plugins
+- https://kilo.ai/docs/customize/custom-subagents
+- https://kilo.ai/docs/customize/workflows
+- https://kilo.ai/docs/automate/mcp/what-is-mcp
+- https://kilo.ai/docs/code-with-ai/agents/orchestrator-mode
+- https://kilo.ai/docs/contributing/architecture
+- https://github.com/Kilo-Org/kilocode/issues/7055
+- https://github.com/Kilo-Org/kilocode/issues/8637
+- /websites/kilo_ai (Context7)
+
+Documentation gaps:
+- dispatch.subagentToolkit — docs describe per-subagent configurable permissions (allow/ask/deny) but do not document a single default toolkit level (full vs read-only) for subagents that lack explicit permission overrides.
+
+---
+
+## windsurf
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://docs.devin.ai/desktop/cascade/cascade | "Cascade operates through configuration files rather than code plugins: .codeiumignore for file filtering, Memories and Rules for customizing" |
+| commandSurface | slash-file | https://docs.devin.ai/desktop/cascade/workflows | "Workflows are authored as markdown files (.md extension) … triggered through slash commands using the format /[workflow-name]." |
+| modelMode | passive | https://docs.devin.ai/desktop/models.md | "Models are selectable via configuration/UI only (SWE-1.5, SWE-1.6, Adaptive, Arena tiers, Claude, GPT)." |
+| hookBus | host | https://docs.devin.ai/desktop/cascade/hooks.md | "Cascade supports twelve hook events covering critical workflow points … Pre-hooks (can block actions): pre_read_code, pre_write_code, pre_ru" |
+| stateIO | filesystem | https://docs.devin.ai/desktop/cascade/cascade | "Cascade can create and modify codebases directly … File access can be restricted through .codeiumignore files" |
+| transport | mcp | https://docs.devin.ai/desktop/cascade/mcp | "Cascade now natively integrates with MCP, allowing you to bring your own selection of MCP servers for Cascade to use." |
+| runtime | undocumented | no authoritative doc — searched: https://docs.devin.ai/windsurf/plugins/getting-started.md, /llmstxt/windsurf_llms-full_txt (Context7) | — |
+| dispatch.namedDispatch | undocumented | no authoritative doc — searched: https://docs.devin.ai/cli/subagents.md, https://docs.devin.ai/desktop/agent-command-center.md | — |
+| dispatch.nested | undocumented | no authoritative doc — searched: https://docs.devin.ai/cli/subagents.md | — |
+| dispatch.maxDepth | undocumented | no authoritative doc — searched: https://docs.devin.ai/cli/subagents.md | — |
+| dispatch.background | undocumented | no authoritative doc — searched: https://docs.devin.ai/desktop/acp.md, https://docs.devin.ai/cli/subagents.md | — |
+| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://docs.devin.ai/cli/subagents.md | — |
+
+Sources consulted:
+- https://docs.devin.ai/desktop/cascade/workflows
+- https://docs.devin.ai/desktop/cascade/mcp
+- https://docs.devin.ai/desktop/cascade/hooks.md
+- https://docs.devin.ai/desktop/cascade/cascade
+- https://docs.devin.ai/desktop/models.md
+- https://docs.devin.ai/windsurf/plugins/getting-started.md
+- https://docs.devin.ai/cli/subagents.md
+- /llmstxt/windsurf_llms-full_txt (Context7)
+
+Documentation gaps:
+- dispatch.namedDispatch — Cascade docs do not document a user-facing named sub-agent dispatch system.
+- dispatch.nested — no documentation for nested sub-agent support in Windsurf Cascade.
+- dispatch.maxDepth — no documented depth limit for Cascade sub-agents.
+- dispatch.background — Cascade has an internal background planning agent but no documented user-facing background sub-agent dispatch.
+- dispatch.subagentToolkit — no documentation for toolkit restrictions on Cascade sub-agents.
+- runtime — Windsurf IDE is Electron-based but no programmatic plugin runtime is documented to developers.
+
+---
+
+## trae
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://traeide.com/docs/how-to-manage-extensions-in-trae-ide | "Trae IDE is a VSCode fork; 'If an extension isn't available in Trae's store, you can install it from VS Code's marketplace' — inherits VSCode in-process extension model" |
+| commandSurface | slash-file | https://docs.trae.ai/ide/skills | "Skills stored as SKILL.md files in '.trae/skills/{skill_name}/' directory; 'Trae allows you to manually trigger skills if needed'" |
+| modelMode | passive | https://docs.trae.ai/ide/models | "Model selection via UI: 'click on the current model name to open the model list'; no programmatic model/LLM request API documented for plugins" |
+| hookBus | engine | https://news.ycombinator.com/item?id=44703164 | "Trae is 'ByteDance's VSCode fork' built on Electron/Monaco; inherits VSCode extension host lifecycle (activate/deactivate hooks, event subsc" |
+| stateIO | filesystem | https://traeide.com/news/6 | "Rules at '.trae/project_rules.md', skills at '.trae/skills/', MCP config at '.trae/mcp.json'; 'codebase files always remain on your local de" |
+| transport | mcp | https://docs.trae.ai/ide/model-context-protocol | "Page title from official docs: 'In TRAE IDE, MCP servers support three transport types' — MCP is built-in" |
+| runtime | node | https://news.ycombinator.com/item?id=44703164 | "Trae is a VSCode fork built on Electron; 'Electron is designed to create desktop applications… a backend using the Node.js runtime'" |
+| dispatch.namedDispatch | true | https://docs.trae.ai/ide/agent | "Agents in Trae 'can be called individually, or automatically called by SOLO Agent at the corresponding stage'" |
+| dispatch.nested | undocumented | no authoritative doc — searched: https://docs.trae.ai/ide/solo-mode, https://docs.trae.ai/ide/agent | — |
+| dispatch.maxDepth | undocumented | no authoritative doc — searched: https://docs.trae.ai/ide/solo-mode | — |
+| dispatch.background | true | https://news.aibase.com/news/22829 | "SOLO 'supports multi-tasking, allowing you to work on multiple development tasks simultaneously'; 'run multiple agents i" |
+| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://docs.trae.ai/ide/agent | — |
+
+Sources consulted:
+- https://docs.trae.ai/ide/model-context-protocol
+- https://docs.trae.ai/ide/agent
+- https://docs.trae.ai/ide/skills
+- https://docs.trae.ai/ide/solo-mode
+- https://docs.trae.ai/ide/solo-coder
+- https://traeide.com/news/6
+- https://traeide.com/docs/how-to-manage-extensions-in-trae-ide
+- https://news.ycombinator.com/item?id=44703164
+- https://news.aibase.com/news/22829
+
+Documentation gaps:
+- dispatch.nested — docs describe two-tier orchestration (SOLO → named agents) but do not state whether a spawned sub-agent can itself spawn further sub-agents.
+- dispatch.maxDepth — no integer depth limit documented beyond one orchestrator level.
+- dispatch.subagentToolkit — docs say agents can be configured with 'callable MCP services and other capabilities' but do not state whether sub-agents receive a full vs. restricted tool set.
+
+---
+
+## kimi
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://context7.com/moonshotai/kimi-cli/llms.txt | "from kimi_cli.app import KimiCLI, enable_logging ... instance = await KimiCLI.create(session, agent_file=myagent) ... class Ls(CallableTool2)" |
+| commandSurface | slash-file | https://github.com/moonshotai/kimi-cli/blob/main/docs/en/customization/skills.md | "/skill:code-style ... /flow:code-review — Skills are SKILL.md markdown files with YAML frontmatter that become /skill:<name> and /flow:<name>" |
+| modelMode | passive | https://github.com/moonshotai/kimi-cli/blob/main/docs/en/configuration/providers.md | "Use the `/model` command to switch between available models and thinking modes ... `--model` option overrides the default model" |
+| hookBus | host | https://moonshotai.github.io/kimi-cli/en/customization/hooks.html | "Core: Add hooks system (Beta) — configure `[[hooks]]` in `config.toml` to run custom shell commands at 13 lifecycle events including `PreToo" |
+| stateIO | filesystem | https://github.com/MoonshotAI/kimi-cli | "Kimi Code CLI is an AI agent that runs in the terminal ... capable of reading and editing code, executing shell commands, searching files" |
+| transport | mcp | https://github.com/moonshotai/kimi-cli/blob/main/docs/en/reference/kimi-mcp.md | "kimi mcp add ... --transport stdio|http ... Manage MCP Servers: Use the kimi mcp sub-command group to add, list, remove, or authorize MCP se" |
+| runtime | python | https://context7.com/moonshotai/kimi-cli/llms.txt | "from kimi_cli.app import KimiCLI ... from kosong.tooling import CallableTool2 — CLI core is Python" |
+| dispatch.namedDispatch | true | https://moonshotai.github.io/kimi-cli/en/customization/agents.html | "subagents:\n  coder:\n    path: ./coder-sub.yaml\n    description: \"Handle coding tasks\"\n  reviewer:\n    path: ./reviewer-sub.yaml" |
+| dispatch.nested | false | https://moonshotai.github.io/kimi-cli/en/customization/agents.html | "All subagent types are prohibited from nesting the `Agent` tool (subagents cannot create their own subagents). Only root" |
+| dispatch.maxDepth | 1 | https://moonshotai.github.io/kimi-cli/en/customization/agents.html | "All subagent types are prohibited from nesting the `Agent` tool (subagents cannot create their own subagents). Only root" |
+| dispatch.background | true | https://moonshotai.github.io/kimi-cli/en/customization/agents.html | "Subagents support foreground and background modes. The `run_in_background` parameter allows tasks to execute asynchronou" |
+| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://moonshotai.github.io/kimi-cli/en/customization/agents.html | — |
+
+Sources consulted:
+- https://moonshotai.github.io/kimi-cli/en/customization/hooks.html
+- https://moonshotai.github.io/kimi-cli/en/customization/agents.html
+- https://github.com/MoonshotAI/kimi-cli
+- https://github.com/moonshotai/kimi-cli/blob/main/docs/en/customization/skills.md
+- https://github.com/moonshotai/kimi-cli/blob/main/docs/en/customization/agents.md
+- https://github.com/moonshotai/kimi-cli/blob/main/docs/en/reference/kimi-mcp.md
+- https://context7.com/moonshotai/kimi-cli/llms.txt
+- /moonshotai/kimi-cli (Context7)
+
+Documentation gaps:
+- dispatch.subagentToolkit — docs show three built-in subagent types each with different tool subsets (coder=full, explore=read-only, plan=no shell/write); no single 'full' or 'read-only' value covers all types; maintainer should clarify the intended classification.
+- runtime — CLI core is Python; a Rust Wire implementation also exists; docs do not state a canonical plugin extension runtime.
