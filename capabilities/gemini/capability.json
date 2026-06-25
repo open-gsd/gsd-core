@@ -52,6 +52,16 @@
       "BeforeAgent",
       "AfterAgent",
       "BeforeModel"
-    ]
+    ],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-toml",
+      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": "undocumented", "subagentToolkit": "undocumented" },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node"
+    }
   }
 }

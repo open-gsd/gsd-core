@@ -1775,6 +1775,16 @@ describe('C3: role:runtime body validation', () => {
       writesSharedSettings: false,
       permissionWriter: null,
       extendedHookEvents: [],
+      hostIntegration: {
+        embeddingMode: 'declarative',
+        commandSurface: 'slash-file',
+        dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full' },
+        modelMode: 'passive',
+        hookBus: 'host',
+        stateIO: 'filesystem',
+        transport: 'mcp',
+        runtime: 'node',
+      },
     },
   };
 
@@ -3218,6 +3228,16 @@ function makeRuntimeCap(overrides) {
       writesSharedSettings: true,
       permissionWriter: null,
       extendedHookEvents: [],
+      hostIntegration: {
+        embeddingMode: 'imperative',
+        commandSurface: 'slash-file',
+        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+        modelMode: 'passive',
+        hookBus: 'host',
+        stateIO: 'filesystem',
+        transport: 'mcp',
+        runtime: 'node',
+      },
       ...((overrides && overrides.runtime) ? overrides.runtime : {}),
     },
     ...overrides,
@@ -4283,6 +4303,16 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
         writesSharedSettings: true,
         permissionWriter: null,
         extendedHookEvents: [],
+        hostIntegration: {
+          embeddingMode: 'imperative',
+          commandSurface: 'slash-file',
+          dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+          modelMode: 'passive',
+          hookBus: 'host',
+          stateIO: 'filesystem',
+          transport: 'mcp',
+          runtime: 'node',
+        },
       },
     };
     if (overrides && typeof overrides === 'object') {
@@ -5135,6 +5165,16 @@ describe('activationKey validation', () => {
         writesSharedSettings: false,
         permissionWriter: null,
         extendedHookEvents: [],
+        hostIntegration: {
+          embeddingMode: 'declarative',
+          commandSurface: 'slash-file',
+          dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full' },
+          modelMode: 'passive',
+          hookBus: 'host',
+          stateIO: 'filesystem',
+          transport: 'mcp',
+          runtime: 'node',
+        },
       },
     };
     const errors = validateCapability(cap, 'cursor');

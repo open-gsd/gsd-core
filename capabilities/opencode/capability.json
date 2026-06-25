@@ -65,6 +65,16 @@
     "installSurface": "settings-json",
     "writesSharedSettings": true,
     "permissionWriter": "opencode",
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": "undocumented", "maxDepth": "undocumented", "background": false, "subagentToolkit": "full" },
+      "modelMode": "active",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "bun"
+    }
   }
 }

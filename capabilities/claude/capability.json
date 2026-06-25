@@ -61,6 +61,16 @@
       "Stop",
       "PreCompact",
       "FileChanged"
-    ]
+    ],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": true, "maxDepth": 5, "background": true, "subagentToolkit": "full" },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node"
+    }
   }
 }

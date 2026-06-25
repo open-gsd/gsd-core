@@ -86,6 +86,16 @@ function runtimeCap(overrides) {
       writesSharedSettings: false,
       permissionWriter: null,
       extendedHookEvents: [],
+      hostIntegration: {
+        embeddingMode: 'imperative',
+        commandSurface: 'slash-file',
+        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+        modelMode: 'passive',
+        hookBus: 'host',
+        stateIO: 'filesystem',
+        transport: 'mcp',
+        runtime: 'node',
+      },
     },
     ...overrides,
   };

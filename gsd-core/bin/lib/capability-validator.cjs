@@ -713,6 +713,16 @@ const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-
 const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
 const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
 
+// ADR-1239 Phase A: hostIntegration axes (MUST stay parity-identical to HOST_INTEGRATION_AXES in src/host-integration.cts)
+const VALID_EMBEDDING_MODES   = new Set(['imperative', 'declarative']);
+const VALID_COMMAND_SURFACES  = new Set(['slash-file', 'slash-programmatic', 'slash-toml', 'palette', 'prose-only']);
+const VALID_MODEL_MODES       = new Set(['active', 'passive']);
+const VALID_HOOK_BUSES        = new Set(['host', 'engine', 'none']);
+const VALID_STATE_IO          = new Set(['filesystem', 'sandboxed-storage', 'session-log-append']);
+const VALID_TRANSPORTS        = new Set(['mcp', 'native-extension']);
+const VALID_HOST_RUNTIMES     = new Set(['node', 'bun', 'sandboxed-web', 'python', 'go', 'rust', 'electron', 'other']);
+const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only']);
+
 // GATE A: installSurface → allowed hooksSurface values (DEFECT.GENERATIVE-FIX: parity invariant)
 // Derived from the actual pairings in the 16 real runtime descriptors.
 const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
@@ -1032,6 +1042,150 @@ function validateRuntimeBody(cap) {
         errors.push(
           'runtime.extendedHookEvents[' + i + '] must be one of: ' + [...VALID_EXTENDED_HOOK_EVENTS].join(', ') +
           ' (got: ' + JSON.stringify(ev) + ')',
+        );
+      }
+    }
+  }
+
+  // hostIntegration — ADR-1239 Phase A: required object with closed-enum axes
+  if (typeof r.hostIntegration !== 'object' || r.hostIntegration === null || Array.isArray(r.hostIntegration)) {
+    errors.push('runtime.hostIntegration is required and must be an object');
+  } else {
+    const hi = r.hostIntegration;
+
+    // S2b: reserved-OWN-KEY guard on hostIntegration (CodeQL barrier — inline literal comparisons)
+    if (Object.prototype.hasOwnProperty.call(hi, '__proto__')) {
+      errors.push('runtime.hostIntegration must not contain reserved key "__proto__"');
+    }
+    if (Object.prototype.hasOwnProperty.call(hi, 'constructor')) {
+      errors.push('runtime.hostIntegration must not contain reserved key "constructor"');
+    }
+    if (Object.prototype.hasOwnProperty.call(hi, 'prototype')) {
+      errors.push('runtime.hostIntegration must not contain reserved key "prototype"');
+    }
+
+    // embeddingMode
+    if (hi.embeddingMode === '__proto__' || hi.embeddingMode === 'constructor' || hi.embeddingMode === 'prototype') {
+      errors.push('runtime.hostIntegration.embeddingMode "' + hi.embeddingMode + '" is a reserved name');
+    } else if (hi.embeddingMode !== 'undocumented' && !VALID_EMBEDDING_MODES.has(hi.embeddingMode)) {
+      errors.push(
+        'runtime.hostIntegration.embeddingMode must be one of: ' + [...VALID_EMBEDDING_MODES].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.embeddingMode) + ')',
+      );
+    }
+
+    // commandSurface
+    if (hi.commandSurface === '__proto__' || hi.commandSurface === 'constructor' || hi.commandSurface === 'prototype') {
+      errors.push('runtime.hostIntegration.commandSurface "' + hi.commandSurface + '" is a reserved name');
+    } else if (hi.commandSurface !== 'undocumented' && !VALID_COMMAND_SURFACES.has(hi.commandSurface)) {
+      errors.push(
+        'runtime.hostIntegration.commandSurface must be one of: ' + [...VALID_COMMAND_SURFACES].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.commandSurface) + ')',
+      );
+    }
+
+    // modelMode
+    if (hi.modelMode === '__proto__' || hi.modelMode === 'constructor' || hi.modelMode === 'prototype') {
+      errors.push('runtime.hostIntegration.modelMode "' + hi.modelMode + '" is a reserved name');
+    } else if (hi.modelMode !== 'undocumented' && !VALID_MODEL_MODES.has(hi.modelMode)) {
+      errors.push(
+        'runtime.hostIntegration.modelMode must be one of: ' + [...VALID_MODEL_MODES].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.modelMode) + ')',
+      );
+    }
+
+    // hookBus
+    if (hi.hookBus === '__proto__' || hi.hookBus === 'constructor' || hi.hookBus === 'prototype') {
+      errors.push('runtime.hostIntegration.hookBus "' + hi.hookBus + '" is a reserved name');
+    } else if (hi.hookBus !== 'undocumented' && !VALID_HOOK_BUSES.has(hi.hookBus)) {
+      errors.push(
+        'runtime.hostIntegration.hookBus must be one of: ' + [...VALID_HOOK_BUSES].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.hookBus) + ')',
+      );
+    }
+
+    // stateIO
+    if (hi.stateIO === '__proto__' || hi.stateIO === 'constructor' || hi.stateIO === 'prototype') {
+      errors.push('runtime.hostIntegration.stateIO "' + hi.stateIO + '" is a reserved name');
+    } else if (hi.stateIO !== 'undocumented' && !VALID_STATE_IO.has(hi.stateIO)) {
+      errors.push(
+        'runtime.hostIntegration.stateIO must be one of: ' + [...VALID_STATE_IO].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.stateIO) + ')',
+      );
+    }
+
+    // transport
+    if (hi.transport === '__proto__' || hi.transport === 'constructor' || hi.transport === 'prototype') {
+      errors.push('runtime.hostIntegration.transport "' + hi.transport + '" is a reserved name');
+    } else if (hi.transport !== 'undocumented' && !VALID_TRANSPORTS.has(hi.transport)) {
+      errors.push(
+        'runtime.hostIntegration.transport must be one of: ' + [...VALID_TRANSPORTS].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.transport) + ')',
+      );
+    }
+
+    // runtime (axis)
+    if (hi.runtime === '__proto__' || hi.runtime === 'constructor' || hi.runtime === 'prototype') {
+      errors.push('runtime.hostIntegration.runtime "' + hi.runtime + '" is a reserved name');
+    } else if (hi.runtime !== 'undocumented' && !VALID_HOST_RUNTIMES.has(hi.runtime)) {
+      errors.push(
+        'runtime.hostIntegration.runtime must be one of: ' + [...VALID_HOST_RUNTIMES].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.runtime) + ')',
+      );
+    }
+
+    // dispatch — required object
+    if (typeof hi.dispatch !== 'object' || hi.dispatch === null || Array.isArray(hi.dispatch)) {
+      errors.push('runtime.hostIntegration.dispatch must be an object');
+    } else {
+      const d = hi.dispatch;
+
+      // S2b: reserved-OWN-KEY guard on dispatch (CodeQL barrier — inline literal comparisons)
+      if (Object.prototype.hasOwnProperty.call(d, '__proto__')) {
+        errors.push('runtime.hostIntegration.dispatch must not contain reserved key "__proto__"');
+      }
+      if (Object.prototype.hasOwnProperty.call(d, 'constructor')) {
+        errors.push('runtime.hostIntegration.dispatch must not contain reserved key "constructor"');
+      }
+      if (Object.prototype.hasOwnProperty.call(d, 'prototype')) {
+        errors.push('runtime.hostIntegration.dispatch must not contain reserved key "prototype"');
+      }
+
+      // namedDispatch — boolean or 'undocumented'
+      if (typeof d.namedDispatch !== 'boolean' && d.namedDispatch !== 'undocumented') {
+        errors.push(
+          'runtime.hostIntegration.dispatch.namedDispatch must be a boolean or "undocumented" (got: ' + JSON.stringify(d.namedDispatch) + ')',
+        );
+      }
+
+      // nested — boolean or 'undocumented'
+      if (typeof d.nested !== 'boolean' && d.nested !== 'undocumented') {
+        errors.push(
+          'runtime.hostIntegration.dispatch.nested must be a boolean or "undocumented" (got: ' + JSON.stringify(d.nested) + ')',
+        );
+      }
+
+      // background — boolean or 'undocumented'
+      if (typeof d.background !== 'boolean' && d.background !== 'undocumented') {
+        errors.push(
+          'runtime.hostIntegration.dispatch.background must be a boolean or "undocumented" (got: ' + JSON.stringify(d.background) + ')',
+        );
+      }
+
+      // subagentToolkit — closed enum or 'undocumented'
+      if (d.subagentToolkit === '__proto__' || d.subagentToolkit === 'constructor' || d.subagentToolkit === 'prototype') {
+        errors.push('runtime.hostIntegration.dispatch.subagentToolkit "' + d.subagentToolkit + '" is a reserved name');
+      } else if (d.subagentToolkit !== 'undocumented' && !VALID_SUBAGENT_TOOLKITS.has(d.subagentToolkit)) {
+        errors.push(
+          'runtime.hostIntegration.dispatch.subagentToolkit must be one of: ' + [...VALID_SUBAGENT_TOOLKITS].join(', ') +
+          ' (or "undocumented") (got: ' + JSON.stringify(d.subagentToolkit) + ')',
+        );
+      }
+
+      // maxDepth — integer >= -1 or 'undocumented'
+      if (d.maxDepth !== 'undocumented' && (!Number.isInteger(d.maxDepth) || d.maxDepth < -1)) {
+        errors.push(
+          'runtime.hostIntegration.dispatch.maxDepth must be an integer >= -1 or "undocumented" (got: ' + JSON.stringify(d.maxDepth) + ')',
         );
       }
     }
@@ -2052,6 +2206,24 @@ module.exports = {
   VALID_INSTALL_SURFACES,
   VALID_PERMISSION_WRITERS,
   VALID_EXTENDED_HOOK_EVENTS,
+  VALID_EMBEDDING_MODES,
+  VALID_COMMAND_SURFACES,
+  VALID_MODEL_MODES,
+  VALID_HOOK_BUSES,
+  VALID_STATE_IO,
+  VALID_TRANSPORTS,
+  VALID_HOST_RUNTIMES,
+  VALID_SUBAGENT_TOOLKITS,
+  _HOST_INTEGRATION_VOCAB: {
+    embeddingMode:   [...VALID_EMBEDDING_MODES],
+    commandSurface:  [...VALID_COMMAND_SURFACES],
+    modelMode:       [...VALID_MODEL_MODES],
+    hookBus:         [...VALID_HOOK_BUSES],
+    stateIO:         [...VALID_STATE_IO],
+    transport:       [...VALID_TRANSPORTS],
+    runtime:         [...VALID_HOST_RUNTIMES],
+    subagentToolkit: [...VALID_SUBAGENT_TOOLKITS],
+  },
   INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
   GEMINI_AGENT_EVENTS,
   CLAUDE_FAMILY_EVENTS,
