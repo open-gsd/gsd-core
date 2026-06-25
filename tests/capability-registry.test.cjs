@@ -1778,7 +1778,7 @@ describe('C3: role:runtime body validation', () => {
       hostIntegration: {
         embeddingMode: 'declarative',
         commandSurface: 'slash-file',
-        dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full' },
+        dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full', backgroundDispatch: false },
         modelMode: 'passive',
         hookBus: 'host',
         stateIO: 'filesystem',
@@ -3231,7 +3231,7 @@ function makeRuntimeCap(overrides) {
       hostIntegration: {
         embeddingMode: 'imperative',
         commandSurface: 'slash-file',
-        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
         modelMode: 'passive',
         hookBus: 'host',
         stateIO: 'filesystem',
@@ -4306,7 +4306,7 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
         hostIntegration: {
           embeddingMode: 'imperative',
           commandSurface: 'slash-file',
-          dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+          dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
           modelMode: 'passive',
           hookBus: 'host',
           stateIO: 'filesystem',
@@ -5168,7 +5168,7 @@ describe('activationKey validation', () => {
         hostIntegration: {
           embeddingMode: 'declarative',
           commandSurface: 'slash-file',
-          dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full' },
+          dispatch: { namedDispatch: true, nested: true, maxDepth: 2, background: false, subagentToolkit: 'full', backgroundDispatch: false },
           modelMode: 'passive',
           hookBus: 'host',
           stateIO: 'filesystem',

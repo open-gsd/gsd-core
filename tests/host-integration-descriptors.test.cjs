@@ -345,7 +345,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
           hostIntegration: {
             embeddingMode: 'bogus',
             commandSurface: 'slash-file',
-            dispatch: { namedDispatch: true, nested: false, maxDepth: 1, background: false, subagentToolkit: 'full' },
+            dispatch: { namedDispatch: true, nested: false, maxDepth: 1, background: false, subagentToolkit: 'full', backgroundDispatch: false },
             modelMode: 'passive',
             hookBus: 'host',
             stateIO: 'filesystem',

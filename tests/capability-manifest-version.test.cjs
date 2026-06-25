@@ -89,7 +89,7 @@ function runtimeCap(overrides) {
       hostIntegration: {
         embeddingMode: 'imperative',
         commandSurface: 'slash-file',
-        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full' },
+        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
         modelMode: 'passive',
         hookBus: 'host',
         stateIO: 'filesystem',
