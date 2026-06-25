@@ -77,3 +77,17 @@ This is the **last upward dependency from the `.cts` source tree into the hand-a
 - **ADR-457 (generated-CJS single source):** the moved engine is authored in `src/*.cts` and consumed as generated `bin/lib/*.cjs`, consistent with the single-source rule.
 - **ADR-1235 (descriptor-driven agent conversion):** complementary — both narrow `bin/install.js`'s ownership of conversion concerns.
 - **Epic #1507** tracks the phases. **Distinct from epic #1258** (cross-runtime skill mapping + plugin skill provision/consumption): #1258 Phase A documents the converter *transform-contract catalog*; this ADR decides *module ownership + dependency direction + engine relocation*. Continues **#1099** (closed first slice that created the module) and is a sibling of **#1173** (agent-converter wiring).
+
+## Amendment — 2026-06-24: Implementation complete (epic #1507 closed)
+
+The decision recorded above is **implemented** on `next`. The ADR `Status` stays **Accepted** — per this directory's append-only convention there is no "Implemented" status; this dated amendment records that the decision is realized.
+
+Landed:
+- **Phase 1 (#1512):** `getDirName` → `src/runtime-name-policy.cts`; `processAttribution` → `src/runtime-artifact-conversion.cts`. (`getCommitAttribution` stays in `bin/install.js` — a documented scope refinement: it is impure install-time config I/O, not a content-transformation helper, so it cannot move into the pure conversion module. Phase 2 injects the resolved attribution value instead.)
+- **Phase 2 (#1513):** the content-rewrite engine (`_applyRuntimeRewrites`), both staged-content walkers, and `computePathPrefix` (private; `_computePathPrefix` for tests) live in `src/runtime-artifact-conversion.cts` behind the deep seam `rewriteStagedSkillBodies` / `rewriteStagedCommandBodies({runtime, configDir, scope, homedir?, platform?, resolveAttribution?})`. The `getInstallExports` / `loadInstallExports` / `InstallExports` relay and the `GSD_TEST_MODE` install.js `require` are **deleted** from `src/runtime-artifact-layout.cts` — the last upward `.cts → bin/install.js` dependency is gone. `CONTEXT.md` marks the module **SHIPPED**. (The install-side cutover lands one indirection deeper than the literal issue text — `install.js` delegates to `createRuntimeArtifactInstallPlan`, which performs the deep calls in `src/runtime-artifact-install-plan.cts` — satisfying the same dependency-direction intent with a cleaner owner.)
+
+Two deferred follow-ups were spun out as **sub-issues of #1507** and have since been **delivered** (neither was a blocker; the architectural goal — single ownership, downward dependency direction, relay deletion — was already met by the merged slices above):
+- **#1675** (PR #1685) — deduped the byte-identical `convertClaudeToAugmentMarkdown` / `convertSlashCommandsToAugmentSkillMentions` between `bin/install.js` and the conversion module (the Phase 1 → Phase 2 deferred cleanup; install.js now binds them from the conversion module, single-sourced).
+- **#1676** (PR #1686) — added the `fast-check` property test (`$HOME`-collapse invariant + path-rewrite idempotency) promised in #1511's test scope.
+
+Delivery verified by a Codex (`gpt-5.4`, high-effort, read-only) review against the epic's stated deliverables, cross-checked against the indexed code graph and live source.
