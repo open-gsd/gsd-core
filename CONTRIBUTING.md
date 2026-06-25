@@ -817,6 +817,7 @@ The following checks run on every PR in addition to the test suite:
 | Job | What it checks | How to pass |
 |-----|----------------|-------------|
 | `Lint — ESLint` | No source-grep tests (see above), via the `local/no-source-grep` rule | Replace with `runGsdTools()` behavioral tests, or add `// allow-test-rule: <reason>` |
+| `Lint — cross-platform portability` | Windows-portability defects in tests, via `local/no-path-literal-in-assert` (more rules land per [ADR-1703](docs/adr/1703-portability-enforcement-architecture.md)) — e.g. a path-returning call asserted against a hardcoded `/`-literal | Normalize the actual: `String(pathFn(...)).replace(/\\/g, '/')`, or structure platform-specific code behind a `process.platform !== 'win32'` guard. **No `eslint-disable`** — see [cross-platform-portability-rules.md](docs/contributing/cross-platform-portability-rules.md) |
 
 Run locally before pushing: `npm run lint` (or `npx eslint .`)
 
