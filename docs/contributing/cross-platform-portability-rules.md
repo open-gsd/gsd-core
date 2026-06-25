@@ -17,6 +17,7 @@ running outside ESLint, fails the build if you try). Legitimately platform-speci
 | Rule | Flags | Surface |
 |---|---|---|
 | `local/no-path-literal-in-assert` | An `assert.equal`/`strictEqual`/`deepEqual`/`deepStrictEqual` or `expect(...).toBe`/`toEqual`/`toStrictEqual` where one operand is a **path-returning function call** and the other is a **hardcoded `/`-string literal** not normalized to POSIX. | `tests/**/*.test.cjs` |
+| `local/no-posix-mode-bit-assert` | An equality assertion comparing a file **`.mode`** (e.g. `statSync(p).mode & 0o777`) to an **octal literal** — Windows reports `0o666`/`0o444`, never the requested mode. | `tests/**/*.test.cjs` |
 
 (More rules land per the epic — see ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702).)
 
@@ -50,6 +51,26 @@ together). Recognized normalizers: `.replace(/\\/g,'/')`, `.replace(/[\\/]/g,'/'
 `.replaceAll('\\','/')`, `.replaceAll(path.sep,'/')`, `.split(path.sep).join('/')`,
 `toPosixPath(...)`.
 
+## How-to — fix a `no-posix-mode-bit-assert` violation
+
+Windows does not honor POSIX file modes — `fs.statSync(p).mode` reads back `0o666` (writable) or
+`0o444` (readonly), never the `0o644`/`0o755` you wrote. A mode-bit assertion is therefore a
+POSIX-only precondition. **Gate it behind a platform check and keep the real behavioral assertion
+running on every OS** (do not delete it — scope it):
+
+```js
+// ❌ flagged
+assert.strictEqual(fs.statSync(p).mode & 0o777, 0o644);
+
+// ✅ scope the POSIX-only precondition; keep the behavioral assertion cross-platform
+if (process.platform !== 'win32') {
+  assert.strictEqual(fs.statSync(p).mode & 0o777, 0o644);
+}
+assert.match(hookCommand, /^node /); // behavioral assertion — runs everywhere
+```
+
+Prefer asserting the *behavior* (command shape, runnability) over the raw mode bit where you can.
+
 ## Platform guards (the only "escape" — by structure, not annotation)
 
 If an assertion is *genuinely* POSIX-only, gate it behind a Windows platform check the rule
@@ -71,6 +92,10 @@ The guard is recognized by control-dependence (it must actually dominate the ass
 binding-aware (a reassigned or `false`-initialized variable is not trusted), and handles
 `os.platform()` and `node:test` skip returns. See
 [`eslint-rules/lib/platform-guard.cjs`](../../eslint-rules/lib/platform-guard.cjs).
+
+> **Note:** the `node:test` `test(name, { skip: isWindows ? … : false }, fn)` *option* object is
+> NOT recognized as a platform guard. To scope a POSIX-only assertion use an
+> `if (process.platform !== 'win32')` guard (or early-return) **inside** the callback.
 
 ## How-to — add a new path resolver
 

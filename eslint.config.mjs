@@ -16,6 +16,7 @@ import noRawRmsyncInTests from './eslint-rules/no-raw-rmsync-in-tests.cjs';
 import noTautologicalAssert from './eslint-rules/no-tautological-assert.cjs';
 import noAdhocMarkdownParsing from './eslint-rules/no-adhoc-markdown-parsing.cjs';
 import noPathLiteralInAssert from './eslint-rules/no-path-literal-in-assert.cjs';
+import noPosixModeBitAssert from './eslint-rules/no-posix-mode-bit-assert.cjs';
 
 const localPlugin = {
   rules: {
@@ -26,6 +27,7 @@ const localPlugin = {
     'no-tautological-assert': noTautologicalAssert,
     'no-adhoc-markdown-parsing': noAdhocMarkdownParsing,
     'no-path-literal-in-assert': noPathLiteralInAssert,
+    'no-posix-mode-bit-assert': noPosixModeBitAssert,
   },
 };
 
@@ -269,6 +271,8 @@ export default tseslint.config(
       'local/no-source-grep': 'error',
       // Ban path-returning calls compared to hardcoded POSIX-slash literals (fails on Windows)
       'local/no-path-literal-in-assert': 'error',
+      // Ban POSIX mode-bit assertions compared to octal literals (fails on Windows)
+      'local/no-posix-mode-bit-assert': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',

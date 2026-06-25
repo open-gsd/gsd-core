@@ -31,6 +31,7 @@ const { globSync } = require('glob');
 // ── Protected portability rules (grows with each ADR-1703 phase) ──────────────
 const PROTECTED_RULES = [
   'no-path-literal-in-assert',
+  'no-posix-mode-bit-assert',
   // Future phases: add new local/ portability rules here.
 ];
 
