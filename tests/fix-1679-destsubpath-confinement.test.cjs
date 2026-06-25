@@ -690,10 +690,15 @@ describe('N1: sibling directory with shared prefix is rejected', () => {
   });
 
   test('N1: accepts a true child subpath inside configDir', () => {
-    // 'bar' appended INSIDE /tmp/gsd-foo => /tmp/gsd-foo/bar — accepted
+    // 'bar' appended INSIDE /tmp/gsd-foo => the child path — accepted.
+    // Compute expected via path.resolve (the same primitive the helper uses) so
+    // the assertion is platform-portable: on Windows path.resolve prepends the
+    // cwd drive (C:\...) and uses backslashes, which a hardcoded posix literal /
+    // path.join (no drive) would not match (#1679 Windows-CI portability).
+    const root = path.resolve('/tmp/gsd-foo');
     const result = assertDestWithinConfigHome('/tmp/gsd-foo', 'bar');
-    assert.strictEqual(result, path.join('/tmp/gsd-foo', 'bar'));
-    assert.ok(result.startsWith('/tmp/gsd-foo' + path.sep));
+    assert.strictEqual(result, path.resolve('/tmp/gsd-foo', 'bar'));
+    assert.ok(result.startsWith(root + path.sep));
   });
 
   test('N1: the accepted child does not imply the sibling is accepted', () => {
