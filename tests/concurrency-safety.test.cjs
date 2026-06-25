@@ -126,6 +126,10 @@ describe('planning lock integration', () => {
     fs.mkdirSync(p1, { recursive: true });
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(
+      path.join(p1, '01-VERIFICATION.md'),
+      '---\nstatus: passed\nscore: "1/1"\n---\n# Verification\nPassed.\n',
+    );
     fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-api'), { recursive: true });
 
     const result = runGsdTools('phase complete 1', tmpDir);
@@ -636,6 +640,10 @@ describe('stress tests with 50+ phases', () => {
     fs.writeFileSync(
       path.join(phase26Dir, '26-01-SUMMARY.md'),
       '# Phase 26 Plan 1 Summary\n\nFeature 26 completed.\n'
+    );
+    fs.writeFileSync(
+      path.join(phase26Dir, '26-VERIFICATION.md'),
+      '---\nstatus: passed\nscore: "1/1"\n---\n# Verification\nPassed.\n',
     );
 
     const result = runGsdTools('phase complete 26', tmpDir);

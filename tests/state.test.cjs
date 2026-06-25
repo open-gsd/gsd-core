@@ -14,6 +14,13 @@ const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
+function writePassedVerification(tmpDir, phaseDirName, paddedPhase) {
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'phases', phaseDirName, `${paddedPhase}-VERIFICATION.md`),
+    ['---', 'status: passed', '---', '', '# Verification', ''].join('\n'),
+  );
+}
+
 describe('state-snapshot command', () => {
   let tmpDir;
 
@@ -1927,6 +1934,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.writeFileSync(path.join(phaseDir, '03-02-PLAN.md'), '# Plan 2\n');
     fs.writeFileSync(path.join(phaseDir, '03-01-SUMMARY.md'), '# Summary 1\n');
     fs.writeFileSync(path.join(phaseDir, '03-02-SUMMARY.md'), '# Summary 2\n');
+    writePassedVerification(tmpDir, '03-api', '03');
 
     // Also need ROADMAP.md for phase complete
     fs.writeFileSync(
@@ -1977,6 +1985,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '04-01-PLAN.md'), '# Plan 1\n');
     fs.writeFileSync(path.join(phaseDir, '04-01-SUMMARY.md'), '# Summary 1\n');
+    writePassedVerification(tmpDir, '04-ui', '04');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -2018,6 +2027,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.mkdirSync(phaseDir, { recursive: true });
     fs.writeFileSync(path.join(phaseDir, '05-01-PLAN.md'), '# Plan\n');
     fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '05-final', '05');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -2036,15 +2046,123 @@ describe('updatePerformanceMetricsSection', () => {
     runGsdTools('phase complete 5', tmpDir);
     const afterSecond = fs.readFileSync(statePath, 'utf-8');
 
-    // Both should have same total plans count (idempotent update for same phase)
+    // #1582: the velocity total must be IDEMPOTENT across re-runs of the same phase.
+    // The old blind-add (prevTotal + summaryCount) double-counted on every re-run
+    // (1 -> 2 here); the fix derives the total from the By-Phase Plans column, so
+    // re-running the same phase upserts the same row and the sum stays stable.
     const firstCount = afterFirst.match(/Total plans completed:\s*(\d+)/);
     const secondCount = afterSecond.match(/Total plans completed:\s*(\d+)/);
     assert.ok(firstCount, 'First run should have total plans');
     assert.ok(secondCount, 'Second run should have total plans');
-    // Second run adds another completion for phase 5, so count increments
-    // The key is the By Phase row for phase 5 should be updated, not duplicated
+    assert.equal(
+      firstCount[1],
+      secondCount[1],
+      `velocity total must be idempotent across re-runs of phase 5 (#1582): first=${firstCount[1]} second=${secondCount[1]}`,
+    );
+    assert.equal(firstCount[1], '1', 'phase 5 has 1 plan, so the velocity total must be 1');
+    // The By Phase row for phase 5 should be updated, not duplicated.
     const phase5Rows = (afterSecond.match(/\|\s*5\s*\|/g) || []).length;
     assert.ok(phase5Rows <= 1, 'Phase 5 should appear at most once in By Phase table (no duplicates)');
+  });
+
+  test('#1582 — velocity self-heals a hand-inflated total down to the true By-Phase sum', () => {
+    // A hand-edited STATE.md whose velocity line says 99 but whose By-Phase table
+    // records the true completed plans. Completing a fresh phase must RECOMPUTE the
+    // total from the table (derive, not accumulate), correcting the inflated value
+    // downward rather than adding to it.
+    const content = `# Project State
+
+**Current Phase:** 02
+**Status:** Executing Phase 2
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 99
+- Average duration: 5 min
+- Total execution time: 0.1 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| 1 | 2 | 10 min | 5 min |
+
+## Accumulated Context
+`;
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-next');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '02-next', '02');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n## Phase 2: Next\n\n- [ ] Phase 2: Next\n`
+    );
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const stateAfter = fs.readFileSync(statePath, 'utf-8');
+    // True sum = phase 1 (2) + phase 2 (1) = 3. Old blind-add would yield 99 + 1 = 100.
+    assert.ok(
+      stateAfter.match(/Total plans completed:\s*3\b/),
+      'velocity total must self-heal to the true By-Phase sum (3), not accumulate from the inflated 99 (#1582)',
+    );
+  });
+
+  test('#1582 — velocity sums indented By-Phase data rows too (codex review: byPhaseTablePattern allows [ \\t]* leading whitespace, so the sum must match it)', () => {
+    // byPhaseTablePattern's data-row capture is `(?:[ \\t]*\\|...)*` — it ALLOWS leading
+    // whitespace. The derive sum must tolerate the same, or a hand-edited/legacy indented
+    // row is captured by the table but silently skipped by the sum (undercount).
+    const content = `# Project State
+
+**Current Phase:** 02
+**Status:** Executing Phase 2
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: N/A
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+  | 1 | 2 | - | - |
+
+## Accumulated Context
+`;
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, content);
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '02-next');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '02-next', '02');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n## Phase 2: Next\n\n- [ ] Phase 2: Next\n`
+    );
+
+    const result = runGsdTools('phase complete 2', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const stateAfter = fs.readFileSync(statePath, 'utf-8');
+    // Indented phase-1 row (2) + new column-0 phase-2 row (1) = 3. A sum regex anchored
+    // at ^\\| would skip the indented row and report 1.
+    assert.ok(
+      stateAfter.match(/Total plans completed:\s*3\b/),
+      'velocity must sum indented By-Phase rows too (codex review, #1582): expected 3 (2 + 1)',
+    );
   });
 
   test('byPhaseTablePattern behavior-lock (#320): By Phase table header preserved and phase row upserted after hoist to module scope', () => {
@@ -2079,6 +2197,7 @@ describe('updatePerformanceMetricsSection', () => {
     fs.writeFileSync(path.join(phaseDir, '06-02-PLAN.md'), '# Plan 2\n');
     fs.writeFileSync(path.join(phaseDir, '06-01-SUMMARY.md'), '# Summary\n');
     fs.writeFileSync(path.join(phaseDir, '06-02-SUMMARY.md'), '# Summary 2\n');
+    writePassedVerification(tmpDir, '06-lock', '06');
 
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -2097,8 +2216,97 @@ describe('updatePerformanceMetricsSection', () => {
     const phase6Rows = (stateAfter.match(/\|\s*6\s*\|/g) || []).length;
     assert.strictEqual(phase6Rows, 1, 'Phase 6 row must appear exactly once in By Phase table (upsert, not append)');
 
-    // Total plans count updated correctly (1 pre-existing + 2 new summaries)
-    assert.ok(stateAfter.match(/Total plans completed:\s*3/), 'Total plans completed should be 3 after upsert');
+    // Total plans count = sum of the By-Phase Plans column after the upsert. Phase 6's
+    // row is upserted to its current summaryCount (2), and it is the only row, so the
+    // derived total is 2. (#1582: derived from the table, not blind-added onto the prior
+    // velocity — which previously produced 1+2=3 by double-counting phase 6.)
+    assert.ok(stateAfter.match(/Total plans completed:\s*2\b/), 'Total plans completed should equal the By-Phase Plans sum (2) after upsert (#1582)');
+  });
+
+  test('#1658 — By-Phase table row upserts on a CRLF STATE.md (byPhaseTablePattern must be CRLF-tolerant)', () => {
+    const content = [
+      '# Project State', '',
+      '**Current Phase:** 07', '**Status:** Executing Phase 7', '',
+      '## Performance Metrics', '',
+      '**Velocity:**',
+      '- Total plans completed: [N]',
+      '- Average duration: N/A',
+      '- Total execution time: 0 hours', '',
+      '**By Phase:**', '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| - | - | - | - |', '',
+      '## Accumulated Context', '',
+    ].join('\n');
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    // Force CRLF line endings across the whole STATE.md (Windows / hand-edited).
+    fs.writeFileSync(statePath, content.replace(/\n/g, '\r\n'), 'utf8');
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '07-crlf');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '07-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '07-01-SUMMARY.md'), '# Summary\n');
+    // #1548 (#1522) enforces canonical verification before phase transition, so phase
+    // complete fail-closes without a passed VERIFICATION.md. Add one so the test exercises
+    // the By-Phase row upsert path (the actual #1658 concern) rather than the gate.
+    writePassedVerification(tmpDir, '07-crlf', '07');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 7: CRLF\n\n- [ ] Phase 7\n');
+
+    const result = runGsdTools('phase complete 7', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const after = fs.readFileSync(statePath, 'utf8');
+    // #1658: byPhaseTablePattern is CRLF-tolerant. #1668 (By-Phase row not persisted on a
+    // CRLF STATE.md even though the pattern matches CRLF) was resolved by #1655's
+    // restructure of updatePerformanceMetricsSection (table upsert now runs before the
+    // velocity manipulation). Assert the full contract: row present, placeholder removed,
+    // velocity derived — all on a CRLF STATE.md.
+    assert.ok(
+      /\|\s*7\s*\|\s*1\s*\|/.test(after),
+      'By-Phase row for phase 7 must be upserted even on a CRLF STATE.md (#1658/#1668)',
+    );
+    assert.ok(
+      !/\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|/.test(after),
+      'placeholder row must be removed on CRLF STATE.md once a real row is upserted',
+    );
+    assert.ok(
+      /Total plans completed:\s*1\b/.test(after),
+      'velocity total must derive from the CRLF By-Phase table (1 plan)',
+    );
+  });
+
+  test('#1659 — completing an unpadded phase number upserts an existing zero-padded By-Phase row (no duplicate)', () => {
+    const content = [
+      '# Project State', '',
+      '**Current Phase:** 05', '**Status:** Executing Phase 5', '',
+      '## Performance Metrics', '',
+      '**Velocity:**', '- Total plans completed: 1', '- Average duration: N/A', '- Total execution time: 0 hours', '',
+      '**By Phase:**', '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| 05 | 1 | - | - |',   // seeded ZERO-PADDED row
+      '',
+      '## Accumulated Context', '',
+    ].join('\n');
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, content, 'utf8');
+
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '05-final');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '05-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '05-01-SUMMARY.md'), '# Summary\n');
+    writePassedVerification(tmpDir, '05-final', '05');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n\n## Phase 5: Final\n\n- [ ] Phase 5\n');
+
+    // phase complete with the UNPADDED number "5" — must upsert the seeded "| 05 |" row,
+    // not append a duplicate "| 5 |".
+    const result = runGsdTools('phase complete 5', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+    const after = fs.readFileSync(statePath, 'utf8');
+    const rows05 = (after.match(/^\|\s*05\s*\|/gm) || []).length;
+    const rows5 = (after.match(/^\|\s*5\s*\|/gm) || []).length;
+    assert.equal(rows05 + rows5, 1, `phase 5 must appear exactly once in By Phase (got |05|=${rows05} |5|=${rows5}) — padded/unpadded must dedup (#1659)`);
   });
 });
 

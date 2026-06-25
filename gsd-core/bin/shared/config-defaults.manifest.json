@@ -98,5 +98,8 @@
   "capabilities": {
     "strict_known_registries": null,
     "auto_update": false
+  },
+  "security": {
+    "injection_blocking": false
   }
 }

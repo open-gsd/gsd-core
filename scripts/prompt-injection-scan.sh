@@ -77,6 +77,7 @@ ALLOWLIST=(
   'hooks/gsd-prompt-guard.js'
   'hooks/gsd-read-injection-scanner.js'
   'tests/read-injection-scanner.security.test.cjs'
+  'tests/read-injection-scanner.property.test.cjs'
   'tests/security-prompt-injection.security.test.cjs'
   'tests/list-seeds.test.cjs'
   'tests/fixtures/adversarial/security/'
@@ -85,6 +86,10 @@ ALLOWLIST=(
   # and are not attack vectors — they explain/demonstrate injection patterns.
   'TEST-EXAMPLES.md'
   'explanation/security-model.md'
+  # The untrusted-input boundary reference quotes injection phrases
+  # ("ignore previous instructions", "you are now…") as examples agents must
+  # NOT comply with — it is the defense, not an attack vector.
+  'references/untrusted-input-boundary.md'
   # Security regression tests for input validators — fixtures must contain
   # real injection payloads to prove the validator rejects them. See
   # DEFECT.PROMPT-INJECTION-SCAN-COLLISION in CONTEXT.md.

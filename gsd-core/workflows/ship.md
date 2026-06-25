@@ -280,7 +280,9 @@ Use the exact key order `skill=`, `fallback=`, `exempt=`, `missing=` so downstre
 Create the PR using the generated body. Write the body to a temp file first so large generated PRD sections do not hit shell argument limits:
 
 ```bash
-PR_BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-pr-body.XXXXXX.md")
+# BSD/macOS mktemp only randomizes XXXXXX when it is the final path component, so make a
+# suffixless temp then append the extension — portable across BSD + GNU (#1520).
+PR_BODY_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-pr-body-XXXXXX") && mv "$PR_BODY_FILE" "${PR_BODY_FILE}.md" && PR_BODY_FILE="${PR_BODY_FILE}.md" || exit 1
 trap 'rm -f "${PR_BODY_FILE:-}"' EXIT
 printf '%s\n' "${PR_BODY}" > "${PR_BODY_FILE}"
 

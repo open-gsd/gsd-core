@@ -172,6 +172,7 @@ const ERROR_REASON = Object.freeze({
   SDK_MISSING_ARG: 'sdk_missing_arg',
   // workflow / phase
   PHASE_NOT_FOUND: 'phase_not_found',
+  PHASE_VERIFICATION_INCOMPLETE: 'phase_verification_incomplete',
   SUMMARY_NO_PLANNING: 'summary_no_planning',
   // graphify
   GRAPHIFY_NO_GRAPH: 'graphify_no_graph',

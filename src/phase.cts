@@ -56,6 +56,9 @@ import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
+import verificationMod = require('./verification.cjs');
+const { readVerificationStatus } = verificationMod;
 
 const { planningDir, withPlanningLock } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
@@ -1389,8 +1392,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   let requirementsUpdated = false;
 
   const warnings: string[] = [];
+  const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
+
   try {
-    const phaseFullDir = path.join(cwd, phaseInfo['directory'] as string);
     const phaseFiles = fs.readdirSync(phaseFullDir);
 
     for (const file of phaseFiles.filter((f) => f.includes('-UAT') && f.endsWith('.md'))) {
@@ -1424,7 +1428,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   let nextPhaseName: string | null = null;
   let isLastPhase = true;
 
-  withPlanningLock(cwd, () => {
+  const verificationBlocked = withPlanningLock(cwd, () => {
+    const verificationStatus = readVerificationStatus(phaseFullDir);
+    if (verificationStatus.status !== 'passed') {
+      return verificationStatus;
+    }
+
     const runPhaseCompleteTransaction = () => {
       const writes: WriteSpec[] = [];
       let roadmapContent: string | null = null;
@@ -1771,7 +1780,18 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     } else {
       runPhaseCompleteTransaction();
     }
+    return null;
   });
+
+  if (verificationBlocked) {
+    const nextStep = verificationBlocked.next_command
+      ? ` Next: ${verificationBlocked.next_command}`
+      : '';
+    error(
+      `Phase ${phaseNum} verification is incomplete: ${verificationBlocked.next_action}${nextStep}`,
+      ERROR_REASON.PHASE_VERIFICATION_INCOMPLETE,
+    );
+  }
 
   let autoPruned = false;
   try {

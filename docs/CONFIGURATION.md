@@ -113,6 +113,9 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "always_confirm_destructive": true,
     "always_confirm_external_services": true
   },
+  "security": {
+    "injection_blocking": false
+  },
   "project_code": null,
   "agent_skills": {},
   "agent_skills_security": {
@@ -831,6 +834,14 @@ These keys live under `workflow.*` — that is where the workflows and installer
 | `workflow.security_enforcement` | boolean | `true` | Enable threat-model-anchored security verification via `/gsd-secure-phase`. When `false`, security checks are skipped entirely |
 | `workflow.security_asvs_level` | number (1-3) | `1` | OWASP ASVS verification level. Level 1 = opportunistic, Level 2 = standard, Level 3 = comprehensive |
 | `workflow.security_block_on` | string | `"high"` | Minimum threat severity that blocks phase advancement. The auditor counts only open threats at or above this severity toward the blocking gate; `none` disables severity blocking. Options: `"critical"`, `"high"`, `"medium"`, `"low"`, `"none"` |
+
+### Injection blocking (top-level `security.*`)
+
+Distinct from the `workflow.security_*` keys above: the read-injection scanner reads a **top-level** `security` object (not `workflow.security`). Set it with `gsd config-set security.injection_blocking true` — it persists as a nested key (`security.injection_blocking`), never a flat dotted key.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `security.injection_blocking` | boolean | `false` | Opt-in circuit-breaker for the read-injection scanner hook (`gsd-read-injection-scanner.js`, PostToolUse on `Read`/`WebFetch`/`WebSearch`). Default (`false`) is **advisory**: HIGH-confidence injection detections are logged but not blocked. When `true`, a HIGH detection emits `decision: "block"` to halt the agent's next step. Because the hook runs *after* the fetch, blocking does **not** retroactively redact content already in the transcript — it is a circuit-breaker, not a redactor. See the [security model](explanation/security-model.md) and [ADR-1577](adr/1577-untrusted-input-boundary-and-injection-blocking.md). |
 
 ---
 

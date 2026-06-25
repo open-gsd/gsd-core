@@ -78,6 +78,7 @@ describe('feat-3251: command-aliases.cjs manifest coverage', () => {
       'PHASES_COMMAND_ALIASES',
       'VALIDATE_COMMAND_ALIASES',
       'ROADMAP_COMMAND_ALIASES',
+      'EVAL_COMMAND_ALIASES',
     ];
     for (const key of familyArrayKeys) {
       const arr = manifest[key];

@@ -378,4 +378,31 @@ describe('single-owner reference-identity guard (ADR-1508 / #1511 Phase 2)', () 
       'install.js must bind _applyRuntimeRewrites from conversion (not a local shim)',
     );
   });
+
+  // #1675 (ADR-1508): the augment converter family is single-sourced in the
+  // conversion module. install.js must re-bind (not re-define) these so there
+  // is exactly one body — the generative-drift hazard the dedup removes.
+  test('install.convertClaudeToAugmentMarkdown === conversion.convertClaudeToAugmentMarkdown (single converter)', () => {
+    assert.strictEqual(
+      install.convertClaudeToAugmentMarkdown,
+      conversionCjs.convertClaudeToAugmentMarkdown,
+      'install.js must bind convertClaudeToAugmentMarkdown from conversion (not a duplicate body)',
+    );
+  });
+
+  test('install.convertClaudeCommandToAugmentSkill === conversion.convertClaudeCommandToAugmentSkill (single converter)', () => {
+    assert.strictEqual(
+      install.convertClaudeCommandToAugmentSkill,
+      conversionCjs.convertClaudeCommandToAugmentSkill,
+      'install.js must bind convertClaudeCommandToAugmentSkill from conversion (not a duplicate body)',
+    );
+  });
+
+  test('install.convertClaudeAgentToAugmentAgent === conversion.convertClaudeAgentToAugmentAgent (single converter)', () => {
+    assert.strictEqual(
+      install.convertClaudeAgentToAugmentAgent,
+      conversionCjs.convertClaudeAgentToAugmentAgent,
+      'install.js must bind convertClaudeAgentToAugmentAgent from conversion (not a duplicate body)',
+    );
+  });
 });

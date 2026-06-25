@@ -527,6 +527,50 @@ If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check fro
 
 If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
+If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate:
+
+```bash
+PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
+VERIFICATION_FILE=$(ls "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1)
+VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null)
+VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status // empty' 2>/dev/null || echo "")
+PHASE_VERIFICATION_STATUS="$VERIFICATION_STATUS_VALUE"
+if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
+  gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed
+fi
+```
+
+If `PHASE_VERIFICATION_STATUS` is `stale`, stop before phase advancement and present:
+
+```
+All UAT tests passed, but phase advancement is blocked until canonical verification is fresh.
+
+Blocking completion:
+verification is stale
+
+- `/gsd:verify-work {phase}` — re-run verification against the latest summaries
+```
+
+Otherwise, check the shared UAT-plus-verification completion predicate before transition:
+
+```bash
+PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)
+PHASE_COMPLETE_PASSED=$(printf '%s' "$PHASE_COMPLETE" | jq -r '.passed' 2>/dev/null || echo "false")
+PHASE_COMPLETE_BLOCKERS=$(printf '%s' "$PHASE_COMPLETE" | jq -r '.blockers[]?' 2>/dev/null || true)
+```
+
+If `PHASE_COMPLETE_PASSED` is not `true`, stop before phase advancement and present:
+
+```
+All UAT tests passed, but phase advancement is blocked until canonical verification passes.
+
+Blocking completion:
+{PHASE_COMPLETE_BLOCKERS}
+
+- `/gsd:execute-phase {phase}` — regenerate execution verification
+- `/gsd:verify-work {phase}` — resume UAT if blockers remain
+```
+
 **Auto-transition: mark phase complete in ROADMAP.md and STATE.md**
 
 Execute the transition workflow inline (do NOT use Task — the orchestrator context already holds the UAT results and phase data needed for accurate transition):

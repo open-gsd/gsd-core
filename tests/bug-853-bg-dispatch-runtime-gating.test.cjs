@@ -45,6 +45,26 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
     );
   });
 
+  test('manager.md compound actions only background plan/execute on Codex', () => {
+    const compoundActionSection = MANAGER.match(
+      /### Compound Action \(background \+ inline\)[\s\S]*?Inline verification:/,
+    );
+    assert.ok(compoundActionSection, 'manager.md must document compound action runtime dispatch');
+
+    assert.match(
+      compoundActionSection[0],
+      /On Codex:[\s\S]{0,260}?Spawn all background agents first[\s\S]{0,220}?plan\/execute/,
+    );
+    assert.match(
+      compoundActionSection[0],
+      /On Claude Code or any other non-Codex runtime:[\s\S]{0,260}?inline/,
+    );
+    assert.doesNotMatch(
+      compoundActionSection[0],
+      /On other runtimes:[\s\S]{0,260}?Spawn all background agents first/,
+    );
+  });
+
   test('autonomous.md gates interactive background dispatch by runtime', () => {
     const autoRuntimeMatches = AUTONOMOUS.match(/config-get runtime/g) || [];
     assert.ok(autoRuntimeMatches.length >= 2, 'autonomous.md must resolve runtime in both 3b (plan) and 3c (execute) interactive branches');

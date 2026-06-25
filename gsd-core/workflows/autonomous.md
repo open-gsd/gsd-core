@@ -61,7 +61,7 @@ fi
 
 When `--only` is set, also set `FROM_PHASE` to the same value so existing filter logic applies.
 
-When `--interactive` is set, discuss runs inline with questions (not auto-answered). On Codex, where a backgrounded agent can still spawn subagents, plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. On every other runtime (Claude Code and all other non-Codex runtimes), backgrounded agents cannot reliably nest subagents, so plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
+When `--interactive` is set, discuss runs inline with questions. On Codex, where a backgrounded agent can still spawn subagents, plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. On every other runtime (Claude Code and all other non-Codex runtimes), backgrounded agents cannot reliably nest subagents, so plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
 
 When `PLAN_STRATEGY=converge`, the planning step MUST invoke the plan-review convergence workflow instead of `gsd-plan-phase`. `--cross-ai` is an alias for `--converge`. Forward `CONVERGENCE_ARGS` exactly as parsed so reviewer flags and `--max-cycles N` retain the same meaning as they have on `/gsd:plan-review-convergence`.
 
@@ -123,18 +123,19 @@ If `PLAN_STRATEGY` is `converge`, display: `Planning: Plan-review convergence en
 Run phase discovery:
 
 ```bash
-ROADMAP=$(gsd_run query roadmap.analyze)
+INIT_MANAGER=$(gsd_run query init.manager)
+if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
 ```
 
 Parse the JSON `phases` array.
 
-**Filter to incomplete phases:** Keep only phases where `disk_status !== "complete"` OR `roadmap_complete === false`.
+**Filter to incomplete phases:** Keep `phase_complete !== true`, including implemented phases with `verification_status !== "passed"`.
 
-**Apply `--from N` filter:** If `FROM_PHASE` was provided, additionally filter out phases where `number < FROM_PHASE` (use numeric comparison — handles decimal phases like "5.1").
+**Apply `--from N`:** If set, filter out phases where `number < FROM_PHASE` (numeric compare; handles "5.1").
 
-**Apply `--to N` filter:** If `TO_PHASE` was provided, additionally filter out phases where `number > TO_PHASE` (use numeric comparison). This limits execution to phases up through the target phase.
+**Apply `--to N`:** If set, filter out phases where `number > TO_PHASE` (numeric compare).
 
-**Apply `--only N` filter:** If `ONLY_PHASE` was provided, additionally filter OUT phases where `number != ONLY_PHASE`. This means the phase list will contain exactly one phase (or zero if already complete).
+**Apply `--only N`:** If set, filter out phases where `number != ONLY_PHASE`.
 
 **If `TO_PHASE` is set and no phases remain** (all phases up to N are already completed):
 
@@ -477,58 +478,51 @@ Skill(skill="gsd-code-review", args="${PHASE_NUM} --fix --auto")
 
 **3d. Post-Execution Routing**
 
-**If `INTERACTIVE` is set:** Wait for the execute agent to complete before reading verification results.
-
-After execute-phase returns (or the execute agent completes), read the verification result:
+After execute, read canonical verification:
 
 ```bash
-VERIFY_STATUS=$(grep "^status:" "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" 2>/dev/null | jq -r '.status//empty')
 ```
 
-Where `PHASE_DIR` comes from the `init phase-op` call already made in step 3a. If the variable is not in scope, re-fetch:
+If `PHASE_DIR` is absent, re-fetch `init.phase-op ${PHASE_NUM}` and parse `phase_dir`.
 
-```bash
-PHASE_STATE=$(gsd_run query init.phase-op ${PHASE_NUM})
-```
-
-Parse `phase_dir` from the JSON.
-
-**If VERIFY_STATUS is empty** (no VERIFICATION.md or no status field):
-
-Go to handle_blocker: "Execute phase ${PHASE_NUM} did not produce verification results."
+If `VERIFY_STATUS` is empty, handle_blocker: "No verification results for phase ${PHASE_NUM}."
 
 **If `passed`:**
 
-Display:
-```
-Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed
-```
+Display `Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then Proceed to iterate step.
 
-Proceed to iterate step.
+**If `stale`:** handle_blocker: "Stale verification for phase ${PHASE_NUM}."
 
 **If `human_needed`:**
 
-Read the human_verification section from VERIFICATION.md to get the count and items requiring manual testing.
-
-
-**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
-Display the items, then ask user via AskUserQuestion:
+Read `human_verification` items. In text mode (`--text` or init `text_mode=true`), replace AskUserQuestion with a numbered list and typed choice. Otherwise display items and ask:
 - **question:** "Phase ${PHASE_NUM} has items needing manual verification. Validate now or continue to next phase?"
 - **options:** "Validate now" / "Continue without validation"
 
-On **"Validate now"**: Present the specific items from VERIFICATION.md's human_verification section. After user reviews, ask:
+On **"Validate now"**: Present items, then ask:
 - **question:** "Validation result?"
 - **options:** "All good — continue" / "Found issues"
 
-On "All good — continue": Display `Phase ${PHASE_NUM} ✅ Human validation passed` and proceed to iterate step.
+On "All good — continue": set VERIFICATION frontmatter `status: passed`, display `Phase ${PHASE_NUM} ✅ Human validation passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then iterate.
 
 On "Found issues": Go to handle_blocker with the user's reported issues as the description.
 
-On **"Continue without validation"**: Display `Phase ${PHASE_NUM} ⏭ Human validation deferred` and proceed to iterate step.
+On **"Continue without validation"**: record an explicit deferred state and stop autonomous mode:
+
+```markdown
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| ${PHASE_NUM} | verification_deferred_human | /gsd:verify-work ${PHASE_NUM} |
+```
+
+Append/update this STATE.md section, display `Phase ${PHASE_NUM} ⏭ verification_deferred_human — resume with /gsd:verify-work ${PHASE_NUM}`, then handle_blocker: "Human verification deferred for phase ${PHASE_NUM}."
 
 **If `gaps_found`:**
 
-Read gap summary from VERIFICATION.md (score and missing items). Display:
+Read gap score/items from VERIFICATION.md. Display:
 ```
 ⚠ Phase ${PHASE_NUM}: ${PHASE_NAME} — Gaps Found
 Score: {N}/{M} must-haves verified
@@ -538,13 +532,13 @@ Ask user via AskUserQuestion:
 - **question:** "Gaps found in phase ${PHASE_NUM}. How to proceed?"
 - **options:** "Run gap closure" / "Continue without fixing" / "Stop autonomous mode"
 
-On **"Run gap closure"**: Execute gap closure cycle (limit: 1 attempt):
+On **"Run gap closure"**: one gap-closure attempt:
 
 ```
 Skill(skill="gsd-plan-phase", args="${PHASE_NUM} --gaps")
 ```
 
-Verify gap plans were created — re-run `init phase-op ${PHASE_NUM}` and check `has_plans`. If no new gap plans → go to handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
+Re-run `init phase-op ${PHASE_NUM}`; if `has_plans` is false, handle_blocker: "Gap closure planning for phase ${PHASE_NUM} did not produce plans."
 
 Re-execute:
 ```
@@ -553,27 +547,39 @@ Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")
 
 Re-read verification status:
 ```bash
-VERIFY_STATUS=$(grep "^status:" "${PHASE_DIR}"/*-VERIFICATION.md 2>/dev/null | head -1 | cut -d: -f2 | tr -d ' ')
+VERIFY_STATUS=$(gsd_run query verification.status "${PHASE_DIR}" 2>/dev/null | jq -r '.status//empty')
 ```
 
-If `passed` or `human_needed`: Route normally (continue or ask user as above).
+If `passed` or `human_needed`: route normally.
+
+If `stale`: handle_blocker: "Stale verification for phase ${PHASE_NUM}."
 
 If still `gaps_found` after this retry: Display "Gaps persist after closure attempt." and ask via AskUserQuestion:
 - **question:** "Gap closure did not fully resolve issues. How to proceed?"
 - **options:** "Continue anyway" / "Stop autonomous mode"
 
-On "Continue anyway": Proceed to iterate step.
+On "Continue anyway": record `verification_deferred_gaps` using the table below, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 On "Stop autonomous mode": Go to handle_blocker.
 
-This limits gap closure to 1 automatic retry to prevent infinite loops.
+This limits gap closure to 1 retry.
 
-On **"Continue without fixing"**: Display `Phase ${PHASE_NUM} ⏭ Gaps deferred` and proceed to iterate step.
+On **"Continue without fixing"**: record an explicit deferred state and stop autonomous mode:
+
+```markdown
+## Deferred Verification
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| ${PHASE_NUM} | verification_deferred_gaps | /gsd:plan-phase ${PHASE_NUM} --gaps |
+```
+
+Append/update this STATE.md section, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 
 On **"Stop autonomous mode"**: Go to handle_blocker with "User stopped — gaps remain in phase ${PHASE_NUM}".
 
 **3d.5. UI Review (Frontend Phases)**
 
-> Run after any successful execution routing (passed, human_needed accepted, or gaps deferred/accepted) — before proceeding to the iterate step.
+> Run only after `passed` or human verification was updated to `passed`.
 
 Resolve the active post-verification hooks and the UI-SPEC gate:
 
@@ -632,16 +638,17 @@ Read and execute: `$HOME/.claude/gsd-core/references/autonomous-smart-discuss.md
  Resume with: /gsd:autonomous --from ${next_incomplete_phase}
 ```
 
-Proceed directly to lifecycle step (which handles partial completion — skips audit/complete/cleanup since not all phases are done). Exit cleanly.
+Proceed to lifecycle step (partial completion skips audit/complete/cleanup). Exit cleanly.
 
-**Otherwise:** After each phase completes, re-read ROADMAP.md to catch phases inserted mid-execution (decimal phases like 5.1):
+**Otherwise:** After each phase, re-read manager projection:
 
 ```bash
-ROADMAP=$(gsd_run query roadmap.analyze)
+INIT_MANAGER=$(gsd_run query init.manager)
+if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
 ```
 
 Re-filter incomplete phases using the same logic as discover_phases:
-- Keep phases where `disk_status !== "complete"` OR `roadmap_complete === false`
+- Keep phases where `phase_complete !== true` or `verification_status !== "passed"`
 - Apply `--from N` filter if originally provided
 - Apply `--to N` filter if originally provided
 - Sort by number ascending

@@ -44,6 +44,10 @@ function writeUatFile(phaseDir, filename, content) {
   fs.writeFileSync(path.join(phaseDir, filename), content, 'utf-8');
 }
 
+function setMtime(filePath, time) {
+  fs.utimesSync(filePath, time, time);
+}
+
 function makePassingUat() {
   return [
     '---',
@@ -206,6 +210,39 @@ describe('phase uat-passed — --require-verification flag', () => {
     const out = JSON.parse(result.output);
     assert.strictEqual(out.passed, true);
     assert.strictEqual(out.policy.require_verification, true);
+  });
+
+  test('--require-verification with stale passed verification → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const verificationPath = path.join(phaseDir, 'feature-VERIFICATION.md');
+    const summaryPath = path.join(phaseDir, 'feature-SUMMARY.md');
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: passed\n---\n\nVerified OK.');
+    writeUatFile(phaseDir, 'feature-SUMMARY.md', '# Summary\n\nImplementation changed after verification.\n');
+    const now = new Date();
+    setMtime(verificationPath, new Date(now.getTime() - 60_000));
+    setMtime(summaryPath, now);
+
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+    assert.ok(
+      out.blockers.some(b => /verification status=stale/i.test(b)),
+      `Expected stale-verification blocker, got: ${JSON.stringify(out.blockers)}`,
+    );
+  });
+
+  test('--require-verification with non-canonical complete verification → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: complete\n---\n\nLegacy OK.');
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+    assert.ok(out.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(out.blockers)}`);
   });
 });
 

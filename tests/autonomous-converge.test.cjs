@@ -109,3 +109,103 @@ describe('autonomous --converge flag (#711)', () => {
     assert.match(howTo, /\/gsd-autonomous --only 4 --converge/, 'how-to should show single-phase converge usage');
   });
 });
+
+describe('autonomous verification deferral contract', () => {
+  test('workflow records explicit deferred states instead of silently advancing (#1525)', () => {
+    const workflow = read(WORKFLOW_PATH);
+
+    assert.match(workflow, /verification_deferred_human/);
+    assert.match(workflow, /verification_deferred_gaps/);
+    assert.match(workflow, /Deferred Verification/);
+    assert.match(workflow, /gsd:verify-work \$\{PHASE_NUM\}/);
+    assert.match(workflow, /gsd:plan-phase \$\{PHASE_NUM\} --gaps/);
+    assert.match(
+      workflow,
+      /\| \$\{PHASE_NUM\} \| verification_deferred_human \| \/gsd:verify-work \$\{PHASE_NUM\} \|/,
+      'human deferral must persist the exact deferred STATE row',
+    );
+    assert.match(
+      workflow,
+      /\| \$\{PHASE_NUM\} \| verification_deferred_gaps \| \/gsd:plan-phase \$\{PHASE_NUM\} --gaps \|/,
+      'gap deferral must persist the exact deferred STATE row',
+    );
+    assert.doesNotMatch(
+      workflow,
+      /Human validation deferred` and proceed to iterate step/,
+      'human-needed deferral must not silently proceed to the next phase',
+    );
+    assert.doesNotMatch(
+      workflow,
+      /Gaps deferred` and proceed to iterate step/,
+      'gap deferral must not silently proceed to the next phase',
+    );
+  });
+
+  test('workflow runs normal transition post-processing after passed verification (#1526)', () => {
+    const workflow = read(WORKFLOW_PATH);
+    const passedIdx = workflow.indexOf('**If `passed`:**');
+    const transitionIdx = workflow.indexOf('transition.md', passedIdx);
+    const iterateIdx = workflow.indexOf('Proceed to iterate step', passedIdx);
+
+    assert.ok(transitionIdx > passedIdx, 'passed verification must invoke transition.md');
+    assert.ok(
+      transitionIdx < iterateIdx,
+      'normal transition post-processing must run before autonomous iterates',
+    );
+  });
+
+  test('workflow reads canonical verification status before human-needed promotion (#1522)', () => {
+    const workflow = read(WORKFLOW_PATH);
+    const waitIdx = workflow.indexOf('After execute, read canonical verification');
+    const humanNeededIdx = workflow.indexOf('**If `human_needed`:**', waitIdx);
+    const promoteIdx = workflow.indexOf('set VERIFICATION frontmatter `status: passed`', humanNeededIdx);
+    const section = workflow.slice(waitIdx, humanNeededIdx);
+
+    assert.ok(waitIdx !== -1, 'workflow must document the post-execution verification read');
+    assert.ok(humanNeededIdx > waitIdx, 'human_needed branch must follow verification status read');
+    assert.ok(promoteIdx > humanNeededIdx, 'human_needed branch must contain the promotion action');
+    assert.match(
+      section,
+      /VERIFY_STATUS=\$\(gsd_run query verification\.status "\$\{PHASE_DIR\}" 2>\/dev\/null \| jq -r '\.status\/\/empty'\)/,
+      'autonomous must route human validation through canonical verification.status',
+    );
+    assert.match(
+      section,
+      /jq -r '\.status\/\/empty'/,
+      'autonomous must parse the projected canonical status value',
+    );
+    assert.doesNotMatch(
+      section,
+      /grep "\^status:"/,
+      'autonomous must not route stale human_needed reports from raw frontmatter',
+    );
+  });
+
+  test('workflow discovers incomplete phases from canonical verification projection (#1522)', () => {
+    const workflow = read(WORKFLOW_PATH);
+    const discoverStart = workflow.indexOf('<step name="discover_phases">');
+    const discoverEnd = workflow.indexOf('</step>', discoverStart);
+    const iterateStart = workflow.indexOf('<step name="iterate">');
+    const iterateEnd = workflow.indexOf('</step>', iterateStart);
+    const discoverStep = workflow.slice(discoverStart, discoverEnd);
+    const iterateStep = workflow.slice(iterateStart, iterateEnd);
+
+    assert.match(discoverStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.ok(
+      discoverStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
+      'autonomous discovery must dereference large init.manager payloads before parsing',
+    );
+    assert.match(discoverStep, /phase_complete !== true/);
+    assert.match(discoverStep, /verification_status !== "passed"/);
+    assert.doesNotMatch(discoverStep, /ROADMAP=\$\(gsd_run query roadmap\.analyze\)/);
+    assert.doesNotMatch(discoverStep, /disk_status !== "complete"/);
+
+    assert.match(iterateStep, /INIT_MANAGER=\$\(gsd_run query init\.manager\)/);
+    assert.ok(
+      iterateStep.includes('if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi'),
+      'autonomous iteration must dereference large init.manager payloads before parsing',
+    );
+    assert.match(iterateStep, /phase_complete !== true/);
+    assert.match(iterateStep, /verification_status !== "passed"/);
+  });
+});

@@ -199,20 +199,61 @@ function reconstructFrontmatter(obj: Frontmatter): string {
   return lines.join('\n');
 }
 
+/**
+ * Slice a frontmatter YAML body into per-top-level-key raw text segments. Each segment
+ * runs from a column-0 `key:` line through the line before the next column-0 key (or the
+ * end), capturing all nested indented content. Used by `spliceFrontmatter` for per-key
+ * identity preservation (#1572): a structurally-unchanged key keeps its original raw
+ * text, so the lossy `reconstructFrontmatter` never touches object-lists the caller did
+ * not modify (e.g. must_haves.artifacts / .prohibitions).
+ */
+function sliceTopLevelFrontmatterSegments(yaml: string): Array<{ key: string; raw: string }> {
+  const lines = yaml.split(/\r?\n/);
+  const segments: Array<{ key: string; raw: string }> = [];
+  let current: { key: string; raw: string[] } | null = null;
+  for (const line of lines) {
+    // A column-0 `key:` (no leading whitespace) starts a new top-level segment.
+    if (/^[A-Za-z0-9_-]+:/.test(line)) {
+      if (current) segments.push({ key: current.key, raw: current.raw.join('\n') });
+      const keyName = (line.match(/^([A-Za-z0-9_-]+):/) as RegExpMatchArray)[1];
+      current = { key: keyName, raw: [line] };
+    } else if (current) {
+      current.raw.push(line);
+    }
+    // Stray lines before the first top-level key (rare in frontmatter) are dropped.
+  }
+  if (current) segments.push({ key: current.key, raw: current.raw.join('\n') });
+  return segments;
+}
+
+/**
+ * Regenerate one frontmatter key's serialization, fail-closed if the lossy
+ * `reconstructFrontmatter` cannot represent the value (#1572 codex review). Object-list
+ * items (e.g. must_haves.artifacts `{path, provides}` maps) serialize as the literal
+ * string "[object Object]"; rather than silently emit that and destroy the data, refuse
+ * so the caller (cmdFrontmatterSet/Merge) errors out WITHOUT writing — directing the
+ * user to edit the file directly. The reported #1572 case (mutating an UNRELATED field)
+ * is unaffected: unchanged keys preserve their original raw text and never reach here.
+ */
+function regenerateFrontmatterKey(key: string, value: FrontmatterValue): string {
+  const rendered = reconstructFrontmatter({ [key]: value });
+  if (/\[object Object\]/.test(rendered)) {
+    throw new Error(
+      `frontmatter: cannot faithfully serialize key "${key}" — it contains a nested object-list ` +
+        `(e.g. must_haves.artifacts) the frontmatter writer cannot represent, and serializing it would ` +
+        `emit "[object Object]". Edit the file directly instead of using frontmatter set/merge.`,
+    );
+  }
+  return rendered;
+}
+
 function spliceFrontmatter(content: string, newObj: Frontmatter): string {
   const match = content.match(/^---\r?\n[\s\S]+?\r?\n---/);
   if (match) {
-    // Identity-preservation (additive, lossless round-trip): `reconstructFrontmatter` is a
-    // deliberately lossy serializer — it cannot faithfully re-emit nested object-list items
-    // (e.g. must_haves.artifacts / must_haves.prohibitions, whose items are `{ path, provides }`
-    // / `{ statement, status, … }` maps). When the caller is writing back a value that is
-    // STRUCTURALLY UNCHANGED from the original parse (the canonical CRUD round-trip and the
-    // #644 prohibition schema round-trip both do this), regenerating from the lossy object would
-    // silently mangle those blocks. Detect that case by deep-equality against a re-parse of the
-    // original frontmatter and preserve the ORIGINAL raw text verbatim — a true no-op splice.
-    // This touches neither the parser (`extractFrontmatter`) nor `parseMustHavesBlock`; it only
-    // makes the existing splice faithful when nothing changed. A genuine mutation (different
-    // object) still flows through `reconstructFrontmatter` exactly as before.
+    const fmBlock = match[0];
+
+    // Whole-document no-op guard: a true no-op returns content verbatim (byte-exact,
+    // including any formatting the lossy serializer would normalize).
     try {
       if (frontmatterDeepEqual(extractFrontmatter(content), newObj)) {
         return content;
@@ -220,10 +261,63 @@ function spliceFrontmatter(content: string, newObj: Frontmatter): string {
     } catch {
       /* fall through to regeneration on any comparison hiccup */
     }
-    const yamlStr = reconstructFrontmatter(newObj);
-    return `---\n${yamlStr}\n---` + content.slice(match[0].length);
+
+    // Per-key identity preservation (#1572). `reconstructFrontmatter` is a deliberately
+    // lossy serializer — it cannot faithfully re-emit nested object-list items (e.g.
+    // must_haves.artifacts / .prohibitions, whose items are `{ path, provides }` /
+    // `{ statement, status }` maps; `extractFrontmatter` flattens those to scalar
+    // strings, so a round-trip drops `provides:` and collapses the list to a malformed
+    // inline array). For any top-level key whose value is STRUCTURALLY UNCHANGED between
+    // the original parse and `newObj`, preserve that key's ORIGINAL raw text verbatim;
+    // regenerate only keys that actually changed. This generalizes the whole-document
+    // no-op guard above to per-key fidelity, so mutating `wave` no longer destroys an
+    // unrelated `must_haves` block. Keys absent from the original (genuinely new) are
+    // regenerated and appended; keys absent from `newObj` are preserved (never silently
+    // deleted by a set/merge).
+    const fmLines = fmBlock.split(/\r?\n/);
+    const inner = fmLines.slice(1, -1).join('\n'); // drop the opening `---` and closing `---`
+    let originalParsed: Frontmatter;
+    try { originalParsed = extractFrontmatter(fmBlock); } catch { originalParsed = {}; }
+
+    const segments = sliceTopLevelFrontmatterSegments(inner);
+    const emitted: string[] = [];
+    const seen: Set<string> = new Set();
+
+    for (const seg of segments) {
+      seen.add(seg.key);
+      if (Object.prototype.hasOwnProperty.call(newObj, seg.key)) {
+        // Key is in newObj: preserve original raw text if structurally unchanged,
+        // otherwise regenerate. The key SET is defined by newObj — keys that were in
+        // the original but are absent from newObj are intentionally dropped (the real
+        // cmdSet/cmdMerge flow always passes the full merged object, so this only
+        // matters for direct unit callers and matches spliceFrontmatter's contract:
+        // the result frontmatter IS newObj).
+        if (frontmatterDeepEqual(newObj[seg.key], originalParsed[seg.key])) {
+          emitted.push(seg.raw); // unchanged → preserve original raw text verbatim
+        } else {
+          emitted.push(regenerateFrontmatterKey(seg.key, newObj[seg.key])); // changed → regenerate (fail-closed on object-lists)
+        }
+      }
+      // else: key absent from newObj → drop (not emitted).
+    }
+    // Append genuinely-new keys not present in the original frontmatter.
+    for (const k of Object.keys(newObj)) {
+      if (!seen.has(k)) {
+        emitted.push(regenerateFrontmatterKey(k, newObj[k]));
+      }
+    }
+
+    const yamlStr = emitted.join('\n');
+    return `---\n${yamlStr}\n---` + content.slice(fmBlock.length);
   }
+  // No existing frontmatter — generate from scratch, fail-closed on unrepresentable values.
   const yamlStr = reconstructFrontmatter(newObj);
+  if (/\[object Object\]/.test(yamlStr)) {
+    throw new Error(
+      'frontmatter: cannot faithfully serialize the requested frontmatter — it contains a nested ' +
+        'object-list (e.g. must_haves.artifacts) the writer cannot represent. Edit the file directly.',
+    );
+  }
   return `---\n${yamlStr}\n---\n\n` + content;
 }
 
@@ -409,8 +503,33 @@ function cmdFrontmatterSet(cwd: string, filePath: string, field: string | undefi
   try { parsedValue = JSON.parse(value as string); } catch { parsedValue = value; }
   fm[field as string] = parsedValue as FrontmatterValue;
   const newContent = spliceFrontmatter(content, fm);
+  // #1660: a no-op set (newContent unchanged) with a dict-valued field means the lossy
+  // frontmatter parser made the new value's projection equal the original's — the change
+  // did not apply (bites object-list fields like must_haves). Detection lives in the pure
+  // exported helper noOpObjectListSetError so the mutation gate (property/unit set) covers
+  // it — the cmd path itself is not in that set.
+  const noOpErr = noOpObjectListSetError(content, newContent, parsedValue);
+  if (noOpErr) {
+    output({ error: noOpErr, field }, raw, undefined);
+    return;
+  }
   platformWriteSync(fullPath, newContent);
   output({ updated: true, field, value: parsedValue }, raw, 'true');
+}
+
+/**
+ * #1660: detect a frontmatter `set` that would be a silent no-op on a dict-valued field.
+ * Returns an error message when the splice produced no content change but the new value
+ * is a dict (object-list fields like must_haves, whose `{path, provides}` items flatten to
+ * scalar strings under extractFrontmatter so a replacement can deep-equal the original's
+ * projection), else null. Scalars and scalar arrays round-trip faithfully, so idempotent
+ * sets of those are intentionally NOT flagged. Pure and unit-tested directly (the cmd path
+ * is not in Stryker's property/unit set, so the detection must be testable in isolation).
+ */
+function noOpObjectListSetError(originalContent: string, newContent: string, parsedValue: unknown): string | null {
+  if (newContent !== originalContent) return null;
+  if (parsedValue === null || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return null;
+  return 'frontmatter set had no effect — the supplied value is equivalent to the existing field under the frontmatter parser, which cannot faithfully round-trip object-list fields like must_haves. Edit the file directly.';
 }
 
 function cmdFrontmatterMerge(cwd: string, filePath: string, data: string | undefined, raw: boolean): void {
@@ -449,6 +568,7 @@ export = {
   parseFrontmatter: extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
+  noOpObjectListSetError,
   parseMustHavesBlock,
   FRONTMATTER_SCHEMAS,
   cmdFrontmatterGet,

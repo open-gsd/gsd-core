@@ -72,6 +72,11 @@ function main() {
       subcommands: 'ROADMAP_SUBCOMMANDS',
       routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'roadmap-command-router.cjs'),
     },
+    {
+      commandAliases: 'EVAL_COMMAND_ALIASES',
+      subcommands: 'EVAL_SUBCOMMANDS',
+      routerPath: path.join(ROOT, 'gsd-core', 'bin', 'lib', 'eval-command-router.cjs'),
+    },
   ];
 
   for (const family of families) {

@@ -273,7 +273,7 @@ This is a WARNING, not a blocker — routing proceeds normally. The debt is visi
 
 **Step 1.7: Check verification status for the current phase**
 
-A phase whose verification ended `gaps_found` or `human_needed` is NOT complete, even when every PLAN.md has a matching SUMMARY.md. The count-based status (`roadmap.analyze`) only sees plans/summaries, so without this check such a phase is reported complete and routing skips straight to the next phase. When the phase appears count-complete (`summaries = plans AND plans > 0`), consult the verification report (the same `verification.status` gate `ship` and `execute-phase` use, from #651):
+A phase whose verification is missing, unknown, `gaps_found`, or `human_needed` is NOT complete, even when every PLAN.md has a matching SUMMARY.md. The count-based status (`roadmap.analyze`) only sees plans/summaries, so without this check such a phase is reported complete and routing skips straight to the next phase. When the phase appears count-complete (`summaries = plans AND plans > 0`), consult the verification report (the same `verification.status` gate `ship` and `execute-phase` use, from #651):
 
 ```bash
 PHASE_DIR=".planning/phases/[current-phase-dir]"
@@ -282,7 +282,7 @@ VERIFICATION_STATUS=$(printf '%s' "$VERIFICATION" | jq -r '.status' 2>/dev/null 
 VERIFICATION_NEXT_ACTION=$(printf '%s' "$VERIFICATION" | jq -r '.next_action' 2>/dev/null || echo "")
 ```
 
-Track: `verification_status` — the `.status` field (`passed | gaps_found | human_needed | missing | unknown`). The query already handles a missing VERIFICATION.md (returns `missing`) and unexpected values, so no per-status file probing is needed. `passed`, `missing` (not yet verified), and `unknown` route as complete (Step 3) — `missing` with an advisory that the phase is unverified; `gaps_found` and `human_needed` route back to close the verification debt (Step 2).
+Track: `verification_status` — the `.status` field (`passed | stale | gaps_found | human_needed | missing | unknown`). The query/projection handles a missing VERIFICATION.md (`missing`), unexpected values, and stale verification (`stale`, when summaries are newer than verification). Only `passed` routes as phase complete (Step 3); every other status routes back to close verification debt (Step 2).
 
 **Step 2: Route based on counts**
 
@@ -291,12 +291,15 @@ Track: `verification_status` — the `.status` field (`passed | gaps_found | hum
 | uat_partial > 0 | UAT testing incomplete | Go to **Route E.2** |
 | uat_with_gaps > 0 | UAT gaps need fix plans | Go to **Route E** |
 | summaries < plans | Unexecuted plans exist | Go to **Route A** |
+| summaries = plans AND plans > 0 AND verification_status = missing | Phase executed; verification report missing | Go to **Route V.missing** |
+| summaries = plans AND plans > 0 AND verification_status = unknown | Phase executed; verification status unknown | Go to **Route V.unknown** |
+| summaries = plans AND plans > 0 AND verification_status = stale | Phase executed; verification is stale | Go to **Route V.stale** |
 | summaries = plans AND plans > 0 AND verification_status = gaps_found | Phase executed; verification found gaps | Go to **Route V.gaps** |
 | summaries = plans AND plans > 0 AND verification_status = human_needed | Phase executed; awaiting human verification | Go to **Route V.human** |
-| summaries = plans AND plans > 0 | Phase complete (verification passed, missing, or n/a) | Go to Step 3 |
+| summaries = plans AND plans > 0 AND verification_status = passed | Phase complete (verification passed) | Go to Step 3 |
 | plans = 0 | Phase not yet planned | Go to **Route B** |
 
-Rows are evaluated top to bottom; the first matching row wins. The two `verification_status` rows must precede the general `summaries = plans` row so a non-`passed` verification is not reported as complete.
+Rows are evaluated top to bottom; the first matching row wins. The `verification_status` rows must precede the passed row so non-`passed` verification is not reported as complete.
 
 ---
 
@@ -444,6 +447,36 @@ UAT.md exists with `status: partial` — testing session ended before all items 
 - `/gsd:execute-phase {phase} ${GSD_WS}` — execute phase plans
 
 ---
+```
+
+---
+
+**Route V.missing: verification report missing**
+
+All plans have summaries, but canonical verification has not passed. The phase is implementation-complete, not phase-complete.
+
+```
+`/gsd:execute-phase {phase} ${GSD_WS}` — re-run execution verification
+```
+
+---
+
+**Route V.unknown: verification status unknown**
+
+VERIFICATION.md has an unexpected status. The phase is implementation-complete, not phase-complete.
+
+```
+`/gsd:execute-phase {phase} ${GSD_WS}` — regenerate verification
+```
+
+---
+
+**Route V.stale: verification is stale**
+
+VERIFICATION.md has `status: passed`, but one or more SUMMARY.md files are newer than the verification report. The phase is implementation-complete, not phase-complete.
+
+```
+`/gsd:verify-work {phase} ${GSD_WS}` — re-run verification against the latest summaries
 ```
 
 ---

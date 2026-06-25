@@ -20,6 +20,7 @@ const {
   extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
+  noOpObjectListSetError,
   parseMustHavesBlock,
   FRONTMATTER_SCHEMAS,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
@@ -943,6 +944,85 @@ describe('spliceFrontmatter: exact delimiter handling', () => {
   });
 });
 
+// spliceFrontmatter per-key identity preservation + fail-closed (#1572). These exercise
+// sliceTopLevelFrontmatterSegments, the per-key deepEqual/preserve/regenerate/drop/append
+// loop, and regenerateFrontmatterKey's "[object Object]" fail-closed directly.
+describe('spliceFrontmatter: per-key preservation + fail-closed (#1572)', () => {
+  const PLAN = [
+    '---', 'phase: 1', 'wave: 1',
+    'must_haves:', '  artifacts:', '    - path: src/foo.ts', '      provides: the foo',
+    '---', '# body', '',
+  ].join('\n');
+
+  test('unchanged object-list key keeps its original raw text (provides survives) when a scalar sibling changes', () => {
+    const parsed = extractFrontmatter(PLAN);
+    parsed.wave = '2'; // mutate one scalar; must_haves flattened-projection unchanged
+    const out = spliceFrontmatter(PLAN, parsed);
+    // must_haves.artifacts raw preserved verbatim (provides intact) — NOT regenerated.
+    assert.deepEqual(parseMustHavesBlock(out, 'artifacts'), [{ path: 'src/foo.ts', provides: 'the foo' }]);
+    // the changed scalar WAS regenerated.
+    assert.ok(/^wave: 2$/m.test(out), 'changed scalar wave must be regenerated to 2');
+    // original ordering preserved (phase before wave before must_haves).
+    const phaseIdx = out.indexOf('phase:');
+    const waveIdx = out.indexOf('wave:');
+    const mhIdx = out.indexOf('must_haves:');
+    assert.ok(phaseIdx < waveIdx && waveIdx < mhIdx, 'top-level key order preserved');
+  });
+
+  test('a changed scalar regenerates only that key (no other key touched)', () => {
+    const out = spliceFrontmatter(PLAN, { ...extractFrontmatter(PLAN), phase: '9' });
+    assert.ok(/^phase: 9$/m.test(out));
+    // wave unchanged → still 1
+    assert.ok(/^wave: 1$/m.test(out));
+  });
+
+  test('keys absent from newObj are dropped (key set is defined by newObj)', () => {
+    const out = spliceFrontmatter(PLAN, { phase: '1' });
+    assert.ok(/^phase: 1$/m.test(out));
+    assert.ok(!/wave:/.test(out), 'wave (absent from newObj) must be dropped');
+    assert.ok(!/must_haves:/.test(out), 'must_haves (absent from newObj) must be dropped');
+  });
+
+  test('genuinely-new keys (not in original) are appended', () => {
+    const out = spliceFrontmatter(PLAN, { ...extractFrontmatter(PLAN), brand_new: 'x' });
+    assert.ok(/^brand_new: x$/m.test(out), 'new key appended');
+    // existing keys still present
+    assert.ok(/^phase: 1$/m.test(out));
+  });
+
+  test('a nested indented block stays attached to its parent key (segment slicer respects indentation)', () => {
+    const multi = '---\na: 1\nmust_haves:\n  artifacts:\n    - path: x\n      provides: y\nb: 2\n---\n';
+    const out = spliceFrontmatter(multi, { ...extractFrontmatter(multi), b: '3' });
+    // The indented artifacts block must be preserved as part of must_haves (not split off),
+    // and b regenerated. proves the slicer grouped the nested lines under must_haves.
+    assert.deepEqual(parseMustHavesBlock(out, 'artifacts'), [{ path: 'x', provides: 'y' }]);
+    assert.ok(/^b: 3$/m.test(out));
+    assert.ok(/^a: 1$/m.test(out));
+  });
+
+  test('whole-document no-op returns the input verbatim', () => {
+    const out = spliceFrontmatter(PLAN, extractFrontmatter(PLAN));
+    assert.equal(out, PLAN);
+  });
+
+  test('changing must_haves to an unrepresentable object-list fails closed (throws, no [object Object])', () => {
+    const newObj = { ...extractFrontmatter(PLAN), must_haves: { artifacts: [{ path: 'p', provides: 'q' }] } };
+    assert.throws(
+      () => spliceFrontmatter(PLAN, newObj),
+      /cannot faithfully serialize key "must_haves"/,
+      'a changed object-list key must fail closed rather than emit [object Object]',
+    );
+  });
+
+  test('no-frontmatter path also fails closed for an unrepresentable object-list value', () => {
+    assert.throws(
+      () => spliceFrontmatter('body only', { must_haves: { artifacts: [{ path: 'p' }] } }),
+      /cannot faithfully serialize the requested frontmatter/,
+      'generating fresh frontmatter with an object-list must fail closed',
+    );
+  });
+});
+
 describe('extractFrontmatter: complex real-world documents', () => {
   test('plan document', () => {
     const doc = [
@@ -1121,5 +1201,31 @@ describe('reconstructFrontmatter: nested subval plain string', () => {
   test('nested subval with hash quoted', () => {
     const result = reconstructFrontmatter({ meta: { tag: 'issue#42' } });
     assert.equal(result, 'meta:\n  tag: "issue#42"');
+  });
+});
+
+// noOpObjectListSetError (#1660) — pure detection helper, unit-tested directly because the
+// cmdFrontmatterSet path is not in Stryker's property/unit set.
+describe('noOpObjectListSetError (#1660)', () => {
+  const ORIG = '---\nphase: 1\n---\n';
+  test('changed content (real update) → null', () => {
+    assert.equal(noOpObjectListSetError(ORIG, ORIG + 'x', { must_haves: 1 }), null);
+  });
+  test('scalar value no-op → null (idempotent scalar sets are fine)', () => {
+    for (const v of [1, 'str', true, 0, '']) assert.equal(noOpObjectListSetError(ORIG, ORIG, v), null, `scalar ${JSON.stringify(v)}`);
+  });
+  test('scalar-array value no-op → null (scalar arrays round-trip faithfully)', () => {
+    assert.equal(noOpObjectListSetError(ORIG, ORIG, ['a', 'b']), null);
+    assert.equal(noOpObjectListSetError(ORIG, ORIG, []), null);
+  });
+  test('null value no-op → null', () => {
+    assert.equal(noOpObjectListSetError(ORIG, ORIG, null), null);
+  });
+  test('dict value no-op → error message naming the object-list round-trip limit', () => {
+    const msg = noOpObjectListSetError(ORIG, ORIG, { artifacts: [{ path: 'p' }] });
+    assert.equal(typeof msg, 'string');
+    assert.ok(msg.includes('had no effect'), msg);
+    assert.ok(msg.includes('object-list'), msg);
+    assert.ok(msg.includes('Edit the file directly'), msg);
   });
 });

@@ -499,14 +499,16 @@ describe('D: always-on hook contract drift guard', () => {
     assert.equal(hooks[0].timeout, 10, 'gsd-context-monitor.js must have timeout 10');
   });
 
-  test('PostToolUse Read group: gsd-read-injection-scanner.js (timeout 5)', () => {
+  test('PostToolUse Read|WebFetch|WebSearch group: gsd-read-injection-scanner.js (timeout 5)', () => {
     const map = buildHookMap();
     const groups = map['PostToolUse'];
     assert.ok(groups, 'PostToolUse must be present in hooks.json');
-    const hooks = groups['Read'];
+    // #1577: the injection scanner now also covers WebFetch/WebSearch ingress,
+    // so the matcher is the combined "Read|WebFetch|WebSearch" group.
+    const hooks = groups['Read|WebFetch|WebSearch'];
     assert.ok(
       Array.isArray(hooks) && hooks.length === 1,
-      `PostToolUse Read must have exactly 1 hook; got: ${JSON.stringify(hooks)}`
+      `PostToolUse Read|WebFetch|WebSearch must have exactly 1 hook; got: ${JSON.stringify(hooks)}`
     );
     assert.equal(hooks[0].script, 'gsd-read-injection-scanner.js', 'hook must be gsd-read-injection-scanner.js');
     assert.equal(hooks[0].timeout, 5, 'gsd-read-injection-scanner.js must have timeout 5');

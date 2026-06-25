@@ -2055,10 +2055,17 @@ function cmdVerifySchemaDrift(
     return;
   }
 
+  // Resolve the phase directory with the canonical phase-token matcher
+  // (phase-id.cjs), not a naive substring test. A bare `.includes(phaseArg)`
+  // lets a non-existent phase silently match a different phase whose directory
+  // name merely contains the requested token (e.g. "1" matching "11-expansion"),
+  // making the drift gate inspect the wrong phase. This mirrors find-phase /
+  // verify phase-completeness, which both use phaseTokenMatches. (#1571)
   let phaseDir: string | null = null;
+  const normalizedPhase = normalizePhaseName(phaseArg);
   const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.isDirectory() && entry.name.includes(phaseArg)) {
+    if (entry.isDirectory() && phaseTokenMatches(entry.name, normalizedPhase)) {
       phaseDir = path.join(phasesDir, entry.name);
       break;
     }

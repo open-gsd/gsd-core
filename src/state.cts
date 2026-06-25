@@ -263,7 +263,7 @@ function _stateLockBodyPid(lockPath: string): number | null {
 let _stateStealSeq = 0;
 
 // Hoisted to module scope — compiled once, not per call (#320). Stateless (/i, used with .match).
-const byPhaseTablePattern = /(\|\s*Phase\s*\|\s*Plans\s*\|\s*Total\s*\|\s*Avg\/Plan\s*\|[ \t]*\n\|(?:[- :\t]+\|)+[ \t]*\n)((?:[ \t]*\|[^\n]*\n)*)(?=\n|$)/i;
+const byPhaseTablePattern = /(\|\s*Phase\s*\|\s*Plans\s*\|\s*Total\s*\|\s*Avg\/Plan\s*\|[ \t]*\r?\n\|(?:[- :\t]+\|)+[ \t]*\r?\n)((?:[ \t]*\|[^\n]*\n)*)(?=\r?\n|$)/i;
 
 // ─── ADR-1372 T6: seam-based section splice helper ───────────────────────────
 
@@ -2417,20 +2417,20 @@ function cmdSignalResume(cwd: string, raw: boolean): void {
  * Returns modified content string.
  */
 function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum: string | number, planCount: number, summaryCount: number): string {
-  // Update Velocity: Total plans completed
-  const totalMatch = content.match(/Total plans completed:\s*(\d+|\[N\])/);
-  const prevTotal = totalMatch && totalMatch[1] !== '[N]' ? parseInt(totalMatch[1], 10) : 0;
-  const newTotal = prevTotal + summaryCount;
-  content = content.replace(
-    /Total plans completed:\s*(\d+|\[N\])/,
-    `Total plans completed: ${newTotal}`
-  );
-
-  // Update By Phase table — upsert row for this phase
+  // By Phase table — upsert the row for THIS phase FIRST. The velocity total is then
+  // DERIVED from the table's Plans column so it stays idempotent on re-run: completing
+  // the same phase again upserts the same row, so the column sum is stable. The previous
+  // blind-add (prevTotal + summaryCount) re-read the cumulative total each call and
+  // double-counted on every re-run. (#1582)
   const byPhaseMatch = content.match(byPhaseTablePattern);
   if (byPhaseMatch) {
     let tableBody = byPhaseMatch[2].trim();
-    const phaseRowPattern = new RegExp(`^\\|\\s*${escapeRegex(String(phaseNum))}\\s*\\|.*$`, 'm');
+    // Match the existing row for this phase, tolerating leading-zero padding in either
+    // direction (#1659): canonicalize a numeric phase to its integer form so a seeded
+    // "| 05 |" row is upserted (not duplicated) by `phase complete 5`, and vice-versa.
+    const phaseNumStr = String(phaseNum);
+    const canonCell = /^\d+$/.test(phaseNumStr) ? `0*${Number(phaseNumStr)}` : escapeRegex(phaseNumStr);
+    const phaseRowPattern = new RegExp(`^\\|\\s*${canonCell}\\s*\\|.*$`, 'm');
     const newRow = `| ${phaseNum} | ${summaryCount} | - | - |`;
 
     if (phaseRowPattern.test(tableBody)) {
@@ -2443,6 +2443,31 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
     }
 
     content = content.replace(byPhaseTablePattern, (_match, tableHeader: string) => `${tableHeader}${tableBody}\n`);
+  }
+
+  // Velocity: Total plans completed — DERIVED as the sum of the By-Phase Plans column
+  // (the second cell) across all data rows. Idempotent by construction (re-running phase
+  // complete upserts the same row → same sum) and self-healing (a hand-edited inflated
+  // total is corrected to the true sum on the next completion). When the By-Phase table
+  // is absent, leave the velocity total unchanged rather than guess. (#1582)
+  if (/Total plans completed:\s*(\d+|\[N\])/.test(content)) {
+    const tableForSum = content.match(byPhaseTablePattern);
+    if (tableForSum) {
+      let sum = 0;
+      for (const row of tableForSum[2].split(/\r?\n/)) {
+        // Data rows look like `| <phase> | <plans> | … |`, optionally indented (the
+        // byPhaseTablePattern data-row capture allows `[ \t]*` leading whitespace, so the
+        // sum must too or hand-edited/legacy indented rows are silently skipped — #1582
+        // codex review). Header (`| Phase | Plans | …`) and separator (`| --- | --- | …`)
+        // rows have a non-numeric second cell and are skipped; non-numeric cells → 0.
+        const cellMatch = row.match(/^\s*\|\s*[^|]+\s*\|\s*(\d+)\s*\|/);
+        if (cellMatch) sum += parseInt(cellMatch[1], 10);
+      }
+      content = content.replace(
+        /Total plans completed:\s*(\d+|\[N\])/,
+        `Total plans completed: ${sum}`,
+      );
+    }
   }
 
   return content;

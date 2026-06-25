@@ -248,6 +248,42 @@ This command is strictly read-only — no config writes, no disk mutation.
 
 ---
 
+### `query eval.score`
+
+```bash
+node gsd-tools.cjs query eval.score --covered <N> --total <N> --infra <tooling>,<dataset>,<cicd>,<guardrails>,<tracing>
+```
+
+Deterministic scorer for eval-auditor results. Computes coverage, infrastructure, and overall scores from audited inputs. Called by `gsd-eval-auditor` in its `calculate_scores` step — agents must not recompute these values by hand.
+
+**Inputs:**
+
+| Flag | Type | Description |
+|---|---|---|
+| `--covered` | integer | Number of eval dimensions scored COVERED |
+| `--total` | integer | Total planned eval dimensions |
+| `--infra` | string | Comma-separated list of 5 infra component statuses (order: tooling, dataset, cicd, guardrails, tracing); each value is `ok`, `partial`, or `missing` |
+
+**Output JSON:**
+
+| Field | Type | Description |
+|---|---|---|
+| `coverage_score` | number | `covered / total × 100` |
+| `infra_score` | number | `(sum of component weights) / 5 × 100` (`ok`=1, `partial`=0.5, `missing`=0) |
+| `overall_score` | number | `(coverage_score × 0.6) + (infra_score × 0.4)` |
+| `verdict` | string | `PRODUCTION READY` (80–100) / `NEEDS WORK` (60–<80) / `SIGNIFICANT GAPS` (40–<60) / `NOT IMPLEMENTED` (0–<40) |
+
+**Example:**
+
+```bash
+node gsd-tools.cjs query eval.score --covered 3 --total 5 --infra ok,partial,missing,ok,ok
+# → {"coverage_score":60,"infra_score":70,"overall_score":64,"verdict":"NEEDS WORK"}
+```
+
+This command is strictly read-only — no config writes, no disk mutation.
+
+---
+
 ## Model Resolution
 
 ```bash

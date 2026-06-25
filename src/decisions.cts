@@ -71,6 +71,19 @@ const bulletColonRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)
  */
 const bulletEmDashRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^*]*[—–][^*]*\*\*\s*(.*)$/;
 
+/**
+ * Titled-colon form: `- **D-NN[ [tags]]: Title.** body`
+ * A title sits between the colon and the closing `**` (so the `:**` anchor of
+ * bulletColonRe fails, and there is no em-dash for bulletEmDashRe). This is a strict
+ * superset of the colon-immediate form, so it MUST be checked AFTER bulletColonRe and
+ * bulletEmDashRe — it only catches bullets those two miss. The title run is `[^:*]*` (no
+ * colon, no `*`) so a genuinely-malformed bullet with a colon in the pre-separator run
+ * (e.g. `D-07 ratio 3:1:**`) still fails the anchor and falls through to the parse-miss
+ * guard — matching bulletColonRe's `[^:*]*` discipline that the separator colon is the
+ * only colon permitted before `**`. (#1639)
+ */
+const bulletTitledColonRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^:*]*:[^:*]*\*\*\s*(.*)$/;
+
 interface ParseDecisionLinesResult {
   decisions: Decision[];
   parseMisses: number;
@@ -147,6 +160,22 @@ function parseDecisionLines(block: string): ParseDecisionLinesResult {
       // title itself is embedded in the bold run but we report the body as text
       // (consistent with how the gate cares only about coverage, not title/body split).
       current = { id, text: emDashMatch[3] || '', category, tags, trackable };
+      continue;
+    }
+
+    // Titled-colon form: `- **D-NN[ [tags]]: Title.** body` (#1639). Checked LAST — it is
+    // a strict superset of bulletColonRe, so it only catches bullets the colon-immediate
+    // and em-dash forms missed (minimal blast radius). id + [tags] trackability honored;
+    // the body after the closing bold run is reported as text.
+    const titledColonMatch = line.match(bulletTitledColonRe);
+    if (titledColonMatch) {
+      flush();
+      const id = `D-${titledColonMatch[1]}`;
+      const tags = titledColonMatch[2]
+        ? titledColonMatch[2].split(',').map((t) => t.trim().toLowerCase()).filter(Boolean)
+        : [];
+      const trackable = !inDiscretion && !tags.some((t) => NON_TRACKABLE_TAGS.has(t));
+      current = { id, text: titledColonMatch[3] || '', category, tags, trackable };
       continue;
     }
 

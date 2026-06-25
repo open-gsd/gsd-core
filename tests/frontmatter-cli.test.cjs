@@ -274,3 +274,170 @@ body`;
     assert.ok(parsed.error, 'Should have error field');
   });
 });
+
+// ─── frontmatter set/merge: must_haves object-list preservation (#1572) ──────
+// `frontmatter set`/`merge` round-tripped the WHOLE frontmatter through the lossy
+// extractFrontmatter → reconstructFrontmatter pair, which flattens must_haves
+// object-list items ({path, provides} maps) to scalar strings and re-emits them as a
+// malformed inline array — destroying `provides:` whenever an UNRELATED field changed.
+// The fix preserves the original raw text for any structurally-unchanged top-level key.
+const { parseMustHavesBlock } = require('../gsd-core/bin/lib/frontmatter.cjs');
+
+describe('frontmatter set/merge preserves must_haves object-lists (#1572)', () => {
+  const ARTIFACTS_PLAN = [
+    '---',
+    'phase: 1',
+    'wave: 1',
+    'plan: 01-01',
+    'type: implementation',
+    'depends_on: []',
+    'files_modified: []',
+    'autonomous: true',
+    'must_haves:',
+    '  artifacts:',
+    '    - path: src/foo.ts',
+    '      provides: the foo',
+    '    - path: src/bar.ts',
+    '      provides: the bar',
+    '---',
+    '# body',
+    '',
+  ].join('\n');
+
+  const PROHIBITIONS_PLAN = [
+    '---',
+    'phase: 1',
+    'wave: 1',
+    'must_haves:',
+    '  prohibitions:',
+    '    - statement: no direct DB calls',
+    '      status: enforced',
+    '    - statement: no print statements',
+    '      status: pending',
+    '---',
+    '# body',
+    '',
+  ].join('\n');
+
+  function runAndParse(plan, cmdArgsForFile) {
+    const file = writeTempFile(plan);
+    runGsdTools(cmdArgsForFile(file));
+    const after = fs.readFileSync(file, 'utf-8');
+    return after;
+  }
+
+  test('set on an unrelated scalar preserves every must_haves.artifacts entry (path + provides)', () => {
+    const after = runAndParse(ARTIFACTS_PLAN, f => ['frontmatter', 'set', f, '--field', 'wave', '--value', '2']);
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'must_haves.artifacts object-list must survive a set on an unrelated field (#1572)',
+    );
+  });
+
+  test('merge of an unrelated field preserves every must_haves.artifacts entry', () => {
+    const after = runAndParse(ARTIFACTS_PLAN, f => ['frontmatter', 'merge', f, '--data', JSON.stringify({ wave: 2 })]);
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'must_haves.artifacts object-list must survive a merge of an unrelated field (#1572)',
+    );
+  });
+
+  test('must_haves.prohibitions object-list is preserved on an unrelated set (same code path)', () => {
+    const after = runAndParse(PROHIBITIONS_PLAN, f => ['frontmatter', 'set', f, '--field', 'wave', '--value', '2']);
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'prohibitions'),
+      [
+        { statement: 'no direct DB calls', status: 'enforced' },
+        { statement: 'no print statements', status: 'pending' },
+      ],
+      'must_haves.prohibitions object-list must survive a set on an unrelated field (#1572)',
+    );
+  });
+
+  test('round-trip is stable: setting wave twice still preserves artifacts (per-key preservation is idempotent)', () => {
+    const file = writeTempFile(ARTIFACTS_PLAN);
+    runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '2']);
+    runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '3']);
+    const after = fs.readFileSync(file, 'utf-8');
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'must_haves.artifacts must survive repeated sets on an unrelated field',
+    );
+  });
+
+  test('directly setting must_haves to a new object-list fails closed instead of emitting [object Object] (#1572 codex review)', () => {
+    // A CHANGED key whose value is an object-list cannot be faithfully serialized by the
+    // lossy writer (it would emit "[object Object]"). Rather than silently destroy the
+    // data, spliceFrontmatter throws — the command fails and the file is left unchanged.
+    const file = writeTempFile(ARTIFACTS_PLAN);
+    const result = runGsdTools([
+      'frontmatter', 'set', file, '--field', 'must_haves',
+      '--value', JSON.stringify({ artifacts: [{ path: 'src/new.ts', provides: 'new thing' }] }),
+    ]);
+    assert.ok(
+      !result.success,
+      'frontmatter set of a must_haves object-list must fail closed (refuse to emit "[object Object]")',
+    );
+    const after = fs.readFileSync(file, 'utf-8');
+    assert.ok(!/\[object Object\]/.test(after), 'the file must not contain "[object Object]" after a refused set');
+    assert.deepEqual(
+      parseMustHavesBlock(after, 'artifacts'),
+      [
+        { path: 'src/foo.ts', provides: 'the foo' },
+        { path: 'src/bar.ts', provides: 'the bar' },
+      ],
+      'the original must_haves.artifacts must be intact after the refused set',
+    );
+  });
+});
+
+// Bug #1660 — frontmatter set of an object-list field (e.g. must_haves) is a silent no-op
+// when the new value's lossy parse projection equals the original's. Folded into the owning
+// frontmatter-cli test (no new top-level bug-NNNN file).
+describe('Bug #1660: frontmatter set of an object-list field fails closed instead of a silent no-op', () => {
+  const PLAN_WITH_MUST_HAVES = [
+    '---', 'phase: 1', 'wave: 1',
+    'must_haves:', '  artifacts:', '    - path: src/foo.ts', '      provides: the foo',
+    '---', '# body', '',
+  ].join('\n');
+
+  test('setting must_haves to a value that flattens to the original projection fails closed (no silent no-op)', () => {
+    const file = writeTempFile(PLAN_WITH_MUST_HAVES);
+    const before = fs.readFileSync(file, 'utf-8');
+    // New value {artifacts:["path: src/foo.ts"]} — its extractFrontmatter projection equals
+    // the original's flattened projection, so the set would otherwise be a silent no-op.
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'must_haves', '--value', JSON.stringify({ artifacts: ['path: src/foo.ts'] })]);
+    const parsed = JSON.parse(result.output);
+    assert.ok(parsed.error, 'a no-op set of an object-list field must surface an error, not silent {updated:true}');
+    const after = fs.readFileSync(file, 'utf-8');
+    assert.equal(after, before, 'the file must be unchanged when the set is refused (no silent partial write)');
+  });
+
+  test('an idempotent set of a scalar (wave, same value) still reports updated (no false positive)', () => {
+    const file = writeTempFile('---\nphase: 1\nwave: 1\n---\n# body\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'wave', '--value', '1']);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'an idempotent SCALAR set must still report {updated:true} (not fail-closed)');
+    assert.ok(!parsed.error, 'an idempotent scalar set must not produce an error');
+  });
+
+  test('an idempotent set of a scalar array (tags, same value) still reports updated (no false positive)', () => {
+    const file = writeTempFile('---\nphase: 1\ntags: ["a","b"]\n---\n# body\n');
+    const result = runGsdTools(['frontmatter', 'set', file, '--field', 'tags', '--value', '["a","b"]']);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'an idempotent scalar-ARRAY set must still report {updated:true} (arrays round-trip; not fail-closed)');
+    assert.ok(!parsed.error, 'an idempotent scalar-array set must not produce an error');
+  });
+});

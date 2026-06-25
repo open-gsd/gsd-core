@@ -186,6 +186,8 @@ describe('scanPhasePlans — nested layout', () => {
     assert.strictEqual(result.planCount, 1);
     assert.strictEqual(result.summaryCount, 1);
     assert.strictEqual(result.completed, true);
+    assert.deepStrictEqual(result.planFiles, ['plans/PLAN-01-setup.md']);
+    assert.deepStrictEqual(result.summaryFiles, ['plans/SUMMARY-01-setup.md']);
   });
 
   test('flat root + nested plans combined', () => {

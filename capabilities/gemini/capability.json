@@ -1,7 +1,7 @@
 {
   "id": "gemini",
   "role": "runtime",
-  "version": "1.6.0-rc.3",
+  "version": "1.6.0",
   "title": "Gemini CLI",
   "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
   "tier": "core",

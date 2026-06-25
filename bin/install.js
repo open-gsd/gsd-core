@@ -637,6 +637,15 @@ const applyRuntimeContentRewritesForCommandsInPlace = runtimeArtifactConversion.
 const convertClaudeToQoderMarkdown = runtimeArtifactConversion.convertClaudeToQoderMarkdown;
 const convertClaudeCommandToQoderSkill = runtimeArtifactConversion.convertClaudeCommandToQoderSkill;
 const convertClaudeAgentToQoderAgent = runtimeArtifactConversion.convertClaudeAgentToQoderAgent;
+// #1675 (ADR-1508): the augment converter family is single-sourced in the
+// conversion module. install.js re-binds (does not re-define) these so there
+// is exactly one body — the generative-drift hazard the dedup removes. The two
+// private helpers (getAugmentSkillAdapterHeader, convertSlashCommandsToAugmentSkillMentions)
+// live only in the conversion module now; they are no longer duplicated here.
+// (All call sites are below this line → no TDZ hazard.)
+const convertClaudeToAugmentMarkdown = runtimeArtifactConversion.convertClaudeToAugmentMarkdown;
+const convertClaudeCommandToAugmentSkill = runtimeArtifactConversion.convertClaudeCommandToAugmentSkill;
+const convertClaudeAgentToAugmentAgent = runtimeArtifactConversion.convertClaudeAgentToAugmentAgent;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
   return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
@@ -2587,105 +2596,14 @@ const claudeToAugmentTools = {
   TodoWrite: 'add_tasks',
 };
 
-function convertSlashCommandsToAugmentSkillMentions(content) {
-  return content.replace(/gsd:/gi, 'gsd-');
-}
-
-function convertClaudeToAugmentMarkdown(content) {
-  let converted = convertSlashCommandsToAugmentSkillMentions(content);
-  converted = converted.replace(/\bBash\(/g, 'launch-process(');
-  converted = converted.replace(/\bEdit\(/g, 'str-replace-editor(');
-  converted = converted.replace(/\bRead\(/g, 'view(');
-  converted = converted.replace(/\bWrite\(/g, 'save-file(');
-  converted = converted.replace(/\bTodoWrite\(/g, 'add_tasks(');
-  converted = converted.replace(/\bAskUserQuestion\b/g, 'conversational prompting');
-  // Replace subagent_type from Claude to Augment format
-  converted = converted.replace(/subagent_type="general-purpose"/g, 'subagent_type="generalPurpose"');
-  converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
-  // Replace project-level Claude conventions with Augment equivalents
-  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.augment/rules/`');
-  converted = converted.replace(/\.\/CLAUDE\.md/g, '.augment/rules/');
-  converted = converted.replace(/`CLAUDE\.md`/g, '`.augment/rules/`');
-  converted = converted.replace(/\bCLAUDE\.md\b/g, '.augment/rules/');
-  converted = converted.replace(/\.claude\/skills\//g, '.augment/skills/');
-  // Remove Claude Code-specific bug workarounds before brand replacement
-  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
-  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  // Replace "Claude Code" brand references with "Augment"
-  converted = converted.replace(/\bClaude Code\b/g, 'Augment');
-  return converted;
-}
-
-function getAugmentSkillAdapterHeader(skillName) {
-  return `<augment_skill_adapter>
-## A. Skill Invocation
-- This skill is invoked when the user mentions \`${skillName}\` or describes a task matching this skill.
-- Treat all user text after the skill mention as \`{{GSD_ARGS}}\`.
-- If no arguments are present, treat \`{{GSD_ARGS}}\` as empty.
-
-## B. User Prompting
-When the workflow needs user input, prompt the user conversationally:
-- Present options as a numbered list in your response text
-- Ask the user to reply with their choice
-- For multi-select, ask for comma-separated numbers
-
-## C. Tool Usage
-Use these Augment tools when executing GSD workflows:
-- \`launch-process\` for running commands (terminal operations)
-- \`str-replace-editor\` for editing existing files
-- \`view\` for reading files and listing directories
-- \`save-file\` for creating new files
-- \`grep\` for searching code (or use MCP servers for advanced search)
-- \`web-search\`, \`web-fetch\` for web queries
-- \`add_tasks\`, \`view_tasklist\`, \`update_tasks\` for task management
-
-## D. Subagent Spawning
-When the workflow needs to spawn a subagent:
-- Use the built-in subagent spawning capability
-- Define agent prompts in \`.augment/agents/\` directory
-</augment_skill_adapter>`;
-}
-
-function convertClaudeCommandToAugmentSkill(content, skillName) {
-  const converted = convertClaudeToAugmentMarkdown(content);
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  let description = `Run GSD workflow ${skillName}.`;
-  if (frontmatter) {
-    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
-    if (maybeDescription) {
-      description = maybeDescription;
-    }
-  }
-  description = toSingleLine(description);
-  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
-  const adapter = getAugmentSkillAdapterHeader(skillName);
-
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
-}
-
-/**
- * Convert Claude Code agent markdown to Augment agent format.
- * Strips frontmatter fields Augment doesn't support (color, skills),
- * converts tool references, and cleans up for Augment agents.
- */
-function convertClaudeAgentToAugmentAgent(content) {
-  let converted = convertClaudeToAugmentMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
-}
-
-/**
- * Copy Claude commands as Augment skills — one folder per skill with SKILL.md.
- * Mirrors copyCommandsAsCursorSkills but uses Augment converters.
- */
+// #1675 (ADR-1508): the augment converter family below was a byte-identical
+// duplicate of runtime-artifact-conversion.cjs:
+//   convertSlashCommandsToAugmentSkillMentions, convertClaudeToAugmentMarkdown,
+//   getAugmentSkillAdapterHeader, convertClaudeCommandToAugmentSkill,
+//   convertClaudeAgentToAugmentAgent
+// Deleted here and bound from runtimeArtifactConversion above (single source).
+// The DEFECT.GENERATIVE-FIX parity guard in
+// tests/enh-1511-rewrite-engine-relocation.test.cjs asserts reference identity.
 
 function convertSlashCommandsToTraeSkillMentions(content) {
   return content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
@@ -11340,10 +11258,14 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     configureKiloPermissions(isGlobal, configDir);
   }
 
-  // For non-Claude runtimes, set resolve_model_ids: "omit" in ~/.gsd/defaults.json
-  // so resolveModelInternal() returns '' instead of Claude aliases (opus/sonnet/haiku)
-  // that the runtime can't resolve. Users can still use model_overrides for explicit IDs.
-  // See #1156. Guard matches the #130-class pattern on configureOpencodePermissions above.
+  // For non-Claude runtimes, DEFAULT resolve_model_ids to "omit" in ~/.gsd/defaults.json
+  // when it is absent or falsy, so resolveModelInternal() returns '' instead of Claude
+  // aliases (opus/sonnet/haiku) the runtime can't resolve. An explicit `true` opt-in
+  // (resolveModelInternal returns full materialized model IDs) MUST be preserved —
+  // rewriting it to "omit" would make generated agent manifests inherit the active
+  // chat model instead of pinning the resolved model. See #1156 (default-to-omit
+  // intent) and #1569 (preserve explicit true). Guard matches the #130-class pattern
+  // on configureOpencodePermissions above.
   if (runtime !== 'claude' && !process.env.GSD_TEST_MODE) {
     const gsdDir = path.join(os.homedir(), '.gsd');
     const defaultsPath = path.join(gsdDir, 'defaults.json');
@@ -11351,7 +11273,22 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
       fs.mkdirSync(gsdDir, { recursive: true });
       let defaults = {};
       try { defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')); } catch { /* new file */ }
-      if (defaults.resolve_model_ids !== 'omit') {
+      // Recover a malformed (valid-JSON-but-non-object) defaults.json to a fresh object so
+      // the write below succeeds and the file is no longer broken. Without this, `null` /
+      // `[]` / a number / a string bypass the parse catch and either throw a TypeError on
+      // property access (swallowed by the outer try/catch, leaving the file broken) or get
+      // a property set that won't round-trip through JSON.stringify. (#1657)
+      if (defaults === null || typeof defaults !== 'object' || Array.isArray(defaults)) {
+        defaults = {};
+      }
+      // Three-valued domain: false/absent → aliases; true → full IDs; "omit" → ''.
+      // Honor ONLY an explicit canonical `true` opt-in (full model IDs) and an existing
+      // "omit"; default everything else — absent, falsy, OR any non-canonical value — to
+      // "omit", the safe non-Claude default. Allowlist-based so malformed values
+      // (0, "", "yes", {}, …) don't leak Claude aliases the runtime can't resolve (#1569).
+      const existing = defaults.resolve_model_ids;
+      const shouldDefaultToOmit = existing !== true && existing !== 'omit';
+      if (shouldDefaultToOmit) {
         defaults.resolve_model_ids = 'omit';
         fs.writeFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n');
         console.log(`  ${green}✓${reset} Set resolve_model_ids: "omit" in ~/.gsd/defaults.json`);
@@ -11810,6 +11747,189 @@ function homePathCoveredByRc(globalBin, homeDir, rcFileNames) {
 }
 
 /**
+ * Decode fish's universal-variable value escaping (the inverse of fish's
+ * `full_escape`). fish serializes every non-`[A-Za-z0-9/_]` byte in
+ * `fish_variables` — e.g. space -> `\x20`, hyphen -> `\x2d`, dot -> `\x2e` —
+ * and joins list elements with the literal 4-char token `\x1e` (NOT a raw
+ * 0x1e byte). Callers split on `\x1e` first, then decode each element here.
+ *
+ * Pure and total: any unrecognised `\`-sequence is passed through verbatim,
+ * so `decode(fishEscape(p)) === p` holds for every path string. Exported for
+ * a fast-check round-trip property test (#323).
+ *
+ * @param {string} s  A single (already `\x1e`-split) escaped value.
+ * @returns {string}  The decoded literal.
+ */
+function decodeFishUniversalValue(s) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c !== '\\') { out += c; continue; }
+    const n = s[i + 1];
+    if (n === 'n') { out += '\n'; i += 1; }
+    else if (n === 'r') { out += '\r'; i += 1; }
+    else if (n === 't') { out += '\t'; i += 1; }
+    else if (n === '\\') { out += '\\'; i += 1; }
+    else if (n === 'x' || n === 'X') {
+      const hex = s.slice(i + 2, i + 4);
+      if (/^[0-9a-fA-F]{2}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 3; }
+      else { out += c; }
+    } else if (n === 'u') {
+      const hex = s.slice(i + 2, i + 6);
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 5; }
+      else { out += c; }
+    } else if (n === 'U') {
+      const hex = s.slice(i + 2, i + 10);
+      if (/^[0-9a-fA-F]{8}$/.test(hex)) { out += String.fromCodePoint(parseInt(hex, 16)); i += 9; }
+      else { out += c; }
+    } else { out += c; }
+  }
+  return out;
+}
+
+/**
+ * Check whether fish's configuration already places `globalBin` on PATH (#323).
+ *
+ * fish does not use the sh-style `export PATH=` rc files that
+ * `homePathCoveredByRc()` parses, so a fish user whose `fish_user_paths`
+ * already covers the global bin would otherwise see a false-positive
+ * "not on your PATH" warning on every install. Two detection routes,
+ * mirroring how `fish_add_path` actually persists:
+ *
+ *  1. The universal-variable store `fish_variables` — a
+ *     `SETUVAR fish_user_paths:<a>\x1e<b>…` line whose `\x1e`-separated
+ *     entries are absolute paths (fish does not HOME-expand them here).
+ *  2. `config.fish` — explicit `fish_add_path …`, `set -gx PATH …`, or
+ *     `set -Ux fish_user_paths …` lines that name the directory after
+ *     HOME expansion.
+ *
+ * Best-effort and side-effect-free: any unreadable / missing file is ignored
+ * (no fish subprocess is spawned). Honours `$XDG_CONFIG_HOME` and always also
+ * checks `~/.config/fish`. Pass `fishConfigDir` to override the lookup
+ * directory (tests).
+ *
+ * @param {string} globalBin  Absolute path to npm's global bin directory.
+ * @param {string} homeDir    Absolute path used to substitute HOME / ~.
+ * @param {string} [fishConfigDir]  Override the fish config directory.
+ * @returns {boolean}         true iff fish config adds globalBin to PATH.
+ */
+function homePathCoveredByFishConfig(globalBin, homeDir, fishConfigDir) {
+  if (!globalBin || !homeDir) return false;
+  const path = require('path');
+  const fs = require('fs');
+
+  const normalise = (p) => {
+    if (!p) return '';
+    let n = p.replace(/[\\/]+$/g, '');
+    if (n === '') n = p.startsWith('/') ? '/' : p;
+    return n;
+  };
+
+  const targetAbs = normalise(path.resolve(globalBin));
+  const homeAbs = path.resolve(homeDir);
+
+  const baseDirs = [];
+  if (fishConfigDir) {
+    baseDirs.push(fishConfigDir);
+  } else {
+    if (process.env.XDG_CONFIG_HOME) {
+      baseDirs.push(path.join(process.env.XDG_CONFIG_HOME, 'fish'));
+    }
+    baseDirs.push(path.join(homeAbs, '.config', 'fish'));
+  }
+
+  const expandHome = (segment) => {
+    let s = segment;
+    s = s.replace(/\$\{HOME\}/g, homeAbs).replace(/\$HOME/g, homeAbs);
+    if (s.startsWith('~/') || s === '~') {
+      s = s === '~' ? homeAbs : path.join(homeAbs, s.slice(2));
+    }
+    return s;
+  };
+
+  // Compare an already-resolved absolute literal (a decoded fish_user_paths
+  // entry — fish stores these resolved, never as `$VAR`/`~`). A literal `$`
+  // here is part of the directory name, so it must NOT be treated as an
+  // unexpanded variable.
+  const matchesLiteral = (segment) => {
+    if (!segment || !path.isAbsolute(segment)) return false;
+    try {
+      return normalise(path.resolve(segment)) === targetAbs;
+    } catch {
+      return false;
+    }
+  };
+
+  // Compare a config.fish shell token: strip surrounding quotes, expand the
+  // common HOME forms, and skip anything still holding a `$` (an unexpanded
+  // variable such as `$PATH` / `$fish_user_paths`) or still relative.
+  const matchesTarget = (rawSegment) => {
+    if (!rawSegment) return false;
+    let seg = rawSegment.trim();
+    if ((seg.startsWith('"') && seg.endsWith('"')) ||
+        (seg.startsWith("'") && seg.endsWith("'"))) {
+      seg = seg.slice(1, -1);
+    }
+    const expanded = expandHome(seg);
+    if (expanded.includes('$')) return false;
+    return matchesLiteral(expanded);
+  };
+
+  const readLines = (filePath) => {
+    try {
+      return fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
+    } catch {
+      return null;
+    }
+  };
+
+  for (const baseDir of baseDirs) {
+    // Route 1: universal variable store.
+    const uvarLines = readLines(path.join(baseDir, 'fish_variables'));
+    if (uvarLines) {
+      for (const rawLine of uvarLines) {
+        const m = /^SETUVAR(?:\s+--\S+)*\s+fish_user_paths:(.*)$/.exec(rawLine);
+        if (!m) continue;
+        // Elements are joined by the literal `\x1e` token; decode each. The
+        // decoded entry is an absolute literal — compare it directly.
+        for (const entry of m[1].split('\\x1e')) {
+          if (matchesLiteral(decodeFishUniversalValue(entry))) return true;
+        }
+      }
+    }
+
+    // Route 2: config.fish explicit PATH mutations.
+    const configLines = readLines(path.join(baseDir, 'config.fish'));
+    if (configLines) {
+      for (const rawLine of configLines) {
+        const line = rawLine.replace(/^\s+/, '');
+        if (line.startsWith('#')) continue;
+
+        let rest = null;
+        let m;
+        if ((m = /^fish_add_path\s+(.+)$/.exec(line))) {
+          rest = m[1];
+        } else if ((m = /^set\s+(?:-\S+\s+)*PATH\s+(.+)$/.exec(line))) {
+          rest = m[1];
+        } else if ((m = /^set\s+(?:-\S+\s+)*fish_user_paths\s+(.+)$/.exec(line))) {
+          rest = m[1];
+        }
+        if (rest === null) continue;
+
+        // Tokens are whitespace-separated; flag tokens (`-g`, `--path`) and
+        // variable references are skipped by matchesTarget / the `-` guard.
+        for (const tok of rest.split(/\s+/)) {
+          if (!tok || tok.startsWith('-')) continue;
+          if (matchesTarget(tok)) return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Emit a PATH-export suggestion if globalBin is not already on PATH AND
  * the user's shell rc files do not already cover it via a HOME-relative
  * entry (#2620).
@@ -11847,6 +11967,16 @@ function maybeSuggestPathExport(globalBin, homeDir) {
   if (homePathCoveredByRc(globalBin, homeDir)) {
     console.log('');
     console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via an rc file entry — try reopening your shell (or ${cyan}source ~/.zshrc${reset}).`);
+    console.log('');
+    return;
+  }
+
+  // Same idea for fish users: fish_user_paths / config.fish already covers the
+  // dir, the current session just predates it. fish has no sh-style rc file so
+  // homePathCoveredByRc never sees it — check the fish config explicitly (#323).
+  if (homePathCoveredByFishConfig(globalBin, homeDir)) {
+    console.log('');
+    console.log(`  ${yellow}⚠${reset} ${bold}${globalBin}${reset}'s directory is already on your PATH via fish's universal variables — open a new fish session (or run ${cyan}exec fish${reset}).`);
     console.log('');
     return;
   }
@@ -12191,6 +12321,8 @@ module.exports = {
     USER_OWNED_ARTIFACTS,
     finishInstall,
     homePathCoveredByRc,
+    homePathCoveredByFishConfig,
+    decodeFishUniversalValue,
     maybeSuggestPathExport,
     runtimeMap,
     allRuntimes,

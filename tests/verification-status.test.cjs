@@ -59,6 +59,11 @@ function writeVerificationMd(dir, filename, status, body = '') {
   fs.writeFileSync(path.join(dir, filename), frontmatter + body);
 }
 
+function setMtime(filePath, iso) {
+  const time = new Date(iso);
+  fs.utimesSync(filePath, time, time);
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('verification-status', () => {
@@ -309,6 +314,69 @@ describe('verification-status', () => {
       );
     } finally {
       cleanup(dir);
+    }
+  });
+
+  test('passed verification older than a summary returns stale', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-651-parent-'));
+    const dir = path.join(baseDir, '01-stale-passed');
+    fs.mkdirSync(dir);
+    try {
+      const verificationPath = path.join(dir, '01-VERIFICATION.md');
+      const summaryPath = path.join(dir, '01-01-SUMMARY.md');
+      writeVerificationMd(dir, '01-VERIFICATION.md', 'passed');
+      fs.writeFileSync(summaryPath, '# Summary');
+      setMtime(verificationPath, '2026-01-01T00:00:00.000Z');
+      setMtime(summaryPath, '2026-01-01T00:01:00.000Z');
+
+      const result = readVerificationStatus(dir);
+      assert.equal(result.status, 'stale');
+      assert.match(result.next_action, /stale/i);
+      assert.equal(result.next_command, '/gsd:verify-work 01');
+    } finally {
+      cleanup(baseDir);
+    }
+  });
+
+  test('gaps_found verification older than a summary still returns gaps_found (not stale)', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-651-parent-'));
+    const dir = path.join(baseDir, '01-stale-gaps');
+    fs.mkdirSync(dir);
+    try {
+      const verificationPath = path.join(dir, '01-VERIFICATION.md');
+      const summaryPath = path.join(dir, '01-01-SUMMARY.md');
+      writeVerificationMd(dir, '01-VERIFICATION.md', 'gaps_found');
+      fs.writeFileSync(summaryPath, '# Summary');
+      setMtime(verificationPath, '2026-01-01T00:00:00.000Z');
+      setMtime(summaryPath, '2026-01-01T00:01:00.000Z');
+
+      const result = readVerificationStatus(dir);
+      assert.equal(result.status, 'gaps_found');
+      assert.equal(result.next_command, '/gsd:plan-phase 01 --gaps');
+    } finally {
+      cleanup(baseDir);
+    }
+  });
+
+  test('human_needed verification older than nested plans/SUMMARY-NN.md returns stale', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-651-parent-'));
+    const dir = path.join(baseDir, '01-stale-human-nested');
+    fs.mkdirSync(dir);
+    try {
+      const plansDir = path.join(dir, 'plans');
+      fs.mkdirSync(plansDir);
+      const verificationPath = path.join(dir, '01-VERIFICATION.md');
+      const summaryPath = path.join(plansDir, 'SUMMARY-01-manual.md');
+      writeVerificationMd(dir, '01-VERIFICATION.md', 'human_needed');
+      fs.writeFileSync(summaryPath, '# Summary');
+      setMtime(verificationPath, '2026-01-01T00:00:00.000Z');
+      setMtime(summaryPath, '2026-01-01T00:01:00.000Z');
+
+      const result = readVerificationStatus(dir);
+      assert.equal(result.status, 'stale');
+      assert.equal(result.next_command, '/gsd:verify-work 01');
+    } finally {
+      cleanup(baseDir);
     }
   });
 

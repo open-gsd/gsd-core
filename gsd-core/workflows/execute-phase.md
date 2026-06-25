@@ -580,7 +580,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    DISPATCH_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
    EXPECTED_BRANCH=$(git rev-parse --abbrev-ref HEAD)
    if [ "${USE_WORKTREES_FOR_PLAN:-true}" != "false" ] && [ -z "${WAVE_WORKTREE_MANIFEST:-}" ]; then
-     WAVE_WORKTREE_MANIFEST=$(mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX.json")
+     M=$(mktemp "${TMPDIR:-/tmp}/gsd-worktree-wave-XXXXXX") && mv "$M" "$M.json" && WAVE_WORKTREE_MANIFEST="$M.json" || exit 1  # XXXXXX must be path-final on BSD/macOS (#1520)
      # Persist the dispatch-time orchestrator worktree root so wave-cleanup can pin back to the
      # orchestrator's OWN worktree — NOT `git worktree list`'s first entry (always the main
      # checkout), which pins a non-primary (per-phase lane) orchestrator off its branch (#630).

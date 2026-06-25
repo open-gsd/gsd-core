@@ -1,5 +1,0 @@
----
-type: Fixed
-pr: 1424
----
-**`gsd-tools query agent-skills` no longer silently drops a configured agent's skills under cwd or workstream drift** — `cmdAgentSkills` now anchors to the project root via `findProjectRoot` before loading config, so invoking it from a descendant subdirectory or with a `GSD_WORKSTREAM` that has no scoped config correctly resolves the configured `agent_skills` block. A new `loadConfigResolved(cwd, options) → { config, source, degraded }` function reports provenance alongside the config object: `source` distinguishes `'root' | 'workstream' | 'builtin-defaults' | 'global-defaults'`; `degraded:true` signals a workstream was requested but its config.json was absent. The `--json` IR of `agent-skills` gains four new fields — `configured` (bool), `reason` (`'resolved' | 'not_configured' | 'configured_empty' | 'configured_unresolved'`), `source`, and `degraded` — making silent failures visible and testable. A `configured_empty` or `configured_unresolved` agent emits a `stderr WARNING`; an unconfigured agent stays silent. (Closes #1366. Part of #1411, P2 / #1415.)

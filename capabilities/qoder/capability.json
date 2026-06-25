@@ -6,6 +6,9 @@
   "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; settings-json hook surface (PreToolUse/PostToolUse/Stop); Claude hook event dialect; tier-2 support.",
   "tier": "core",
   "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
   "runtime": {
     "configHome": {
       "kind": "dot-home",
