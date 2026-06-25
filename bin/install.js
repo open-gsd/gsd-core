@@ -630,6 +630,15 @@ const processAttribution = runtimeArtifactConversion.processAttribution;
 const computePathPrefix = runtimeArtifactConversion._computePathPrefix;
 const applyRuntimeContentRewritesInPlace = runtimeArtifactConversion.applyRuntimeContentRewritesInPlace;
 const applyRuntimeContentRewritesForCommandsInPlace = runtimeArtifactConversion.applyRuntimeContentRewritesForCommandsInPlace;
+// #1675 (ADR-1508): the augment converter family is single-sourced in the
+// conversion module. install.js re-binds (does not re-define) these so there
+// is exactly one body — the generative-drift hazard the dedup removes. The two
+// private helpers (getAugmentSkillAdapterHeader, convertSlashCommandsToAugmentSkillMentions)
+// live only in the conversion module now; they are no longer duplicated here.
+// (All call sites are below this line → no TDZ hazard.)
+const convertClaudeToAugmentMarkdown = runtimeArtifactConversion.convertClaudeToAugmentMarkdown;
+const convertClaudeCommandToAugmentSkill = runtimeArtifactConversion.convertClaudeCommandToAugmentSkill;
+const convertClaudeAgentToAugmentAgent = runtimeArtifactConversion.convertClaudeAgentToAugmentAgent;
 
 function rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts) {
   return hooksSurface.rewriteLegacyManagedNodeHookCommands(settings, absoluteRunner, opts);
@@ -2580,105 +2589,14 @@ const claudeToAugmentTools = {
   TodoWrite: 'add_tasks',
 };
 
-function convertSlashCommandsToAugmentSkillMentions(content) {
-  return content.replace(/gsd:/gi, 'gsd-');
-}
-
-function convertClaudeToAugmentMarkdown(content) {
-  let converted = convertSlashCommandsToAugmentSkillMentions(content);
-  converted = converted.replace(/\bBash\(/g, 'launch-process(');
-  converted = converted.replace(/\bEdit\(/g, 'str-replace-editor(');
-  converted = converted.replace(/\bRead\(/g, 'view(');
-  converted = converted.replace(/\bWrite\(/g, 'save-file(');
-  converted = converted.replace(/\bTodoWrite\(/g, 'add_tasks(');
-  converted = converted.replace(/\bAskUserQuestion\b/g, 'conversational prompting');
-  // Replace subagent_type from Claude to Augment format
-  converted = converted.replace(/subagent_type="general-purpose"/g, 'subagent_type="generalPurpose"');
-  converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
-  // Replace project-level Claude conventions with Augment equivalents
-  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.augment/rules/`');
-  converted = converted.replace(/\.\/CLAUDE\.md/g, '.augment/rules/');
-  converted = converted.replace(/`CLAUDE\.md`/g, '`.augment/rules/`');
-  converted = converted.replace(/\bCLAUDE\.md\b/g, '.augment/rules/');
-  converted = converted.replace(/\.claude\/skills\//g, '.augment/skills/');
-  // Remove Claude Code-specific bug workarounds before brand replacement
-  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
-  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  // Replace "Claude Code" brand references with "Augment"
-  converted = converted.replace(/\bClaude Code\b/g, 'Augment');
-  return converted;
-}
-
-function getAugmentSkillAdapterHeader(skillName) {
-  return `<augment_skill_adapter>
-## A. Skill Invocation
-- This skill is invoked when the user mentions \`${skillName}\` or describes a task matching this skill.
-- Treat all user text after the skill mention as \`{{GSD_ARGS}}\`.
-- If no arguments are present, treat \`{{GSD_ARGS}}\` as empty.
-
-## B. User Prompting
-When the workflow needs user input, prompt the user conversationally:
-- Present options as a numbered list in your response text
-- Ask the user to reply with their choice
-- For multi-select, ask for comma-separated numbers
-
-## C. Tool Usage
-Use these Augment tools when executing GSD workflows:
-- \`launch-process\` for running commands (terminal operations)
-- \`str-replace-editor\` for editing existing files
-- \`view\` for reading files and listing directories
-- \`save-file\` for creating new files
-- \`grep\` for searching code (or use MCP servers for advanced search)
-- \`web-search\`, \`web-fetch\` for web queries
-- \`add_tasks\`, \`view_tasklist\`, \`update_tasks\` for task management
-
-## D. Subagent Spawning
-When the workflow needs to spawn a subagent:
-- Use the built-in subagent spawning capability
-- Define agent prompts in \`.augment/agents/\` directory
-</augment_skill_adapter>`;
-}
-
-function convertClaudeCommandToAugmentSkill(content, skillName) {
-  const converted = convertClaudeToAugmentMarkdown(content);
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  let description = `Run GSD workflow ${skillName}.`;
-  if (frontmatter) {
-    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
-    if (maybeDescription) {
-      description = maybeDescription;
-    }
-  }
-  description = toSingleLine(description);
-  const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
-  const adapter = getAugmentSkillAdapterHeader(skillName);
-
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
-}
-
-/**
- * Convert Claude Code agent markdown to Augment agent format.
- * Strips frontmatter fields Augment doesn't support (color, skills),
- * converts tool references, and cleans up for Augment agents.
- */
-function convertClaudeAgentToAugmentAgent(content) {
-  let converted = convertClaudeToAugmentMarkdown(content);
-
-  const { frontmatter, body } = extractFrontmatterAndBody(converted);
-  if (!frontmatter) return converted;
-
-  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
-  const description = extractFrontmatterField(frontmatter, 'description') || '';
-
-  const cleanFrontmatter = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n---`;
-
-  return `${cleanFrontmatter}\n${body}`;
-}
-
-/**
- * Copy Claude commands as Augment skills — one folder per skill with SKILL.md.
- * Mirrors copyCommandsAsCursorSkills but uses Augment converters.
- */
+// #1675 (ADR-1508): the augment converter family below was a byte-identical
+// duplicate of runtime-artifact-conversion.cjs:
+//   convertSlashCommandsToAugmentSkillMentions, convertClaudeToAugmentMarkdown,
+//   getAugmentSkillAdapterHeader, convertClaudeCommandToAugmentSkill,
+//   convertClaudeAgentToAugmentAgent
+// Deleted here and bound from runtimeArtifactConversion above (single source).
+// The DEFECT.GENERATIVE-FIX parity guard in
+// tests/enh-1511-rewrite-engine-relocation.test.cjs asserts reference identity.
 
 function convertSlashCommandsToTraeSkillMentions(content) {
   return content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
