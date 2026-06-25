@@ -487,15 +487,17 @@ describe('M1: _copyStaged rejects dest equal to configRoot', () => {
   });
 
   test('M1: _copyStaged throws when destDir equals configRoot (was silently accepted before fix)', () => {
-    // dest === configRoot: the old guard used !== which let this slip through.
-    // The new guard uses === which must throw.
+    // dest === configRoot: the canonical gate (assertDestWithinConfigHome) rejects
+    // resolved === root with "escapes configHome" / "not configHome itself".
     assert.throws(
       () => _copyStaged(stagedDir, configDir, { kind: 'commands', destSubpath: '.', prefix: 'gsd-' }, configDir),
       (err) => {
         assert.ok(err instanceof Error, 'must be an Error');
         assert.ok(
-          err.message.includes('_copyStaged') &&
-          (err.message.includes('root itself') || err.message.includes('outside') || err.message.includes('inside')),
+          err.message.includes('escapes configHome') ||
+          err.message.includes('not configHome itself') ||
+          err.message.includes('outside') ||
+          err.message.includes('inside'),
           `expected confinement error in: ${err.message}`,
         );
         return true;
@@ -511,8 +513,12 @@ describe('M1: _copyStaged rejects dest equal to configRoot', () => {
         (err) => {
           assert.ok(err instanceof Error, 'must be an Error');
           assert.ok(
-            err.message.includes('_copyStaged'),
-            `expected _copyStaged error in: ${err.message}`,
+            // After EDIT 1, _copyStaged delegates to assertDestWithinConfigHome which
+            // emits "escapes configHome"; the old "_copyStaged" prefix is no longer present.
+            err.message.includes('escapes configHome') ||
+            err.message.includes('strict subpath') ||
+            err.message.includes('refusing'),
+            `expected confinement error in: ${err.message}`,
           );
           return true;
         },

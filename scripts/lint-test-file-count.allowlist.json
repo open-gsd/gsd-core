@@ -142,9 +142,10 @@
         "install-regressions.test.cjs",
         "install-runtime-artifacts.test.cjs",
         "install-update-marker.test.cjs",
+        "install-write-confinement.test.cjs",
         "install.test.cjs"
       ],
-      "issue": "TBD"
+      "issue": "1679"
     },
     "validate": {
       "files": [

@@ -5629,8 +5629,21 @@ function writeCopilotHookConfig(targetDir) {
  * Reads agent .md files from source, extracts metadata, writes .toml configs.
  */
 function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-sandbox') {
-  const configPath = path.join(targetDir, 'config.toml');
-  const agentsTomlDir = path.join(targetDir, 'agents');
+  // ADR-1239 Phase B write-confinement: every Codex config write stays under targetDir.
+  const configPath = assertDestWithinConfigHome(targetDir, 'config.toml');
+  const agentsTomlDir = assertDestWithinConfigHome(targetDir, 'agents');
+  const resolvedTargetRoot = path.resolve(targetDir);
+  // Symlink-escape guard (parity with _copyStaged / copyWithPathReplacement): the
+  // lexical gate above does not resolve symlinks, so a pre-existing config.toml or
+  // agents/ symlink could redirect writes outside targetDir. Reject those.
+  if (
+    hasExistingSymlinkBetween(resolvedTargetRoot, configPath) ||
+    hasExistingSymlinkBetween(resolvedTargetRoot, path.resolve(agentsTomlDir))
+  ) {
+    throw new Error(
+      `installCodexConfig: a Codex config path under "${targetDir}" contains a symlink escaping the install root — refusing to write`,
+    );
+  }
   fs.mkdirSync(agentsTomlDir, { recursive: true });
 
   const agentEntries = fs.readdirSync(agentsSrc).filter(f => f.startsWith('gsd-') && f.endsWith('.md'));
@@ -5675,7 +5688,16 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // follows the same config-driven precedence as the Claude .md effort key.
     const effortCfg = readGsdEffectiveEffortConfig(targetDir);
     const tomlContent = generateCodexAgentToml(name, content, modelOverrides, runtimeResolver, effortCfg, sandboxTier);
-    fs.writeFileSync(path.join(agentsTomlDir, `${name}.toml`), tomlContent);
+    // Confine the per-agent write to the agents/ dir itself: a crafted agent
+    // `name` containing path separators must not escape agents/ (which would let
+    // it clobber config.toml or write elsewhere under the configHome).
+    const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
+    if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath)) {
+      throw new Error(
+        `installCodexConfig: agent toml path "${agentTomlPath}" contains a symlink escaping the install root — refusing to write`,
+      );
+    }
+    fs.writeFileSync(agentTomlPath, tomlContent);
   }
 
   const gsdBlock = generateCodexConfigBlock(agents, targetDir);
@@ -6738,22 +6760,26 @@ function _copyStaged(stagedDir, destDir, kind, configDir) {
   // Defense-in-depth: verify destDir is within the install root even if the
   // upstream assertDestWithinConfigHome check was somehow bypassed. This guards
   // the actual write site against any future call-site drift.
-  if (configDir !== undefined) {
-    const resolvedDest = path.resolve(destDir);
-    const resolvedRoot = path.resolve(configDir);
-    if (resolvedDest === resolvedRoot || !resolvedDest.startsWith(resolvedRoot + path.sep)) {
-      throw new Error(
-        `_copyStaged: destDir "${destDir}" must be strictly inside the install root "${configDir}", not the root itself — refusing to write`,
-      );
-    }
-    // Symlink-escape guard: reject if any path component between configDir and
-    // destDir is a symlink that would redirect writes outside configDir.
-    if (hasExistingSymlinkBetween(resolvedRoot, resolvedDest)) {
-      throw new Error(
-        `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${configDir}" — refusing to write`,
-      );
-    }
+  // Fail-closed: every _copyStaged write must declare its install root so the gate
+  // can confine it. All callers pass configDir; an omitted root is a bug, not a copy.
+  if (configDir === undefined) {
+    throw new Error(
+      '_copyStaged: configDir (install root) is required to confine writes — refusing to write',
+    );
   }
+  // Strict-subpath + NUL containment via the canonical gate (shared with the
+  // layout-driven install plan); throws if destDir escapes the install root.
+  // destDir here is an absolute path; path.resolve(configDir, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to configDir.
+  const resolvedDest = assertDestWithinConfigHome(configDir, destDir);
+  // Symlink-escape guard: reject if any path component between configDir and
+  // destDir is a symlink that would redirect writes outside configDir.
+  if (hasExistingSymlinkBetween(path.resolve(configDir), resolvedDest)) {
+    throw new Error(
+      `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${configDir}" — refusing to write`,
+    );
+  }
+  // Use the validated absolute path for the actual writes below.
+  destDir = resolvedDest;
   if (!fs.existsSync(stagedDir)) return;
   fs.mkdirSync(destDir, { recursive: true });
 
@@ -7286,7 +7312,7 @@ function uninstallRuntimeArtifacts(runtime, configDir, scope) {
  * @param {boolean} isCommand - Whether the source is a command directory
  * @param {boolean} isGlobal - Whether the install is global
  */
-function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand = false, isGlobal = false) {
+function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand = false, isGlobal = false, confinementRoot) {
   const isOpencode = runtime === 'opencode';
   const isKilo = runtime === 'kilo';
   const isGemini = runtime === 'gemini';
@@ -7302,6 +7328,25 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   const isCline = runtime === 'cline';
   const dirName = getDirName(runtime);
 
+  // ADR-1239 Phase B write-confinement: refuse to wipe/write a destDir that
+  // escapes the caller-declared install root. Runs BEFORE the rmSync below so a
+  // crafted destDir can never delete or write outside confinementRoot.
+  if (confinementRoot === undefined) {
+    throw new Error(
+      'copyWithPathReplacement: confinementRoot is required to confine writes to the install root — refusing to write',
+    );
+  }
+  const resolvedConfinementRoot = path.resolve(confinementRoot);
+  const resolvedDestDir = assertDestWithinConfigHome(confinementRoot, destDir);
+  if (hasExistingSymlinkBetween(resolvedConfinementRoot, resolvedDestDir)) {
+    throw new Error(
+      `copyWithPathReplacement: destDir "${destDir}" contains a symlink escaping the install root "${confinementRoot}" — refusing to write`,
+    );
+  }
+  // Use the validated absolute path for all writes below so the gate validates
+  // exactly what is written (a relative destDir would otherwise resolve to cwd).
+  destDir = resolvedDestDir;
+
   // Clean install: remove existing destination to prevent orphaned files
   if (fs.existsSync(destDir)) {
     fs.rmSync(destDir, { recursive: true });
@@ -7315,7 +7360,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
     const destPath = path.join(destDir, entry.name);
 
     if (entry.isDirectory()) {
-      copyWithPathReplacement(srcPath, destPath, pathPrefix, runtime, isCommand, isGlobal);
+      copyWithPathReplacement(srcPath, destPath, pathPrefix, runtime, isCommand, isGlobal, confinementRoot);
     } else if (entry.name.endsWith('.md')) {
       // Replace ~/.claude/ and $HOME/.claude/ and ./.claude/ with runtime-appropriate paths
       // Skip generic replacement for Copilot — convertClaudeToCopilotContent handles all paths
@@ -8903,7 +8948,7 @@ function populatePristineDir({ packageSrc, pristineDir, modified, runtime, pathP
       const srcDir = path.join(packageSrc, top);
       const stageDir = path.join(stageRoot, top);
       if (!fs.existsSync(srcDir)) continue;
-      copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal);
+      copyWithPathReplacement(srcDir, stageDir, pathPrefix, runtime, false, isGlobal, stageRoot);
     }
 
     for (const relPath of safeModified) {
@@ -9846,7 +9891,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       fs.mkdirSync(commandsDir, { recursive: true });
       const gsdSrc = _stageSkills(_commandsDir);
       const gsdDest = path.join(commandsDir, 'gsd');
-      copyWithPathReplacement(gsdSrc, gsdDest, pathPrefix, runtime, true, isGlobal);
+      copyWithPathReplacement(gsdSrc, gsdDest, pathPrefix, runtime, true, isGlobal, targetDir);
       if (verifyInstalled(gsdDest, 'commands/gsd')) {
         console.log(`  ${green}✓${reset} Installed commands/gsd`);
       } else {
@@ -9928,7 +9973,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   const skillSrc = path.join(src, 'gsd-core');
   const skillDest = path.join(targetDir, 'gsd-core');
   const savedGsdArtifacts = preserveUserArtifacts(skillDest, USER_OWNED_ARTIFACTS);
-  copyWithPathReplacement(skillSrc, skillDest, pathPrefix, runtime, false, isGlobal);
+  copyWithPathReplacement(skillSrc, skillDest, pathPrefix, runtime, false, isGlobal, targetDir);
   restoreUserArtifacts(skillDest, savedGsdArtifacts);
   if (verifyInstalled(skillDest, 'gsd-core')) {
     console.log(`  ${green}✓${reset} Installed workflow assets`);
@@ -9948,7 +9993,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     const commandsSrc = path.join(src, 'commands', 'gsd');
     const commandsDest = path.join(skillDest, 'commands', 'gsd');
     if (fs.existsSync(commandsSrc)) {
-      copyWithPathReplacement(commandsSrc, commandsDest, pathPrefix, runtime, true, isGlobal);
+      copyWithPathReplacement(commandsSrc, commandsDest, pathPrefix, runtime, true, isGlobal, targetDir);
       console.log(`  ${green}✓${reset} Installed command bodies to gsd-core/commands/gsd/ (workflow delegation targets)`);
     }
   }
@@ -12365,6 +12410,7 @@ module.exports = {
     processAttribution,
     applyRuntimeContentRewritesForCommandsInPlace,
     _copyStaged,
+    copyWithPathReplacement,
   };
 
 // Main logic — only run when not loaded as a module for testing
