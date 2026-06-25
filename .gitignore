@@ -232,3 +232,4 @@ reports/mutation/
 # Local Crabbox machine configuration
 .crabbox.yaml
 .crabbox.local.yaml
+.contribute/
