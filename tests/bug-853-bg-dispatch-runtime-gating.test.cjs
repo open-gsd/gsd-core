@@ -21,28 +21,28 @@ const path = require('node:path');
 const { createTempProject, cleanup: cleanupDir, runGsdTools } = require('./helpers.cjs');
 
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (see #1708)
 const MANAGER = fs.readFileSync(path.join(WORKFLOWS_DIR, 'manager.md'), 'utf8');
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (see #1708)
 const AUTONOMOUS = fs.readFileSync(path.join(WORKFLOWS_DIR, 'autonomous.md'), 'utf8');
 
 describe('bug-853 — manager/autonomous gate background dispatch by runtime', () => {
   test('manager.md resolves dispatch-should-flatten before dispatching plan/execute', () => {
     // Two dispatch sites (plan + execute), each must use dispatch-should-flatten.
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (see #1708)
     const matches = MANAGER.match(/dispatch-should-flatten/g) || [];
     assert.ok(matches.length >= 2, 'manager.md must use dispatch-should-flatten for both plan and execute dispatch');
   });
 
   test('manager.md documents why most runtimes cannot background-dispatch', () => {
     // Accept both old singular form (backgrounded agent has no) and new plural form (backgrounded agents have no)
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (see #1708)
     assert.match(MANAGER, /backgrounded agents? ha(?:s|ve) no `Agent`\/`Task` tool/);
   });
 
   test('manager.md gates background dispatch on FLATTEN=false and runs plan/execute inline otherwise', () => {
     // Background path uses FLATTEN is false
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (see #1708)
     assert.match(MANAGER, /If `FLATTEN` is `false`[\s\S]{0,400}?run_in_background=true/);
     // Inline is the default/else branch for plan — anchored on FLATTEN=true language (not runtime name)
     assert.match(
@@ -57,7 +57,7 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
   });
 
   test('manager.md compound action preamble uses FLATTEN language (not hardcoded runtime names)', () => {
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (see #1708)
     const compoundActionSection = MANAGER.match(
       /### Compound Action \(background \+ inline\)[\s\S]*?Inline verification:/,
     );
@@ -87,7 +87,7 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
 
   test('autonomous.md gates interactive background dispatch using dispatch-should-flatten', () => {
     // Two dispatch sites (3b plan + 3c execute), each must use dispatch-should-flatten.
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (see #1708)
     const autoFlattenMatches = AUTONOMOUS.match(/dispatch-should-flatten/g) || [];
     assert.ok(autoFlattenMatches.length >= 2, 'autonomous.md must use dispatch-should-flatten in both 3b (plan) and 3c (execute) interactive branches');
     // Accept both old singular form (backgrounded agent has no) and new plural form (backgrounded agents have no)
@@ -96,7 +96,7 @@ describe('bug-853 — manager/autonomous gate background dispatch by runtime', (
 
   test('autonomous.md gates interactive background dispatch on FLATTEN=false; runs plan/execute inline otherwise', () => {
     // Background block: run_in_background=true appears within the FLATTEN=false branch and gsd-plan-phase is nearby
-    // allow-test-rule: source-text-is-the-product
+    // allow-test-rule: source-text-is-the-product (see #1708)
     assert.match(AUTONOMOUS, /If `FLATTEN` is `false`[\s\S]{0,1200}?run_in_background=true[\s\S]{0,600}?gsd-plan-phase/);
     // Background block: run_in_background=true appears within the FLATTEN=false branch and gsd-execute-phase is nearby
     assert.match(AUTONOMOUS, /If `FLATTEN` is `false`[\s\S]{0,3000}?run_in_background=true[\s\S]{0,200}?gsd-execute-phase/);
