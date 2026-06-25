@@ -726,6 +726,49 @@ describe('#1477 .gsd-source marker provisioning', () => {
     assert.equal(path.basename(path.dirname(markerSrc)), 'commands');
   });
 
+  // ── Guard: marker is scoped to claude-global ONLY (#1477 PR-scope) ───────────
+  // Locks the `runtime === 'claude' && isGlobal` write guard. Every other layout
+  // (non-claude runtimes, and claude *local*) ships a commands/gsd source tree, so
+  // findInstallSourceRoot's walk-up already resolves and the marker must not appear.
+  function findGsdSourceMarkers(root) {
+    const found = [];
+    const walk = (dir) => {
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) walk(full);
+        else if (e.name === '.gsd-source') found.push(full);
+      }
+    };
+    walk(root);
+    return found;
+  }
+
+  test('non-claude global install writes no .gsd-source marker (locks runtime === claude)', () => {
+    runInstall(true /* isGlobal */, 'cursor');
+    assert.deepEqual(
+      findGsdSourceMarkers(tmpRoot), [],
+      'a non-claude runtime must not provision the claude-global marker',
+    );
+  });
+
+  test('claude local install writes no .gsd-source marker (locks isGlobal)', () => {
+    // Local installs target process.cwd()/.claude — chdir into the fixture so the
+    // install is contained within tmpRoot rather than polluting the repo.
+    const savedCwd = process.cwd();
+    process.chdir(tmpRoot);
+    try {
+      runInstall(false /* isGlobal */, 'claude');
+    } finally {
+      process.chdir(savedCwd);
+    }
+    assert.deepEqual(
+      findGsdSourceMarkers(tmpRoot), [],
+      'a claude local install must not provision the marker — local ships commands/gsd',
+    );
+  });
+
   // ── Failure 1 end-to-end: resolution succeeds FROM the deployed tree ─────────
   // The deployed module's __dirname is <claudeDir>/gsd-core/bin/lib, which has no
   // commands/gsd ancestor (global skills layout). Only the marker rescues it.
