@@ -505,7 +505,7 @@ Classify status using this decision tree IN ORDER (most restrictive first):
 
 A ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth is never FAILED and never VERIFIED: it does not trigger gaps_found (the code is present and wired) and is not counted as verified (its runtime behavior was not exercised). It routes through the existing human_needed sink — no new overall status.
 
-**Score:** `verified_truths / total_truths` — `verified_truths` counts ✓ VERIFIED truths plus PASSED (override) truths; ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths are the only ones excluded, reported separately as the `behavior_unverified` count. A headline N/N therefore certifies behavioral evidence for every behavior-dependent truth, not merely symbol presence.
+**Score:** `verified_truths / total_truths` — `verified_truths` counts ✓ VERIFIED truths plus PASSED (override) truths; excluded are ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths (the `behavior_unverified` count) and abstained ⚠️ `insufficient_spec` backstop truths (#1154) — both are not ✓ VERIFIED and both route to `human_needed`. A headline N/N therefore certifies behavioral evidence for every behavior-dependent truth and explicit evidence for every non-inferable one, not merely symbol presence.
 </step>
 
 <step name="filter_deferred_items">

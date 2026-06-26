@@ -508,7 +508,7 @@
   "gsd-core/workflows/undo.md": "18dec684fb1076f9",
   "gsd-core/workflows/update.md": "a27dcfd2814bf2b1",
   "gsd-core/workflows/validate-phase.md": "f513c28c01a44cb7",
-  "gsd-core/workflows/verify-phase.md": "3ad68ddc3b614a2f",
+  "gsd-core/workflows/verify-phase.md": "15a999f82868ad29",
   "gsd-core/workflows/verify-work.md": "24d323b667d15d01",
   "hooks/gsd-cursor-post-tool.js": "019d503aee8b4a3f",
   "hooks/gsd-cursor-session-start.js": "c6e04ed597ea7020",
