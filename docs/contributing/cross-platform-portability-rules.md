@@ -21,8 +21,9 @@ running outside ESLint, fails the build if you try). Legitimately platform-speci
 | `local/no-unguarded-nonportable-exec` | A file that **both** sets a chmod exec-bit (`chmod`/`chmodSync` with `0oNNN & 0o111 !== 0`) **and** invokes `sh`/`bash` with a `-c` flag (`execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync`) without a Windows platform guard — Windows Git Bash ignores the exec bit for extension-less PATH-executed scripts. | `tests/**/*.test.cjs` |
 | `local/no-crlf-fragile-split` | A `.split('\n')` or `.split("\n")` call on `readFileSync` content, **or** a regex literal containing a bare `\n` used against `readFileSync` content — Windows `git-autocrlf` yields `\r\n` line endings so a literal `\n` split or regex will mismatch. | `tests/**/*.test.cjs` |
 | `local/no-hardcoded-tmp` | A hardcoded `/tmp/` string passed as the first argument to an `fs.*` function or `path.join` — `/tmp` does not exist on Windows. Use `os.tmpdir()` instead. | `tests/**/*.test.cjs` |
-| `local/no-bare-npm-exec` | An `execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync` call with `"npm"` as the command and no `{ shell: true }` option (or a platform-guarded equivalent) — `npm` is a `.cmd` batch wrapper on Windows and will not be found without a shell. | `tests/**/*.test.cjs` |
-| `local/require-userprofile-with-home` | A `process.env.HOME = <x>` assignment in a test file with no corresponding `process.env.USERPROFILE` reference anywhere in the file — Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. | `tests/**/*.test.cjs` |
+| `local/no-bare-npm-exec` | An `execFileSync`/`spawnSync`/`spawn` call with `"npm"` as the command and no `{ shell: true }` option (or a platform-guarded equivalent) — `npm` is a `.cmd` batch wrapper on Windows and is not found without a shell. (`execSync`/`exec` already run via a shell, so they are not flagged.) | `tests/**/*.test.cjs` |
+| `local/require-userprofile-with-home` | A `process.env.HOME = <x>` assignment in a test file with no corresponding `process.env.USERPROFILE` **assignment** — Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. | `tests/**/*.test.cjs` |
+| `local/normalize-path-in-content` | A path-returning fn result (excluding `path.basename`, which returns a separator-less filename) interpolated **directly** into content without `.replace(/\\/g,'/')` normalization — backslash paths leak into generated content on Windows (`RULESET.CONTENT-PATH-NORMALIZATION`). Two content shapes are detected: (a) the template/string contains an `@`-reference marker (`@~/`, `@$`, `@/`), `$HOME`, or `~/`; (b) the quasi immediately following the interpolation starts with `/…\.md` or `/…\.json`. **Indirect data-flow** (path stored in a variable/field then interpolated) is not detected — normalize at source. Fix: `String(resolvedTarget).replace(/\\/g, '/')`. | `src/**/*.cts` |
 
 (See ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702) for the full phase history.)
 
@@ -237,3 +238,14 @@ The rule matches by spelling and inspects the direct operand (or a `String(<path
   inspected; assert against the path call directly or its `String(...)` wrap.
 - For a genuine explicit-dir *pass-through* assertion (a resolver that returns its input
   verbatim), the `String(...).replace(/\\/g,'/')` remedy is a harmless no-op.
+- **The rule catches a path-returning call interpolated *directly* into `${ }`.** It does NOT
+  track **indirect data-flow** — a path stored in a variable or object field, then interpolated
+  (e.g. `${globalSkillDir}/SKILL.md` → `@${entry.ref}`). Indirect content-path-leaks rely on
+  `RULESET.CONTENT-PATH-NORMALIZATION` discipline (normalize at source) and code review.
+  The one known indirect leak (`src/init.cts` `cmdAgentSkills` `entry.ref` building) is fixed
+  by normalizing at the content-emit site: `- @${String(entry.ref).replace(/\\/g, '/')}`.
+- **Content detection shape (b)** fires when the quasi *immediately following* the interpolation
+  starts with `/…\.md` or `/…\.json`. A bare `.md` or `.json` token in the *middle* of prose
+  (e.g. `: see README.md`) does NOT qualify — the quasi must start with the forward slash.
+  Config-dir substrings (`/.claude`, `/commands`, `/skills`, etc.) are deliberately NOT content
+  markers — they caused false positives on log/error/diagnostic strings mentioning config dirs.

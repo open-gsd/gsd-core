@@ -26,6 +26,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const espree = require('espree');
+const tsEstree = require('@typescript-eslint/typescript-estree');
 const { globSync } = require('glob');
 
 // ── Protected portability rules (grows with each ADR-1703 phase) ──────────────
@@ -38,6 +39,8 @@ const PROTECTED_RULES = [
   'no-hardcoded-tmp',
   'no-bare-npm-exec',
   'require-userprofile-with-home',
+  // ADR-1703 Phase 5 rule (issue #1733) — applies to src/**/*.cts (production sources)
+  'normalize-path-in-content',
 ];
 
 // ── Detect disable directives via the comment text ───────────────────────────
@@ -81,14 +84,25 @@ function classifyComment(commentValue) {
   return null;
 }
 
-// ── Collect test files ────────────────────────────────────────────────────────
+// ── Collect scanned files ─────────────────────────────────────────────────────
+//
+// The disable-ban covers:
+//   - tests/**/*.test.cjs  — test sources (phase 1–4 scope)
+//   - src/**/*.cts         — production TypeScript sources (extended in phase 5 to
+//                            protect normalize-path-in-content, which applies to
+//                            src/**/*.cts; an eslint-disable there would bypass the
+//                            production rule entirely)
 
 const SELF_ABS = __filename;
 
 function collectTestFiles() {
-  return globSync('tests/**/*.test.cjs', { cwd: path.join(__dirname, '..') })
-    .map(rel => path.join(__dirname, '..', rel))
+  const root = path.join(__dirname, '..');
+  const testFiles = globSync('tests/**/*.test.cjs', { cwd: root })
+    .map(rel => path.join(root, rel))
     .filter(absPath => absPath !== SELF_ABS);
+  const srcFiles = globSync('src/**/*.cts', { cwd: root })
+    .map(rel => path.join(root, rel));
+  return [...testFiles, ...srcFiles];
 }
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
@@ -101,15 +115,23 @@ function scanFile(absPath) {
     throw new Error(`Could not read ${absPath}: ${err.message}`);
   }
 
+  // .cts files use TypeScript syntax — use @typescript-eslint/typescript-estree.
+  // .cjs files use plain JS — use espree (the original parser).
+  const isCts = absPath.endsWith('.cts');
+
   let ast;
   try {
-    ast = espree.parse(src, {
-      comment: true,
-      ecmaVersion: 2022,
-      loc: true,
-      range: true,
-      tolerant: true,
-    });
+    if (isCts) {
+      ast = tsEstree.parse(src, { comment: true, loc: true, range: true });
+    } else {
+      ast = espree.parse(src, {
+        comment: true,
+        ecmaVersion: 2022,
+        loc: true,
+        range: true,
+        tolerant: true,
+      });
+    }
   } catch (parseErr) {
     // C5: fail CLOSED on parse error — a file that fails to parse must FAIL the
     // test with its path, not be silently skipped.  Silent skip is a false-green:
@@ -135,7 +157,7 @@ function scanFile(absPath) {
 // ── C5: parse-error fail-closed ───────────────────────────────────────────────
 
 describe('C5 — scanFile fails closed on parse error', () => {
-  test('C5: scanFile throws on parse error instead of silently returning empty result', () => {
+  test('C5a: scanFile throws on parse error instead of silently returning empty result (.cjs path, espree)', () => {
     // Inject a parse error deterministically by monkeypatching espree.parse.
     // This is the cross-platform approach (works under root/Docker too).
     const origParse = espree.parse;
@@ -152,6 +174,51 @@ describe('C5 — scanFile fails closed on parse error', () => {
       );
     } finally {
       espree.parse = origParse;
+    }
+  });
+
+  test('W1/C5b: scanFile throws on parse error for .cts path (tsEstree path — fail-closed)', () => {
+    // W1: The existing C5a test only exercises the espree (.cjs) path.  This test
+    // exercises the tsEstree (.cts) path by monkeypatching tsEstree.parse and
+    // pointing scanFile at a synthetic .cts-suffixed path.
+    //
+    // Cross-platform approach: monkeypatch the module method, not chmod/permissions
+    // (chmod 0o000 is bypassed by root in Docker and behaves differently per OS).
+    //
+    // tsEstree exports 'parse' via a configurable getter (no setter), so we use
+    // Object.defineProperty to inject a throwing stub, then restore the original
+    // descriptor in the finally block.
+    const tsEstreeModule = require('@typescript-eslint/typescript-estree');
+    const origDescriptor = Object.getOwnPropertyDescriptor(tsEstreeModule, 'parse');
+    const injected = () => { throw new SyntaxError('injected tsEstree parse error for W1/C5b test'); };
+    Object.defineProperty(tsEstreeModule, 'parse', {
+      value: injected,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+
+    // Also monkeypatch fs.readFileSync to return dummy content for the fake .cts
+    // path, so the .cts branch in scanFile runs without needing a real file.
+    const origReadFileSync = fs.readFileSync;
+    fs.readFileSync = (p, enc) => {
+      if (typeof p === 'string' && p.endsWith('.cts')) return '// dummy cts content';
+      return origReadFileSync.call(fs, p, enc);
+    };
+
+    try {
+      assert.throws(
+        () => scanFile(path.join(__dirname, 'dummy-fixture.cts')),
+        (err) => {
+          return err instanceof Error &&
+            err.message.includes('injected tsEstree parse error for W1/C5b test');
+        },
+        'scanFile must throw on tsEstree parse error for .cts files (fail-closed)'
+      );
+    } finally {
+      fs.readFileSync = origReadFileSync;
+      // Restore original descriptor (getter-only)
+      Object.defineProperty(tsEstreeModule, 'parse', origDescriptor);
     }
   });
 });
