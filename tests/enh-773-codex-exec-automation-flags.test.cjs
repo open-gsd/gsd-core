@@ -19,7 +19,7 @@ describe('enh-773: automated codex exec invocations include --ephemeral and --da
   // probe (`codex exec --help | grep …`) is not an automation invocation, so it
   // is excluded from the per-invocation flag assertions below.
   const codexExecLines = workflow
-    .split('\n')
+    .split(/\r?\n/)
     .filter((line) => line.includes('codex exec') && !line.includes('codex exec --help'));
 
   test('review.md contains at least one codex exec invocation', () => {
@@ -43,7 +43,7 @@ describe('enh-773: automated codex exec invocations include --ephemeral and --da
     // be probed (`codex exec --help | grep`) and applied via $CODEX_BYPASS_FLAG so
     // older installs do not fail with "unexpected argument" (a silent empty review).
     assert.ok(
-      /codex exec --help[^\n]*grep[^\n]*--dangerously-bypass-hook-trust/.test(workflow),
+      /codex exec --help[^\r\n]*grep[^\r\n]*--dangerously-bypass-hook-trust/.test(workflow),
       'review.md must capability-probe --dangerously-bypass-hook-trust via `codex exec --help | grep`'
     );
     assert.ok(

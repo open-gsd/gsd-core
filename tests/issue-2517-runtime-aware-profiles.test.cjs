@@ -57,17 +57,21 @@ function writeConfig(tmpDir, obj) {
 // behavior. Capture HOME, point it at an isolated tmpdir for the duration of
 // each test, restore on teardown.
 let _origHome;
+let _origUserProfile;
 let _origGsdHome;
 let _isolatedHome;
 function isolateHome() {
   _origHome = process.env.HOME;
+  _origUserProfile = process.env.USERPROFILE;
   _origGsdHome = process.env.GSD_HOME;
   _isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-home-iso-'));
   process.env.HOME = _isolatedHome;
+  process.env.USERPROFILE = _isolatedHome;
   process.env.GSD_HOME = _isolatedHome;
 }
 function restoreHome() {
   if (_origHome === undefined) delete process.env.HOME; else process.env.HOME = _origHome;
+  if (_origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = _origUserProfile;
   if (_origGsdHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = _origGsdHome;
   cleanup(_isolatedHome);
   _isolatedHome = null;

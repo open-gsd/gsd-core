@@ -32,7 +32,7 @@ const MANIFEST_REQUIRED_KEYS = new Set([
  */
 function extractManifests(mdContent) {
   const manifests = [];
-  const fenceRe = /```json\s*\n([\s\S]*?)```/g;
+  const fenceRe = /```json\s*\r?\n([\s\S]*?)```/g;
   let match;
   while ((match = fenceRe.exec(mdContent)) !== null) {
     let parsed;

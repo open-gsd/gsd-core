@@ -24,6 +24,7 @@
         "env": []
       }
     },
+    "localConfigDir": ".kilo",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
@@ -70,6 +71,16 @@
     "installSurface": "settings-json",
     "writesSharedSettings": false,
     "permissionWriter": "kilo",
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": true, "maxDepth": -1, "background": true, "subagentToolkit": "undocumented", "backgroundDispatch": false },
+      "modelMode": "active",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "bun"
+    }
   }
 }

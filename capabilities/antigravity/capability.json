@@ -24,6 +24,7 @@
       ],
       "probeExists": "gsd-core/VERSION"
     },
+    "localConfigDir": ".agents",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
@@ -55,6 +56,16 @@
     "installSurface": "settings-json",
     "writesSharedSettings": true,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": "undocumented", "nested": "undocumented", "maxDepth": "undocumented", "background": true, "subagentToolkit": "undocumented", "backgroundDispatch": "undocumented" },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "go"
+    }
   }
 }

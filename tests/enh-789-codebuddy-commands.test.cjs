@@ -38,11 +38,14 @@ const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
-  installRuntimeArtifacts,
-  uninstallRuntimeArtifacts,
   convertClaudeCommandToCodebuddyCommand,
   convertClaudeCommandToCodebuddySkill,
 } = require('../bin/install.js');
+
+const {
+  installRuntimeArtifacts,
+  uninstallRuntimeArtifacts,
+} = require('../gsd-core/bin/lib/install-engine.cjs');
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { loadSkillsManifest, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
 
@@ -53,11 +56,11 @@ const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 // ─── Layout contract ─────────────────────────────────────────────────────────
 
 describe('enh-789 — codebuddy layout has commands + skills kinds', () => {
-  test('resolveRuntimeArtifactLayout codebuddy returns 2 kinds', () => {
+  test('resolveRuntimeArtifactLayout codebuddy returns 3 kinds (ADR-1235 §1 agents cutover)', () => {
     const layout = resolveRuntimeArtifactLayout('codebuddy', '/tmp/fake-codebuddy-dir');
-    assert.strictEqual(layout.kinds.length, 2, 'codebuddy must have exactly 2 artifact kinds');
+    assert.strictEqual(layout.kinds.length, 3, 'codebuddy must have exactly 3 artifact kinds (commands + skills + agents)');
     const kindNames = layout.kinds.map(k => k.kind).sort();
-    assert.deepStrictEqual(kindNames, ['commands', 'skills']);
+    assert.deepStrictEqual(kindNames, ['agents', 'commands', 'skills']);
   });
 
   test('codebuddy commands kind targets commands/ with gsd- prefix', () => {

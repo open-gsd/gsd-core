@@ -169,12 +169,14 @@ test('execute-phase.md, quick.md, and diagnose-issues.md guards are generalized 
 });
 
 // ---------------------------------------------------------------------------
-// Orchestration gating: manager.md + autonomous.md now gate on codex for
-// background dispatch, not on "not claude".  (#1521 Stage 2)
+// Orchestration gating: manager.md + autonomous.md gate background dispatch on
+// the typed FLATTEN query. #1708 (ADR-1239 Phase B) graduated #1521's
+// codex-specific check to a documentation-sourced shouldFlattenDispatch — the
+// prose now branches on `FLATTEN` (false = background), not a runtime name.
 // ---------------------------------------------------------------------------
 
-test('manager.md and autonomous.md gate run_in_background on codex specifically (#1521)', () => {
-  // allow-test-rule: orchestration dispatch gating in manager/autonomous .md is the runtime contract surface (#1521)
+test('manager.md and autonomous.md gate run_in_background on FLATTEN=false, not a runtime name (#1521, graduated by #1708)', () => {
+  // allow-test-rule: orchestration dispatch gating in manager/autonomous .md is the runtime contract surface (#1521/#1708)
   const manager = fs.readFileSync(
     path.join(__dirname, '..', 'gsd-core', 'workflows', 'manager.md'),
     'utf8',
@@ -184,24 +186,29 @@ test('manager.md and autonomous.md gate run_in_background on codex specifically 
     'utf8',
   );
 
-  // Both files must gate run_in_background on codex (not on a generic "not claude" condition)
+  // Both files must gate run_in_background on the typed FLATTEN decision (not a runtime name)
   assert.ok(
-    /`RUNTIME` is `codex`[\s\S]{0,500}?run_in_background=true/.test(manager),
-    'manager.md: expected run_in_background dispatch gated on RUNTIME=codex specifically',
+    /If `FLATTEN` is `false`[\s\S]{0,500}?run_in_background=true/.test(manager),
+    'manager.md: expected run_in_background dispatch gated on FLATTEN=false (typed dispatch-should-flatten query)',
   );
   assert.ok(
-    /`RUNTIME` is `codex`[\s\S]{0,700}?run_in_background=true/.test(autonomous),
-    'autonomous.md: expected run_in_background dispatch gated on RUNTIME=codex specifically',
+    /If `FLATTEN` is `false`[\s\S]{0,1200}?run_in_background=true/.test(autonomous),
+    'autonomous.md: expected run_in_background dispatch gated on FLATTEN=false (typed dispatch-should-flatten query)',
   );
 
-  // Inline is the default/else branch (not just claude)
+  // Inline is the else branch, keyed on FLATTEN — never a runtime name
   assert.ok(
-    /Otherwise[\s\S]{0,200}?Claude Code or any other non-Codex runtime/.test(manager),
-    'manager.md: expected "Otherwise (Claude Code or any other non-Codex runtime)" inline branch',
+    /Otherwise[\s\S]{0,250}?inline/i.test(manager),
+    'manager.md: expected "Otherwise ... inline" branch keyed on FLATTEN',
   );
   assert.ok(
-    /Otherwise[\s\S]{0,200}?Claude Code or any other non-Codex runtime/.test(autonomous),
-    'autonomous.md: expected "Otherwise (Claude Code or any other non-Codex runtime)" inline branch',
+    /Otherwise[\s\S]{0,250}?inline/i.test(autonomous),
+    'autonomous.md: expected "Otherwise ... inline" branch keyed on FLATTEN',
+  );
+  // And the old runtime-name gating must be gone (no `RUNTIME` is `codex` dispatch gate)
+  assert.ok(
+    !/`RUNTIME` is `codex`[\s\S]{0,500}?run_in_background=true/.test(manager),
+    'manager.md: must no longer gate run_in_background on the runtime name',
   );
 });
 

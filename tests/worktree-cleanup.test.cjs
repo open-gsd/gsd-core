@@ -53,7 +53,7 @@ function extractNamedBlock(markdown, blockName) {
  */
 function extractFencedCodeBlocks(markdown) {
   const blocks = [];
-  const lines = markdown.split('\n');
+  const lines = markdown.split(/\r?\n/);
   let inFence = false;
   let fenceLang = '';
   let buffer = [];
@@ -83,7 +83,7 @@ function extractFencedCodeBlocks(markdown) {
  */
 function shellStatements(script) {
   const statements = [];
-  const lines = script.split('\n');
+  const lines = script.split(/\r?\n/);
   for (let raw of lines) {
     const line = raw.replace(/#.*$/, '').trim();
     if (!line) continue;
@@ -219,7 +219,7 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       // negated/opt-out context (e.g. "Do NOT pass --no-verify"); reject
       // any sentence whose first verb is "Use --no-verify".
       const sentences = block
-        .replace(/\n+/g, ' ')
+        .replace(/\r?\n+/g, ' ')
         .split(/(?<=[.!?])\s+/);
       for (const sentence of sentences) {
         if (!sentence.includes('--no-verify')) continue;
@@ -253,7 +253,7 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       assert.notStrictEqual(endIdx, -1, 'parallel-executor sub-section terminator must exist');
       const subBlock = block.slice(headingIdx, endIdx);
       assert.ok(subBlock.length > 0, 'sub-section must have content');
-      const sentences = subBlock.replace(/\n+/g, ' ').split(/(?<=[.!?])\s+/);
+      const sentences = subBlock.replace(/\r?\n+/g, ' ').split(/(?<=[.!?])\s+/);
       for (const sentence of sentences) {
         if (!sentence.includes('--no-verify')) continue;
         const lower = sentence.toLowerCase();
@@ -448,10 +448,10 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       const idx = content.indexOf('Parallel agents');
       assert.notStrictEqual(idx, -1, 'must contain a "Parallel agents" callout');
       const section = content.slice(idx);
-      const endMatch = section.slice(1).match(/\n#{1,6}\s/);
+      const endMatch = section.slice(1).match(/\r?\n#{1,6}\s/);
       assert.ok(endMatch, 'Parallel agents section must terminate at the next heading');
       const tail = section.slice(0, 1 + endMatch.index);
-      const sentences = tail.replace(/\n+/g, ' ').split(/(?<=[.!?])\s+/);
+      const sentences = tail.replace(/\r?\n+/g, ' ').split(/(?<=[.!?])\s+/);
       for (const sentence of sentences) {
         if (!sentence.includes('--no-verify')) continue;
         const lower = sentence.toLowerCase();

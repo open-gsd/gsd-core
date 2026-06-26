@@ -191,7 +191,7 @@ describe('milestone-summary artifact path resolution', () => {
   test('current milestone paths point to .planning/ root', () => {
     const content = fs.readFileSync(workflowPath, 'utf-8');
     // Current milestone should read from .planning/ root
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
     const currentSection = lines.slice(
       lines.findIndex(l => l.includes('Current/in-progress')),
       lines.findIndex(l => l.includes('Current/in-progress')) + 10

@@ -90,10 +90,12 @@ function runGlobalInstall(runtime, tmpHome) {
   const prev = process.env[envVar];
   const prevCwd = process.cwd();
   const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
   const prevSkipStale = process.env.GSD_SKIP_STALE_SDK_CHECK;
 
   process.env[envVar] = tmpHome;
   process.env.HOME = isolatedHome;
+  process.env.USERPROFILE = isolatedHome;
   process.env.GSD_SKIP_STALE_SDK_CHECK = '1';
   process.chdir(REPO_ROOT);
 
@@ -105,6 +107,8 @@ function runGlobalInstall(runtime, tmpHome) {
     else process.env[envVar] = prev;
     if (prevHome === undefined) delete process.env.HOME;
     else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
     if (prevSkipStale === undefined) delete process.env.GSD_SKIP_STALE_SDK_CHECK;
     else process.env.GSD_SKIP_STALE_SDK_CHECK = prevSkipStale;
     // Clean up the isolated HOME dir

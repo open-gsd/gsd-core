@@ -85,6 +85,20 @@ The **primitive vocabulary stays closed and first-party** (ADR-857 Decision 8): 
 
 Each phase is its own `approved-*` issue + PR with equivalence/parity proof.
 
+### Amendment — Phase A implemented (#1684, v1.7.0)
+
+Phase A is **implemented** (the ADR itself remains `Proposed` overall until Phases B–E land). The negotiated capability schema is materialized as a pure, additive, no-I/O module — the **Host-Integration Interface** (`src/host-integration.cts` → `gsd-core/bin/lib/host-integration.cjs`):
+
+- **The eight negotiated axes** are carried under `capability.json` `runtime.hostIntegration` (extending, not replacing, the ADR-1016 axes), validated by `validateRuntimeBody` (`capability-validator.cjs`) across all 16 runtime descriptors, with the closed vocabulary kept in lock-step by a parity guard.
+- **`PROTOCOL_VERSION`** is an integer starting at `1`, **distinct** from the package `version` / `engines.gsd` semver (the `version`/`protocolVersion` overlap, resolved).
+- **`negotiateHostCapabilities(host, engine?)`** performs the in-process `initialize` exchange and enforces the trust-boundary invariant `effective ⊆ host-declared ∩ engine-known`: an undeclared axis or an unknown / higher-`protocolVersion` value is **never** trusted — it degrades to the most-restrictive known value (fail-closed), never throws.
+- **`degradationFor`** is the typed Full/Degraded/Absent ladder table; **`profileOf` + `PROFILE_BASELINES`** classify each descriptor into `programmatic-cli` (9 hosts: claude, opencode, cursor, cline, hermes, qwen, kilo, trae, kimi), `declarative-cli` (7 hosts: codex, gemini, antigravity, augment, codebuddy, copilot, windsurf), or `ide` (defined as a baseline; no installed host yet — VS Code lands in Phase D).
+- **Overlap resolutions (explicit):** `commandStyle` (GSD emission style, retained) ⊥ `commandSurface` (host surface type); `hookEvents` dialect ⊥ `hookBus` ownership (a host with `hooksSurface:none` may still be `hookBus:host` — e.g. opencode); the `opencode-subset` `hookEvents` value remains reserved for the Phase D OpenCode hook-dialect consumer; `runtimeCompat` (feature→host) stays an independent override, orthogonal to these runtime→engine axes.
+
+**Every per-host axis value is documentation-sourced, with citations.** Each of the 8 axes for all 16 installed CLIs was determined from that CLI's authoritative documentation (Context7 + the official dev docs/source), never inferred. The full per-CLI, per-axis matrix — value, source, and an evidence quote — is recorded in [`docs/reference/host-integration-capability-matrix.md`](reference/host-integration-capability-matrix.md), the deployment source-of-truth that Phases B–E build on. Where a CLI's docs genuinely do not state an axis, the descriptor carries the explicit `undocumented` sentinel (which `negotiateHostCapabilities` fail-closes on) rather than a guessed value — 22 such markers exist today, each with its search trail in the matrix. Two findings corrected this ADR's original appendix matrix: (1) current OpenAI **Codex** docs document slash-commands, so its `commandSurface` is `slash-file`, not `prose-only`; (2) several hosts run non-Node runtimes (opencode & kilo on **bun**; hermes & kimi on **python**; antigravity on **go**), so the `runtime` axis vocabulary was widened to `node|bun|sandboxed-web|python|go|rust|electron|other`. The documented `embeddingMode` split (9 imperative / 7 declarative, above) likewise reflects each CLI's real plugin/extension API, not a profile assumption.
+
+No consumer wires the negotiated result yet — Phase A is interface-definition only; the engine↔host boundary (Phase B) and the adapters (Phase C) are where it is consumed.
+
 ## Host-capability profiles (negotiation baselines)
 
 - **Programmatic-CLI** (Claude Code, pi, OpenCode): imperative; full dispatch; host hook bus; MCP; `slash` surface. The richest target — minimal degradation.

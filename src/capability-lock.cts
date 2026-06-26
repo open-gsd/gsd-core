@@ -42,12 +42,13 @@ import crypto from 'node:crypto';
 const ledgerMod = require('./capability-ledger.cjs') as {
   readSmallRegularFile: (filePath: string, maxBytes: number) => string | null;
 };
-const { execTool } = require('./shell-command-projection.cjs') as {
+const { execTool, retryRenameSync } = require('./shell-command-projection.cjs') as {
   execTool: (
     program: string,
     args: string[],
     opts?: { cwd?: string; env?: Record<string, string>; timeout?: number },
   ) => { exitCode: number; stdout: string; stderr: string; signal: NodeJS.Signals | null; error: Error | null };
+  retryRenameSync: (fromPath: string, toPath: string) => void;
 };
 /* eslint-enable @typescript-eslint/no-require-imports */
 
@@ -494,7 +495,7 @@ function acquireLock(lockPath: string, opts?: { maxAttempts?: number; waitForFre
 
     // Steal atomically (only one racer can rename the inode).
     const stolen = `${lockPath}.stale-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    try { fs.renameSync(lockPath, stolen); } catch { return null; } // another process won the steal
+    try { retryRenameSync(lockPath, stolen); } catch { return null; } // another process won the steal
     try { fs.rmSync(stolen, { force: true }); } catch { /* best-effort */ }
     if (attempt + 1 < maxAttempts) lockBackoff();
   }

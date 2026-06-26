@@ -915,7 +915,7 @@ describe('roadmap update-plan-progress command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
-    const rowMatch = roadmap.match(/^\|[^\n]*50\. Build[^\n]*$/m);
+    const rowMatch = roadmap.match(/^\|[^\r\n]*50\. Build[^\r\n]*$/m);
     assert.ok(rowMatch, 'table row should exist');
     const cells = rowMatch[0].split('|').slice(1, -1).map(c => c.trim());
     assert.strictEqual(cells.length, 5, 'should have 5 columns');
@@ -1252,7 +1252,7 @@ describe('regressions: insert missing plan rows (#1163)', () => {
   // ── Adversarial: CRLF in ROADMAP.md ──────────────────────────────────────
 
   test('CRLF line endings in ROADMAP.md are handled without corruption', () => {
-    const content = buildRoadmapBoldPlans('5').replace(/\n/g, '\r\n');
+    const content = buildRoadmapBoldPlans('5').replace(/\r?\n/g, '\r\n');
     fs.writeFileSync(roadmapPath, content);
     createPhaseWithPlans(tmpDir, '5', ['5-01-PLAN.md', '5-02-PLAN.md']);
 

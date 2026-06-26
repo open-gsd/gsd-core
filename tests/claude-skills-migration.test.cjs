@@ -25,9 +25,12 @@ const ROOT = path.join(__dirname, '..');
 const {
   convertClaudeCommandToClaudeSkill,
   writeManifest,
+} = require(path.join(ROOT, 'bin', 'install.js'));
+
+const {
   installRuntimeArtifacts,
   uninstallRuntimeArtifacts,
-} = require(path.join(ROOT, 'bin', 'install.js'));
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-engine.cjs'));
 
 const {
   loadSkillsManifest,

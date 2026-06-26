@@ -187,3 +187,92 @@ describe('bug #3439: shell projection module owns managed-hook policy and legacy
     );
   });
 });
+
+describe('#1693 regression: Windows legacy-node rewrite must not double-quote a "$CLAUDE_PROJECT_DIR"-anchored local hook path', () => {
+  const winRunner = '"C:/Program Files/nodejs/node.exe"';
+
+  // WHY: a local-install hook path already carries a `"$CLAUDE_PROJECT_DIR"`
+  // anchored prefix (only the variable quoted, rest bare). On Windows the legacy
+  // rewrite previously JSON.stringify'd the whole token, yielding
+  // `"\"$CLAUDE_PROJECT_DIR\"/..."`. node then received an argument starting with
+  // a literal `"`, treated it as relative, and died with MODULE_NOT_FOUND —
+  // breaking every node managed hook at once (self-locking deadlock).
+  test('projectLegacySettingsHookCommand emits the anchored path verbatim, not re-quoted', () => {
+    const anchored = '"$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js';
+    const command = projectLegacySettingsHookCommand({
+      absoluteRunner: winRunner,
+      scriptPath: anchored,
+      scriptToken: anchored,
+      platform: 'win32',
+      runtime: 'claude',
+    });
+    assert.equal(
+      command,
+      '"C:/Program Files/nodejs/node.exe" "$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js',
+    );
+    assert.ok(!command.includes('\\"'), 'must not contain escaped double-quotes');
+  });
+
+  // WHY: the fix must be surgical — a BARE absolute Windows path (no anchored
+  // prefix) can contain spaces ("Program Files") and still REQUIRES quoting.
+  test('projectLegacySettingsHookCommand still quotes a bare absolute Windows path', () => {
+    const abs = 'C:/Program Files App/.claude/hooks/gsd-context-monitor.js';
+    const command = projectLegacySettingsHookCommand({
+      absoluteRunner: winRunner,
+      scriptPath: abs,
+      scriptToken: JSON.stringify(abs),
+      platform: 'win32',
+      runtime: 'claude',
+    });
+    assert.equal(
+      command,
+      '"C:/Program Files/nodejs/node.exe" "C:/Program Files App/.claude/hooks/gsd-context-monitor.js"',
+    );
+  });
+
+  // WHY: the anchored short-circuit is scoped to win32. On POSIX the rewrite
+  // already preserved the caller's original `scriptToken` and never had the
+  // double-quote bug, so that behavior must be left byte-identical. scriptPath
+  // is anchored but scriptToken is a DISTINCT single-quoted value: if the
+  // win32 gate were removed, the anchored short-circuit would emit scriptPath
+  // and this assertion would fail — that is what pins the gate.
+  test('projectLegacySettingsHookCommand preserves the original scriptToken for anchored paths on POSIX', () => {
+    const command = projectLegacySettingsHookCommand({
+      absoluteRunner: '"/usr/local/bin/node"',
+      scriptPath: '"$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-statusline.js',
+      scriptToken: "'/x/hooks/gsd-statusline.js'",
+      platform: 'linux',
+      runtime: 'claude',
+    });
+    assert.equal(command, `"/usr/local/bin/node" '/x/hooks/gsd-statusline.js'`);
+  });
+
+  // WHY: end-to-end through the installer rewrite — the actual #2979 path that
+  // ran during the user's 1.5.0 -> 1.6.0 local update. Managed node hooks get
+  // the absolute runner + clean anchored path; a non-node-prefixed managed .sh
+  // hook (already correct) is left untouched.
+  test('rewriteLegacyManagedNodeHookCommands produces clean anchored node commands on Windows', () => {
+    const settings = {
+      hooks: {
+        PostToolUse: [
+          {
+            hooks: [
+              { command: 'node "$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js' },
+            ],
+          },
+        ],
+      },
+    };
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, winRunner, {
+      platform: 'win32',
+      runtime: 'claude',
+    });
+    assert.equal(changed, true);
+    const rewritten = settings.hooks.PostToolUse[0].hooks[0].command;
+    assert.equal(
+      rewritten,
+      '"C:/Program Files/nodejs/node.exe" "$CLAUDE_PROJECT_DIR"/.claude/hooks/gsd-context-monitor.js',
+    );
+    assert.ok(!rewritten.includes('\\"'), 'rewritten command must not contain escaped double-quotes');
+  });
+});

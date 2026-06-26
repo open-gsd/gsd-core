@@ -21,7 +21,7 @@ const INVENTORY_PATH = path.join(ROOT, 'docs', 'INVENTORY.md');
 test('docs/INVENTORY.md has no "(N shipped)" count scalars in headings', () => {
   const content = fs.readFileSync(INVENTORY_PATH, 'utf8');
   const offenders = content
-    .split('\n')
+    .split(/\r?\n/)
     .filter((line) => /^##\s+.+\(\d+\s+shipped\)/.test(line));
 
   assert.ok(

@@ -18,6 +18,7 @@
         "COPILOT_HOME"
       ]
     },
+    "localConfigDir": ".github",
     "configFormat": "markdown",
     "artifactLayout": {
       "global": [
@@ -48,6 +49,16 @@
     "installSurface": "copilot-instructions",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": true, "subagentToolkit": "full", "backgroundDispatch": false },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "undocumented"
+    }
   }
 }

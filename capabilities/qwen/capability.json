@@ -17,6 +17,7 @@
         "QWEN_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".qwen",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
@@ -52,6 +53,16 @@
       "SubagentStop",
       "Stop",
       "PreCompact"
-    ]
+    ],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": true, "subagentToolkit": "full", "backgroundDispatch": false },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node"
+    }
   }
 }

@@ -23,10 +23,11 @@ const { createTempDir, cleanup, captureConsole } = require('./helpers.cjs');
 const {
   convertClaudeCommandToClineSkill,
   convertClaudeToCliineMarkdown,
-  installRuntimeArtifacts,
   install,
   _applyRuntimeRewrites,
 } = require('../bin/install.js');
+
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const {
   resolveRuntimeArtifactLayout,

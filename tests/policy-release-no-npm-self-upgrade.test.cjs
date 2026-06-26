@@ -14,14 +14,14 @@ const WORKFLOWS_DIR = path.join(REPO_ROOT, '.github', 'workflows');
 
 // Matches: npm install -g npm@..., npm i -g npm, npm install --global npm@11, etc.
 // Does NOT match: npm ci, npm install (no -g / --global followed by npm)
-const NPM_SELF_UPGRADE_RE = /\bnpm\s+(install|i)\s+(-g|--global)\b[^\n]*\bnpm(@|\b)/;
+const NPM_SELF_UPGRADE_RE = /\bnpm\s+(install|i)\s+(-g|--global)\b[^\r\n]*\bnpm(@|\b)/;
 
 describe('policy: no runtime npm self-upgrade in release lanes (#318)', () => {
   const releaseFile = path.join(WORKFLOWS_DIR, 'release.yml');
 
   test('release.yml must not contain a runtime global npm self-upgrade step', () => {
     const content = fs.readFileSync(releaseFile, 'utf8');
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
     const violations = lines
       .map((line, idx) => ({ line, lineNo: idx + 1 }))
       .filter(({ line }) => NPM_SELF_UPGRADE_RE.test(line));

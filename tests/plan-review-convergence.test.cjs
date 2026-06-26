@@ -177,7 +177,7 @@ describe('plan-review-convergence workflow: config gate (#2306-v2)', () => {
 
   test('workflow defaults config key to false (opt-in, not opt-out)', () => {
     // The config-get call must default to false, not true
-    const configGetMatch = workflow.match(/config-get\s+workflow\.plan_review_convergence[^\n]*/);
+    const configGetMatch = workflow.match(/config-get\s+workflow\.plan_review_convergence[^\r\n]*/);
     assert.ok(
       configGetMatch,
       'workflow must read workflow.plan_review_convergence via config-get'
@@ -546,7 +546,7 @@ describe('plan-review-convergence CONFIGURATION.md documentation (#2306-v2)', ()
   });
 
   test('CONFIGURATION.md entry documents disabled-by-default behavior', () => {
-    const row = configDoc.match(/workflow\.plan_review_convergence[^\n]*/);
+    const row = configDoc.match(/workflow\.plan_review_convergence[^\r\n]*/);
     assert.ok(row, 'workflow.plan_review_convergence row must exist in CONFIGURATION.md');
     assert.ok(
       row[0].includes('false') || row[0].includes('disabled'),
@@ -724,7 +724,7 @@ describe('plan-review-convergence workflow: source-grounding reviewer pass (#22)
 
     // ── Severity mappings: AMBIGUOUS→MEDIUM and UNCHECKABLE→INFO must appear
     //    on the SAME line inside the section, not just anywhere in the file ────
-    const severityLine = section.split('\n').find((line) =>
+    const severityLine = section.split(/\r?\n/).find((line) =>
       line.includes('AMBIGUOUS') && line.includes('MEDIUM') &&
       line.includes('UNCHECKABLE') && line.includes('INFO')
     );
@@ -856,7 +856,7 @@ describe('plan-review-convergence workflow: inline plan-phase dispatch (#936)', 
       /Skill\(\s*skill=['"]gsd-plan-phase['"]/.test(b.blockText)
     );
     assert.deepStrictEqual(
-      wrapping.map((b) => b.blockText.slice(0, 80).replace(/\n/g, '\\n')),
+      wrapping.map((b) => b.blockText.slice(0, 80).replace(/\r?\n/g, '\\n')),
       [],
       'Initial planning must NOT wrap gsd-plan-phase inside Agent() — run it inline so ' +
       'it can spawn gsd-planner/gsd-plan-checker at depth 1. See: bug #936'
@@ -871,7 +871,7 @@ describe('plan-review-convergence workflow: inline plan-phase dispatch (#936)', 
       /--reviews/.test(b.blockText)
     );
     assert.deepStrictEqual(
-      wrapping.map((b) => b.blockText.slice(0, 80).replace(/\n/g, '\\n')),
+      wrapping.map((b) => b.blockText.slice(0, 80).replace(/\r?\n/g, '\\n')),
       [],
       'Replan step must NOT wrap gsd-plan-phase inside Agent() — the replan loop can ' +
       'never produce a plan on Claude Code when plan-phase is at depth 1. See: bug #936'

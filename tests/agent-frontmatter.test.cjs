@@ -50,7 +50,7 @@ describe('HDOC: anti-heredoc instruction', () => {
     for (const agent of ALL_AGENTS) {
       const content = fs.readFileSync(path.join(AGENTS_DIR, agent + '.md'), 'utf-8');
       // Match actual heredoc commands (not references in anti-heredoc instruction)
-      const lines = content.split('\n');
+      const lines = content.split(/\r?\n/);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         // Skip lines that are part of the anti-heredoc instruction or markdown code fences

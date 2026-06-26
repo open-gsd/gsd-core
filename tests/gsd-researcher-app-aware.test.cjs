@@ -55,7 +55,7 @@ describe('phase-researcher: Architectural Responsibility Mapping', () => {
 
   test('step is a pure reasoning step with no tool calls', () => {
     // Extract the ARM section content (between the ARM heading and the next ## Step heading)
-    const armHeadingMatch = content.match(/## Step 1\.5[^\n]*Architectural Responsibility Map/);
+    const armHeadingMatch = content.match(/## Step 1\.5[^\r\n]*Architectural Responsibility Map/);
     assert.ok(armHeadingMatch, 'Must have a Step 1.5 heading for Architectural Responsibility Mapping');
 
     const armStart = content.indexOf(armHeadingMatch[0]);

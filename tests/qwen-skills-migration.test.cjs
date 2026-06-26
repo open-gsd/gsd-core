@@ -21,8 +21,9 @@ const fs = require('fs');
 
 const {
   convertClaudeCommandToClaudeSkill,
-  installRuntimeArtifacts,
 } = require('../bin/install.js');
+
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const {
   loadSkillsManifest,
@@ -97,7 +98,7 @@ describe('Qwen Code: convertClaudeCommandToClaudeSkill', () => {
   });
 
   test('preserves body content unchanged', () => {
-    const body = '\n<objective>\nDo the thing.\n</objective>\n\n<process>\nStep 1.\nStep 2.\n</process>\n';
+    const body = '\n<objective>\nDo the thing.\n</objective>\r?\n\n<process>\nStep 1.\nStep 2.\n</process>\n';
     const input = [
       '---',
       'name: gsd:test',
@@ -299,10 +300,10 @@ describe('Qwen Code: SKILL.md format validation', () => {
     const result = convertClaudeCommandToClaudeSkill(input, 'gsd-review');
 
     // Parse the frontmatter
-    const fmMatch = result.match(/^---\n([\s\S]*?)\n---/);
+    const fmMatch = result.match(/^---\r?\n([\s\S]*?)\r?\n---/);
     assert.ok(fmMatch, 'has frontmatter block');
 
-    const fmLines = fmMatch[1].split('\n');
+    const fmLines = fmMatch[1].split(/\r?\n/);
     const hasName = fmLines.some(l => l.startsWith('name: gsd-review'));
     const hasDesc = fmLines.some(l => l.startsWith('description:'));
     const hasAgent = fmLines.some(l => l.startsWith('agent:'));

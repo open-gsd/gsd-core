@@ -23,7 +23,7 @@ const { toPosixPath, generateSlugInternal } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestoneInfo } = roadmapParser;
-import { platformWriteSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningRoot, setActiveWorkstream, getActiveWorkstream } = planningWorkspace;
@@ -92,13 +92,13 @@ function migrateToWorkstreams(cwd: string, workstreamName: string): MigrateResul
       const src = path.join(baseDir, item.name);
       if (fs.existsSync(src)) {
         const dest = path.join(wsDir, item.name);
-        fs.renameSync(src, dest);
+        retryRenameSync(src, dest);
         filesMoved.push(item.name);
       }
     }
   } catch (err) {
     for (const name of filesMoved) {
-      try { fs.renameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { /* ignore */ }
+      try { retryRenameSync(path.join(wsDir, name), path.join(baseDir, name)); } catch { /* ignore */ }
     }
     try { fs.rmSync(wsDir, { recursive: true }); } catch { /* ignore */ }
     try { fs.rmdirSync(path.join(baseDir, 'workstreams')); } catch { /* ignore */ }
@@ -310,12 +310,12 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   try {
     const entries = fs.readdirSync(wsDir, { withFileTypes: true });
     for (const entry of entries) {
-      fs.renameSync(path.join(wsDir, entry.name), path.join(archivePath, entry.name));
+      retryRenameSync(path.join(wsDir, entry.name), path.join(archivePath, entry.name));
       filesMoved.push(entry.name);
     }
   } catch (err) {
     for (const fname of filesMoved) {
-      try { fs.renameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { /* ignore */ }
+      try { retryRenameSync(path.join(archivePath, fname), path.join(wsDir, fname)); } catch { /* ignore */ }
     }
     try { fs.rmSync(archivePath, { recursive: true }); } catch { /* ignore */ }
     if (active === name) setActiveWorkstream(cwd, name!);

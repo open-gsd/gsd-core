@@ -44,7 +44,7 @@ function listAgentFiles() {
 
 function scanForRetired(filePath) {
   const text = fs.readFileSync(filePath, 'utf-8');
-  const lines = text.split('\n');
+  const lines = text.split(/\r?\n/);
   const hits = [];
   for (let i = 0; i < lines.length; i++) {
     for (const cmd of RETIRED_COMMANDS) {

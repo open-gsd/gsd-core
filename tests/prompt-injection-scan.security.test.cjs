@@ -286,7 +286,7 @@ describe('codebase prompt injection scan', () => {
       const content = fs.readFileSync(file, 'utf-8');
       if (invisiblePattern.test(content)) {
         // Find the line numbers with invisible chars
-        const lines = content.split('\n');
+        const lines = content.split(/\r?\n/);
         const badLines = [];
         lines.forEach((line, i) => {
           if (invisiblePattern.test(line)) {

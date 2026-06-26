@@ -919,7 +919,7 @@
     {
       "id": "DEFECT.WINDOWS-POSIX-MODE-BIT-ASSERT.prevention",
       "klass": "DEFECT",
-      "value": "ref DEFECT.WINDOWS-TEST-PORTABILITY — gsd-test is Mac/Linux only (no Windows host), only the CI windows-latest lane catches this; run npm run lint:ci (lint-windows-test-portability) before push; prefer asserting the BEHAVIOR (command shape, runnability) over the filesystem mode bit",
+      "value": "ref DEFECT.WINDOWS-TEST-PORTABILITY — gsd-test is Mac/Linux only (no Windows host), only the CI windows-latest lane catches this; run npm run lint:ci (local/no-unguarded-nonportable-exec now enforces this via ESLint) before push; prefer asserting the BEHAVIOR (command shape, runnability) over the filesystem mode bit",
       "line": 735
     },
     {
@@ -931,7 +931,7 @@
     {
       "id": "DEFECT.WINDOWS-TEST-PORTABILITY.detect",
       "klass": "DEFECT",
-      "value": "npm run lint:windows-test-portability (tripwire: flags tests combining chmod exec-bit with sh/bash -c and no platform guard); watch CI windows matrix green before declaring a PR done",
+      "value": "local/no-unguarded-nonportable-exec ESLint rule (enforced in tests/**/*.test.cjs via npm run lint); flags tests combining chmod exec-bit with sh/bash -c and no platform guard; watch CI windows matrix green before declaring a PR done",
       "line": 727
     },
     {
@@ -943,7 +943,7 @@
     {
       "id": "DEFECT.WINDOWS-TEST-PORTABILITY.fix-forward",
       "klass": "DEFECT",
-      "value": "gate platform-specific execution with if (process.platform !== 'win32'); normalize path expectations to forward slashes with .replace(/\\\\/g, '/'); invoke scripts via explicit interpreter (sh <path>) rather than relying on exec-bit; annotate // windows-portability-ok: <reason> when a bypass is intentional",
+      "value": "gate platform-specific execution with if (process.platform !== 'win32') — there is no opt-out annotation; structure any platform-specific code behind this guard; normalize path expectations to forward slashes with .replace(/\\\\/g, '/'); invoke scripts via explicit interpreter (sh <path>) rather than relying on exec-bit; see local/no-unguarded-nonportable-exec ESLint rule and docs/how-to/windows-portability.md for details",
       "line": 728
     },
     {

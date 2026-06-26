@@ -17,6 +17,7 @@
         "CODEX_HOME"
       ]
     },
+    "localConfigDir": ".codex",
     "configFormat": "toml",
     "artifactLayout": {
       "global": [
@@ -48,6 +49,16 @@
     "installSurface": "codex-toml",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": true, "maxDepth": 1, "background": true, "subagentToolkit": "full", "backgroundDispatch": true },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node"
+    }
   }
 }

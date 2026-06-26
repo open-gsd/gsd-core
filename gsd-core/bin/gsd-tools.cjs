@@ -204,6 +204,24 @@ const projectRoot = require('./lib/project-root.cjs');
 // against any require/load-ordering edge where the export isn't bound yet
 // when this entrypoint is first required (#604).
 const findProjectRoot = (...args) => projectRoot.findProjectRoot(...args);
+
+// #1754: CLI skew detection — warn (stderr, non-blocking) if this gsd-tools.cjs
+// is NOT the project-local install while a project-local install exists. Catches
+// the shadowing scenario from #1748 (stale global canary shadowing project-local).
+try {
+  const _skew = require('./lib/cli-skew-check.cjs');
+  const _skewRoot = findProjectRoot(process.cwd());
+  if (_skewRoot) {
+    const _skewLocal = path.join(_skewRoot, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const _skewWarn = _skew.checkCliSkew({
+      resolvedPath: path.resolve(__filename),
+      projectRoot: _skewRoot,
+      projectLocalExists: fs.existsSync(_skewLocal),
+    });
+    if (_skewWarn) process.stderr.write(_skewWarn + '\n');
+  }
+} catch { /* advisory — never block */ }
+
 const { getActiveWorkstream } = require('./lib/planning-workspace.cjs');
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
 const state = require('./lib/state.cjs');
@@ -1235,6 +1253,56 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         output: output,
       });
       if (!handled) config.cmdConfigGet(cwd, args[1], raw, defaultValue);
+      break;
+    }
+
+    case 'dispatch-should-flatten': {
+      // #1708 / #853: typed query replacing the `RUNTIME === 'codex'` prose rule.
+      //
+      // Resolves the current runtime (GSD_RUNTIME > config.runtime > 'claude'),
+      // looks up registry.runtimes[id].runtime.hostIntegration.dispatch, and
+      // calls shouldFlattenDispatch(dispatch) from host-integration.cjs.
+      //
+      // Fail-closed: any unknown runtime, missing dispatch, or thrown error
+      // yields `true` (inline — the always-safe default).
+      //
+      // Output:
+      //   --raw   → prints exactly `true` or `false`
+      //   --json  → prints { runtime, shouldFlatten, dispatch }
+      //   default → same as --raw
+      try {
+        // Resolve runtime using the same precedence as `config-get runtime`.
+        const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+        const runtimeId = resolveRuntime(cwd);
+
+        // Look up dispatch from the capability registry.
+        const registry = require('./lib/capability-registry.cjs');
+        const runtimeEntry = registry.runtimes != null
+          ? registry.runtimes[runtimeId]
+          : null;
+        const dispatch = runtimeEntry?.runtime?.hostIntegration?.dispatch ?? null;
+
+        // Call shouldFlattenDispatch from host-integration.cjs.
+        const hostIntegration = require('./lib/host-integration.cjs');
+        const shouldFlat = dispatch !== null
+          ? hostIntegration.shouldFlattenDispatch(dispatch)
+          : true; // fail-closed: unknown runtime → inline
+
+        const jsonIdx = args.indexOf('--json');
+        if (jsonIdx !== -1) {
+          output({
+            runtime: runtimeId,
+            shouldFlatten: shouldFlat,
+            dispatch: dispatch,
+          }, raw);
+        } else {
+          // --raw or default: print exactly true or false
+          process.stdout.write(shouldFlat ? 'true' : 'false');
+        }
+      } catch {
+        // Fail-closed on any error: inline is always safe.
+        process.stdout.write('true');
+      }
       break;
     }
 

@@ -150,7 +150,7 @@ describe('createDefaultLogger — stderr on error', () => {
     const stderrOutput = captureStderr(() => logger.onEvent(errEvent));
 
     // Must be exactly one non-empty line
-    const lines = stderrOutput.split('\n').filter(l => l.trim().length > 0);
+    const lines = stderrOutput.split(/\r?\n/).filter(l => l.trim().length > 0);
     assert.equal(lines.length, 1, `expected 1 line, got ${lines.length}: ${stderrOutput}`);
   });
 
@@ -259,7 +259,7 @@ describe('createDefaultLogger — audit file', () => {
 
     const auditPath = path.join(tmpDir, '.planning', '.gsd-trace.jsonl');
     const content = fs.readFileSync(auditPath, 'utf8');
-    const lines = content.split('\n').filter(l => l.trim().length > 0);
+    const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
     assert.equal(lines.length, 2, `expected 2 lines, got ${lines.length}`);
 
     const parsed0 = JSON.parse(lines[0]);
@@ -279,7 +279,7 @@ describe('createDefaultLogger — audit file', () => {
     logger2.onEvent(makeOkEvent({ traceId: 'second' }));
 
     const content = fs.readFileSync(auditPath, 'utf8');
-    const lines = content.split('\n').filter(l => l.trim().length > 0);
+    const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
     assert.equal(lines.length, 2, 'both events must appear (append-only)');
     assert.equal(JSON.parse(lines[0]).traceId, 'first');
     assert.equal(JSON.parse(lines[1]).traceId, 'second');
@@ -293,7 +293,7 @@ describe('createDefaultLogger — audit file', () => {
 
     const auditPath = path.join(tmpDir, '.planning', '.gsd-trace.jsonl');
     const content = fs.readFileSync(auditPath, 'utf8');
-    const lines = content.split('\n').filter(l => l.trim().length > 0);
+    const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
     assert.equal(lines.length, 2);
 
     const traceIds = lines.map(l => JSON.parse(l).traceId);

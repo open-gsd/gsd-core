@@ -40,7 +40,7 @@ const USER_GUIDE_MD = path.join(ROOT, 'docs', 'USER-GUIDE.md');
  */
 function extractSection(filePath, headerSubstring) {
   const content = fs.readFileSync(filePath, 'utf8');
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   let inSection = false;
   let startDepth = 0;
   const collected = [];
@@ -275,7 +275,7 @@ describe('#3025 markdownlint pre-flight: MD040 + MD056', () => {
     const section = extractSection(CONTEXT_BUDGET_MD, 'mcp');
     // Guard: same null-section concern as MD040 above (CR follow-up).
     assert.ok(section, 'MCP section not found in context-budget.md — cannot check MD056');
-    const lines = section.split('\n');
+    const lines = section.split(/\r?\n/);
     // Walk through and detect tables: header row followed by a separator
     // (--- pattern) followed by data rows. Count `|` per line.
     const issues = [];

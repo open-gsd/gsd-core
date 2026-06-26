@@ -64,11 +64,11 @@ describe('resolveRuntimeArtifactLayout — claude global', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — cursor', () => {
-  test('returns correct layout for cursor — skills + commands kinds (#785)', () => {
+  test('returns correct layout for cursor — skills + commands + agents kinds (#785, ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('cursor', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'cursor');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
 
     const skillsKind = layout.kinds.find(k => k.kind === 'skills');
     assert.ok(skillsKind, 'must have a skills kind');
@@ -81,6 +81,12 @@ describe('resolveRuntimeArtifactLayout — cursor', () => {
     assert.strictEqual(commandsKind.destSubpath, 'commands');
     assert.strictEqual(commandsKind.prefix, 'gsd-');
     assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
@@ -137,54 +143,84 @@ describe('resolveRuntimeArtifactLayout — antigravity', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — windsurf', () => {
-  test('returns local workflow layout for windsurf', () => {
+  test('returns local workflow + agents layout for windsurf (ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR, 'local');
     assert.strictEqual(layout.runtime, 'windsurf');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'workflows');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands/workflows kind');
+    assert.strictEqual(commandsKind.destSubpath, 'workflows');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 
-  test('returns empty global layout for windsurf', () => {
+  test('returns agents-only global layout for windsurf (ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('windsurf', FAKE_DIR, 'global');
     assert.strictEqual(layout.runtime, 'windsurf');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 0);
+    assert.strictEqual(layout.kinds.length, 1);
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'global windsurf must have agents kind (ADR-1235 §1)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — augment', () => {
-  test('returns correct layout for augment (commands + skills)', () => {
+  test('returns correct layout for augment (commands + skills + agents — ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'augment');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
-    // commands kind first
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-    // skills kind second
-    assert.strictEqual(layout.kinds[1].kind, 'skills');
-    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 3);
+
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands kind');
+    assert.strictEqual(commandsKind.destSubpath, 'commands');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
 describe('resolveRuntimeArtifactLayout — trae', () => {
-  test('returns correct layout for trae', () => {
+  test('returns correct layout for trae (skills + agents — ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('trae', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'trae');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 
@@ -237,21 +273,29 @@ describe('resolveRuntimeArtifactLayout — hermes', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — codebuddy', () => {
-  test('returns correct layout for codebuddy (commands + skills — #789)', () => {
+  test('returns correct layout for codebuddy (commands + skills + agents — #789, ADR-1235)', () => {
     const layout = resolveRuntimeArtifactLayout('codebuddy', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'codebuddy');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 2);
-    // commands kind first
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-    // skills kind second
-    assert.strictEqual(layout.kinds[1].kind, 'skills');
-    assert.strictEqual(layout.kinds[1].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 3);
+
+    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
+    assert.ok(commandsKind, 'must have a commands kind');
+    assert.strictEqual(commandsKind.destSubpath, 'commands');
+    assert.strictEqual(commandsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof commandsKind.stage, 'function');
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (ADR-1235 §1 descriptor cutover)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 

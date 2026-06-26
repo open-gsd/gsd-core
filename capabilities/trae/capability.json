@@ -17,6 +17,7 @@
         "TRAE_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".trae",
     "configFormat": "none",
     "artifactLayout": {
       "global": [
@@ -27,6 +28,14 @@
           "nesting": "nested",
           "recursive": false,
           "converter": "convertClaudeCommandToTraeSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToTraeAgent"
         }
       ],
       "local": [
@@ -37,6 +46,14 @@
           "nesting": "nested",
           "recursive": false,
           "converter": "convertClaudeCommandToTraeSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToTraeAgent"
         }
       ]
     },
@@ -47,6 +64,16 @@
     "installSurface": "profile-marker-only",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "imperative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": true, "nested": "undocumented", "maxDepth": "undocumented", "background": true, "subagentToolkit": "undocumented", "backgroundDispatch": "undocumented" },
+      "modelMode": "passive",
+      "hookBus": "engine",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "node"
+    }
   }
 }

@@ -18,9 +18,19 @@
         "WINDSURF_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".windsurf",
     "configFormat": "none",
     "artifactLayout": {
-      "global": [],
+      "global": [
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToWindsurfAgent"
+        }
+      ],
       "local": [
         {
           "kind": "commands",
@@ -29,6 +39,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToWindsurfWorkflow"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToWindsurfAgent"
         }
       ]
     },
@@ -39,6 +57,16 @@
     "installSurface": "profile-marker-only",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": []
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": { "namedDispatch": "undocumented", "nested": "undocumented", "maxDepth": "undocumented", "background": "undocumented", "subagentToolkit": "undocumented", "backgroundDispatch": "undocumented" },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "undocumented"
+    }
   }
 }

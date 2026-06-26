@@ -76,6 +76,7 @@ function runtimeCap(overrides) {
     engines: { gsd: '>=1.6.0' },
     runtime: {
       configHome: { kind: 'dot-home', name: '.demo', env: [] },
+      localConfigDir: '.demo',
       configFormat: 'settings-json',
       artifactLayout: { global: [], local: [] },
       commandStyle: 'slash-hyphen',
@@ -86,6 +87,16 @@ function runtimeCap(overrides) {
       writesSharedSettings: false,
       permissionWriter: null,
       extendedHookEvents: [],
+      hostIntegration: {
+        embeddingMode: 'imperative',
+        commandSurface: 'slash-file',
+        dispatch: { namedDispatch: true, nested: true, maxDepth: -1, background: true, subagentToolkit: 'full', backgroundDispatch: false },
+        modelMode: 'passive',
+        hookBus: 'host',
+        stateIO: 'filesystem',
+        transport: 'mcp',
+        runtime: 'node',
+      },
     },
     ...overrides,
   };
