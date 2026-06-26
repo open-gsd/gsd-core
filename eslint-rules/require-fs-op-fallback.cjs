@@ -6,9 +6,11 @@
  * Flag: a bare fs.rename / fs.renameSync call (the atomic-publish primitive
  * named first in DEFECT.WINDOWS-FS-OPS.symptom) that is NOT either:
  *
- *   (a) inside a try/catch whose catch handler references a transient errno
- *       ('EPERM' / 'EBUSY' / 'EACCES', literally OR via a *RETRY_ERRNOS-style
- *       set identifier — the established RENAME_RETRY_ERRNOS convention), OR
+ *   (a) inside a try/catch whose catch handler BOTH references a transient
+ *       errno ('EPERM' / 'EBUSY' / 'EACCES', literally OR via a *RETRY_ERRNOS-
+ *       style set identifier) AND carries a retry signal (a loop `continue`
+ *       backedge or a `return <call>` delegation — NOT a bare rethrow: the
+ *       defect's cure is retry/fallback, not just errno recognition), OR
  *   (b) control-dependent on a Windows platform guard
  *       (process.platform !== 'win32' / early-return — isWindowsExcludedNode).
  *
@@ -140,24 +142,85 @@ function catchHandlerReferencesTransientErrno(handlerNode) {
 }
 
 /**
- * True when `renameNode` sits inside the `try` block (try.body) of an
- * enclosing TryStatement whose catch handler references a transient errno.
+ * True when `handlerNode` (a CatchClause) contains a RETRY SIGNAL — evidence the
+ * catch actually re-attempts the rename rather than merely observing the errno.
  *
- * Walks the FULL ancestor chain — an outer errno-handling catch protects the
- * rename even if an intermediate (inner) try's catch is bare. This avoids a
- * false positive on the nested-try shape.
+ * Recognized retry signals:
+ *   - ContinueStatement          — a loop backedge (`for { try{rename}catch{continue} }`)
+ *   - ReturnStatement whose argument is a CallExpression — delegation
+ *                                  (`return retry()`, `return atomicRenameWithRetry(...)`)
+ *
+ * This closes the "errno-check-then-rethrow" false-negative: a catch like
+ * `catch (e) { if (e.code === 'EPERM') throw e; throw e; }` references the
+ * errno but never retries, so it still fails on Windows transient locks. The
+ * DEFECT.WINDOWS-FS-OPS fix-forward requires retry/fallback, not just recognition.
+ *
+ * Skips `parent`/`tokens`/`comments` keys to avoid cycles.
+ */
+function catchHandlerHasRetrySignal(handlerNode) {
+  if (!handlerNode || typeof handlerNode !== 'object') return false;
+  const seen = new WeakSet();
+  function walk(n) {
+    if (!n || typeof n !== 'object') return false;
+    if (seen.has(n)) return false;
+    seen.add(n);
+    // Loop backedge: `continue` re-enters the enclosing retry loop.
+    if (n.type === 'ContinueStatement') return true;
+    // Delegation: `return retry()` / `return atomicRenameWithRetry(...)` hands
+    // the rename off to a helper that performs its own bounded retry.
+    if (
+      n.type === 'ReturnStatement' &&
+      n.argument != null &&
+      n.argument.type === 'CallExpression'
+    ) {
+      return true;
+    }
+    for (const key of Object.keys(n)) {
+      if (key === 'parent' || key === 'tokens' || key === 'comments') continue;
+      const child = n[key];
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (item && typeof item === 'object' && item.type) {
+            if (walk(item)) return true;
+          }
+        }
+      } else if (child && typeof child === 'object' && child.type) {
+        if (walk(child)) return true;
+      }
+    }
+    return false;
+  }
+  return walk(handlerNode);
+}
+
+/**
+ * True when `renameNode` is protected by a transient-errno retry: i.e. the
+ * NEAREST enclosing TryStatement WITH A CATCH HANDLER whose `block` contains
+ * the rename has a handler that BOTH references a transient errno AND carries a
+ * retry signal (loop backedge or delegation return).
+ *
+ * Walks bottom-up and STOPS at the first TryStatement that (a) contains the
+ * rename in its `block` and (b) has a `handler`. A try with only a `finally`
+ * (no handler) does not intercept the rename error — it is skipped and the
+ * climb continues. The nearest catching try is where the rename's error lands;
+ * an outer catch is UNREACHABLE once the nearest catch intercepts (it may
+ * swallow, transform, or rethrow-as-other), so walking past it would be
+ * unsound (a false negative — see the nested-try case). An errno reference
+ * alone is insufficient; the handler must also retry (see catchHandlerHasRetrySignal).
  */
 function isInsideTransientErrnoTryCatch(renameNode, sourceCode) {
   const ancestors = _getAncestors(renameNode, sourceCode);
   for (let i = ancestors.length - 1; i >= 0; i--) {
     const anc = ancestors[i];
     if (anc.type !== 'TryStatement') continue;
-    // renameNode must be within the try block (block), NOT the handler.
-    if (anc.handler && _containsNode(anc.block, renameNode)) {
-      if (catchHandlerReferencesTransientErrno(anc.handler)) {
-        return true;
-      }
-    }
+    if (!_containsNode(anc.block, renameNode)) continue;
+    if (!anc.handler) continue; // try-finally: error propagates, keep climbing
+    // Nearest catching try found — its handler is authoritative. An outer
+    // catch cannot protect the rename if this one intercepts first.
+    return (
+      catchHandlerReferencesTransientErrno(anc.handler) &&
+      catchHandlerHasRetrySignal(anc.handler)
+    );
   }
   return false;
 }

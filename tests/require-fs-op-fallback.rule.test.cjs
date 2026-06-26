@@ -7,9 +7,11 @@
  *
  * Rule: flag a bare fs.rename / fs.renameSync call (the atomic-publish
  * primitive named first in DEFECT.WINDOWS-FS-OPS.symptom) that is NOT either:
- *   (a) inside a try/catch whose catch handler references a transient errno
- *       ('EPERM' / 'EBUSY' / 'EACCES', literally or via a *RETRY_ERRNOS set),
- *       OR
+ *   (a) inside a try/catch (the NEAREST catching try) whose catch handler BOTH
+ *       references a transient errno ('EPERM' / 'EBUSY' / 'EACCES', literally
+ *       or via a *RETRY_ERRNOS set) AND carries a retry signal (a loop
+ *       `continue` backedge or a `return <call>` delegation — NOT a bare
+ *       rethrow: the cure is retry, not just errno recognition), OR
  *   (b) control-dependent on a Windows platform guard
  *       (process.platform !== 'win32' / early-return — isWindowsExcludedNode).
  *
@@ -27,14 +29,19 @@
  *  - fs.renameSync inside try/catch that cleans up + rethrows, no errno ref
  *    (the atomicWriteFileSync / atomicWriteInstallState shape — the real bug)
  *  - bare fs.rename(...) async
+ *  - fs.renameSync inside try/catch whose catch checks errno but only RETHROWS
+ *    (HIGH-1 from codex review: errno reference alone is insufficient — no retry)
+ *  - fs.renameSync inside an INNER try whose catch swallows, even with an OUTER
+ *    try whose catch handles EPERM (HIGH-2: outer catch is unreachable)
  *
  * VALID (no violation):
- *  - fs.renameSync inside try/catch whose catch checks err.code === 'EPERM'
- *  - fs.renameSync inside try/catch whose catch references RENAME_RETRY_ERRNOS
- *  - fs.renameSync inside try/catch with switch(err.code) case 'EBUSY'
+ *  - fs.renameSync inside a retry loop whose catch checks errno + `continue`
+ *  - fs.renameSync inside try/catch whose catch references RENAME_RETRY_ERRNOS set
+ *  - fs.renameSync inside try/catch with switch(err.code) + return retry() (delegation)
  *  - fs.renameSync inside if (process.platform !== 'win32') { ... }
- *  - fs.renameSync after if (process.platform === 'win32') return; guard
- *  - fs.copyFileSync / fs.unlinkSync — NOT flagged (out of scope)
+ *  - fs.renameSync after early-return guard / hoisted isWindows boolean
+ *  - fs.renameSync inside a try-finally, protected by the NEXT enclosing catching try
+ *  - fs.copyFileSync / fs.unlinkSync — NOT flagged (out of scope — fallback primitives)
  *  - fs.readFileSync / fs.writeFileSync — NOT flagged (not rename)
  */
 
@@ -134,6 +141,29 @@ describe('require-fs-op-fallback invalid cases', () => {
     });
   });
 
+  test('invalid: fs.renameSync inside try/catch whose catch checks errno but only RETHROWS (no retry)', () => {
+    // HIGH-1 (codex review): referencing the errno is not enough — the defect's
+    // cure is retry/fallback, not just recognition. A catch that checks the
+    // errno and rethrows (no continue / no delegation) still fails on Windows
+    // transient locks, so it is a violation.
+    ruleTester.run('require-fs-op-fallback', requireFsOpFallback, {
+      valid: [],
+      invalid: [
+        {
+          code: `function publish(tmp, target) {
+  try {
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    if (e.code === 'EPERM') throw e;
+    throw e;
+  }
+}`,
+          errors: [{ messageId: 'requireFsOpFallback' }],
+        },
+      ],
+    });
+  });
+
   test('invalid: fs.renameSync inside try/catch whose catch references an UNRELATED errno (ENOENT) only', () => {
     // A catch handling ENOENT does NOT protect against the EPERM/EBUSY/EACCES
     // transient-lock family — still a violation.
@@ -159,14 +189,19 @@ describe('require-fs-op-fallback invalid cases', () => {
 // ─── VALID cases (no violation) ───────────────────────────────────────────────
 
 describe('require-fs-op-fallback valid cases', () => {
-  test('valid: fs.renameSync inside try/catch whose catch checks err.code === "EPERM"', () => {
+  test('valid: fs.renameSync inside a retry loop whose catch checks err.code === "EPERM" and continues', () => {
+    // The minimal compliant shape: errno check + loop backedge (continue).
     ruleTester.run('require-fs-op-fallback', requireFsOpFallback, {
       valid: [
         `function publish(tmp, target) {
-  try {
-    fs.renameSync(tmp, target);
-  } catch (e) {
-    if (e.code === 'EPERM') { /* retry logic */ }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      fs.renameSync(tmp, target);
+      return;
+    } catch (e) {
+      if (e.code === 'EPERM') { backoff(); continue; }
+      throw e;
+    }
   }
 }`,
       ],
@@ -197,7 +232,9 @@ function atomicRenameWithRetry(tmpPath, filePath) {
     });
   });
 
-  test('valid: fs.renameSync inside try/catch with switch(err.code) casing EBUSY and EACCES', () => {
+  test('valid: fs.renameSync inside try/catch with switch(err.code) casing EBUSY and EACCES, delegating via return retry()', () => {
+    // The `return retry()` is a ReturnStatement-with-CallExpression — a retry
+    // signal (delegation to a helper that performs its own bounded retry).
     ruleTester.run('require-fs-op-fallback', requireFsOpFallback, {
       valid: [
         `function publish(tmp, target) {
@@ -263,21 +300,51 @@ function atomicRenameWithRetry(tmpPath, filePath) {
     });
   });
 
-  test('valid: fs.renameSync inside a try nested in an OUTER try whose catch handles EPERM', () => {
-    // The rename is protected by the outer errno-handling catch even though
-    // the immediate (inner) try's catch is bare. Walking the full ancestor
-    // chain avoids a false positive here.
+  test('invalid: fs.renameSync inside an INNER try whose catch swallows, with an OUTER try whose catch handles EPERM (HIGH-2)', () => {
+    // HIGH-2 (codex review): the inner catch intercepts the rename error
+    // (swallows it), so the outer errno-handling catch is UNREACHABLE for that
+    // failure. Walking the full ancestor chain and treating the outer catch as
+    // protective was a false negative. The nearest catching try's handler is
+    // authoritative; since it swallows without retry, this is a violation.
     ruleTester.run('require-fs-op-fallback', requireFsOpFallback, {
-      valid: [
-        `function publish(tmp, target) {
+      valid: [],
+      invalid: [
+        {
+          code: `function publish(tmp, target) {
   try {
     try {
       fs.renameSync(tmp, target);
     } catch (inner) {
-      // inner cleanup, no errno
+      // inner cleanup, swallows the rename error — no retry
     }
   } catch (e) {
-    if (e.code === 'EPERM') { /* outer handles it */ }
+    if (e.code === 'EPERM') { return retry(); }
+  }
+}`,
+          errors: [{ messageId: 'requireFsOpFallback' }],
+        },
+      ],
+    });
+  });
+
+  test('valid: try-finally (no catch) is skipped — rename protected by the NEXT enclosing catching try', () => {
+    // A try with only a finally does not intercept the rename error, so the
+    // climb continues to the next enclosing TryStatement with a handler.
+    ruleTester.run('require-fs-op-fallback', requireFsOpFallback, {
+      valid: [
+        `function publish(tmp, target) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      try {
+        fs.renameSync(tmp, target);
+      } finally {
+        meter.tick();
+      }
+      return;
+    } catch (e) {
+      if (e.code === 'EPERM') { continue; }
+      throw e;
+    }
   }
 }`,
       ],
