@@ -318,6 +318,16 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   }> = [];
   let match: RegExpExecArray | null;
 
+  // Phase 0 (pre-milestone) and Phase 999 (backlog) are sentinels, not real
+  // phases. They legitimately have no directory and must never be surfaced as
+  // current/next phase or counted in phase_count. Mirrors the engine-wide
+  // sentinel convention (phase-id getMilestoneFromPhaseId, roadmap-command-router
+  // SENTINELS, the #1445 /^999/ progress filters). (#1580)
+  const isSentinelPhase = (num: string): boolean => {
+    const major = parseInt(num, 10);
+    return major === 0 || major === 999;
+  };
+
   // Build phase directory lookup once (O(1) readdir instead of O(N) per phase)
   const _phaseDirNames = (() => {
     try {
@@ -329,6 +339,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
 
   while ((match = phasePattern.exec(content)) !== null) {
     const phaseNum = match[1];
+    if (isSentinelPhase(phaseNum)) continue;
     const phaseName = match[2].replace(/\(INSERTED\)/i, '').trim();
 
     // Extract goal from the section
@@ -437,7 +448,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     checklistPhases.add(checklistMatch[1]);
   }
   const detailPhases = new Set(phases.map(p => p.number));
-  const missingDetails = [...checklistPhases].filter(p => !detailPhases.has(p));
+  const missingDetails = [...checklistPhases].filter(p => !detailPhases.has(p) && !isSentinelPhase(p));
 
   const result = {
     milestones,
