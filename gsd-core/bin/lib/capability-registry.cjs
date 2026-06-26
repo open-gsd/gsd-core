@@ -86,6 +86,7 @@ const capabilities = {
         ],
         "probeExists": "gsd-core/VERSION"
       },
+      "localConfigDir": ".agents",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -193,6 +194,7 @@ const capabilities = {
           "AUGMENT_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".augment",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -279,6 +281,7 @@ const capabilities = {
           "CLAUDE_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".claude",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -362,6 +365,7 @@ const capabilities = {
           "CLINE_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".cline",
       "configFormat": "markdown-dir",
       "artifactLayout": {
         "global": [
@@ -483,6 +487,7 @@ const capabilities = {
           "CODEBUDDY_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".codebuddy",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -569,6 +574,7 @@ const capabilities = {
           "CODEX_HOME"
         ]
       },
+      "localConfigDir": ".codex",
       "configFormat": "toml",
       "artifactLayout": {
         "global": [
@@ -640,6 +646,7 @@ const capabilities = {
           "COPILOT_HOME"
         ]
       },
+      "localConfigDir": ".github",
       "configFormat": "markdown",
       "artifactLayout": {
         "global": [
@@ -709,6 +716,7 @@ const capabilities = {
           "CURSOR_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".cursor",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -914,6 +922,7 @@ const capabilities = {
           "GEMINI_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".gemini",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -1029,6 +1038,7 @@ const capabilities = {
           "HERMES_HOME"
         ]
       },
+      "localConfigDir": ".hermes",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -1158,6 +1168,7 @@ const capabilities = {
           "env": []
         }
       },
+      "localConfigDir": ".kilo",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -1248,6 +1259,7 @@ const capabilities = {
         ],
         "probeExists": "skills"
       },
+      "localConfigDir": ".kimi-code",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -1542,6 +1554,7 @@ const capabilities = {
           "XDG_CONFIG_HOME"
         ]
       },
+      "localConfigDir": ".opencode",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -1758,6 +1771,7 @@ const capabilities = {
           "QWEN_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".qwen",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -2082,6 +2096,7 @@ const capabilities = {
           "TRAE_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".trae",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -2247,6 +2262,7 @@ const capabilities = {
           "WINDSURF_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".windsurf",
       "configFormat": "none",
       "artifactLayout": {
         "global": [],
@@ -3038,6 +3054,7 @@ const runtimes = {
         ],
         "probeExists": "gsd-core/VERSION"
       },
+      "localConfigDir": ".agents",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3108,6 +3125,7 @@ const runtimes = {
           "AUGMENT_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".augment",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3194,6 +3212,7 @@ const runtimes = {
           "CLAUDE_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".claude",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3277,6 +3296,7 @@ const runtimes = {
           "CLINE_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".cline",
       "configFormat": "markdown-dir",
       "artifactLayout": {
         "global": [
@@ -3337,6 +3357,7 @@ const runtimes = {
           "CODEBUDDY_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".codebuddy",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3423,6 +3444,7 @@ const runtimes = {
           "CODEX_HOME"
         ]
       },
+      "localConfigDir": ".codex",
       "configFormat": "toml",
       "artifactLayout": {
         "global": [
@@ -3494,6 +3516,7 @@ const runtimes = {
           "COPILOT_HOME"
         ]
       },
+      "localConfigDir": ".github",
       "configFormat": "markdown",
       "artifactLayout": {
         "global": [
@@ -3563,6 +3586,7 @@ const runtimes = {
           "CURSOR_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".cursor",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -3649,6 +3673,7 @@ const runtimes = {
           "GEMINI_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".gemini",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3723,6 +3748,7 @@ const runtimes = {
           "HERMES_HOME"
         ]
       },
+      "localConfigDir": ".hermes",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3800,6 +3826,7 @@ const runtimes = {
           "env": []
         }
       },
+      "localConfigDir": ".kilo",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -3890,6 +3917,7 @@ const runtimes = {
         ],
         "probeExists": "skills"
       },
+      "localConfigDir": ".kimi-code",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -3960,6 +3988,7 @@ const runtimes = {
           "XDG_CONFIG_HOME"
         ]
       },
+      "localConfigDir": ".opencode",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -4045,6 +4074,7 @@ const runtimes = {
           "QWEN_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".qwen",
       "configFormat": "settings-json",
       "artifactLayout": {
         "global": [
@@ -4119,6 +4149,7 @@ const runtimes = {
           "TRAE_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".trae",
       "configFormat": "none",
       "artifactLayout": {
         "global": [
@@ -4189,6 +4220,7 @@ const runtimes = {
           "WINDSURF_CONFIG_DIR"
         ]
       },
+      "localConfigDir": ".windsurf",
       "configFormat": "none",
       "artifactLayout": {
         "global": [],

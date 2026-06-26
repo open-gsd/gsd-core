@@ -142,20 +142,12 @@ export function getProjectInstructionFile(runtime: unknown): string {
  * `bin/install.js` re-exports this same function for back-compat.
  */
 export function getDirName(runtime: string): string {
-  if (runtime === 'copilot') return '.github';
-  if (runtime === 'opencode') return '.opencode';
-  if (runtime === 'gemini') return '.gemini';
-  if (runtime === 'kilo') return '.kilo';
-  if (runtime === 'codex') return '.codex';
-  if (runtime === 'antigravity') return '.agents';
-  if (runtime === 'cursor') return '.cursor';
-  if (runtime === 'windsurf') return '.windsurf';
-  if (runtime === 'augment') return '.augment';
-  if (runtime === 'trae') return '.trae';
-  if (runtime === 'qwen') return '.qwen';
-  if (runtime === 'hermes') return '.hermes';
-  if (runtime === 'kimi') return '.kimi-code';
-  if (runtime === 'codebuddy') return '.codebuddy';
-  if (runtime === 'cline') return '.cline';
+  if (!runtime) return '.claude';
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { runtimes } = require('./capability-registry.cjs') as {
+    runtimes: Record<string, { runtime?: { localConfigDir?: string } } | undefined>;
+  };
+  const dir = runtimes[runtime]?.runtime?.localConfigDir;
+  if (typeof dir === 'string' && dir.length > 0) return dir;
   return '.claude';
 }

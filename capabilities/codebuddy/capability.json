@@ -17,6 +17,7 @@
         "CODEBUDDY_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".codebuddy",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

@@ -17,6 +17,7 @@
         "TRAE_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".trae",
     "configFormat": "none",
     "artifactLayout": {
       "global": [

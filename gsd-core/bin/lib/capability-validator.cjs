@@ -1030,6 +1030,20 @@ function validateRuntimeBody(cap) {
     );
   }
 
+  // localConfigDir — REQUIRED non-empty dot-dir string (ADR-1239 Phase B #1679)
+  // Must start with '.' (e.g. ".claude", ".cursor"). Validated here so the registry
+  // generator catches any descriptor missing the field before regenerating.
+  if (typeof r.localConfigDir !== 'string' || r.localConfigDir.length === 0) {
+    errors.push(
+      'runtime.localConfigDir is required and must be a non-empty string (e.g. ".claude"); ' +
+      'got: ' + JSON.stringify(r.localConfigDir),
+    );
+  } else if (!r.localConfigDir.startsWith('.')) {
+    errors.push(
+      'runtime.localConfigDir must start with "." (a dot-dir); got: ' + JSON.stringify(r.localConfigDir),
+    );
+  }
+
   // extendedHookEvents — required array; every element must be in closed enum
   if (!Array.isArray(r.extendedHookEvents)) {
     errors.push(

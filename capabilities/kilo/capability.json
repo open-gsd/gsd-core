@@ -24,6 +24,7 @@
         "env": []
       }
     },
+    "localConfigDir": ".kilo",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

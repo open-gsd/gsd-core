@@ -17,6 +17,7 @@
         "AUGMENT_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".augment",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
