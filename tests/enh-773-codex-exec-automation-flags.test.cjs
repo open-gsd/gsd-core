@@ -113,7 +113,7 @@ describe('#1698 regression: codex review is captured via --output-last-message, 
     'utf8'
   );
   const codexExecLines = workflow
-    .split('\n')
+    .split(/\r?\n/)
     .filter((line) => line.includes('codex exec') && !line.includes('codex exec --help'));
 
   test('every codex exec invocation captures the review via -o <FILE>', () => {
