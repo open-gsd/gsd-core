@@ -308,6 +308,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
 | `prohibition-probe.md` | Spec-phase prohibition-completeness probe — the two-stage adversarial-recall → precision protocol that surfaces the unwritten *must-NOT* constraints (values/safety/ethics), with status×verification (`test`/`judgment`) tiering and canon-referral breadcrumbs (Step 5.6); second adapter of the `probe-core` resolution model. |
+| `honest-verifier.md` | Verify-time abstention on non-inferable (`backstop`) truths — the truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): a `backstop` truth the verifier can't confirm with explicit evidence abstains → `human_needed` (reason `insufficient_spec`), never a silent pass (#1154). |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
 | `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
 | `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via the discuss-phase/modes progressive-disclosure split, #717). |
