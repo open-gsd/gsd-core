@@ -277,6 +277,9 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 | **Color** | Cyan |
 | **Produces** | BLOCK/FLAG/PASS verdict |
 
+**Key behaviors:**
+- **Adversarial stance / "The Auditor" (#1578):** applies explicit BLOCK/FLAG/PASS tiers and an anti-capitulation rule that resists author-framing pressure while still allowing self-correction when the prior dimension application was mistaken. Persona effects are strongest on Sonnet-class reasoning and unvalidated on budget/Haiku-class routing; the criteria and evidence remain authoritative.
+
 ---
 
 ### gsd-verifier
@@ -711,6 +714,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 **Key behaviors:**
 - Single-doc scope — never synthesizes or resolves conflicts (that is the synthesizer's job)
 - Heuristic-first classification; returns UNKNOWN when the doc lacks type signals rather than guessing
+- **Extraction discipline (#1578):** few-shot input→output exemplars plus a terminal schema restatement; marks a field absent rather than fabricating a value when the doc lacks the signal.
 
 ---
 
@@ -730,6 +734,7 @@ Twelve additional agents ship under `agents/gsd-*.md` and are used by specialty 
 **Key behaviors:**
 - Hard-blocks on LOCKED-vs-LOCKED ADR contradictions instead of silently picking a winner
 - Follows the `references/doc-conflict-engine.md` contract so `/gsd-import` and `/gsd-ingest-docs` produce consistent conflict reports
+- **Extraction discipline (#1578):** few-shot exemplars plus a terminal schema restatement and a mark-absent (no-fabrication) rule for missing fields.
 
 ---
 
