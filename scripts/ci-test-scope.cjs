@@ -118,6 +118,7 @@ const RULES = [
     tests: [
       'tests/semver-compare.test.cjs',
       'tests/bug-10-semver-policy-consolidation.test.cjs',
+      'tests/golden-install-parity.test.cjs', // any src/installer change can alter emitted install artifacts → re-verify golden install parity (drift guard)
     ],
   },
   {
@@ -134,6 +135,7 @@ const RULES = [
       'tests/install-path-detection.test.cjs',
       'tests/release-tarball-smoke.install.test.cjs',
       'tests/runtime-artifact-layout.test.cjs',
+      'tests/golden-install-parity.test.cjs', // any src/installer change can alter emitted install artifacts → re-verify golden install parity (drift guard)
     ],
   },
   {
