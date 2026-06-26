@@ -212,6 +212,28 @@ as-built deviations from the Phase 0 catalog, both within this ADR's precision d
 The forward "how to add a portability rule" recipe delivered by this phase lives at
 [`docs/contributing/adding-a-portability-rule.md`](../contributing/adding-a-portability-rule.md).
 
+Two further as-built deviations from the Phase 0 text, reconciled in the post-merge
+coverage audit (#1749):
+
+- **Disable-ban mechanism — meta-rule → out-of-band test.** §"Strictness" specified a
+  `local/no-portability-disable` ESLint meta-rule to ban inline disables of portability
+  rules. What shipped is [`tests/portability-rule-disable-ban.test.cjs`](../../tests/portability-rule-disable-ban.test.cjs)
+  — a `node:test` that scans files for disable directives **outside ESLint**, so it cannot
+  itself be eslint-disabled (an advantage over an in-process meta-rule, which the ADR noted
+  as the motivating risk). The substitution is at least as strong; recorded here so the
+  ADR's written mechanism matches the as-built one.
+
+- **Drift-guard `bin/install.js` scope.** §"Architecture" said the drift guard parses
+  `src/runtime-homes.cts` *and the relevant `bin/install.js` exports*. The shipped
+  [`tests/portability-vocab-drift.test.cjs`](../../tests/portability-vocab-drift.test.cjs)
+  originally covered only `runtime-homes.cts`; the audit extended it to `bin/install.js`
+  with a SOUND shape only (a top-level function that directly `return path.*(...)` must be
+  registered; plus a curated two-way existence lock on the installer path helpers). The
+  looser body-contains heuristic used for `runtime-homes.cts` is unsound for the generated
+  12k-line installer (~33 false positives), so a new installer resolver that builds a path
+  via a temp variable relies on review — documented as a boundary in the test. The active
+  resolver module (`runtime-homes.cts`) remains fully drift-guarded by the looser heuristic.
+
 ## Alternatives considered
 
 1. **Keep extending the regex lint.** Rejected — the adversarial review proved it is

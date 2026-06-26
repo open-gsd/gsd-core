@@ -21,6 +21,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const tsParser = require('@typescript-eslint/parser');
+const espree = require('espree');
 
 const { PATH_RETURNING_FNS } = require('../eslint-rules/lib/portability-vocab.cjs');
 
@@ -32,6 +33,21 @@ const IGNORED_NON_PATH_EXPORTS = new Set([
   // detectAntigravityDirAmbiguity: returns an object (AntigravityAmbiguity), not a path string.
   'detectAntigravityDirAmbiguity',
 ]);
+
+// bin/install.js path-returning helpers that are registered in PATH_RETURNING_FNS.
+// This is the curated set named by ADR-1703 L114-119 ("the relevant bin/install.js
+// exports"). The companion test below locks it two ways: each must still be DEFINED
+// in the generated installer (catches a rename/removal making the vocab entry stale),
+// AND this list must equal the PATH_RETURNING_FNS bare-names that are defined in
+// bin/install.js (so the curation cannot drift silently out of sync with the vocab).
+const INSTALL_JS_PATH_HELPERS = [
+  'getConfigDirFromHome',
+  'getGlobalDir',
+  'resolveKiloConfigPath',
+  'resolveOpencodeConfigPath',
+  'computePathPrefix',
+  'normalizeInstallRelativePath',
+];
 
 describe('portability-vocab drift guard', () => {
   test('PATH_RETURNING_FNS is a non-empty array', () => {
@@ -336,4 +352,134 @@ describe('portability-vocab drift guard', () => {
       'mySpecifierResolver should not be in PATH_RETURNING_FNS (it is a test fixture name)',
     );
   });
+
+  // ─── ADR-1703 L114-119: the drift guard also covers "the relevant bin/install.js
+  // exports". The generated installer is a path-heavy 12k-line CommonJS file where
+  // the loose body-contains heuristic (used for runtime-homes.cts) is UNSOUND — it
+  // produces ~33 false positives because nearly every function uses path.join. The
+  // two checks below use SOUND shapes only, and document the residual boundary.
+  test('bin/install.js: every function that DIRECTLY returns a path.* call is in PATH_RETURNING_FNS', () => {
+    const srcPath = path.join(__dirname, '..', 'bin', 'install.js');
+    const raw = fs.readFileSync(srcPath, 'utf8');
+    // bin/install.js starts with a shebang espree cannot parse — rewrite #! -> //.
+    const src = raw.startsWith('#!') ? '//' + raw.slice(2) : raw;
+    const ast = espree.parse(src, { ecmaVersion: 2022, loc: true, range: true, tolerant: true });
+
+    // SOUND shape: a top-level function whose body contains a ReturnStatement
+    // whose argument is a CallExpression to path.join/resolve/dirname/normalize/
+    // relative. This is tight (0 false positives on the current installer) and
+    // catches the canonical resolver shape (resolveOpencodeConfigPath,
+    // resolveKiloConfigPath). It does NOT catch a resolver that builds a path
+    // into a temp variable then returns the temp — see the boundary note below.
+    function returnsPathCall(funcBody) {
+      let found = false;
+      function walk(n) {
+        if (found || !n || typeof n !== 'object') return;
+        if (n.type === 'ReturnStatement' && n.argument && n.argument.type === 'CallExpression') {
+          const callee = n.argument.callee;
+          if (
+            callee.type === 'MemberExpression' &&
+            !callee.computed &&
+            callee.object.type === 'Identifier' &&
+            callee.object.name === 'path' &&
+            callee.property.type === 'Identifier' &&
+            ['join', 'resolve', 'dirname', 'normalize', 'relative', 'basename'].includes(callee.property.name)
+          ) {
+            found = true;
+            return;
+          }
+        }
+        // Do NOT descend into nested function expressions/declarations — a path
+        // return inside a nested callback does not make the outer fn path-returning.
+        if (n.type === 'FunctionExpression' || n.type === 'ArrowFunctionExpression' || n.type === 'FunctionDeclaration') return;
+        for (const key of Object.keys(n)) {
+          if (key === 'parent' || key === 'tokens' || key === 'comments') continue;
+          const child = n[key];
+          if (Array.isArray(child)) {
+            for (const item of child) {
+              if (item && typeof item === 'object' && item.type) walk(item);
+            }
+          } else if (child && typeof child === 'object' && child.type) {
+            walk(child);
+          }
+        }
+      }
+      walk(funcBody);
+      return found;
+    }
+
+    const pathReturning = [];
+    for (const node of ast.body) {
+      if (node.type === 'FunctionDeclaration' && node.id && node.body) {
+        if (returnsPathCall(node.body)) pathReturning.push(node.id.name);
+      }
+    }
+
+    const vocabSet = new Set(PATH_RETURNING_FNS);
+    const missing = pathReturning.filter((n) => !vocabSet.has(n));
+    assert.deepStrictEqual(
+      missing,
+      [],
+      `These bin/install.js functions return a path.* call but are missing from PATH_RETURNING_FNS:\n  ${missing.join('\n  ')}\n\nRegister them in eslint-rules/lib/portability-vocab.cjs (or, if they do not return a string path that flows into content/assertions, document why).`,
+    );
+  });
+
+  test('bin/install.js: the curated INSTALL_JS_PATH_HELPERS still exist (no stale vocab entries after a rename)', () => {
+    const srcPath = path.join(__dirname, '..', 'bin', 'install.js');
+    const raw = fs.readFileSync(srcPath, 'utf8');
+    const src = raw.startsWith('#!') ? '//' + raw.slice(2) : raw;
+    const ast = espree.parse(src, { ecmaVersion: 2022, loc: true, range: true, tolerant: true });
+
+    // Collect every top-level function-declaration AND const/let/var name defined
+    // in the installer (path helpers may be `function foo(){}` OR a const import
+    // like `const computePathPrefix = runtimeArtifactConversion._computePathPrefix`).
+    const defined = new Set();
+    for (const node of ast.body) {
+      if (node.type === 'FunctionDeclaration' && node.id) defined.add(node.id.name);
+      if (node.type === 'VariableDeclaration') {
+        for (const decl of node.declarations) {
+          if (decl.type === 'VariableDeclarator' && decl.id && decl.id.type === 'Identifier') {
+            defined.add(decl.id.name);
+          }
+        }
+      }
+    }
+
+    // (a) Each curated helper must still be defined — catches a rename/removal
+    //     that would leave a stale entry in PATH_RETURNING_FNS (the rule would
+    //     silently stop matching the renamed resolver).
+    const missing = INSTALL_JS_PATH_HELPERS.filter((n) => !defined.has(n));
+    assert.deepStrictEqual(
+      missing,
+      [],
+      `These curated bin/install.js path helpers are no longer defined in bin/install.js — their PATH_RETURNING_FNS entries are now stale:\n  ${missing.join('\n  ')}\n\nRename them in eslint-rules/lib/portability-vocab.cjs PATH_RETURNING_FNS and in INSTALL_JS_PATH_HELPERS here.`,
+    );
+
+    // (b) The curated list must equal the PATH_RETURNING_FNS bare-names that are
+    //     defined in bin/install.js — so the curation cannot drift out of sync
+    //     with the vocab. If a new install.js helper is added to PATH_RETURNING_FNS,
+    //     it must also be added to INSTALL_JS_PATH_HELPERS (and vice versa).
+    const vocabSet = new Set(PATH_RETURNING_FNS);
+    const vocabHelpersDefinedInInstallJs = [...vocabSet].filter((n) => defined.has(n) && !n.includes('.')).sort();
+    assert.deepStrictEqual(
+      [...INSTALL_JS_PATH_HELPERS].sort(),
+      vocabHelpersDefinedInInstallJs,
+      `INSTALL_JS_PATH_HELPERS is out of sync with PATH_RETURNING_FNS entries defined in bin/install.js.\n` +
+        `  curated list:  [${[...INSTALL_JS_PATH_HELPERS].sort().join(', ')}]\n` +
+        `  vocab ∩ install.js: [${vocabHelpersDefinedInInstallJs.join(', ')}]\n` +
+        `Reconcile the two lists.`,
+    );
+  });
 });
+
+// ─── Known boundary (documented, not enforced) ─────────────────────────────────
+//
+// A NEW path-returning resolver added to bin/install.js that builds its path via
+// a temp variable (`const p = path.join(...); return p;`) or by delegating to
+// another helper (`return getGlobalDir(...)`) is NOT caught by the tight
+// return-path.* check above (which requires `return path.join(...)` directly).
+// The looser body-contains heuristic is unsound here (33 FPs on the current
+// installer). The installer's path API is a small, stable, curated set; a new
+// resolver there is caught at code review (the active resolver module,
+// src/runtime-homes.cts, IS fully drift-guarded by the looser heuristic above,
+// which is sound for that focused module).
