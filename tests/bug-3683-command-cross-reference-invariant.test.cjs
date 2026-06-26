@@ -19,7 +19,7 @@ function readKnownTargets() {
 }
 
 function stripFrontmatter(src) {
-  return src.replace(/^---\r?\n[\s\S]*?\n---\r?\n/, '');
+  return src.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
 }
 
 // Word-boundary lookbehind matching fix-slash-commands.cjs buildColonPattern / buildPattern

@@ -178,7 +178,7 @@ describe('descriptor-driven equivalence: env-var overrides', () => {
     process.env['COPILOT_CONFIG_DIR'] = '/custom/copilot-dir';
     process.env['COPILOT_HOME'] = '/should/not/win';
     try {
-      assert.strictEqual(getGlobalConfigDir('copilot'), '/custom/copilot-dir');
+      assert.strictEqual(String(getGlobalConfigDir('copilot')).replace(/\\/g, '/'), '/custom/copilot-dir');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -188,7 +188,7 @@ describe('descriptor-driven equivalence: env-var overrides', () => {
     const saved = clearAllEnvKeys();
     process.env['COPILOT_HOME'] = '/custom/copilot-home';
     try {
-      assert.strictEqual(getGlobalConfigDir('copilot'), '/custom/copilot-home');
+      assert.strictEqual(String(getGlobalConfigDir('copilot')).replace(/\\/g, '/'), '/custom/copilot-home');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -219,7 +219,7 @@ describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
     const saved = clearAllEnvKeys();
     process.env['OPENCODE_CONFIG'] = '/home/u/cfg/opencode.json';
     try {
-      assert.strictEqual(getGlobalConfigDir('opencode'), '/home/u/cfg');
+      assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/home/u/cfg');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -230,7 +230,7 @@ describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
     process.env['OPENCODE_CONFIG_DIR'] = '/dir/wins';
     process.env['OPENCODE_CONFIG'] = '/file/loses.json';
     try {
-      assert.strictEqual(getGlobalConfigDir('opencode'), '/dir/wins');
+      assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/dir/wins');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -241,7 +241,7 @@ describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
     process.env['OPENCODE_CONFIG'] = '/cfg/opencode.json';
     process.env['XDG_CONFIG_HOME'] = '/xdg/should/lose';
     try {
-      assert.strictEqual(getGlobalConfigDir('opencode'), '/cfg');
+      assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/cfg');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -272,7 +272,7 @@ describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
     const saved = clearAllEnvKeys();
     process.env['KILO_CONFIG'] = '/home/u/cfg/kilo.json';
     try {
-      assert.strictEqual(getGlobalConfigDir('kilo'), '/home/u/cfg');
+      assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/home/u/cfg');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -283,7 +283,7 @@ describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
     process.env['KILO_CONFIG_DIR'] = '/dir/wins';
     process.env['KILO_CONFIG'] = '/file/loses.json';
     try {
-      assert.strictEqual(getGlobalConfigDir('kilo'), '/dir/wins');
+      assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/dir/wins');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -294,7 +294,7 @@ describe('descriptor-driven equivalence: xdg runtimes (opencode, kilo)', () => {
     process.env['KILO_CONFIG'] = '/cfg/kilo.json';
     process.env['XDG_CONFIG_HOME'] = '/xdg/should/lose';
     try {
-      assert.strictEqual(getGlobalConfigDir('kilo'), '/cfg');
+      assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/cfg');
     } finally {
       restoreEnvKeys(saved);
     }
@@ -735,10 +735,10 @@ describe('descriptor-driven equivalence: generic-agents-root kimi probe hit/miss
 
 describe('descriptor-driven equivalence: explicitDir short-circuit', () => {
   test('explicitDir absolute path returned as-is (any runtime)', () => {
-    assert.strictEqual(getGlobalConfigDir('claude', '/tmp/explicit'), '/tmp/explicit');
-    assert.strictEqual(getGlobalConfigDir('opencode', '/tmp/explicit'), '/tmp/explicit');
-    assert.strictEqual(getGlobalConfigDir('kimi', '/tmp/explicit'), '/tmp/explicit');
-    assert.strictEqual(getGlobalConfigDir('grok', '/tmp/explicit'), '/tmp/explicit');
+    assert.strictEqual(String(getGlobalConfigDir('claude', '/tmp/explicit')).replace(/\\/g, '/'), '/tmp/explicit');
+    assert.strictEqual(String(getGlobalConfigDir('opencode', '/tmp/explicit')).replace(/\\/g, '/'), '/tmp/explicit');
+    assert.strictEqual(String(getGlobalConfigDir('kimi', '/tmp/explicit')).replace(/\\/g, '/'), '/tmp/explicit');
+    assert.strictEqual(String(getGlobalConfigDir('grok', '/tmp/explicit')).replace(/\\/g, '/'), '/tmp/explicit');
   });
 
   test('explicitDir with ~ is expanded', () => {
@@ -750,7 +750,7 @@ describe('descriptor-driven equivalence: explicitDir short-circuit', () => {
 
   test('explicitDir wins even when env var is set', () => {
     withEnv({ CLAUDE_CONFIG_DIR: '/should/not/win' }, () => {
-      assert.strictEqual(getGlobalConfigDir('claude', '/explicit/wins'), '/explicit/wins');
+      assert.strictEqual(String(getGlobalConfigDir('claude', '/explicit/wins')).replace(/\\/g, '/'), '/explicit/wins');
     });
   });
 });
@@ -769,7 +769,7 @@ describe('descriptor-driven equivalence: grok (not in registry)', () => {
 
   test('grok: GROK_AGENTS_HOME override', () => {
     withEnv({ GROK_AGENTS_HOME: '/custom/grok-agents' }, () => {
-      assert.strictEqual(getGlobalConfigDir('grok'), '/custom/grok-agents');
+      assert.strictEqual(String(getGlobalConfigDir('grok')).replace(/\\/g, '/'), '/custom/grok-agents');
     });
   });
 
@@ -794,7 +794,7 @@ describe('descriptor-driven equivalence: unknown runtime fallback', () => {
 
   test('unknown runtime → CLAUDE_CONFIG_DIR if set', () => {
     withEnv({ CLAUDE_CONFIG_DIR: '/custom/claude-for-unknown' }, () => {
-      assert.strictEqual(getGlobalConfigDir('no-such-runtime'), '/custom/claude-for-unknown');
+      assert.strictEqual(String(getGlobalConfigDir('no-such-runtime')).replace(/\\/g, '/'), '/custom/claude-for-unknown');
     });
   });
 });

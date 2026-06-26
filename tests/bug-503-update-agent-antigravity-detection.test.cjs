@@ -88,13 +88,13 @@ describe('/gsd:update detects local Antigravity (.agent / .agents) installs (#50
 
   test('execution_context classifier maps /.agents/ and /.agent/ paths to antigravity (update.md)', () => {
     const hasAgentsClassifierRule =
-      /\/\.agents\/[^\n]*->[^\n]*antigravity/.test(UPDATE_MD);
+      /\/\.agents\/[^\r\n]*->[^\r\n]*antigravity/.test(UPDATE_MD);
     assert.ok(
       hasAgentsClassifierRule,
       'update.md classifier must map a `/.agents/` path to the `antigravity` runtime',
     );
     const hasAgentClassifierRule =
-      /\/\.agent\/[^\n]*->[^\n]*antigravity/.test(UPDATE_MD);
+      /\/\.agent\/[^\r\n]*->[^\r\n]*antigravity/.test(UPDATE_MD);
     assert.ok(
       hasAgentClassifierRule,
       'update.md classifier must still map a `/.agent/` path to the `antigravity` runtime (backward-compat)',
@@ -108,7 +108,7 @@ describe('/gsd:update detects local Antigravity (.agent / .agents) installs (#50
     // include both .agents (canonical, #791) and .agent (legacy, #503) or
     // stale indicators could linger.
     const runtimeDirLoops = UPDATE_MD
-      .split('\n')
+      .split(/\r?\n/)
       .filter((l) => /for dir in .*\.claude.*\.codex/.test(l));
     assert.ok(
       runtimeDirLoops.length >= 1,

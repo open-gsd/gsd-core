@@ -237,7 +237,7 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
     assert.strictEqual(prep.status, 0, `prepare step failed: ${prep.stderr}`);
 
     const selected = fs.readFileSync(path.join(tmpDir, '.ci-selected-tests.txt'), 'utf8');
-    for (const line of selected.split('\n').filter(Boolean)) {
+    for (const line of selected.split(/\r?\n/).filter(Boolean)) {
       const isSentinel = SUITE_SENTINELS.includes(line);
       assert.ok(
         isSentinel || fs.existsSync(path.join(tmpDir, line)),

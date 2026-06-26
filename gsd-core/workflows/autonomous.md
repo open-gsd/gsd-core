@@ -61,7 +61,7 @@ fi
 
 When `--only` is set, also set `FROM_PHASE` to the same value so existing filter logic applies.
 
-When `--interactive` is set, discuss runs inline with questions. On Codex, where a backgrounded agent can still spawn subagents, plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. On every other runtime (Claude Code and all other non-Codex runtimes), backgrounded agents cannot reliably nest subagents, so plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
+When `--interactive` is set, discuss runs inline with questions. When `dispatch-should-flatten` returns `false` (e.g. codex, cursor — runtimes where a backgrounded agent can still spawn subagents), plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. When `dispatch-should-flatten` returns `true` (e.g. claude and other runtimes where backgrounded agents cannot reliably nest subagents), plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
 
 When `PLAN_STRATEGY=converge`, the planning step MUST invoke the plan-review convergence workflow instead of `gsd-plan-phase`. `--cross-ai` is an alias for `--converge`. Forward `CONVERGENCE_ARGS` exactly as parsed so reviewer flags and `--max-cycles N` retain the same meaning as they have on `/gsd:plan-review-convergence`.
 
@@ -358,13 +358,13 @@ UI_SPEC_FILE=$(ls "${PHASE_DIR}"/*-UI-SPEC.md 2>/dev/null | head -1)
 
 **3b. Plan**
 
-**If `INTERACTIVE` is set:** Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). Among supported runtimes only **Codex** (`spawn_agent`) can do this; Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except Codex, which is dispatched in the background. Resolve the runtime first:
+**If `INTERACTIVE` is set:** Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). This is determined from the documentation-sourced dispatch capability in the registry (#1708); Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except where `dispatch-should-flatten` returns `false`. Resolve first:
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
+FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
 ```
 
-- **If `RUNTIME` is `codex`:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
+- **If `FLATTEN` is `false`:** Dispatch plan as a background agent to keep the main context lean. While plan runs, the workflow can immediately start discussing the next phase (see step 4).
 
   - If `PLAN_STRATEGY=converge`, print: `◆ Spawning background plan-convergence loop for phase ${PHASE_NUM}... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
@@ -388,7 +388,7 @@ RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null ||
 
   Store the agent task_id. After discuss for the next phase completes (or if no next phase), wait for the plan agent to finish before proceeding to execute.
 
-- **Otherwise (Claude Code or any other non-Codex runtime):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
+- **Otherwise (`FLATTEN` is `true` — run inline):** Run plan **inline** (do NOT background) so the plan-checker runs. The next phase's discuss does not overlap planning here — correctness over overlap.
 
   - If `PLAN_STRATEGY=converge`:
 
@@ -420,13 +420,13 @@ Verify plan produced output — re-run `init phase-op` and check `has_plans`. If
 
 **3c. Execute**
 
-**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). Among supported runtimes only **Codex** (`spawn_agent`) can do this; Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except Codex, which is dispatched in the background. Resolve the runtime first:
+**If `INTERACTIVE` is set:** Wait for the plan agent to complete (if not already) and verify plans exist. Background dispatch is only safe on a runtime where a backgrounded agent can still nest the pipeline's subagents (plan-checker / worktree executors / verifier). This is determined from the documentation-sourced dispatch capability in the registry (#1708); Claude Code's backgrounded agents have no `Agent`/`Task` tool, and every other runtime either prohibits nested subagents or disables them by default. So run **inline** everywhere except where `dispatch-should-flatten` returns `false`. Resolve first:
 
 ```bash
-RUNTIME=$(gsd_run query config-get runtime --default claude --raw 2>/dev/null || echo "claude")
+FLATTEN=$(gsd_run query dispatch-should-flatten --raw 2>/dev/null || echo "true")
 ```
 
-- **If `RUNTIME` is `codex`:** Dispatch execute as a background agent:
+- **If `FLATTEN` is `false`:** Dispatch execute as a background agent:
 
 ```
 Agent(
@@ -438,7 +438,7 @@ Agent(
 
   Store the agent task_id. The workflow can now start discussing the next phase while this phase executes in the background. Before starting post-execution routing for this phase, wait for the execute agent to complete.
 
-- **Otherwise (Claude Code or any other non-Codex runtime):** Run execute **inline** (do NOT background) so worktree isolation and verification run:
+- **Otherwise (`FLATTEN` is `true` — run inline):** Run execute **inline** (do NOT background) so worktree isolation and verification run:
 
 ```
 Skill(skill="gsd-execute-phase", args="${PHASE_NUM} --no-transition")

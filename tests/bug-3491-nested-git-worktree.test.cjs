@@ -168,7 +168,7 @@ test('bug-3491: new-project.md gates `git init` on in_nested_subdir, not just ha
   // either gate the init on `in_nested_subdir`/worktree-root semantics or
   // drop the unconditional `git init` block entirely.
   const unconditionalInitPattern =
-    /\*\*If `has_git` is false:\*\* Initialize git:\s*\n+```bash\s*\ngit init\s*\n```/;
+    /\*\*If `has_git` is false:\*\* Initialize git:\s*\r?\n+```bash\s*\r?\ngit init\s*\r?\n```/;
   assert.ok(
     !unconditionalInitPattern.test(content),
     'new-project.md must not run `git init` unconditionally on has_git=false (#3491). ' +

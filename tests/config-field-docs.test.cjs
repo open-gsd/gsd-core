@@ -64,7 +64,7 @@ describe('config-field-docs', () => {
     // Extract CONFIG_DEFAULTS keys from config-loader.cjs source (moved from core.cjs by ADR-857 phase 2e)
     const coreSource = fs.readFileSync(CORE_PATH, 'utf-8');
     const defaultsMatch = coreSource.match(
-      /const CONFIG_DEFAULTS\s*=\s*\{([\s\S]*?)\n\};/
+      /const CONFIG_DEFAULTS\s*=\s*\{([\s\S]*?)\r?\n\};/
     );
     assert.ok(defaultsMatch, 'Could not find CONFIG_DEFAULTS in config-loader.cjs');
 
@@ -302,7 +302,7 @@ describe('CONFIGURATION.md parity (#1216)', () => {
   test('settings-advanced.md parse-default list must NOT show subagent_timeout default 600 (#1216)', () => {
     // Line 53 regression: the parse-default list item must use 300000, not 600
     assert.ok(
-      !(/`workflow\.subagent_timeout`[^\n]*default:[^\n]*`?600`?/.test(settingsAdvancedContent)),
+      !(/`workflow\.subagent_timeout`[^\r\n]*default:[^\n]*`?600`?/.test(settingsAdvancedContent)),
       'settings-advanced.md must NOT list subagent_timeout default as 600 (stale seconds default)'
     );
   });

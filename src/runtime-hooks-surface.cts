@@ -110,7 +110,7 @@ function atomicWriteFileSync(target: string, data: string, options: fs.WriteFile
   __atomicWrittenTmps.add(tmp);
   try {
     fs.writeFileSync(tmp, data, options);
-    fs.renameSync(tmp, target);
+    shellCmdProjection.retryRenameSync(tmp, target);
     // Successful rename: the tmp path no longer exists, but leave it in the
     // Set so _cleanTmpFiles can recognise it as installer-owned if it somehow
     // lingers (e.g. a rename succeeded but left a stale entry on some FS).

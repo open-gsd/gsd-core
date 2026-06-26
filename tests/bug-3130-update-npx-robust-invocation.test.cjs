@@ -32,7 +32,7 @@ const src = fs.readFileSync(UPDATE_WF, 'utf8');
 test('bug #3130: update.md contains no bare npx invocations (cache-stale form)', () => {
   // Any occurrence of `npx -y @opengsd/gsd-core@<something>` without `--package=`
   // is the stale form that triggers the two failure modes.
-  const stale = (src.match(/npx -y @opengsd\/gsd-core@\S+[^\n]*/g) || []);
+  const stale = (src.match(/npx -y @opengsd\/gsd-core@\S+[^\r\n]*/g) || []);
   assert.deepEqual(
     stale,
     [],

@@ -15,6 +15,15 @@ import noElapsedAssertion from './eslint-rules/no-elapsed-assertion.cjs';
 import noRawRmsyncInTests from './eslint-rules/no-raw-rmsync-in-tests.cjs';
 import noTautologicalAssert from './eslint-rules/no-tautological-assert.cjs';
 import noAdhocMarkdownParsing from './eslint-rules/no-adhoc-markdown-parsing.cjs';
+import noPathLiteralInAssert from './eslint-rules/no-path-literal-in-assert.cjs';
+import noPosixModeBitAssert from './eslint-rules/no-posix-mode-bit-assert.cjs';
+import noUnguardedNonportableExec from './eslint-rules/no-unguarded-nonportable-exec.cjs';
+import noCrlfFragileSplit from './eslint-rules/no-crlf-fragile-split.cjs';
+import noHardcodedTmp from './eslint-rules/no-hardcoded-tmp.cjs';
+import noBareNpmExec from './eslint-rules/no-bare-npm-exec.cjs';
+import requireUserprofileWithHome from './eslint-rules/require-userprofile-with-home.cjs';
+import normalizePathInContent from './eslint-rules/normalize-path-in-content.cjs';
+import requireFsOpFallback from './eslint-rules/require-fs-op-fallback.cjs';
 
 const localPlugin = {
   rules: {
@@ -24,6 +33,15 @@ const localPlugin = {
     'no-raw-rmsync-in-tests': noRawRmsyncInTests,
     'no-tautological-assert': noTautologicalAssert,
     'no-adhoc-markdown-parsing': noAdhocMarkdownParsing,
+    'no-path-literal-in-assert': noPathLiteralInAssert,
+    'no-posix-mode-bit-assert': noPosixModeBitAssert,
+    'no-unguarded-nonportable-exec': noUnguardedNonportableExec,
+    'no-crlf-fragile-split': noCrlfFragileSplit,
+    'no-hardcoded-tmp': noHardcodedTmp,
+    'no-bare-npm-exec': noBareNpmExec,
+    'require-userprofile-with-home': requireUserprofileWithHome,
+    'normalize-path-in-content': normalizePathInContent,
+    'require-fs-op-fallback': requireFsOpFallback,
   },
 };
 
@@ -39,6 +57,8 @@ export default tseslint.config(
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
+      'gsd-core/bin/lib/host-integration.cjs',
+      'gsd-core/bin/lib/install-engine.cjs',
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
       'gsd-core/bin/lib/capability-ledger.cjs',
@@ -200,6 +220,42 @@ export default tseslint.config(
       // ADR-1372 T7: enforce use of the markdown-sectionizer seam; grandfather
       // pre-migration sites with // allow-adhoc-markdown: <reason>
       'local/no-adhoc-markdown-parsing': 'error',
+      // ADR-1703 Phase 5: flag path-returning calls interpolated into content
+      // (markdown @-references, workflow files, generated docs) without POSIX
+      // normalization. Promoted to 'error' after precision review (path.basename
+      // excluded; content heuristic tightened to genuine reference/config-dir
+      // markers). See RULESET.CONTENT-PATH-NORMALIZATION in CONTEXT.md.
+      'local/normalize-path-in-content': 'error',
+      // ADR-1703 Phase 6: flag an unguarded fs.rename/fs.renameSync (the
+      // atomic-publish primitive) that lacks a transient-errno fallback
+      // (EPERM/EBUSY/EACCES retry or a Windows platform guard). See
+      // DEFECT.WINDOWS-FS-OPS in CONTEXT.md.
+      'local/require-fs-op-fallback': 'error',
+    },
+  },
+
+  // ── bin/install.js + scripts/build-hooks.js — ADR-1703 Phase 6 glob expansion ─
+  // The top-level `bin/install.js` (generated installer) and `scripts/build-hooks.js`
+  // (the build-side atomic-replace helper) are the two production surfaces named by
+  // DEFECT.WINDOWS-FS-OPS that were NOT covered by the src/**/*.cts / gsd-core/bin/**/*.cjs
+  // globs (ADR-1703 L124-126). This block brings them under the two production
+  // portability rules. It deliberately does NOT apply the full js.recommended set —
+  // bin/install.js is ~12k lines of generated code; the ADR's mandate is the
+  // portability defect surface, not a broader generated-code style sweep.
+  {
+    files: ['bin/install.js', 'scripts/build-hooks.js'],
+    plugins: {
+      local: localPlugin,
+    },
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      'local/normalize-path-in-content': 'error',
+      'local/require-fs-op-fallback': 'error',
     },
   },
 
@@ -264,6 +320,20 @@ export default tseslint.config(
       'local/no-tautological-assert': 'error',
       // Ban source-grep pattern in tests — use require() + behavior assertions instead
       'local/no-source-grep': 'error',
+      // Ban path-returning calls compared to hardcoded POSIX-slash literals (fails on Windows)
+      'local/no-path-literal-in-assert': 'error',
+      // Ban POSIX mode-bit assertions compared to octal literals (fails on Windows)
+      'local/no-posix-mode-bit-assert': 'error',
+      // Ban unguarded chmod exec-bit + sh/bash -c combos (fails on Windows Git Bash)
+      'local/no-unguarded-nonportable-exec': 'error',
+      // Ban CRLF-fragile file-content splits and regex patterns (ADR-1703 Phase 4)
+      'local/no-crlf-fragile-split': 'error',
+      // Ban hardcoded /tmp/ paths in fs.* calls (ADR-1703 Phase 4)
+      'local/no-hardcoded-tmp': 'error',
+      // Ban bare npm exec without shell:true (ADR-1703 Phase 4)
+      'local/no-bare-npm-exec': 'error',
+      // Require USERPROFILE alongside HOME assignments (ADR-1703 Phase 4)
+      'local/require-userprofile-with-home': 'error',
       // Ban raw setTimeout sync + elapsed/duration-style assertions via no-restricted-syntax
       'no-restricted-syntax': [
         'error',

@@ -35,7 +35,7 @@ function assertNyquistCapabilityGate(name) {
 
 function findNyquistConfigLine(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
-  const lines = content.split('\n');
+  const lines = content.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     if (lines[i].includes('config-get workflow.nyquist_validation')) {
       return { lineNumber: i + 1, line: lines[i] };

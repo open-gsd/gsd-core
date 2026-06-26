@@ -118,6 +118,7 @@ const RULES = [
     tests: [
       'tests/semver-compare.test.cjs',
       'tests/bug-10-semver-policy-consolidation.test.cjs',
+      'tests/golden-install-parity.test.cjs', // any src/installer change can alter emitted install artifacts → re-verify golden install parity (drift guard)
     ],
   },
   {
@@ -134,6 +135,7 @@ const RULES = [
       'tests/install-path-detection.test.cjs',
       'tests/release-tarball-smoke.install.test.cjs',
       'tests/runtime-artifact-layout.test.cjs',
+      'tests/golden-install-parity.test.cjs', // any src/installer change can alter emitted install artifacts → re-verify golden install parity (drift guard)
     ],
   },
   {
@@ -212,17 +214,35 @@ const RULES = [
     ],
   },
   {
-    name: 'configuration',
-    match: path => ['config', 'configuration', 'model-catalog', 'model-profile'].some(k => path.includes(k)),
+     name: 'configuration',
+     match: path => ['config', 'configuration', 'model-catalog', 'model-profile'].some(k => path.includes(k)),
+     tests: [
+       'tests/config.test.cjs',
+       'tests/config-get-default.test.cjs',
+       'tests/configuration-migrate-config.test.cjs',
+       'tests/model-catalog-runtime-defaults.test.cjs',
+       'tests/model-profiles.test.cjs',
+     ],
+   },
+  {
+    // ADR-1703 portability lint surface. Editing a rule, the shared vocab/guard
+    // helpers, or the eslint config that wires them must re-run the rule suites
+    // + the disable-ban. The disable-ban also scans bin/install.js and
+    // scripts/build-hooks.js (the Phase 6 glob-expansion surface), so changes
+    // to those files re-run it too.
+    name: 'portability lint rules (ADR-1703)',
+    match: path => path.startsWith('eslint-rules/') ||
+      path === 'eslint.config.mjs' ||
+      path === 'bin/install.js' ||
+      path === 'scripts/build-hooks.js',
     tests: [
-      'tests/config.test.cjs',
-      'tests/config-get-default.test.cjs',
-      'tests/configuration-migrate-config.test.cjs',
-      'tests/model-catalog-runtime-defaults.test.cjs',
-      'tests/model-profiles.test.cjs',
+      'tests/portability-rule-disable-ban.test.cjs',
+      'tests/portability-vocab-drift.test.cjs',
+      'tests/require-fs-op-fallback.rule.test.cjs',
+      'tests/normalize-path-in-content.rule.test.cjs',
     ],
   },
-];
+ ];
 
 function usage() {
   return [

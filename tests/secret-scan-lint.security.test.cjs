@@ -113,7 +113,7 @@ describe('secret-scan-lint.sh script exists and is executable', { skip: IS_WINDO
   });
 
   test('lint script has bash shebang', () => {
-    const firstLine = fs.readFileSync(LINT_SCRIPT, 'utf-8').split('\n')[0];
+    const firstLine = fs.readFileSync(LINT_SCRIPT, 'utf-8').split(/\r?\n/)[0];
     assert.ok(
       firstLine.startsWith('#!/usr/bin/env bash') || firstLine.startsWith('#!/bin/bash'),
       `${LINT_SCRIPT} missing bash shebang: ${firstLine}`

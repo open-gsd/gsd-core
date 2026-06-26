@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -523,7 +524,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       const oldPath = path.join(phasesDir, phaseEntry.oldDir);
       const newPath = path.join(phasesDir, phaseEntry.newDir);
       if (fs.existsSync(oldPath)) {
-        fs.renameSync(oldPath, newPath);
+        retryRenameSync(oldPath, newPath);
         performedRenames.push({ oldPath, newPath });
         renamedDirs.push(`${phaseEntry.oldDir} → ${phaseEntry.newDir}`);
       }
@@ -597,7 +598,7 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     for (let i = performedRenames.length - 1; i >= 0; i--) {
       const { oldPath, newPath } = performedRenames[i];
       try {
-        if (fs.existsSync(newPath)) fs.renameSync(newPath, oldPath);
+        if (fs.existsSync(newPath)) retryRenameSync(newPath, oldPath);
       } catch { /* best-effort */ }
     }
     for (const [filePath, backup] of fileBackups) {

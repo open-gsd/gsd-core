@@ -38,11 +38,14 @@ const path = require('node:path');
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
-  installRuntimeArtifacts,
-  uninstallRuntimeArtifacts,
   convertClaudeCommandToCodebuddyCommand,
   convertClaudeCommandToCodebuddySkill,
 } = require('../bin/install.js');
+
+const {
+  installRuntimeArtifacts,
+  uninstallRuntimeArtifacts,
+} = require('../gsd-core/bin/lib/install-engine.cjs');
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { loadSkillsManifest, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
 

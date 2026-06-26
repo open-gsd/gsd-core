@@ -117,7 +117,24 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": "undocumented",
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "go"
+      }
     }
   },
   "audit": {
@@ -223,7 +240,24 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "claude": {
@@ -289,7 +323,24 @@ const capabilities = {
         "Stop",
         "PreCompact",
         "FileChanged"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 5,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "cline": {
@@ -332,7 +383,24 @@ const capabilities = {
       "installSurface": "cline-rules",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "code-review": {
@@ -462,7 +530,24 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "codex": {
@@ -515,7 +600,24 @@ const capabilities = {
       "installSurface": "codex-toml",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "copilot": {
@@ -568,7 +670,24 @@ const capabilities = {
       "installSurface": "copilot-instructions",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "undocumented"
+      }
     }
   },
   "cursor": {
@@ -637,7 +756,24 @@ const capabilities = {
       "installSurface": "cursor-hooks-json",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 2,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "drift": {
@@ -813,7 +949,24 @@ const capabilities = {
         "BeforeAgent",
         "AfterAgent",
         "BeforeModel"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-toml",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": "undocumented",
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "graphify": {
@@ -907,7 +1060,24 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-programmatic",
+        "dispatch": {
+          "namedDispatch": false,
+          "nested": true,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "python"
+      }
     }
   },
   "intel": {
@@ -1034,7 +1204,24 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": false,
       "permissionWriter": "kilo",
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": -1,
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      }
     }
   },
   "kimi": {
@@ -1090,7 +1277,24 @@ const capabilities = {
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "python"
+      }
     }
   },
   "mempalace": {
@@ -1384,7 +1588,24 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": "opencode",
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": false,
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      }
     }
   },
   "pattern-mapper": {
@@ -1570,7 +1791,24 @@ const capabilities = {
       "permissionWriter": null,
       "extendedHookEvents": [
         "Stop"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 5,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "qwen": {
@@ -1627,7 +1865,24 @@ const capabilities = {
         "SubagentStop",
         "Stop",
         "PreCompact"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "research": {
@@ -1929,7 +2184,24 @@ const capabilities = {
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "engine",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "ui": {
@@ -2068,7 +2340,24 @@ const capabilities = {
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": "undocumented",
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": "undocumented",
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "undocumented"
+      }
     }
   }
 };
@@ -2852,7 +3141,24 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": "undocumented",
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "go"
+      }
     }
   },
   "augment": {
@@ -2921,7 +3227,24 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "claude": {
@@ -2987,7 +3310,24 @@ const runtimes = {
         "Stop",
         "PreCompact",
         "FileChanged"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 5,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "cline": {
@@ -3030,7 +3370,24 @@ const runtimes = {
       "installSurface": "cline-rules",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "codebuddy": {
@@ -3099,7 +3456,24 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "codex": {
@@ -3152,7 +3526,24 @@ const runtimes = {
       "installSurface": "codex-toml",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "copilot": {
@@ -3205,7 +3596,24 @@ const runtimes = {
       "installSurface": "copilot-instructions",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "undocumented"
+      }
     }
   },
   "cursor": {
@@ -3274,7 +3682,24 @@ const runtimes = {
       "installSurface": "cursor-hooks-json",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 2,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "gemini": {
@@ -3331,7 +3756,24 @@ const runtimes = {
         "BeforeAgent",
         "AfterAgent",
         "BeforeModel"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-toml",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": "undocumented",
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "hermes": {
@@ -3384,7 +3826,24 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-programmatic",
+        "dispatch": {
+          "namedDispatch": false,
+          "nested": true,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "read-only",
+          "backgroundDispatch": false
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "python"
+      }
     }
   },
   "kilo": {
@@ -3459,7 +3918,24 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": false,
       "permissionWriter": "kilo",
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": -1,
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      }
     }
   },
   "kimi": {
@@ -3515,7 +3991,24 @@ const runtimes = {
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "python"
+      }
     }
   },
   "opencode": {
@@ -3585,7 +4078,24 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": "opencode",
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": false,
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      }
     }
   },
   "qoder": {
@@ -3640,7 +4150,24 @@ const runtimes = {
       "permissionWriter": null,
       "extendedHookEvents": [
         "Stop"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 5,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "qwen": {
@@ -3697,7 +4224,24 @@ const runtimes = {
         "SubagentStop",
         "Stop",
         "PreCompact"
-      ]
+      ],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": false,
+          "maxDepth": 1,
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "trae": {
@@ -3749,7 +4293,24 @@ const runtimes = {
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "engine",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node"
+      }
     }
   },
   "windsurf": {
@@ -3793,7 +4354,24 @@ const runtimes = {
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": []
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": "undocumented",
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": "undocumented",
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "undocumented"
+      }
     }
   }
 };

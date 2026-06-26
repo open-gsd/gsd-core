@@ -1406,7 +1406,7 @@ describe('cmdInitMapCodebase', () => {
       path.join(__dirname, '..', 'gsd-core', 'workflows', 'map-codebase.md'), 'utf8'
     );
     // OpenCode must NOT appear in the "WITHOUT Task tool" / "NOT available" condition
-    const withoutLine = workflow.split('\n').find(l =>
+    const withoutLine = workflow.split(/\r?\n/).find(l =>
       l.includes('NOT available') || l.includes('WITHOUT Task tool')
     );
     assert.ok(withoutLine, 'workflow should have a line about Task tool NOT being available');

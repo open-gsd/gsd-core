@@ -44,17 +44,22 @@ describe('bug-2794: readGsdRuntimeProfileResolver resolves opencode tier overrid
   let projectDir;
   let homeDir;
   let origHome;
+  let origUP;
 
   beforeEach(() => {
     projectDir = makeTmp('proj');
     homeDir = makeTmp('home');
     origHome = process.env.HOME;
+    origUP = process.env.USERPROFILE;
     process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
   });
 
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
     else process.env.HOME = origHome;
+    if (origUP === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = origUP;
     cleanup(projectDir);
     cleanup(homeDir);
   });
@@ -105,20 +110,25 @@ describe('bug-2794: OpenCode agent install embeds model_profile_overrides model'
   let projectDir;
   let homeDir;
   let origHome;
+  let origUP;
   let origCwd;
 
   beforeEach(() => {
     projectDir = makeTmp('proj');
     homeDir = makeTmp('home');
     origHome = process.env.HOME;
+    origUP = process.env.USERPROFILE;
     origCwd = process.cwd();
     process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
     process.chdir(projectDir);
   });
 
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
     else process.env.HOME = origHome;
+    if (origUP === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = origUP;
     process.chdir(origCwd);
     cleanup(projectDir);
     cleanup(homeDir);

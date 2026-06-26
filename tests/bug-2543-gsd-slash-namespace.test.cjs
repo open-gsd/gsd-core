@@ -119,7 +119,7 @@ describe('slash-command namespace invariant (#3443)', () => {
     const violations = [];
     for (const file of allUserFacingFiles) {
       const src = fs.readFileSync(file, 'utf-8');
-      const lines = src.split('\n');
+      const lines = src.split(/\r?\n/);
       for (let i = 0; i < lines.length; i++) {
         if (retiredPattern.test(lines[i])) {
           violations.push(`${path.relative(ROOT, file)}:${i + 1}: ${lines[i].trim().slice(0, 80)}`);

@@ -23,6 +23,7 @@ const ROOT = path.join(__dirname, '..');
 // the real ~/.config/opencode/ even if the guard is missing.
 const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-130-test-'));
 process.env.HOME = FAKE_HOME;
+process.env.USERPROFILE = FAKE_HOME;
 
 // The opencode config dir that configureOpencodePermissions would use for a
 // global install when configDir=null: <HOME>/.config/opencode/

@@ -22,7 +22,7 @@ describe('commit_docs bypass guard (#1783)', () => {
 
   test('execute-phase.md: every git add .planning/ has a commit_docs guard', () => {
     const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
       if (/git add\b.*\.planning\//.test(lines[i])) {
@@ -39,7 +39,7 @@ describe('commit_docs bypass guard (#1783)', () => {
 
   test('quick.md: every git add .planning/ has a commit_docs guard', () => {
     const content = fs.readFileSync(QUICK_PATH, 'utf-8');
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
       if (/git add\b.*\.planning\//.test(lines[i])) {
@@ -55,7 +55,7 @@ describe('commit_docs bypass guard (#1783)', () => {
 
   test('quick.md: git add ${file_list} has a commit_docs guard for .planning/ filtering', () => {
     const content = fs.readFileSync(QUICK_PATH, 'utf-8');
-    const lines = content.split('\n');
+    const lines = content.split(/\r?\n/);
 
     // Find the line(s) that do `git add ${file_list}` — this variable
     // includes .planning/STATE.md so it needs a commit_docs guard too
@@ -82,7 +82,7 @@ describe('commit_docs bypass guard (#1783)', () => {
       const content = fs.readFileSync(wf.path, 'utf-8');
 
       // Find all occurrences of git add that reference .planning/
-      const regex = /git add\b[^\n]*\.planning\//g;
+      const regex = /git add\b[^\r\n]*\.planning\//g;
       let match;
       while ((match = regex.exec(content)) !== null) {
         // Get the 500-char window before this match

@@ -94,18 +94,18 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
 describe('bug #3126: runtime-homes env-var overrides', () => {
   test('claude respects CLAUDE_CONFIG_DIR (was missing in old code)', () => {
     withEnv('CLAUDE_CONFIG_DIR', '/custom/claude', () => {
-      assert.strictEqual(getGlobalConfigDir('claude'), '/custom/claude');
+      assert.strictEqual(String(getGlobalConfigDir('claude')).replace(/\\/g, '/'), '/custom/claude');
     });
   });
   test('cursor respects CURSOR_CONFIG_DIR', () => {
     withEnv('CURSOR_CONFIG_DIR', '/custom/cursor', () => {
-      assert.strictEqual(getGlobalConfigDir('cursor'), '/custom/cursor');
+      assert.strictEqual(String(getGlobalConfigDir('cursor')).replace(/\\/g, '/'), '/custom/cursor');
     });
   });
   test('opencode respects OPENCODE_CONFIG_DIR', () => {
     withEnv('OPENCODE_CONFIG_DIR', '/custom/opencode', () => {
       withEnv('XDG_CONFIG_HOME', undefined, () => {
-        assert.strictEqual(getGlobalConfigDir('opencode'), '/custom/opencode');
+        assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/custom/opencode');
       });
     });
   });
@@ -215,7 +215,7 @@ describe('bug #3126: runtime-homes getGlobalSkillDir', () => {
 describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-path precedence', () => {
   // ── explicitDir override ──────────────────────────────────────────────────
   test('explicitDir absolute path is returned as-is (claude)', () => {
-    assert.strictEqual(getGlobalConfigDir('claude', '/tmp/x'), '/tmp/x');
+    assert.strictEqual(String(getGlobalConfigDir('claude', '/tmp/x')).replace(/\\/g, '/'), '/tmp/x');
   });
 
   test('explicitDir with tilde is expanded (opencode)', () => {
@@ -227,7 +227,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
 
   test('explicitDir wins even when OPENCODE_CONFIG_DIR is also set', () => {
     withEnv('OPENCODE_CONFIG_DIR', '/should/not/win', () => {
-      assert.strictEqual(getGlobalConfigDir('opencode', '/explicit/wins'), '/explicit/wins');
+      assert.strictEqual(String(getGlobalConfigDir('opencode', '/explicit/wins')).replace(/\\/g, '/'), '/explicit/wins');
     });
   });
 
@@ -236,7 +236,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
     withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
       withEnv('XDG_CONFIG_HOME', undefined, () => {
         withEnv('OPENCODE_CONFIG', '/home/u/cfg/opencode.json', () => {
-          assert.strictEqual(getGlobalConfigDir('opencode'), '/home/u/cfg');
+          assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/home/u/cfg');
         });
       });
     });
@@ -245,7 +245,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
   test('opencode: OPENCODE_CONFIG_DIR takes precedence over OPENCODE_CONFIG', () => {
     withEnv('OPENCODE_CONFIG_DIR', '/dir/wins', () => {
       withEnv('OPENCODE_CONFIG', '/file/loses.json', () => {
-        assert.strictEqual(getGlobalConfigDir('opencode'), '/dir/wins');
+        assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/dir/wins');
       });
     });
   });
@@ -254,7 +254,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
     withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
       withEnv('OPENCODE_CONFIG', '/cfg/opencode.json', () => {
         withEnv('XDG_CONFIG_HOME', '/xdg/should/lose', () => {
-          assert.strictEqual(getGlobalConfigDir('opencode'), '/cfg');
+          assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/cfg');
         });
       });
     });
@@ -278,7 +278,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
     withEnv('KILO_CONFIG_DIR', undefined, () => {
       withEnv('XDG_CONFIG_HOME', undefined, () => {
         withEnv('KILO_CONFIG', '/home/u/cfg/kilo.json', () => {
-          assert.strictEqual(getGlobalConfigDir('kilo'), '/home/u/cfg');
+          assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/home/u/cfg');
         });
       });
     });
@@ -287,7 +287,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
   test('kilo: KILO_CONFIG_DIR takes precedence over KILO_CONFIG', () => {
     withEnv('KILO_CONFIG_DIR', '/dir/wins', () => {
       withEnv('KILO_CONFIG', '/file/loses.json', () => {
-        assert.strictEqual(getGlobalConfigDir('kilo'), '/dir/wins');
+        assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/dir/wins');
       });
     });
   });
@@ -296,7 +296,7 @@ describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-pat
     withEnv('KILO_CONFIG_DIR', undefined, () => {
       withEnv('KILO_CONFIG', '/cfg/kilo.json', () => {
         withEnv('XDG_CONFIG_HOME', '/xdg/should/lose', () => {
-          assert.strictEqual(getGlobalConfigDir('kilo'), '/cfg');
+          assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/cfg');
         });
       });
     });

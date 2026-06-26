@@ -1366,7 +1366,7 @@ describe('cmdStateResolveBlocker (state resolve-blocker)', () => {
     assert.ok(!updated.includes('- Single blocker'), 'resolved blocker should be removed');
 
     // Section should contain "None" placeholder, not be empty
-    const sectionMatch = updated.match(/## Blockers\n([\s\S]*?)(?=\n##|$)/i);
+    const sectionMatch = updated.match(/## Blockers\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
     assert.ok(sectionMatch, 'Blockers section should still exist');
     assert.ok(sectionMatch[1].includes('None'), 'Blockers section should contain None placeholder');
   });
@@ -1680,7 +1680,7 @@ Progress: [..........] 0%
     );
 
     // Extract the Current Position section
-    const posMatch = content.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    const posMatch = content.match(/## Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
     assert.ok(posMatch, 'Current Position section should exist');
     const posSection = posMatch[1];
 
@@ -1742,7 +1742,7 @@ Progress: [..........] 0%
     const content = fs.readFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'
     );
-    const posMatch = content.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    const posMatch = content.match(/## Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
     assert.ok(posMatch, 'Current Position section should exist after advance-plan');
     const posSection = posMatch[1];
 
@@ -2240,7 +2240,7 @@ describe('updatePerformanceMetricsSection', () => {
     ].join('\n');
     const statePath = path.join(tmpDir, '.planning', 'STATE.md');
     // Force CRLF line endings across the whole STATE.md (Windows / hand-edited).
-    fs.writeFileSync(statePath, content.replace(/\n/g, '\r\n'), 'utf8');
+    fs.writeFileSync(statePath, content.replace(/\r?\n/g, '\r\n'), 'utf8');
 
     const phaseDir = path.join(tmpDir, '.planning', 'phases', '07-crlf');
     fs.mkdirSync(phaseDir, { recursive: true });
@@ -2464,7 +2464,7 @@ Progress: [##########] 20%
     );
 
     // Current Position Status: line must also be "Ready to execute"
-    const posMatch = stateContent.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    const posMatch = stateContent.match(/## Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
     assert.ok(posMatch, 'Current Position section not found');
     const posStatusMatch = posMatch[1].match(/^Status:\s*(.+)/m);
     assert.ok(posStatusMatch, 'Status field not found in Current Position section');
@@ -2519,7 +2519,7 @@ Progress: [##########] 20%
     const stateContent = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
 
     // Locate the Current Position section and verify the Status line there.
-    const posMatch = stateContent.match(/## Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+    const posMatch = stateContent.match(/## Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
     assert.ok(posMatch, 'Current Position section not found');
     const posStatusMatch = posMatch[1].match(/^Status:\s*(.+)/m);
     assert.ok(posStatusMatch, 'Status field not found in Current Position section');
@@ -2678,7 +2678,7 @@ describe('state sync command', () => {
     const afterSecond = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
 
     // Strip frontmatter timestamps which will differ
-    const stripTimestamps = (s) => s.replace(/last_updated:.*\n/g, '').replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/g, 'TS');
+    const stripTimestamps = (s) => s.replace(/last_updated:.*\r?\n/g, '').replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/g, 'TS');
     assert.strictEqual(stripTimestamps(afterFirst), stripTimestamps(afterSecond), 'Two syncs should produce same result');
   });
 
@@ -3119,7 +3119,7 @@ describe('state add-roadmap-evolution (bug #1140)', () => {
   // Body of `## Accumulated Context` bounded by the next h2 (or EOF), so
   // placement assertions prove a subsection sits INSIDE that section.
   const accumulatedContextBody = (state) => {
-    const m = state.match(/##\s*Accumulated Context\s*\n([\s\S]*?)(?=\n##[^#]|$)/);
+    const m = state.match(/##\s*Accumulated Context\s*\r?\n([\s\S]*?)(?=\n##[^#]|$)/);
     return m ? m[1] : null;
   };
 
@@ -3284,7 +3284,7 @@ describe('state add-roadmap-evolution (bug #1140)', () => {
 
     const state = readState(tmpDir);
     assert.ok(state.includes('- Phase 9 edited: line one line two line three'), `note not flattened:\n${state}`);
-    assert.ok(!/\n\s*line two/.test(state), 'continuation lines must not spill outside the bullet');
+    assert.ok(!/\r?\n\s*line two/.test(state), 'continuation lines must not spill outside the bullet');
 
     const second = runGsdTools(
       ['state', 'add-roadmap-evolution', '--phase', '9', '--action', 'edited', '--note-file', notePath],
@@ -3722,7 +3722,7 @@ describe('regressions: table-format STATE.md (#1162)', () => {
   });
 
   test('CRLF line endings in table format are handled', () => {
-    const content = buildTableFormatState({ status: 'Ready to plan' }).replace(/\n/g, '\r\n');
+    const content = buildTableFormatState({ status: 'Ready to plan' }).replace(/\r?\n/g, '\r\n');
     fs.writeFileSync(statePath, content);
 
     const result = runGsdTools(['state', 'update', 'Status', 'Ready to execute'], tmpDir);
@@ -4021,7 +4021,7 @@ describe('#1255 — begin/complete-phase advance status for pipe-table STATE.md'
       const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
 
       // Extract the ## Current Position section only, to avoid matching Configuration rows
-      const cpMatch = after.match(/##\s*Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+      const cpMatch = after.match(/##\s*Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
       assert.ok(cpMatch, '## Current Position section must exist');
       const cpSection = cpMatch[1];
 
@@ -4095,7 +4095,7 @@ describe('#1255 — begin/complete-phase advance status for pipe-table STATE.md'
       const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
 
       // Extract the ## Current Position section only, to avoid matching Configuration rows
-      const cpMatch = after.match(/##\s*Current Position\s*\n([\s\S]*?)(?=\n##|$)/i);
+      const cpMatch = after.match(/##\s*Current Position\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
       assert.ok(cpMatch, '## Current Position section must exist');
       const cpSection = cpMatch[1];
 

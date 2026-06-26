@@ -95,8 +95,8 @@ describe('plan-phase decision-coverage gate (#2492)', () => {
     const snippet = md.slice(gateIdx, gateIdx + 800);
     // Accept either an inline `|| exit 1` or a `|| { ...; exit 1; }` group.
     const hasJqGuard =
-      /jq[^\n]*\.data\.passed\s*==\s*true/.test(snippet) ||
-      /jq[^\n]*\(\.passed\s*\/\/\s*\.data\.passed\)\s*==\s*true/.test(snippet);
+      /jq[^\r\n]*\.data\.passed\s*==\s*true/.test(snippet) ||
+      /jq[^\r\n]*\(\.passed\s*\/\/\s*\.data\.passed\)\s*==\s*true/.test(snippet);
     const hasExitOne = /\|\|\s*(?:exit\s+1|\{[\s\S]{0,200}?exit\s+1)/.test(snippet);
     assert.ok(
       hasJqGuard && hasExitOne,
