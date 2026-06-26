@@ -44,6 +44,8 @@ const FAKE_DIR = '/tmp/fake-config-dir-dd';
 // ── STEP-0 golden (captured from switch BEFORE edits) ────────────────────────
 // Format: { kind, destSubpath, prefix } for each entry in kinds[].
 // 'function' means we assert typeof kind.stage === 'function'.
+// ADR-1235 step 1 (#1763): cursor, windsurf, augment, trae, codebuddy each gained
+// an `agents` kind (appended last). Goldens consciously updated post-cutover.
 
 const GOLDEN = {
   // ── claude ──────────────────────────────────────────────────────────────────
@@ -58,13 +60,16 @@ const GOLDEN = {
   // ── cursor ───────────────────────────────────────────────────────────────────
   // Old switch: BOTH scopes returned [skills, commands] (no scope branch).
   // 5b backfill: local == global.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'cursor/global': [
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
     { kind: 'commands', destSubpath: 'commands',  prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
   'cursor/local': [
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
     { kind: 'commands', destSubpath: 'commands',  prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── gemini ───────────────────────────────────────────────────────────────────
@@ -104,29 +109,39 @@ const GOLDEN = {
   ],
 
   // ── windsurf ─────────────────────────────────────────────────────────────────
-  'windsurf/global': [],
+  // ADR-1235 step 1 (#1763): agents kind added to both scopes.
+  'windsurf/global': [
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
+  ],
   'windsurf/local': [
     { kind: 'commands', destSubpath: 'workflows', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── augment ──────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'augment/global': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
   'augment/local': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── trae ─────────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'trae/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'trae/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── qwen ─────────────────────────────────────────────────────────────────────
@@ -149,13 +164,16 @@ const GOLDEN = {
 
   // ── codebuddy ────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1235 step 1 (#1763): agents kind added.
   'codebuddy/global': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
   'codebuddy/local': [
     { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
+    { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
   ],
 
   // ── cline ────────────────────────────────────────────────────────────────────
@@ -360,13 +378,15 @@ describe('resolveRuntimeArtifactLayout — scope defaults to global (descriptor-
 // ── Non-vacuous check: verify at least one multi-kind runtime ─────────────────
 
 describe('resolveRuntimeArtifactLayout — multi-kind runtimes non-vacuous (descriptor-driven)', () => {
-  test('augment global returns 2 kinds (commands + skills)', () => {
+  test('augment global returns 3 kinds (commands + skills + agents)', () => {
     const layout = resolveRuntimeArtifactLayout('augment', FAKE_DIR, 'global');
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
     assert.strictEqual(layout.kinds[0].kind, 'commands');
     assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[2].kind, 'agents');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
     assert.strictEqual(typeof layout.kinds[1].stage, 'function');
+    assert.strictEqual(typeof layout.kinds[2].stage, 'function');
   });
 
   test('kimi global returns skills then kimi-agents', () => {
@@ -378,10 +398,11 @@ describe('resolveRuntimeArtifactLayout — multi-kind runtimes non-vacuous (desc
     assert.strictEqual(layout.kinds[1].prefix, 'gsd');
   });
 
-  test('codebuddy global returns commands then skills', () => {
+  test('codebuddy global returns commands then skills then agents', () => {
     const layout = resolveRuntimeArtifactLayout('codebuddy', FAKE_DIR, 'global');
-    assert.strictEqual(layout.kinds.length, 2);
+    assert.strictEqual(layout.kinds.length, 3);
     assert.strictEqual(layout.kinds[0].kind, 'commands');
     assert.strictEqual(layout.kinds[1].kind, 'skills');
+    assert.strictEqual(layout.kinds[2].kind, 'agents');
   });
 });

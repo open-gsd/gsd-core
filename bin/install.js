@@ -9268,11 +9268,24 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   agentsSrc = _stageAgents(path.join(src, 'agents'));
   const agentsDest = path.join(targetDir, 'agents');
 
+  // ADR-1235 §1: runtimes that have been migrated to the descriptor-driven agent
+  // path (installRuntimeArtifacts → convertedAgentsKind). The descriptor path
+  // applies path-rewrite + attribution + converter + normalize via
+  // stageAgentsForRuntimeWithConverter (with agentCtx pre-converter threading) in
+  // createRuntimeArtifactInstallPlan. Their agents are already written ABOVE
+  // (by installRuntimeArtifacts at line 8912), which also performs its own
+  // stale-file prune pass. The inline stale-removal + inline loop both skip them.
+  // Trivial group (cursor/windsurf/augment/trae/codebuddy) cut over together.
+  // cline is excluded: it takes a rules-only local branch and has a local/global
+  // complication that the descriptor-driven path does not handle correctly.
+  const _DESCRIPTOR_AGENTS_RUNTIMES = new Set(['cursor', 'windsurf', 'augment', 'trae', 'codebuddy']);
+
   // Always remove stale gsd-* agents first so re-installing with
   // `--minimal` actually shrinks a previously-full install.
   // For Codex this also covers per-agent `.toml` files alongside the `.md`
   // sources so a full → minimal switch doesn't leave stale registrations.
-  if (fs.existsSync(agentsDest)) {
+  // Skipped for descriptor-agent runtimes (installRuntimeArtifacts prunes).
+  if (!_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime) && fs.existsSync(agentsDest)) {
     for (const file of fs.readdirSync(agentsDest)) {
       if (
         file.startsWith('gsd-') &&
@@ -9285,6 +9298,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
 
   if (isKimi) {
     console.log(`  ${dim}↳${reset} Kimi custom agent YAML/prompt artifacts were installed via runtime artifact layout`);
+  } else if (_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime)) {
+    // installRuntimeArtifacts already wrote agents + handles stale-file cleanup
+    // via its own prune pass. No further action needed.
+    console.log(`  ${dim}↳${reset} Agents installed via descriptor-driven layout (${runtime})`);
   } else if (isMinimalMode(_effectiveInstallMode)) {
     // Codex registers agents in `config.toml` via `[agents.gsd-*]` sections.
     // Without stripping them here, a full → minimal reinstall would leave the
