@@ -565,6 +565,8 @@ function installRuntimeArtifacts(
 
   const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, configDir, scope as 'global' | 'local');
   const planResult = runtimeArtifactInstallPlan.createRuntimeArtifactInstallPlan({
+    // `Layout` is structurally identical across the layout/install-plan .cjs
+    // modules but nominally distinct to tsc (untyped .cjs boundary) — bridge it.
     layout: layout as any,
     resolvedProfile,
     homedir: () => os.homedir(),
