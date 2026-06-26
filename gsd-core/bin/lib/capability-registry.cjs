@@ -213,6 +213,14 @@ const capabilities = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToAugmentSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToAugmentAgent"
           }
         ],
         "local": [
@@ -231,6 +239,14 @@ const capabilities = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToAugmentSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToAugmentAgent"
           }
         ]
       },
@@ -506,6 +522,14 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCodebuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCodebuddyAgent"
           }
         ],
         "local": [
@@ -524,6 +548,14 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCodebuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCodebuddyAgent"
           }
         ]
       },
@@ -735,6 +767,14 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCursorCommand"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCursorAgent"
           }
         ],
         "local": [
@@ -753,6 +793,14 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCursorCommand"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCursorAgent"
           }
         ]
       },
@@ -2107,6 +2155,14 @@ const capabilities = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToTraeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToTraeAgent"
           }
         ],
         "local": [
@@ -2117,6 +2173,14 @@ const capabilities = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToTraeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToTraeAgent"
           }
         ]
       },
@@ -2265,7 +2329,16 @@ const capabilities = {
       "localConfigDir": ".windsurf",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [],
+        "global": [
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWindsurfAgent"
+          }
+        ],
         "local": [
           {
             "kind": "commands",
@@ -2274,6 +2347,14 @@ const capabilities = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToWindsurfWorkflow"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWindsurfAgent"
           }
         ]
       },
@@ -3144,6 +3225,14 @@ const runtimes = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToAugmentSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToAugmentAgent"
           }
         ],
         "local": [
@@ -3162,6 +3251,14 @@ const runtimes = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToAugmentSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToAugmentAgent"
           }
         ]
       },
@@ -3376,6 +3473,14 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCodebuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCodebuddyAgent"
           }
         ],
         "local": [
@@ -3394,6 +3499,14 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCodebuddySkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCodebuddyAgent"
           }
         ]
       },
@@ -3605,6 +3718,14 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCursorCommand"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCursorAgent"
           }
         ],
         "local": [
@@ -3623,6 +3744,14 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToCursorCommand"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToCursorAgent"
           }
         ]
       },
@@ -4160,6 +4289,14 @@ const runtimes = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToTraeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToTraeAgent"
           }
         ],
         "local": [
@@ -4170,6 +4307,14 @@ const runtimes = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToTraeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToTraeAgent"
           }
         ]
       },
@@ -4223,7 +4368,16 @@ const runtimes = {
       "localConfigDir": ".windsurf",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [],
+        "global": [
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWindsurfAgent"
+          }
+        ],
         "local": [
           {
             "kind": "commands",
@@ -4232,6 +4386,14 @@ const runtimes = {
             "nesting": "flat",
             "recursive": false,
             "converter": "convertClaudeCommandToWindsurfWorkflow"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToWindsurfAgent"
           }
         ]
       },
