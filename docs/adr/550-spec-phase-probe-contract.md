@@ -158,3 +158,40 @@ This records the **truth-axis half of Decision 4** that the original ADR deliber
 5. **Two measured properties define the design (maintainer Decision 2; caveats to record).** *Exogenous, not endogenous:* abstention is triggered by the external `backstop` tag, never a self-judged "abstain if unsure" — endogenous abstention was measured near-useless on true blind spots (100% → 67% vs exogenous 100% → 17%; N17). *Routing, not diagnosis:* the verdict does not name the omitted rule (the held-out test carries it). **Evidence honesty:** N17 is n=27, 1 rep — **direction-finding, not powered**; the effect is large and monotone but real-world precision depends on the edge-probe's *true* `backstop` recall/precision (the experiment modeled a perfect tagger), which is why the over-abstention guard and the capable-tier requirement are load-bearing acceptance criteria. **Model-tier coupling:** abstention is reliable on the default `gsd-verifier` tier (`sonnet`+); the budget tier (`haiku`) heeds the tag only inconsistently and degrades toward current behavior — captured as a documented cost (and a test) so a tier regression is caught, not discovered in production.
 
 Net effect: the truth-axis `backstop` tier gains the verify-time disposition D4 gave the prohibition judgment tier; the contract's CI-testable surface (D5) gains the truth-axis projection round-trip parity and the abstain-on-unconfirmed-backstop regression. The decision also lives in `src/probe-core.cts` comments, `gsd-core/references/honest-verifier.md`, the `plan-phase.md` / `verify-phase.md` / `agents/gsd-verifier.md` prose, and the #1154 changeset.
+
+## Addendum (2026-06-22) — Alternatives considered (recall / representation / packaging side)
+
+This consolidates the spec-phase-side rejected and deferred alternatives for the probe family,
+so a re-proposal meets a recorded reason rather than a fresh debate. (The enforcement-mechanism
+alternatives — the flat-vs-nested descriptor, the inline violation snippet, `failFirst`
+attestation, and mandatory causation control — are recorded in **ADR-1606**, the
+prohibition-enforcement verify-time seam.)
+
+- **A standalone LLM requirement *classifier* as a feature — REJECTED (#652, closed
+  2026-06-04).** The enhancement "requirement classification in the spec phase should use an
+  LLM-assisted classifier" was closed without approval: the edge-probe's shape taxonomy plus
+  the prohibition probe's adversarial recall **already capture most of the value** a general
+  classifier would, without adding a separate model-dependent surface to maintain. *Re-open
+  only if* a classifier demonstrably beats both probes on a held-out battery.
+
+- **A deterministic `prohibition-probe.cjs` recall engine — REJECTED.** Unlike the closed edge
+  taxonomy, the prohibition recall stage is inherently LLM prose reasoning; only the
+  schema/projection layer is real code (Decision 7b). A deterministic recall adapter is the
+  scope-creep flagged in `gsd-core/references/prohibition-probe.md`; recall is validated
+  offline (N18), not asserted in CI. *Re-open only if* recall can be made deterministic without
+  collapsing the adversarial open-question that gives it model-robust reach.
+
+- **A `polarity` field on `truths` — REJECTED (already decided — see Decision 3).** `truths`
+  are positive observables with no `verify.cjs` handler; a prohibition parked there inherits
+  non-enforcement. Recorded in Decision 3 ("`truths` is left untouched — no `polarity` field is
+  added"); listed here only so the alternatives set is readable in one place.
+
+- **A single dispatcher CLI for all probes — DEFERRED (already decided — see Decision 7e).**
+  Each probe ships its own bin calling a shared `runProbeCli(...)`; a unified dispatcher is
+  deferred as pure invocation plumbing with no migration debt. Recorded in Decision 7e; listed
+  here only for completeness.
+
+*Net:* the two NEW entries (#652 classifier, deterministic recall engine) are the only ones
+this addendum adds to 550's decision record; the other two are cross-references to existing
+decisions, collected so the probe family's full "alternatives considered" set is readable in
+one place.

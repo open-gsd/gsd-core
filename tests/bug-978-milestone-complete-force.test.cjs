@@ -19,10 +19,13 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
  * Build a fixture where the guard will fire:
  *  - STATE.md has `milestone: <version>` so the guard's version-match check is
  *    satisfied.
- *  - ROADMAP.md lists a `### Phase 999.1: Backlog Work` heading for that
- *    milestone, but there is NO on-disk phase directory for it.
+ *  - ROADMAP.md lists a `### Phase 2: Real Work` heading for that milestone, but
+ *    there is NO on-disk phase directory for it.
  *
  * This guarantees "unstarted phase" detection without touching any real phases.
+ * NOTE: the unstarted phase must be a REAL phase number — Phase 0 and Phase 999
+ * are backlog/pre-milestone sentinels that are intentionally excluded from this
+ * guard (#1580), so they would not fire it.
  */
 function makeGuardFixture(tmpDir, version) {
   // STATE.md with frontmatter milestone field matching the version
@@ -32,10 +35,10 @@ function makeGuardFixture(tmpDir, version) {
   );
 
   // ROADMAP.md — the heading must include the version so getMilestonePhaseFilter
-  // does not return missingExplicitVersion.  Phase 999.1 has no on-disk dir.
+  // does not return missingExplicitVersion.  Phase 2 has no on-disk dir.
   fs.writeFileSync(
     path.join(tmpDir, '.planning', 'ROADMAP.md'),
-    `# Roadmap ${version}\n\n### Phase 999.1: Backlog Work\n**Goal:** Not started\n`,
+    `# Roadmap ${version}\n\n### Phase 2: Real Work\n**Goal:** Not started\n`,
   );
 }
 
@@ -80,7 +83,7 @@ describe('bug-978: milestone complete --force overrides unstarted-phase guard', 
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.version, 'v1.0');
-    // Milestone entry should have been created even though phase 999.1 has no dir
+    // Milestone entry should have been created even though phase 2 has no dir
     assert.ok(
       fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
       'MILESTONES.md should have been created',
