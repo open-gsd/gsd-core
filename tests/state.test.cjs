@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, parseFrontmatter } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 function writePassedVerification(tmpDir, phaseDirName, paddedPhase) {
@@ -5163,5 +5163,135 @@ describe('T6 section-splice characterization — milestone-switch', () => {
     } finally {
       cleanup(d);
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bug #1695 — state patch of an unrelated field clobbers curated body-derived
+// scalars (current_phase_name, last_activity_desc).
+//
+// A `state patch` of an unrelated field (e.g. --Status) runs
+// readModifyWriteStateMd with resync:false. syncStateFrontmatter still runs
+// unconditionally and re-derives every body-derived scalar; the #1264 fix
+// restored only `progress`, so current_phase_name (and last_activity_desc) were
+// left at whatever the body re-derived.
+//
+// Fix (src/state.cts): a #1230-style delta guard preserves curated
+// current_phase_name / last_activity_desc when the patch did NOT change the body
+// field they are derived from. begin/planned/complete-phase DO rewrite those
+// lines, so they still advance (covered by the negative case below). The fix is
+// independent of how parseProsePhaseField resolves the name — the curated
+// frontmatter value is restored regardless of what the body re-derives.
+//
+// Oracle note: preservation is asserted against the persisted STATE.md
+// frontmatter (the surface #1695 clobbers). `state json` is used only for
+// `progress`; it re-derives last_activity_desc from the body independently of
+// the frontmatter, so it is not a valid oracle for that scalar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('regressions: #1695 — state patch preserves curated body-derived scalars', () => {
+  let tmpDir;
+  let statePath;
+
+  // A STATE.md whose frontmatter holds curated scalars and whose body
+  // `## Current Position` carries an inverted `Phase: N — Name (aside)` line —
+  // the exact shape that mis-derived the name before #1695.
+  function buildStateMd(opts) {
+    const o = opts || {};
+    const curatedName = o.currentPhaseName !== undefined ? o.currentPhaseName : 'Native Hotkey';
+    const curatedDesc = o.lastActivityDesc !== undefined ? o.lastActivityDesc : 'curated activity note';
+    const fm = ['---', 'gsd_state_version: 1.0', 'current_phase: 16'];
+    if (curatedName !== null) fm.push(`current_phase_name: ${curatedName}`);
+    fm.push('status: executing');
+    if (curatedDesc !== null) fm.push(`last_activity_desc: ${curatedDesc}`);
+    fm.push(
+      'progress:',
+      '  total_phases: 5',
+      '  completed_phases: 2',
+      '  total_plans: 10',
+      '  completed_plans: 4',
+      '  percent: 42',
+      '---',
+    );
+    return [
+      ...fm,
+      '',
+      '# GSD State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 16 — Native Hotkey (next; Phase 15 landed, UAT deferred)',
+      'Status: executing',
+      'Last activity: 2026-01-01',
+      '',
+      '## Accumulated Context',
+      '',
+      '### Decisions',
+      '',
+      '- Use Node 22',
+      '',
+    ].join('\n');
+  }
+
+  const readFrontmatter = () => parseFrontmatter(fs.readFileSync(statePath, 'utf-8'));
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    statePath = path.join(tmpDir, '.planning', 'STATE.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // AC #1: state patch --Status leaves current_phase_name byte-unchanged.
+  test('state patch --Status preserves curated current_phase_name (not the body aside)', () => {
+    fs.writeFileSync(statePath, buildStateMd({ currentPhaseName: 'Native Hotkey' }));
+
+    const patch = runGsdTools('state patch --Status "AUDIT-PATCH unrelated field"', tmpDir);
+    assert.ok(patch.success, `state patch failed: ${patch.error}`);
+
+    const fm = readFrontmatter();
+    assert.strictEqual(
+      fm.current_phase_name,
+      'Native Hotkey',
+      `current_phase_name must survive a patch of an unrelated field (got: ${JSON.stringify(fm.current_phase_name)})`,
+    );
+  });
+
+  // AC #1 companion: the #1264 progress invariant still holds on the same call.
+  test('state patch --Status preserves curated progress (#1264 unbroken)', () => {
+    fs.writeFileSync(statePath, buildStateMd({}));
+
+    const patch = runGsdTools('state patch --Status "AUDIT-PATCH unrelated field"', tmpDir);
+    assert.ok(patch.success, `state patch failed: ${patch.error}`);
+
+    const json = runGsdTools('state json', tmpDir);
+    assert.ok(json.success, `state json failed: ${json.error}`);
+    const fm = JSON.parse(json.output);
+    assert.strictEqual(String(fm.progress.completed_phases), '2', 'completed_phases must be preserved');
+    assert.strictEqual(String(fm.progress.percent), '42', 'percent must be preserved');
+  });
+
+  // Negative case: the delta guard must NOT fire when the write genuinely
+  // changes the body Phase line. begin-phase rewrites `## Current Position`
+  // Phase, so current_phase_name must ADVANCE to the new name — not stay pinned
+  // to the curated value the guard preserves on an unrelated patch.
+  test('state begin-phase advances current_phase_name (guard does not pin the old name)', () => {
+    fs.writeFileSync(statePath, buildStateMd({ currentPhaseName: 'Native Hotkey' }));
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '17', '--name', 'Submission Pipeline', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error || result.output}`);
+
+    const fm = readFrontmatter();
+    assert.strictEqual(
+      fm.current_phase_name,
+      'Submission Pipeline',
+      `current_phase_name must advance to the begun phase's name, not stay pinned to the curated value (got: ${JSON.stringify(fm.current_phase_name)})`,
+    );
+    assert.strictEqual(String(fm.current_phase), '17', 'current_phase must advance to 17');
   });
 });

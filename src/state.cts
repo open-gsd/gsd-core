@@ -2034,6 +2034,9 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     const preSessionMatch = matchSessionSection(preBody);
     const preSessionScope = preSessionMatch ? preSessionMatch[1] : preBody;
     const preBodyStoppedAt = stateExtractField(preSessionScope, 'Stopped At') || stateExtractField(preSessionScope, 'Stopped at');
+    // Bug #1695: pre-transform body source field for the current_phase_name
+    // delta guard below (mirrors the Status/Stopped-At pair).
+    const preBodyPhase = stateExtractField(preBody, 'Phase');
 
     const modified = transformFn(content);
 
@@ -2065,6 +2068,8 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     const postSessionMatch = matchSessionSection(postBody);
     const postSessionScope = postSessionMatch ? postSessionMatch[1] : postBody;
     const postBodyStoppedAt = stateExtractField(postSessionScope, 'Stopped At') || stateExtractField(postSessionScope, 'Stopped at');
+    // Bug #1695: post-transform counterpart of the source field snapshotted above.
+    const postBodyPhase = stateExtractField(postBody, 'Phase');
 
     let mutated = false;
     const postFm = extractFrontmatter(synced) as Record<string, unknown>;
@@ -2103,6 +2108,26 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
       postFm['stopped_at'] !== preFmSnapshot['stopped_at']
     ) {
       postFm['stopped_at'] = preFmSnapshot['stopped_at'];
+      mutated = true;
+    }
+
+    // Bug #1695: preserve curated current_phase_name when this write did NOT
+    // change the body Phase line it is derived from. syncStateFrontmatter
+    // re-derives current_phase_name from the `## Current Position` Phase line on
+    // every write — including a resync:false patch of an unrelated field — so
+    // without this guard `state patch --Status X` silently reverts a curated
+    // current_phase_name to whatever the Phase line derives. begin/planned/
+    // complete-phase DO rewrite the Phase line (changing the delta), so they are
+    // unaffected. Mirrors the #1230 status/stopped_at heuristic, and extends the
+    // #1264 "an unrelated patch must not rewrite untouched frontmatter" invariant
+    // (which covered progress only) to this body-derived scalar.
+    if (
+      postBodyPhase === preBodyPhase &&
+      typeof preFmSnapshot['current_phase_name'] === 'string' &&
+      preFmSnapshot['current_phase_name'].length > 0 &&
+      postFm['current_phase_name'] !== preFmSnapshot['current_phase_name']
+    ) {
+      postFm['current_phase_name'] = preFmSnapshot['current_phase_name'];
       mutated = true;
     }
 
