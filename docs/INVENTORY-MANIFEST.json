@@ -299,6 +299,7 @@
       "check-command-router.cjs",
       "cjs-command-router-adapter.cjs",
       "cli-exit.cjs",
+      "cli-skew-check.cjs",
       "clock.cjs",
       "clusters.cjs",
       "code-review-flags.cjs",

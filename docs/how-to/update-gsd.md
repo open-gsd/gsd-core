@@ -138,3 +138,13 @@ Each GSD release may include installer migrations that rename, move, or retire m
 - [Manual update](../manual-update.md)
 - [Installer migrations](../installer-migrations.md)
 - [Docs index](../README.md)
+
+## CLI version-skew warning
+
+GSD warns (to stderr, non-blocking) when the resolved `gsd-tools.cjs` is **outside your project root** while a project-local install exists — a sign that a global install (often a retired `@gsd-build/sdk` canary) is shadowing your project-local GSD. The warning names the resolved path and, for the `@gsd-build/sdk` case, gives the removal command:
+
+```bash
+npm uninstall -g @gsd-build/sdk
+```
+
+If you see this warning, remove the stale global package so `gsd_run` resolves the project-local install.
