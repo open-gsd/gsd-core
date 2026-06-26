@@ -24,6 +24,7 @@ running outside ESLint, fails the build if you try). Legitimately platform-speci
 | `local/no-bare-npm-exec` | An `execFileSync`/`spawnSync`/`spawn` call with `"npm"` as the command and no `{ shell: true }` option (or a platform-guarded equivalent) — `npm` is a `.cmd` batch wrapper on Windows and is not found without a shell. (`execSync`/`exec` already run via a shell, so they are not flagged.) | `tests/**/*.test.cjs` |
 | `local/require-userprofile-with-home` | A `process.env.HOME = <x>` assignment in a test file with no corresponding `process.env.USERPROFILE` **assignment** — Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. | `tests/**/*.test.cjs` |
 | `local/normalize-path-in-content` | A path-returning fn result (excluding `path.basename`, which returns a separator-less filename) interpolated **directly** into content without `.replace(/\\/g,'/')` normalization — backslash paths leak into generated content on Windows (`RULESET.CONTENT-PATH-NORMALIZATION`). Two content shapes are detected: (a) the template/string contains an `@`-reference marker (`@~/`, `@$`, `@/`), `$HOME`, or `~/`; (b) the quasi immediately following the interpolation starts with `/…\.md` or `/…\.json`. **Indirect data-flow** (path stored in a variable/field then interpolated) is not detected — normalize at source. Fix: `String(resolvedTarget).replace(/\\/g, '/')`. | `src/**/*.cts` |
+| `local/require-fs-op-fallback` | An unguarded `fs.rename` / `fs.renameSync` (the atomic-publish primitive) that is NOT inside a `try`/`catch` whose handler references a transient errno (`'EPERM'`/`'EBUSY'`/`'EACCES'`, or a `*RETRY_ERRNOS` set) AND is NOT behind a Windows platform guard — on Windows a concurrent reader / antivirus scanner can transiently hold the target open and throw. A `catch (e) {}` that silently swallows, or a catch that cleans-up-and-rethrows without an errno check, does **not** satisfy the rule. `fs.copyFile` / `fs.unlink` are deliberately **not** flagged (they are the *fallback primitives* named by the defect's own fix-forward, and `unlink` has many intentional best-effort cleanup sites). | `src/**/*.cts`, `bin/install.js`, `scripts/build-hooks.js` |
 
 (See ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702) for the full phase history.)
 
@@ -221,6 +222,59 @@ process.env.USERPROFILE = isolatedDir;
 if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
 if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
 ```
+
+## How-to — fix a `require-fs-op-fallback` violation
+
+Why it fails on Windows: `fs.renameSync(tmp, target)` (the atomic-publish primitive) uses Windows
+`MoveFileEx` with `MOVEFILE_REPLACE_EXISTING`, which throws `EPERM`/`EBUSY`/`EACCES` when an
+antivirus scanner, indexer, or concurrent reader transiently holds the target open. On macOS/Linux
+`rename(2)` atomically replaces regardless of open handles, so the bare call passes everywhere
+except the `windows-latest` CI lane (DEFECT.WINDOWS-FS-OPS).
+
+**Fix option A (preferred for production): route through `retryRenameSync`** — the shared drop-in
+from `shell-command-projection.cjs` that retries the transient errnos a bounded number of times
+before rethrowing. It is idempotent on POSIX (the transient errnos do not occur there):
+
+```js
+import { retryRenameSync } from './shell-command-projection.cjs';
+
+// ❌ flagged — EPERM/EBUSY propagates unhandled on Windows
+fs.renameSync(tmpPath, target);
+
+// ✅ drop-in — retries transient locks, throws on persistent failure
+retryRenameSync(tmpPath, target);
+```
+
+**Fix option B: inline the `RENAME_RETRY_ERRNOS` loop** (the convention already used by
+`capability-ledger`, `capability-consent`, and `shell-command-projection`'s own `atomicRenameWithRetry`):
+
+```js
+const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    fs.renameSync(tmpPath, target);
+    break;
+  } catch (err) {
+    if (attempt < 3 && RENAME_RETRY_ERRNOS.has(err.code)) { backoff(); continue; }
+    throw err;
+  }
+}
+```
+
+**Fix option C: gate behind a platform check** when the rename is genuinely POSIX-only:
+
+```js
+// ✅ platform-guarded — not flagged
+if (process.platform !== 'win32') {
+  fs.renameSync(tmpPath, target);
+}
+```
+
+> **`copyFile` / `unlink` are not flagged.** Per the defect's own fix-forward, they are the
+> *fallback primitives* ("catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry"), not
+> separate defect sites. A retry delegated to a helper that itself wraps `renameSync` in the
+> `RENAME_RETRY_ERRNOS` loop is compliant because the helper's own `renameSync` is recognized; a
+> bare `fs.renameSync(...)` call is what gets flagged.
 
 ## How-to — add a new path resolver
 

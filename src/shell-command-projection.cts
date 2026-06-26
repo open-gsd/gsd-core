@@ -596,6 +596,21 @@ function atomicRenameWithRetry(tmpPath: string, filePath: string): NodeJS.ErrnoE
   return renameErr;
 }
 
+/**
+ * Drop-in replacement for `fs.renameSync(from, to)` that retries the transient
+ * Windows lock errnos (EPERM/EBUSY/EACCES — see DEFECT.WINDOWS-FS-OPS) a bounded
+ * number of times with a short backoff before rethrowing the final error.
+ *
+ * Idempotent on POSIX (the transient errnos do not occur), so callers retain
+ * identical semantics on macOS/Linux while gaining resilience on Windows where
+ * an antivirus scanner, indexer, or concurrent reader may briefly hold the
+ * target open. Enforced by local/require-fs-op-fallback (ADR-1703 Phase 6).
+ */
+export function retryRenameSync(fromPath: string, toPath: string): void {
+  const err = atomicRenameWithRetry(fromPath, toPath);
+  if (err !== null) throw err;
+}
+
 export function platformWriteSync(filePath: string, content: string, opts: { encoding?: BufferEncoding } = {}): void {
   const { content: normalized, encoding } = normalizeContent(filePath, content, opts);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

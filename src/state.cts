@@ -20,7 +20,7 @@ const { escapeRegex, normalizePhaseName, extractPhaseToken } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
-import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths } = planningWorkspace;
@@ -1903,7 +1903,7 @@ function acquireStateLock(statePath: string, clock?: StateLockClock): string {
           // we must NOT fall through to a delete — back off and retry the create.
           const stolen = lockPath + '.stale-' + process.pid + '-' + clock.now() + '-' + (_stateStealSeq++);
           let renamed = false;
-          try { fs.renameSync(lockPath, stolen); renamed = true; } catch { /* another racer won */ }
+          try { retryRenameSync(lockPath, stolen); renamed = true; } catch { /* another racer won */ }
           if (renamed) {
             try { fs.rmSync(stolen, { force: true }); } catch { /* best-effort */ }
             // Successful steal — retry immediately to grab the just-freed lock.

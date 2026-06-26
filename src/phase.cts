@@ -49,7 +49,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
 import { realClock } from './clock.cjs';
@@ -1068,12 +1068,12 @@ function renameDecimalPhases(
     const oldPhaseId = `${baseInt}.${item.oldDecimal}`;
     const newPhaseId = `${baseInt}.${newDecimal}`;
     const newDirName = `${item.prefix}.${newDecimal}-${item.slug}`;
-    fs.renameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
     renamedDirs.push({ from: item.dir, to: newDirName });
     for (const f of fs.readdirSync(path.join(phasesDir, newDirName))) {
       if (f.includes(oldPhaseId)) {
         const newFileName = f.replace(oldPhaseId, newPhaseId);
-        fs.renameSync(
+        retryRenameSync(
           path.join(phasesDir, newDirName, f),
           path.join(phasesDir, newDirName, newFileName),
         );
@@ -1120,12 +1120,12 @@ function renameIntegerPhases(
     const oldPrefix = `${oldPadded}${letterSuffix}${decimalSuffix}`;
     const newPrefix = `${newPadded}${letterSuffix}${decimalSuffix}`;
     const newDirName = `${newPrefix}-${item.slug}`;
-    fs.renameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
     renamedDirs.push({ from: item.dir, to: newDirName });
     for (const f of fs.readdirSync(path.join(phasesDir, newDirName))) {
       if (f.startsWith(oldPrefix)) {
         const newFileName = newPrefix + f.slice(oldPrefix.length);
-        fs.renameSync(
+        retryRenameSync(
           path.join(phasesDir, newDirName, f),
           path.join(phasesDir, newDirName, newFileName),
         );
