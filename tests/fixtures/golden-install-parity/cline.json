@@ -300,7 +300,7 @@
   "gsd-core/workflows/update.md": "9cad8a8f4baff922",
   "gsd-core/workflows/validate-phase.md": "54687a0f2a562fc4",
   "gsd-core/workflows/verify-phase.md": "68a74f247fdce962",
-  "gsd-core/workflows/verify-work.md": "6f482d32e0c8d49a",
+  "gsd-core/workflows/verify-work.md": "553197cb36695180",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
   "scripts/changeset/github-release-notes.cjs": "795677f0c009b132",
