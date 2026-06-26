@@ -30,9 +30,51 @@
  */
 
 const { execFileSync } = require('child_process');
-const { readFileSync } = require('fs');
+const fs = require('fs');
 
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
+
+// ── Resilient stdin reader ────────────────────────────────────────────────────
+// On macOS, libuv sets the stdin pipe fd to non-blocking mode.  A synchronous
+// readFileSync(process.stdin.fd) can therefore throw EAGAIN ("resource
+// temporarily unavailable") when the writer hasn't yet filled the pipe — this
+// is intermittent under heavy CI shard load and causes a spurious status 2
+// exit.  We work around it by calling fs.readSync in a loop and retrying on
+// EAGAIN with a 1 ms synchronous pause (Atomics.wait on a fresh SharedArrayBuffer
+// — no hot spin, no real-clock dependency, works under --experimental-vm-modules).
+/**
+ * Read all of stdin synchronously, retrying on EAGAIN.
+ *
+ * @returns {string} UTF-8 decoded full stdin content.
+ */
+function readStdinSync() {
+  const BUF_SIZE = 64 * 1024; // 64 KB chunks
+  const buf = Buffer.allocUnsafe(BUF_SIZE);
+  const chunks = [];
+
+  for (;;) {
+    let bytesRead;
+    try {
+      bytesRead = fs.readSync(process.stdin.fd, buf, 0, BUF_SIZE, null);
+    } catch (err) {
+      if (err.code === 'EAGAIN') {
+        // Non-blocking pipe not yet ready — yield for ~1 ms then retry.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1);
+        continue;
+      }
+      if (err.code === 'EOF') {
+        break;
+      }
+      throw err;
+    }
+    if (bytesRead === 0) {
+      break; // Clean EOF
+    }
+    chunks.push(Buffer.from(buf.slice(0, bytesRead)));
+  }
+
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 // ── Per-module mutation score ratchet ─────────────────────────────────────────
 // ADR-456 / issue #1187: every covered module declares a minScore floor.
@@ -195,7 +237,7 @@ function resolveChangedFiles(args) {
   // When --base is absent AND stdin is not a TTY (isTTY is falsy / undefined),
   // read a newline-delimited file list from stdin.
   if (!args.base && process.stdin.isTTY !== true) {
-    const raw = readFileSync(process.stdin.fd, 'utf8');
+    const raw = readStdinSync();
     return raw.split('\n').map(l => l.trim()).filter(Boolean);
   }
 
@@ -318,6 +360,6 @@ function resolveMutationBreak(raw) {
 
 // Export internals for programmatic use (tests/mutation-matrix-ratchet.test.cjs).
 // The require.main guard prevents main() from running when this file is require()d.
-module.exports = { COVERED, TARGET_MUTATION_SCORE, resolveMutationBreak };
+module.exports = { COVERED, TARGET_MUTATION_SCORE, resolveMutationBreak, readStdinSync };
 
 if (require.main === module) runMain(main);
