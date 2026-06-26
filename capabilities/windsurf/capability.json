@@ -18,6 +18,7 @@
         "WINDSURF_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".windsurf",
     "configFormat": "none",
     "artifactLayout": {
       "global": [],
