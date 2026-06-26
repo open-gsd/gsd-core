@@ -6534,6 +6534,125 @@ const _applyRuntimeRewrites = runtimeArtifactConversion._applyRuntimeRewrites;
 const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaudeRuntimeDefaults;
 
 /**
+ * Data-driven dispatch table for copyWithPathReplacement (ADR-1239 Phase B).
+ * Keyed by runtime id. Each entry declares ONLY what that runtime does differently.
+ * The DEFAULT (no entry, or entry with no md/js key) = identity transform after
+ * the uniform steps — covers claude, augment, codebuddy, kimi, etc.
+ *
+ * Entry shape:
+ *   mdSkipGenericRewrite?: boolean  — skip the ~/.claude/ rewrite block (copilot, antigravity)
+ *   md?: (content, ctx) => string   — per-runtime .md transform
+ *   mdReattributeAfter?: boolean    — re-run processAttribution after md() (copilot, antigravity)
+ *   mdTomlRenameOnCommand?: boolean — when isCommand, rename dest .md → .toml (gemini)
+ *   js?: (content, ctx) => string   — per-runtime .cjs/.js transform (absent = plain copyFileSync)
+ *
+ * ctx = { isCommand, isGlobal, dirName, pathPrefix, entryName, runtime }
+ */
+const RUNTIME_CONTENT_DISPATCH = {
+  opencode: {
+    md: (content) => convertClaudeToOpencodeFrontmatter(content),
+  },
+  kilo: {
+    md: (content) => convertClaudeToKiloFrontmatter(content),
+  },
+  gemini: {
+    md: (content, ctx) =>
+      convertClaudeToGeminiMarkdown(content, {
+        isCommand: ctx.isCommand,
+        commandName: ctx.isCommand ? ctx.entryName.replace(/\.md$/, '') : null,
+      }),
+    mdTomlRenameOnCommand: true,
+  },
+  codex: {
+    md: (content) => convertClaudeToCodexMarkdown(content),
+  },
+  copilot: {
+    mdSkipGenericRewrite: true,
+    md: (content, ctx) => convertClaudeToCopilotContent(content, ctx.isGlobal),
+    mdReattributeAfter: true,
+    js: (content, ctx) => convertClaudeToCopilotContent(content, ctx.isGlobal),
+  },
+  antigravity: {
+    mdSkipGenericRewrite: true,
+    md: (content, ctx) => convertClaudeToAntigravityContent(content, ctx.isGlobal),
+    mdReattributeAfter: true,
+    js: (content, ctx) => convertClaudeToAntigravityContent(content, ctx.isGlobal),
+  },
+  cursor: {
+    md: (content) => convertClaudeToCursorMarkdown(content),
+    js: (content) => {
+      content = content.replace(/gsd:/gi, 'gsd-');
+      content = content.replace(/\.claude\/skills\//g, '.cursor/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.cursor/rules/');
+      content = content.replace(/\bClaude Code\b/g, 'Cursor');
+      return content;
+    },
+  },
+  windsurf: {
+    md: (content) => convertClaudeToWindsurfMarkdown(content),
+    js: (content) => {
+      // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
+      content = content.replace(/gsd:/gi, 'gsd-');
+      content = content.replace(/\.claude\/skills\//g, '.devin/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.devin/rules');
+      content = content.replace(/\bClaude Code\b/g, 'Windsurf');
+      return content;
+    },
+  },
+  trae: {
+    md: (content) => convertClaudeToTraeMarkdown(content),
+    js: (content) => {
+      content = content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
+        return `/gsd-${commandName}`;
+      });
+      content = content.replace(/\.claude\/skills\//g, '.trae/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.trae/rules/');
+      content = content.replace(/\bClaude Code\b/g, 'Trae');
+      return content;
+    },
+  },
+  cline: {
+    md: (content) => convertClaudeToCliineMarkdown(content),
+    js: (content) => {
+      content = content.replace(/\.claude\/skills\//g, '.cline/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.clinerules');
+      content = content.replace(/\bClaude Code\b/g, 'Cline');
+      return content;
+    },
+  },
+  qwen: {
+    md: (content) => {
+      content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
+      content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
+      content = content.replace(/\.claude\//g, '.qwen/');
+      return content;
+    },
+    js: (content) => {
+      content = content.replace(/\.claude\/skills\//g, '.qwen/skills/');
+      content = content.replace(/\.claude\//g, '.qwen/');
+      content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
+      content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
+      return content;
+    },
+  },
+  hermes: {
+    md: (content) => {
+      content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
+      content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
+      content = content.replace(/\.claude\//g, '.hermes/');
+      return content;
+    },
+    js: (content) => {
+      content = content.replace(/\.claude\/skills\//g, '.hermes/skills/');
+      content = content.replace(/\.claude\//g, '.hermes/');
+      content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
+      content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
+      return content;
+    },
+  },
+};
+
+/**
  * Recursively copy directory, replacing paths in .md files
  * Deletes existing destDir first to remove orphaned files from previous versions
  * @param {string} srcDir - Source directory
@@ -6544,19 +6663,6 @@ const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaude
  * @param {boolean} isGlobal - Whether the install is global
  */
 function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand = false, isGlobal = false, confinementRoot) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCline = runtime === 'cline';
   const dirName = getDirName(runtime);
 
   // ADR-1239 Phase B write-confinement: refuse to wipe/write a destDir that
@@ -6593,10 +6699,13 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
     if (entry.isDirectory()) {
       copyWithPathReplacement(srcPath, destPath, pathPrefix, runtime, isCommand, isGlobal, confinementRoot);
     } else if (entry.name.endsWith('.md')) {
+      const dispatch = RUNTIME_CONTENT_DISPATCH[runtime] || {};
+      const ctx = { isCommand, isGlobal, dirName, pathPrefix, entryName: entry.name, runtime };
+
       // Replace ~/.claude/ and $HOME/.claude/ and ./.claude/ with runtime-appropriate paths
-      // Skip generic replacement for Copilot — convertClaudeToCopilotContent handles all paths
+      // Skip generic replacement for Copilot/Antigravity — their converters handle all paths
       let content = fs.readFileSync(srcPath, 'utf8');
-      if (!isCopilot && !isAntigravity) {
+      if (!dispatch.mdSkipGenericRewrite) {
         const globalClaudeRegex = /~\/\.claude\//g;
         const globalClaudeHomeRegex = /\$HOME\/\.claude\//g;
         const localClaudeRegex = /\.\/\.claude\//g;
@@ -6631,112 +6740,25 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       // colon-canonical runtimes (Gemini).
       content = normalizeAgentBodyForRuntime(content, runtime, readGsdCommandNames());
 
-      // Convert frontmatter for opencode compatibility
-      if (isOpencode || isKilo) {
-        content = isKilo
-          ? convertClaudeToKiloFrontmatter(content)
-          : convertClaudeToOpencodeFrontmatter(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isGemini) {
-        // Apply Gemini-specific Markdown transformations (slash commands, TOML).
-        // #778: thread the command name (file stem) so per-command TOML
-        // enrichment (live-state injection) can target a specific command.
-        const geminiCommandName = isCommand ? entry.name.replace(/\.md$/, '') : null;
-        const processed = convertClaudeToGeminiMarkdown(content, { isCommand, commandName: geminiCommandName });
-        const finalPath = isCommand ? destPath.replace(/\.md$/, '.toml') : destPath;
-        fs.writeFileSync(finalPath, processed);
-      } else if (isCodex) {
-        content = convertClaudeToCodexMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isCopilot) {
-        content = convertClaudeToCopilotContent(content, isGlobal);
-        content = processAttribution(content, getCommitAttribution(runtime));
-        fs.writeFileSync(destPath, content);
-      } else if (isAntigravity) {
-        content = convertClaudeToAntigravityContent(content, isGlobal);
-        content = processAttribution(content, getCommitAttribution(runtime));
-        fs.writeFileSync(destPath, content);
-      } else if (isCursor) {
-        content = convertClaudeToCursorMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isWindsurf) {
-        content = convertClaudeToWindsurfMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isTrae) {
-        content = convertClaudeToTraeMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isCline) {
-        content = convertClaudeToCliineMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isQwen) {
-        content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
-        content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
-        content = content.replace(/\.claude\//g, '.qwen/');
-        fs.writeFileSync(destPath, content);
-      } else if (isHermes) {
-        content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
-        content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
-        content = content.replace(/\.claude\//g, '.hermes/');
+      // Apply per-runtime .md converter (if any)
+      if (dispatch.md) content = dispatch.md(content, ctx);
+
+      // Re-run attribution after converter for runtimes that need it (copilot, antigravity)
+      if (dispatch.mdReattributeAfter) content = processAttribution(content, getCommitAttribution(runtime));
+
+      // Gemini: rename .md → .toml for command files
+      const finalPath = (dispatch.mdTomlRenameOnCommand && isCommand) ? destPath.replace(/\.md$/, '.toml') : destPath;
+      fs.writeFileSync(finalPath, content);
+    } else if (entry.name.endsWith('.cjs') || entry.name.endsWith('.js')) {
+      const dispatch = RUNTIME_CONTENT_DISPATCH[runtime] || {};
+      if (dispatch.js) {
+        const ctx = { isCommand, isGlobal, dirName, pathPrefix, entryName: entry.name, runtime };
+        let content = fs.readFileSync(srcPath, 'utf8');
+        content = dispatch.js(content, ctx);
         fs.writeFileSync(destPath, content);
       } else {
-        fs.writeFileSync(destPath, content);
+        fs.copyFileSync(srcPath, destPath);
       }
-    } else if (isCopilot && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // Copilot: also transform .cjs/.js files for CONV-06 and CONV-07
-      let content = fs.readFileSync(srcPath, 'utf8');
-      content = convertClaudeToCopilotContent(content, isGlobal);
-      fs.writeFileSync(destPath, content);
-    } else if (isAntigravity && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // Antigravity: also transform .cjs/.js files for path/command conversions
-      let content = fs.readFileSync(srcPath, 'utf8');
-      content = convertClaudeToAntigravityContent(content, isGlobal);
-      fs.writeFileSync(destPath, content);
-    } else if (isCursor && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // For Cursor, also convert Claude references in JS/CJS utility scripts
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/gsd:/gi, 'gsd-');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.cursor/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.cursor/rules/');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Cursor');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isWindsurf && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // For Windsurf/Devin, also convert Claude references in JS/CJS utility scripts.
-      // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/gsd:/gi, 'gsd-');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.devin/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.devin/rules');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Windsurf');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isTrae && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
-        return `/gsd-${commandName}`;
-      });
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.trae/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.trae/rules/');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Trae');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isCline && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.cline/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.clinerules');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Cline');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isQwen && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.qwen/skills/');
-      jsContent = jsContent.replace(/\.claude\//g, '.qwen/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, 'QWEN.md');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Qwen Code');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isHermes && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.hermes/skills/');
-      jsContent = jsContent.replace(/\.claude\//g, '.hermes/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, 'HERMES.md');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Hermes Agent');
-      fs.writeFileSync(destPath, jsContent);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
