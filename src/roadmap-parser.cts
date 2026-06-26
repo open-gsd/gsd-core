@@ -23,6 +23,7 @@ const {
   escapeRegex,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
+  phaseHeadingParentheticalRegexSource,
   stripProjectCodePrefix,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
 } = phaseIdModule;
@@ -209,8 +210,9 @@ interface RoadmapPhaseResult {
 }
 
 function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
+  const phaseTag = phaseHeadingParentheticalRegexSource();
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}${phaseTag}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
@@ -434,7 +436,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
 
     // Use tokenizeHeadings (fence-aware) instead of stripFencedLines + regex.
     // T4 seam migration: phase headings inside fences are excluded automatically.
-    const phaseHeadingPattern = /^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/i;
+    const phaseHeadingPattern = /^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^\n)]*\))?\s*:/i;
     for (const h of tokenizeHeadings(roadmap)) {
       if (h.level < 2 || h.level > 4) continue;
       const pm = phaseHeadingPattern.exec(h.text);

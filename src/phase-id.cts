@@ -22,6 +22,7 @@ const PROJECT_CODE_PREFIX_STRIP_RE = /^[A-Z][A-Z0-9_]*-(?=\d)/;
 const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z][A-Z0-9_]*-(?=\d)/i;
 const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z][A-Z0-9_]*)-(\d.*)/i;
 const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
+const PHASE_HEADING_PARENTHETICAL_SOURCE = '(?:\\s*\\([^\\n)]*\\))?';
 
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
@@ -121,6 +122,10 @@ function phaseMarkdownRegexSourceExact(phaseNum: unknown): string | null {
   const raw = String(phaseNum);
   if (!hasProjectCodePrefix(raw)) return null;
   return escapeRegex(raw);
+}
+
+function phaseHeadingParentheticalRegexSource(): string {
+  return PHASE_HEADING_PARENTHETICAL_SOURCE;
 }
 
 function comparePhaseNum(a: unknown, b: unknown): number {
@@ -226,6 +231,7 @@ export = {
   getPhaseDirFromPhaseId,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
+  phaseHeadingParentheticalRegexSource,
   comparePhaseNum,
   extractPhaseToken,
   phaseTokenMatches,

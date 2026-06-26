@@ -33,6 +33,7 @@ const {
   escapeRegex,
   normalizePhaseName,
   phaseMarkdownRegexSource,
+  phaseHeadingParentheticalRegexSource,
   comparePhaseNum,
   phaseTokenMatches,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
@@ -216,7 +217,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
       try {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         const phasePattern = new RegExp(
-          `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalized)}\\.(\\d+)\\s*:`,
+          `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalized)}\\.(\\d+)${phaseHeadingParentheticalRegexSource()}\\s*:`,
           'gi',
         );
         let pm: RegExpExecArray | null;
@@ -263,7 +264,7 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
   const escapedPhase = phaseMarkdownRegexSource(phaseNum);
-  const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}\\s*:`, 'i');
+  const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}${phaseHeadingParentheticalRegexSource()}\\s*:`, 'i');
 
   for (const content of [milestoneContent, fullContent]) {
     const headerMatch = content.match(phaseHeader);
@@ -929,7 +930,7 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
     }
 
     const rmPhasePattern = new RegExp(
-      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)\\s*:`,
+      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)${phaseHeadingParentheticalRegexSource()}\\s*:`,
       'gi',
     );
     let rmMatch: RegExpExecArray | null;
@@ -1355,7 +1356,7 @@ function writePlanningFileSet(writes: WriteSpec[]): void {
 function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: string | null): string | null {
   if (!roadmapContent || !phaseNum) return null;
   const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
-  const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}\\s*:\\s*([^\\n]+)`, 'im'));
+  const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}${phaseHeadingParentheticalRegexSource()}\\s*:\\s*([^\\n]+)`, 'im'));
   if (!heading) return null;
   const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
   return name || null;
@@ -1444,7 +1445,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
         const checkboxPattern = new RegExp(
-          `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}[:\\s][^\\n]*)`,
+          `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}${phaseHeadingParentheticalRegexSource()}[:\\s][^\\n]*)`,
           'i',
         );
         roadmapContent = roadmapContent.replace(
@@ -1508,7 +1509,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           const phaseSectionMatch = currentMilestoneRoadmap.match(
             new RegExp(
-              `(#{2,4}\\s*Phase\\s+${phaseEsc}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`,
+              `(#{2,4}\\s*Phase\\s+${phaseEsc}${phaseHeadingParentheticalRegexSource()}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`,
               'i',
             ),
           );

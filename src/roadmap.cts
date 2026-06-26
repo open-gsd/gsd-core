@@ -14,7 +14,7 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseTokenMatches } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseHeadingParentheticalRegexSource, phaseTokenMatches } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -115,8 +115,9 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
  */
 function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: string): PhaseSearchResult | null {
   // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
+  const phaseTag = phaseHeadingParentheticalRegexSource();
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}${phaseTag}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
@@ -124,7 +125,7 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
   if (!headerMatch) {
     // Fallback: check if phase exists in summary list but missing detail section
     const checklistPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${escapedPhase}:\\s*([^*]+)\\*\\*`,
+      `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${escapedPhase}${phaseTag}:\\s*([^*]+)\\*\\*`,
       'i'
     );
     const checklistMatch = content.match(checklistPattern);
@@ -760,7 +761,7 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // #3537: padding-tolerant fragment so the caller's resolved padded id
     // matches un-padded ROADMAP headings.
     const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
-    const phaseHeaderPattern = new RegExp(`(#{2,4}\\s*Phase\\s+${phaseEscaped}:[^\\n]*)`, 'i');
+    const phaseHeaderPattern = new RegExp(`(#{2,4}\\s*Phase\\s+${phaseEscaped}${phaseHeadingParentheticalRegexSource()}:[^\\n]*)`, 'i');
     const phaseMatch = content.match(phaseHeaderPattern);
     if (!phaseMatch) return;
 
