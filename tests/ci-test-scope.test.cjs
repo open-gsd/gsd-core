@@ -547,6 +547,34 @@ describe('test-full shard matrix parity (#1212)', () => {
   });
 });
 
+describe('golden-install-parity selection (#1691 drift guard)', () => {
+  // Regression: a src/*.cts-only edit recompiles bin/lib/*.cjs (changing installed
+  // hashes), but the scoped CI lane was not re-running golden-install-parity —
+  // causing golden fixtures to silently drift (#1691 milestone/roadmap cts change).
+  // Both the 'TS runtime sources' and 'installer and package layout' rules must now
+  // select tests/golden-install-parity.test.cjs.
+
+  test('src/*.cts change selects golden-install-parity (TS runtime sources rule)', () => {
+    const result = scopeFor(['src/milestone.cts']);
+    assert.strictEqual(result.code_changed, true,
+      `expected code_changed=true for src/ change, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+      `expected golden-install-parity in targeted_tests for src/*.cts change, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+
+  test('bin/install.js change selects golden-install-parity (installer and package layout rule)', () => {
+    const result = scopeFor(['bin/install.js']);
+    assert.strictEqual(result.code_changed, true,
+      `expected code_changed=true for bin/ change, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+      `expected golden-install-parity in targeted_tests for bin/install.js change, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+});
+
 describe('code_changed=false implies clean output invariant', () => {
   // Fix 1: when code_changed is false, full_matrix, targeted_tests, windows_tests
   // must ALL be empty/false — even if a docs path coincidentally

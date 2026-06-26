@@ -29,6 +29,9 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   installRuntimeArtifacts,
   installOpencodeFamilySkills,
+} = require('../gsd-core/bin/lib/install-engine.cjs');
+
+const {
   parseRuntimeInput,
   allRuntimes,
 } = require('../bin/install.js');

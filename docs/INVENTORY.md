@@ -442,6 +442,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `host-integration.cjs` | Host-Integration Interface (ADR-1239 Phase A) — negotiated capability contract over the six host-integration points; `negotiateHostCapabilities` fail-closes on undeclared/unknown/`undocumented` values, typed degradation ladder, host-capability profiles; the 8 `runtime.hostIntegration` axes are validated in `capability-validator.cjs` and sourced per-CLI in `docs/reference/host-integration-capability-matrix.md` |
 | `init-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools init` |
 | `init.cjs` | Compound context loading for each workflow type |
+| `install-engine.cjs` | Runtime-artifact install engine — `installRuntimeArtifacts`/`uninstallRuntimeArtifacts`/`installOpencodeFamilySkills` + their helpers, extracted from `bin/install.js` (ADR-1239 Phase B, #1679); install.js imports them back and injects `getCommitAttribution` |
 | `install-profiles.cjs` | Install profile allowlist + skill staging for `--minimal` install (#2762); single source of truth for which `gsd-*` skills/agents land in runtime config dirs |
 | `installer-migration-authoring.cjs` | Installer migration authoring guardrails for record metadata, explicit scopes, ownership evidence, and runtime contract citations |
 | `installer-migration-report.cjs` | Installer migration report projection and blocked-action guard for install/update integration |

@@ -7,6 +7,10 @@ Windows-only defect is caught before it ships — not after it reaches the `wind
 lane. The architecture and rationale are in [ADR-1703](../adr/1703-portability-enforcement-architecture.md);
 this page is the practical reference + how-to.
 
+> **Adding a new rule?** See [`adding-a-portability-rule.md`](./adding-a-portability-rule.md) —
+> the five seams (rule / vocab / platform-guard / disable-ban / ci-scope), the zero-escape-hatch
+> contract, and the step-by-step recipe.
+
 These rules are **hard-fail with zero escape hatches**: there is no `// windows-portability-ok:`
 comment and no `eslint-disable` for them (a `tests/portability-rule-disable-ban.test.cjs` check,
 running outside ESLint, fails the build if you try). Legitimately platform-specific code must be
@@ -21,8 +25,10 @@ running outside ESLint, fails the build if you try). Legitimately platform-speci
 | `local/no-unguarded-nonportable-exec` | A file that **both** sets a chmod exec-bit (`chmod`/`chmodSync` with `0oNNN & 0o111 !== 0`) **and** invokes `sh`/`bash` with a `-c` flag (`execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync`) without a Windows platform guard — Windows Git Bash ignores the exec bit for extension-less PATH-executed scripts. | `tests/**/*.test.cjs` |
 | `local/no-crlf-fragile-split` | A `.split('\n')` or `.split("\n")` call on `readFileSync` content, **or** a regex literal containing a bare `\n` used against `readFileSync` content — Windows `git-autocrlf` yields `\r\n` line endings so a literal `\n` split or regex will mismatch. | `tests/**/*.test.cjs` |
 | `local/no-hardcoded-tmp` | A hardcoded `/tmp/` string passed as the first argument to an `fs.*` function or `path.join` — `/tmp` does not exist on Windows. Use `os.tmpdir()` instead. | `tests/**/*.test.cjs` |
-| `local/no-bare-npm-exec` | An `execFileSync`/`spawnSync`/`spawn`/`exec`/`execSync` call with `"npm"` as the command and no `{ shell: true }` option (or a platform-guarded equivalent) — `npm` is a `.cmd` batch wrapper on Windows and will not be found without a shell. | `tests/**/*.test.cjs` |
-| `local/require-userprofile-with-home` | A `process.env.HOME = <x>` assignment in a test file with no corresponding `process.env.USERPROFILE` reference anywhere in the file — Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. | `tests/**/*.test.cjs` |
+| `local/no-bare-npm-exec` | An `execFileSync`/`spawnSync`/`spawn` call with `"npm"` as the command and no `{ shell: true }` option (or a platform-guarded equivalent) — `npm` is a `.cmd` batch wrapper on Windows and is not found without a shell. (`execSync`/`exec` already run via a shell, so they are not flagged.) | `tests/**/*.test.cjs` |
+| `local/require-userprofile-with-home` | A `process.env.HOME = <x>` assignment in a test file with no corresponding `process.env.USERPROFILE` **assignment** — Windows uses `USERPROFILE` as the home directory environment variable, not `HOME`. | `tests/**/*.test.cjs` |
+| `local/normalize-path-in-content` | A path-returning fn result (excluding `path.basename`, which returns a separator-less filename) interpolated **directly** into content without `.replace(/\\/g,'/')` normalization — backslash paths leak into generated content on Windows (`RULESET.CONTENT-PATH-NORMALIZATION`). Two content shapes are detected: (a) the template/string contains an `@`-reference marker (`@~/`, `@$`, `@/`), `$HOME`, or `~/`; (b) the quasi immediately following the interpolation starts with `/…\.md` or `/…\.json`. **Indirect data-flow** (path stored in a variable/field then interpolated) is not detected — normalize at source. Fix: `String(resolvedTarget).replace(/\\/g, '/')`. | `src/**/*.cts` |
+| `local/require-fs-op-fallback` | An unguarded `fs.rename` / `fs.renameSync` (the atomic-publish primitive) that is NOT inside a `try`/`catch` whose handler references a transient errno (`'EPERM'`/`'EBUSY'`/`'EACCES'`, or a `*RETRY_ERRNOS` set) AND is NOT behind a Windows platform guard — on Windows a concurrent reader / antivirus scanner can transiently hold the target open and throw. A `catch (e) {}` that silently swallows, or a catch that cleans-up-and-rethrows without an errno check, does **not** satisfy the rule. `fs.copyFile` / `fs.unlink` are deliberately **not** flagged (they are the *fallback primitives* named by the defect's own fix-forward, and `unlink` has many intentional best-effort cleanup sites). | `src/**/*.cts`, `bin/install.js`, `scripts/build-hooks.js` |
 
 (See ADR-1703's catalog and [epic #1702](https://github.com/open-gsd/gsd-core/issues/1702) for the full phase history.)
 
@@ -221,6 +227,59 @@ if (origHome === undefined) delete process.env.HOME; else process.env.HOME = ori
 if (origUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = origUserProfile;
 ```
 
+## How-to — fix a `require-fs-op-fallback` violation
+
+Why it fails on Windows: `fs.renameSync(tmp, target)` (the atomic-publish primitive) uses Windows
+`MoveFileEx` with `MOVEFILE_REPLACE_EXISTING`, which throws `EPERM`/`EBUSY`/`EACCES` when an
+antivirus scanner, indexer, or concurrent reader transiently holds the target open. On macOS/Linux
+`rename(2)` atomically replaces regardless of open handles, so the bare call passes everywhere
+except the `windows-latest` CI lane (DEFECT.WINDOWS-FS-OPS).
+
+**Fix option A (preferred for production): route through `retryRenameSync`** — the shared drop-in
+from `shell-command-projection.cjs` that retries the transient errnos a bounded number of times
+before rethrowing. It is idempotent on POSIX (the transient errnos do not occur there):
+
+```js
+import { retryRenameSync } from './shell-command-projection.cjs';
+
+// ❌ flagged — EPERM/EBUSY propagates unhandled on Windows
+fs.renameSync(tmpPath, target);
+
+// ✅ drop-in — retries transient locks, throws on persistent failure
+retryRenameSync(tmpPath, target);
+```
+
+**Fix option B: inline the `RENAME_RETRY_ERRNOS` loop** (the convention already used by
+`capability-ledger`, `capability-consent`, and `shell-command-projection`'s own `atomicRenameWithRetry`):
+
+```js
+const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    fs.renameSync(tmpPath, target);
+    break;
+  } catch (err) {
+    if (attempt < 3 && RENAME_RETRY_ERRNOS.has(err.code)) { backoff(); continue; }
+    throw err;
+  }
+}
+```
+
+**Fix option C: gate behind a platform check** when the rename is genuinely POSIX-only:
+
+```js
+// ✅ platform-guarded — not flagged
+if (process.platform !== 'win32') {
+  fs.renameSync(tmpPath, target);
+}
+```
+
+> **`copyFile` / `unlink` are not flagged.** Per the defect's own fix-forward, they are the
+> *fallback primitives* ("catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry"), not
+> separate defect sites. A retry delegated to a helper that itself wraps `renameSync` in the
+> `RENAME_RETRY_ERRNOS` loop is compliant because the helper's own `renameSync` is recognized; a
+> bare `fs.renameSync(...)` call is what gets flagged.
+
 ## How-to — add a new path resolver
 
 When you add a function that returns a filesystem path (e.g. in `src/runtime-homes.cts`), add its
@@ -237,3 +296,14 @@ The rule matches by spelling and inspects the direct operand (or a `String(<path
   inspected; assert against the path call directly or its `String(...)` wrap.
 - For a genuine explicit-dir *pass-through* assertion (a resolver that returns its input
   verbatim), the `String(...).replace(/\\/g,'/')` remedy is a harmless no-op.
+- **The rule catches a path-returning call interpolated *directly* into `${ }`.** It does NOT
+  track **indirect data-flow** — a path stored in a variable or object field, then interpolated
+  (e.g. `${globalSkillDir}/SKILL.md` → `@${entry.ref}`). Indirect content-path-leaks rely on
+  `RULESET.CONTENT-PATH-NORMALIZATION` discipline (normalize at source) and code review.
+  The one known indirect leak (`src/init.cts` `cmdAgentSkills` `entry.ref` building) is fixed
+  by normalizing at the content-emit site: `- @${String(entry.ref).replace(/\\/g, '/')}`.
+- **Content detection shape (b)** fires when the quasi *immediately following* the interpolation
+  starts with `/…\.md` or `/…\.json`. A bare `.md` or `.json` token in the *middle* of prose
+  (e.g. `: see README.md`) does NOT qualify — the quasi must start with the forward slash.
+  Config-dir substrings (`/.claude`, `/commands`, `/skills`, etc.) are deliberately NOT content
+  markers — they caused false positives on log/error/diagnostic strings mentioning config dirs.

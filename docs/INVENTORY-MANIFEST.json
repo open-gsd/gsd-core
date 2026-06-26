@@ -332,6 +332,7 @@
       "host-integration.cjs",
       "init-command-router.cjs",
       "init.cjs",
+      "install-engine.cjs",
       "install-profiles.cjs",
       "installer-migration-authoring.cjs",
       "installer-migration-report.cjs",

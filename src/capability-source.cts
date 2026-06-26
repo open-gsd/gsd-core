@@ -34,6 +34,7 @@ const shellSeam = require('./shell-command-projection.cjs') as {
   execGit: (args: string[], opts?: { cwd?: string; timeout?: number }) => SpawnResult;
   execNpm: (args: string[], opts?: { cwd?: string; timeout?: number }) => SpawnResult;
   execTool: (program: string, args: string[], opts?: { cwd?: string; timeout?: number }) => SpawnResult;
+  retryRenameSync: (fromPath: string, toPath: string) => void;
 };
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -752,16 +753,16 @@ function stageValidated(opts: {
     // lives in capability-lifecycle.cjs and uses promote:false above.)
     if (fs.existsSync(finalDir)) {
       const backupDir = `${finalDir}.old-${process.pid}-${Date.now()}`;
-      fs.renameSync(finalDir, backupDir);
+      shellSeam.retryRenameSync(finalDir, backupDir);
       try {
-        fs.renameSync(stagingDir, finalDir);
+        shellSeam.retryRenameSync(stagingDir, finalDir);
       } catch (err) {
-        try { fs.renameSync(backupDir, finalDir); } catch { /* best-effort restore */ }
+        try { shellSeam.retryRenameSync(backupDir, finalDir); } catch { /* best-effort restore */ }
         throw err;
       }
       try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch { /* best-effort */ }
     } else {
-      fs.renameSync(stagingDir, finalDir);
+      shellSeam.retryRenameSync(stagingDir, finalDir);
     }
 
     const version = typeof cap['version'] === 'string' ? cap['version'] : '';

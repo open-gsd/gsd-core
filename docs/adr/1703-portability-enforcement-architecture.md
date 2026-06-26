@@ -1,7 +1,7 @@
 # ADR-1703: Cross-platform portability enforcement as AST ESLint rules
 
-- **Status:** Proposed
-- **Date:** 2026-06-25
+- **Status:** Accepted
+- **Date:** 2026-06-25 (Phase 0); **Accepted 2026-06-26** (Phase 7 closeout — all phases shipped)
 - **Issue:** [#1703](https://github.com/open-gsd/gsd-core/issues/1703) — Phase 0 of epic [#1702](https://github.com/open-gsd/gsd-core/issues/1702)
 - **Supersedes:** the regex-based `scripts/lint-windows-test-portability.cjs`, the
   `tests/windows-test-parity-guard.test.cjs` named-set ratchet (G1–G6), the
@@ -185,6 +185,54 @@ phasing (one rule at a time, each independently reviewed and shipped) and by the
 Each implementation phase runs the full engineering directive (rubber-duck → laws → architecture
 → qa-test-architect → strict TDD via `RuleTester` → codex adversarial → Diátaxis → rebase+PR)
 and is its own approved child issue + PR under epic #1702.
+
+## Phase 7 — as-built / acceptance (2026-06-26)
+
+All seven phases shipped; the architecture is exercised in production and accepted. Two
+as-built deviations from the Phase 0 catalog, both within this ADR's precision discipline:
+
+- **Phase 6 scope — `require-fs-op-fallback` narrowed to rename.** The catalog row named
+  `DEFECT.WINDOWS-FS-OPS` for "`src/**/*.cts`, build/install". The defect's own `.fix-forward`
+  defines the cure as *"catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry"* — so
+  `copyFile`/`unlink` are the **fallback primitives**, not separate defect sites, and flagging
+  them would flag the cure (`unlink` also has ~30 intentional best-effort cleanup sites that would
+  be a FP minefield). v1 recognition is therefore `fs.rename`/`fs.renameSync` only, with the
+  `RENAME_RETRY_ERRNOS` retry loop as the recognized compliant shape; `copyFile`/`unlink`
+  transient-lock sub-classes are documented for a possible follow-up. The ADR-mandated glob
+  expansion to `bin/install.js` + `scripts/build-hooks.js` (L124-126) landed as specified.
+  Documented on [#1740](https://github.com/open-gsd/gsd-core/issues/1740).
+
+- **Phase 6 precision tightening (codex review).** The rule's compliance shape was tightened after
+  an adversarial gpt-5.5 review: a catch must BOTH reference a transient errno AND carry a retry
+  signal (a loop `continue` backedge or a `return <call>` delegation — NOT a bare rethrow), and
+  only the **nearest catching** try/catch counts (an outer errno-catch is unreachable once an inner
+  catch intercepts). This enforces the defect's *"never silently swallow"* + cure-is-retry clauses
+  honestly. See [`eslint-rules/require-fs-op-fallback.cjs`](../../eslint-rules/require-fs-op-fallback.cjs).
+
+The forward "how to add a portability rule" recipe delivered by this phase lives at
+[`docs/contributing/adding-a-portability-rule.md`](../contributing/adding-a-portability-rule.md).
+
+Two further as-built deviations from the Phase 0 text, reconciled in the post-merge
+coverage audit (#1749):
+
+- **Disable-ban mechanism — meta-rule → out-of-band test.** §"Strictness" specified a
+  `local/no-portability-disable` ESLint meta-rule to ban inline disables of portability
+  rules. What shipped is [`tests/portability-rule-disable-ban.test.cjs`](../../tests/portability-rule-disable-ban.test.cjs)
+  — a `node:test` that scans files for disable directives **outside ESLint**, so it cannot
+  itself be eslint-disabled (an advantage over an in-process meta-rule, which the ADR noted
+  as the motivating risk). The substitution is at least as strong; recorded here so the
+  ADR's written mechanism matches the as-built one.
+
+- **Drift-guard `bin/install.js` scope.** §"Architecture" said the drift guard parses
+  `src/runtime-homes.cts` *and the relevant `bin/install.js` exports*. The shipped
+  [`tests/portability-vocab-drift.test.cjs`](../../tests/portability-vocab-drift.test.cjs)
+  originally covered only `runtime-homes.cts`; the audit extended it to `bin/install.js`
+  with a SOUND shape only (a top-level function that directly `return path.*(...)` must be
+  registered; plus a curated two-way existence lock on the installer path helpers). The
+  looser body-contains heuristic used for `runtime-homes.cts` is unsound for the generated
+  12k-line installer (~33 false positives), so a new installer resolver that builds a path
+  via a temp variable relies on review — documented as a boundary in the test. The active
+  resolver module (`runtime-homes.cts`) remains fully drift-guarded by the looser heuristic.
 
 ## Alternatives considered
 

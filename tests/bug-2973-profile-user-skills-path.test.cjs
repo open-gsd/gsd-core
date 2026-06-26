@@ -45,7 +45,8 @@ const { cleanup } = require('./helpers.cjs');
 const ROOT = path.join(__dirname, '..');
 const PROFILE_OUTPUT = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'profile-output.cjs');
 const WORKFLOW = path.join(ROOT, 'gsd-core', 'workflows', 'profile-user.md');
-const INSTALL = path.join(ROOT, 'bin', 'install.js');
+
+const installEngine = require('../gsd-core/bin/lib/install-engine.cjs');
 
 describe('Bug #2973: dev-preferences default writer path is skills/gsd-dev-preferences/SKILL.md', () => {
   test('exercise the writer in a subprocess with HOME pointed at a tmp dir; assert the artifact lands at the skills path', () => {
@@ -112,7 +113,7 @@ describe('Bug #2973: profile-user.md confirmation message references the skills 
 
 describe('Bug #2973: installer migrates existing legacy dev-preferences.md to skills/gsd-dev-preferences/SKILL.md', () => {
   test('migrateLegacyDevPreferencesToSkill is exported and writes to the skills path', () => {
-    const inst = require(INSTALL);
+    const inst = installEngine;
     // Module exports the migration helper for direct testing.
     // Note: this is the structural assertion — the helper exists with the
     // documented signature. End-to-end install testing is covered by
@@ -124,7 +125,7 @@ describe('Bug #2973: installer migrates existing legacy dev-preferences.md to sk
   test('migration writes to skills/gsd-dev-preferences/SKILL.md when no skill exists yet', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2973-mig-'));
     try {
-      const inst = require(INSTALL);
+      const inst = installEngine;
       const saved = new Map([['dev-preferences.md', '# my legacy preferences\n']]);
       const migrated = inst.migrateLegacyDevPreferencesToSkill(tmpDir, saved);
       assert.equal(migrated, true, 'expected migration to succeed when no SKILL.md exists');
@@ -139,7 +140,7 @@ describe('Bug #2973: installer migrates existing legacy dev-preferences.md to sk
   test('migration is a no-op when a SKILL.md already exists at the new location (do not clobber user-customized skill content)', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2973-skip-'));
     try {
-      const inst = require(INSTALL);
+      const inst = installEngine;
       const skillDir = path.join(tmpDir, 'skills', 'gsd-dev-preferences');
       const skillFile = path.join(skillDir, 'SKILL.md');
       fs.mkdirSync(skillDir, { recursive: true });
@@ -172,7 +173,7 @@ describe('Bug #2973 (#3003 CR): installRuntimeArtifacts preserves user-owned gsd
     // Production install() does NOT call uninstallRuntimeArtifacts() first.
     // installRuntimeArtifacts → _copyStaged overlays only staged skill dirs;
     // gsd-dev-preferences (not in source) is left untouched.
-    const inst = require(INSTALL);
+    const inst = installEngine;
     const { loadSkillsManifest, resolveProfile } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-profiles.cjs'));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2973-wipe-'));
     try {
@@ -212,7 +213,7 @@ describe('Bug #2973 (#3003 CR): installRuntimeArtifacts preserves user-owned gsd
     // installRuntimeArtifacts() — the full uninstall+reinstall cycle.
     // uninstallRuntimeArtifacts removes all gsd-* entries; installRuntimeArtifacts
     // then writes fresh ones from source.
-    const inst = require(INSTALL);
+    const inst = installEngine;
     const { loadSkillsManifest, resolveProfile } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-profiles.cjs'));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2973-wipe-shipped-'));
     try {
