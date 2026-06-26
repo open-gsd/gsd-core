@@ -21,11 +21,17 @@ interface ResolvedProfile {
   agents?: Set<string>;
 }
 
+interface AgentCtx {
+  runtime: string;
+  pathPrefix: string;
+  attribution: string | null | undefined;
+}
+
 interface ArtifactKind {
   kind: ArtifactKindName;
   destSubpath: string;
   prefix?: string;
-  stage: (resolvedProfile: ResolvedProfile) => string;
+  stage: (resolvedProfile: ResolvedProfile, agentCtx?: AgentCtx) => string;
 }
 
 interface Layout {
@@ -49,9 +55,18 @@ interface Dependencies {
   rewriteStagedCommandBodies?: (stagedDir: string, opts: RewriteOpts) => string | void;
 }
 
+interface ComputePathPrefixOpts {
+  isGlobal: boolean;
+  isOpencode: boolean;
+  isWindowsHost: boolean;
+  resolvedTarget: string;
+  homeDir: string;
+}
+
 interface RuntimeArtifactConversionExports {
   rewriteStagedSkillBodies: (stagedDir: string, opts: RewriteOpts) => string | void;
   rewriteStagedCommandBodies: (stagedDir: string, opts: RewriteOpts) => string | void;
+  _computePathPrefix: (opts: ComputePathPrefixOpts) => string;
 }
 
 interface PlanItem {
@@ -151,10 +166,34 @@ function createRuntimeArtifactInstallPlan(args: CreateRuntimeArtifactInstallPlan
     resolveAttribution,
   };
 
+  // ADR-1235 §1: build agentCtx once per plan so agents kind entries can apply
+  // the CORRECT pre-converter cross-cutting (path rewrites → attribution → converter
+  // → normalize). This mirrors the exact per-file order in the inline agent loop
+  // in bin/install.js (lines 9330-9415). agentCtx is passed as the second arg
+  // to kind.stage() for agents kind entries with a converter (convertedAgentsKind).
+  // NO _stampNonClaudeRuntimeDefaults — agents are NOT stamped in the inline loop.
+  const os = _require('node:os') as typeof import('node:os');
+  const homedirFn: () => string = homedir ?? (() => os.homedir());
+  const resolvedTarget = path.resolve(layout.configDir).replace(/\\/g, '/');
+  const homeDir = homedirFn().replace(/\\/g, '/');
+  const isGlobal = scope === 'global';
+  const isOpencode = layout.runtime === 'opencode';
+  const isWindowsHost = (platform ?? process.platform) === 'win32';
+  const pathPrefix = conversionExports._computePathPrefix({ isGlobal, isOpencode, isWindowsHost, resolvedTarget, homeDir });
+  const attribution = resolveAttribution ? resolveAttribution(layout.runtime) : undefined;
+  const agentCtx: AgentCtx = { runtime: layout.runtime, pathPrefix, attribution };
+
   for (const kind of layout.kinds) {
     let stagedDir: string;
     try {
-      stagedDir = kind.stage(resolvedProfile);
+      if (kind.kind === 'agents') {
+        // ADR-1235 §1: pass agentCtx so stageAgentsForRuntimeWithConverter applies
+        // the full inline-loop order: pathRewrites → attribution → converter → normalize.
+        // The cross-cutting is now PRE-converter (inside staging), not POST.
+        stagedDir = kind.stage(resolvedProfile, agentCtx);
+      } else {
+        stagedDir = kind.stage(resolvedProfile);
+      }
     } catch (err) {
       return { ok: false, kind: 'stage_failed', message: errorMessage(err), cleanupDirs, failedKind: kind.kind };
     }
@@ -168,6 +207,8 @@ function createRuntimeArtifactInstallPlan(args: CreateRuntimeArtifactInstallPlan
         const rewrittenDir = rewriteStagedSkillBodies(stagedDir, rewriteOpts);
         sourceDir = addCleanupDir(cleanupDirs, stagedDir, rewrittenDir);
       }
+      // agents kind: cross-cutting already applied INSIDE kind.stage() via agentCtx.
+      // No POST-step needed. sourceDir stays as stagedDir.
     } catch (err) {
       return { ok: false, kind: 'rewrite_failed', message: errorMessage(err), cleanupDirs, failedKind: kind.kind };
     }
