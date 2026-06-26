@@ -711,8 +711,8 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 
 `DEFECT.WINDOWS-FS-OPS.symptom=fs.renameSync / fs.copyFileSync hits EPERM/EBUSY on Windows when antivirus or another process holds a transient handle on the target`
 `DEFECT.WINDOWS-FS-OPS.examples=c47c2c5d build-hooks rename → copy fallback, d2412271 install Windows persistent SDK shim`
-`DEFECT.WINDOWS-FS-OPS.detect=any rename/copy in build/install path without try/catch fallback`
-`DEFECT.WINDOWS-FS-OPS.fix-forward=catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry, surface degraded-mode message; never silently swallow`
+`DEFECT.WINDOWS-FS-OPS.detect=ADR-1703 Phase 6: enforced by local/require-fs-op-fallback (AST ESLint rule, error) over src/**/*.cts + bin/install.js + scripts/build-hooks.js — flags an unguarded fs.rename/fs.renameSync (the atomic-publish primitive named in .symptom) that lacks a transient-errno retry or a Windows platform guard; a catch that silently swallows or cleans-up-and-rethrows without an errno check does NOT satisfy the .fix-forward clause. copyFile/unlink are the fallback primitives (out of scope); delegated retry helpers (retryRenameSync from shell-command-projection) are the recognized compliant shape`
+`DEFECT.WINDOWS-FS-OPS.fix-forward=catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry, surface degraded-mode message; never silently swallow; the canonical production cure is retryRenameSync (shell-command-projection.cjs) or a bounded RENAME_RETRY_ERRNOS = new Set(['EPERM','EBUSY','EACCES']) loop`
 
 `DEFECT.UNBOUNDED-SUBPROCESS.symptom=git/npm subprocess shelled out without timeout; CLI hangs indefinitely on stuck remote, large repo, or missing network`
 `DEFECT.UNBOUNDED-SUBPROCESS.examples=a33cbe72 worktree fix bound git subprocesses with timeout`

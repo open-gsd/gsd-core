@@ -41,6 +41,9 @@ const PROTECTED_RULES = [
   'require-userprofile-with-home',
   // ADR-1703 Phase 5 rule (issue #1733) — applies to src/**/*.cts (production sources)
   'normalize-path-in-content',
+  // ADR-1703 Phase 6 rule (issue #1740) — applies to src/**/*.cts AND the build/install
+  // surface (bin/install.js, scripts/build-hooks.js) brought under lint by the glob expansion
+  'require-fs-op-fallback',
 ];
 
 // ── Detect disable directives via the comment text ───────────────────────────
@@ -92,6 +95,10 @@ function classifyComment(commentValue) {
 //                            protect normalize-path-in-content, which applies to
 //                            src/**/*.cts; an eslint-disable there would bypass the
 //                            production rule entirely)
+//   - bin/install.js + scripts/build-hooks.js — the ADR-1703 Phase 6 glob expansion
+//                            surface (DEFECT.WINDOWS-FS-OPS); an eslint-disable in the
+//                            generated installer or build-side atomic-replace helper
+//                            would bypass require-fs-op-fallback / normalize-path-in-content
 
 const SELF_ABS = __filename;
 
@@ -102,7 +109,12 @@ function collectTestFiles() {
     .filter(absPath => absPath !== SELF_ABS);
   const srcFiles = globSync('src/**/*.cts', { cwd: root })
     .map(rel => path.join(root, rel));
-  return [...testFiles, ...srcFiles];
+  // ADR-1703 Phase 6: the two production portability-rule surfaces outside src/ + tests/.
+  const prodExtra = [
+    path.join(root, 'bin', 'install.js'),
+    path.join(root, 'scripts', 'build-hooks.js'),
+  ].filter(absPath => fs.existsSync(absPath));
+  return [...testFiles, ...srcFiles, ...prodExtra];
 }
 
 // ── Scan ──────────────────────────────────────────────────────────────────────
@@ -114,6 +126,12 @@ function scanFile(absPath) {
   } catch (err) {
     throw new Error(`Could not read ${absPath}: ${err.message}`);
   }
+
+  // bin/install.js (generated installer) starts with a `#!/usr/bin/env node` shebang
+  // that espree cannot parse. Rewrite the leading `#!` to `//` so it becomes a valid
+  // line comment — this preserves byte length and line numbers so any reported
+  // directive stays at the correct source line.
+  if (src.startsWith('#!')) src = '//' + src.slice(2);
 
   // .cts files use TypeScript syntax — use @typescript-eslint/typescript-estree.
   // .cjs files use plain JS — use espree (the original parser).

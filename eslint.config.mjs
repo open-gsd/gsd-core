@@ -23,6 +23,7 @@ import noHardcodedTmp from './eslint-rules/no-hardcoded-tmp.cjs';
 import noBareNpmExec from './eslint-rules/no-bare-npm-exec.cjs';
 import requireUserprofileWithHome from './eslint-rules/require-userprofile-with-home.cjs';
 import normalizePathInContent from './eslint-rules/normalize-path-in-content.cjs';
+import requireFsOpFallback from './eslint-rules/require-fs-op-fallback.cjs';
 
 const localPlugin = {
   rules: {
@@ -40,6 +41,7 @@ const localPlugin = {
     'no-bare-npm-exec': noBareNpmExec,
     'require-userprofile-with-home': requireUserprofileWithHome,
     'normalize-path-in-content': normalizePathInContent,
+    'require-fs-op-fallback': requireFsOpFallback,
   },
 };
 
@@ -224,6 +226,36 @@ export default tseslint.config(
       // excluded; content heuristic tightened to genuine reference/config-dir
       // markers). See RULESET.CONTENT-PATH-NORMALIZATION in CONTEXT.md.
       'local/normalize-path-in-content': 'error',
+      // ADR-1703 Phase 6: flag an unguarded fs.rename/fs.renameSync (the
+      // atomic-publish primitive) that lacks a transient-errno fallback
+      // (EPERM/EBUSY/EACCES retry or a Windows platform guard). See
+      // DEFECT.WINDOWS-FS-OPS in CONTEXT.md.
+      'local/require-fs-op-fallback': 'error',
+    },
+  },
+
+  // ── bin/install.js + scripts/build-hooks.js — ADR-1703 Phase 6 glob expansion ─
+  // The top-level `bin/install.js` (generated installer) and `scripts/build-hooks.js`
+  // (the build-side atomic-replace helper) are the two production surfaces named by
+  // DEFECT.WINDOWS-FS-OPS that were NOT covered by the src/**/*.cts / gsd-core/bin/**/*.cjs
+  // globs (ADR-1703 L124-126). This block brings them under the two production
+  // portability rules. It deliberately does NOT apply the full js.recommended set —
+  // bin/install.js is ~12k lines of generated code; the ADR's mandate is the
+  // portability defect surface, not a broader generated-code style sweep.
+  {
+    files: ['bin/install.js', 'scripts/build-hooks.js'],
+    plugins: {
+      local: localPlugin,
+    },
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      'local/normalize-path-in-content': 'error',
+      'local/require-fs-op-fallback': 'error',
     },
   },
 
