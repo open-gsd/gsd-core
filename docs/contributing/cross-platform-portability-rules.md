@@ -7,6 +7,10 @@ Windows-only defect is caught before it ships — not after it reaches the `wind
 lane. The architecture and rationale are in [ADR-1703](../adr/1703-portability-enforcement-architecture.md);
 this page is the practical reference + how-to.
 
+> **Adding a new rule?** See [`adding-a-portability-rule.md`](./adding-a-portability-rule.md) —
+> the five seams (rule / vocab / platform-guard / disable-ban / ci-scope), the zero-escape-hatch
+> contract, and the step-by-step recipe.
+
 These rules are **hard-fail with zero escape hatches**: there is no `// windows-portability-ok:`
 comment and no `eslint-disable` for them (a `tests/portability-rule-disable-ban.test.cjs` check,
 running outside ESLint, fails the build if you try). Legitimately platform-specific code must be
