@@ -66,6 +66,11 @@ Reviewer-selection precedence:
 - Known-but-undetected slugs emit an info note and are ignored
 - If all configured reviewers are unavailable, fail with an actionable message
 
+**Reviewer instances (#1517, optional):** if `review.reviewer_instances` is configured,
+instance names in `review.default_reviewers` run as independent identities. Resolution rules
+are in `gsd-core/references/reviewer-instances.md` — load it lazily only when instances are
+configured. Unconfigured → default path unchanged.
+
 If no CLIs are available:
 ```
 No external AI CLIs found. Install at least one:
@@ -242,6 +247,10 @@ else
   CODEX_BYPASS_FLAG=""
 fi
 ```
+
+**Reviewer instances (#1517, optional):** when instances are configured, each selected
+instance invokes its base `cli` with its own `model`/`agent` (opaque argv, never
+shell-interpolated). Exact invocation in `gsd-core/references/reviewer-instances.md`.
 
 For each selected CLI, invoke in sequence (not parallel — avoid rate limits):
 
@@ -634,6 +643,11 @@ Combine all review responses into `{phase_dir}/{padded_phase}-REVIEWS.md`:
 
 After all reviewers complete, collect trim metadata files written during the run. For each reviewer that was trimmed (i.e. a `.metadata.json` file exists and `hardFailed` or `omitted` is non-empty, or `projectMdShrunk` is true, or `planTruncationPct > 0`), include a `trimmed_reviewers` block in the frontmatter. Omit the key entirely if no reviewer was trimmed.
 
+**Reviewer instances (#1517, optional):** when instances ran, frontmatter records their
+names, each gets its own `## <Adapter> Review (<instance>)` section, and ≥2 same-cli
+instances print a one-line shared-adapter caveat. Format in
+`gsd-core/references/reviewer-instances.md`.
+
 ```markdown
 ---
 phase: {N}
@@ -681,6 +695,18 @@ trimmed_reviewers:        # only present if at least one reviewer was trimmed
 ## OpenCode Review
 
 {opencode review content}
+
+---
+
+## OpenCode Review (opencode-deepseek)
+
+{opencode-deepseek instance review content — only present when this instance was selected}
+
+---
+
+## OpenCode Review (opencode-mimo)
+
+{opencode-mimo instance review content — only present when this instance was selected}
 
 ---
 
