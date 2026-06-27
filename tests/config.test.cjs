@@ -1093,6 +1093,59 @@ describe('config-set/config-get context', () => {
   });
 });
 
+// ─── config-set value coercion (#1581) ───────────────────────────────────────
+
+describe('config-set value coercion (#1581)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    const config = readConfig(tmpDir);
+    config.context_window = 200000;
+    writeConfig(tmpDir, config);
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('rejects non-finite context_window instead of writing null', () => {
+    const result = runGsdTools(['config-set', 'context_window', 'Infinity', '--raw'], tmpDir);
+    assert.strictEqual(result.success, false);
+    assert.ok(
+      result.error.includes('Invalid context_window'),
+      `Expected context_window validation error: ${result.error}`,
+    );
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.context_window, 200000);
+  });
+
+  test('rejects non-canonical numeric context_window values', () => {
+    for (const value of ['  ', '0x10', '1e6', '0']) {
+      const result = runGsdTools(['config-set', 'context_window', value, '--raw'], tmpDir);
+      assert.strictEqual(result.success, false, `${value} should be rejected`);
+      assert.ok(
+        result.error.includes('Invalid context_window'),
+        `Expected context_window validation error for ${JSON.stringify(value)}: ${result.error}`,
+      );
+    }
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.context_window, 200000);
+  });
+
+  test('preserves numeric-looking project_code values as strings', () => {
+    const result = runGsdTools(['config-set', 'project_code', '007', '--raw'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(result.output.trim(), 'project_code=007');
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.project_code, '007');
+  });
+});
+
 // ─── config-path (#2282) ────────────────────────────────────────────────────
 
 describe('config-path command (#2282)', () => {
