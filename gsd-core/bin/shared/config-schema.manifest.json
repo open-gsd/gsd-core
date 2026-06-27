@@ -173,6 +173,11 @@
       "description": "review.max_prompt_tokens_per_reviewer.<reviewer-slug>"
     },
     {
+      "topLevel": "review",
+      "source": "^review\\.reviewer_instances\\.[a-zA-Z0-9_-]+\\.(cli|model|agent)$",
+      "description": "review.reviewer_instances.<instance-name>.<cli|model|agent> (#1517)"
+    },
+    {
       "topLevel": "model_policy",
       "source": "^model_policy\\.runtime_tiers\\.[a-zA-Z0-9_-]+\\.(opus|sonnet|haiku)$",
       "description": "model_policy.runtime_tiers.<runtime>.<opus|sonnet|haiku>"
