@@ -48,7 +48,15 @@ Parse `SNAPSHOT` as JSON. It has the shape:
 
 `situation` is one of: `no-project`, `paused`, `blocked`, `verify-failed`, `needs-first-phase`, `planning`, `executing`, `verify-pending`, `idle-stranded`, `complete`, `unknown`.
 
-**Fallback (never strand the user):** if `SNAPSHOT` is empty, not valid JSON, or missing `actions`, do NOT error. Instead run `/gsd:progress` and stop. Print one line first: `smart-entry unavailable — showing progress.`
+**Fallback (never strand the user):** `smart-entry --json` can fail for two reasons, and each has a different recovery. Parse `SNAPSHOT`; if it is empty, not valid JSON, or missing `actions`, apply the first matching recovery below — do NOT error.
+
+1. **`gsd-tools` itself is broken** (the failure is a `Cannot find module ...` / Node crash, not just an empty result). Probe by running `gsd_run state-snapshot` — if THAT also errors, the whole tool layer is down and routing to `/gsd:progress` would dead-end too (it also needs gsd-tools). **Recover by reading state directly:**
+   - Read `.planning/STATE.md` (frontmatter + body) with the Read tool. Extract: `status` (frontmatter `status:` or body `**Status:**`), `Phase:` from the body, `total_phases`/`percent` from a nested `progress:` frontmatter object if present, and any `## Blockers` items.
+   - Synthesize a minimal result: `situation` = your best guess from the status text (`executing`/`verifying`/`planning`/`complete`/`paused`), `summary` = a one-line read ("Phase N of M · status"), and an `actions` list built from status (e.g. verifying → `/gsd:verify-work`, executing → `/gsd:execute-phase`, else `/gsd:progress`), always including `/gsd:quick` and `/gsd:help`.
+   - Print one line first: `smart-entry unavailable (gsd-tools error) — reading state directly. The gsd-tools layer may need a rebuild (rm tsconfig.build.tsbuildinfo && npm run build).`
+   - Proceed to the `present` step with this synthesized result.
+
+2. **Only `smart-entry` is unavailable** (e.g. older gsd-core without the subcommand; `state-snapshot` still works). Run `/gsd:progress` and stop. Print one line first: `smart-entry unavailable — showing progress.`
 </step>
 
 <step name="present">
