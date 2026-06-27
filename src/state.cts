@@ -30,6 +30,11 @@ import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import stateTransitionMod = require('./state-transition.cjs');
+const { transitionCore } = stateTransitionMod;
+type StateTransitionIntent = stateTransitionMod.StateTransitionIntent;
+type StateTransitionDeps = stateTransitionMod.StateTransitionDeps;
 import {
   computeProgressPercent,
   normalizeProgressNumbers,
@@ -2179,184 +2184,28 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
     return;
   }
 
-  const today = realClock.today();
-  const updated: string[] = [];
+  // ADR-1769 Phase 1: dispatches to the STATE.md Transition Module. The 175-line
+  // RMW callback that used to live here (format detection + preservation policy
+  // + section mutation + idempotency guard + resume branching) is now the pure
+  // `transitionCore` function in src/state-transition.cts, backed by the
+  // field-classification table. readModifyWriteStateMd still owns the lock,
+  // #1230 post-sync preservation, and the no-op write guard.
+  const intent: StateTransitionIntent = {
+    kind: 'beginPhase',
+    phaseNumber,
+    phaseName: phaseName ?? null,
+    planCount: planCount ?? null,
+  };
+  const deps: StateTransitionDeps = {
+    clock: realClock,
+    progressProvider: () => null, // beginPhase doesn't consult disk progress; syncStateFrontmatter's scan is authoritative
+  };
 
+  let updated: string[] = [];
   readModifyWriteStateMd(statePath, (content) => {
-    // Bug #1255: all body-field replacements must operate on the body only
-    // (frontmatter stripped), not on the full content.  When the full content is
-    // passed to stateReplaceField the YAML `status: planning` key matches the
-    // plain-text pattern (`^Status:\s*`) before the body pipe-table row, so the
-    // pipe-table `| Status | Planning |` is never updated and syncStateFrontmatter
-    // re-derives 'planning' from the unchanged body — the status never advances.
-    const existingFm = extractFrontmatter(content) as Record<string, unknown>;
-    const hasFrontmatter = Object.keys(existingFm).length > 0;
-    let body = stripFrontmatter(content);
-
-    // Helper to reassemble content for field-replacement checks; callers that
-    // only need to test/replace body fields use `body` directly, and the final
-    // return reassembles the frontmatter block with the updated body.
-    const reassemble = (b: string) =>
-      hasFrontmatter ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}` : b;
-
-    // Idempotency guard (#3127): if the phase is already mid-flight, do NOT
-    // overwrite execution-progress fields (Current Plan, plan body line,
-    // Last Activity Description). Only update fields that are safe to
-    // refresh on resume (Last Activity date, Status if inconsistent).
-    // A phase is considered mid-flight when Status contains 'Executing Phase N'
-    // for the current phase number.
-    // #1255: extract from body (not full content) so the YAML `status:` key
-    // cannot shadow the body Status field.
-    const currentStatus = stateExtractField(body, 'Status') || '';
-    const isAlreadyExecuting = new RegExp(`Executing Phase\\s+${escapeRegex(String(phaseNumber))}\\b`, 'i').test(currentStatus);
-
-    // Update Status field (body only — #1255)
-    const statusValue = `Executing Phase ${phaseNumber}`;
-    let result = stateReplaceField(body, 'Status', statusValue);
-    if (result) { body = result; updated.push('Status'); }
-
-    // Update Last Activity (safe to update on resume — tracks when execute-phase ran)
-    result = stateReplaceField(body, 'Last Activity', today);
-    if (result) { body = result; updated.push('Last Activity'); }
-
-    if (!isAlreadyExecuting) {
-      // First-time execution: set all progress fields
-
-      // Update Last Activity Description
-      const activityDesc = `Phase ${phaseNumber} execution started`;
-      result = stateReplaceField(body, 'Last Activity Description', activityDesc);
-      if (result) { body = result; updated.push('Last Activity Description'); }
-
-      // Update Current Phase
-      result = stateReplaceField(body, 'Current Phase', String(phaseNumber));
-      if (result) { body = result; updated.push('Current Phase'); }
-
-      // Update Current Phase Name
-      if (phaseName) {
-        result = stateReplaceField(body, 'Current Phase Name', phaseName);
-        if (result) { body = result; updated.push('Current Phase Name'); }
-      }
-
-      // Update Current Plan to 1 (starting from the first plan)
-      result = stateReplaceField(body, 'Current Plan', '1');
-      if (result) { body = result; updated.push('Current Plan'); }
-
-      // Update Total Plans in Phase
-      if (planCount) {
-        result = stateReplaceField(body, 'Total Plans in Phase', String(planCount));
-        if (result) { body = result; updated.push('Total Plans in Phase'); }
-      }
-
-      // Update **Current focus:** body text line (#1104)
-      const focusLabel = phaseName ? `Phase ${phaseNumber} — ${phaseName}` : `Phase ${phaseNumber}`;
-      const focusPattern = /(\*\*Current focus:\*\*\s*).*/i;
-      if (focusPattern.test(body)) {
-        body = body.replace(focusPattern, (_match, prefix: string) => `${prefix}${focusLabel}`);
-        updated.push('Current focus');
-      }
-
-      // Update ## Current Position section (#1104, #1365)
-      // ADR-1372 T6: positionPattern → tokenizeHeadings + spliceStateSection.
-      // Mirrors /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; stop at level ≥ 2.
-      const posHs = tokenizeHeadings(body);
-      const posIdx = posHs.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
-      if (posIdx !== -1) {
-        const posH = posHs[posIdx];
-        const bodyLines = body.split('\n');
-        const posHL = bodyLines[posH.line - 1];
-        const posBodyStart = posH.offset + posHL.length + 1;
-        let posBodyEnd = body.length;
-        for (let j = posIdx + 1; j < posHs.length; j++) {
-          if (STOP_H2_PLUS(posHs[j].level)) { posBodyEnd = posHs[j].offset - 1; break; }
-        }
-        let posBody = body.slice(posBodyStart, posBodyEnd);
-
-        // Update or insert Phase line
-        const newPhase = `Phase: ${phaseNumber}${phaseName ? ` (${phaseName})` : ''} — EXECUTING`;
-        if (/^Phase:/m.test(posBody)) {
-          posBody = posBody.replace(/^Phase:.*$/m, newPhase);
-        } else {
-          // Pipe-table format in Current Position (#1257): update the | Phase | … |
-          // cell rather than prepending a spurious inline `Phase:` line (which left
-          // the table cell stale). Mirrors the Status/Last-activity table branches.
-          const phaseValue = `${phaseNumber}${phaseName ? ` (${phaseName})` : ''} — EXECUTING`;
-          const replaced = stateReplaceField(posBody, 'Phase', phaseValue);
-          if (replaced !== null) posBody = replaced;
-        }
-
-        // Update or insert Plan line
-        const newPlan = `Plan: 1 of ${planCount || '?'}`;
-        if (/^Plan:/m.test(posBody)) {
-          posBody = posBody.replace(/^Plan:.*$/m, newPlan);
-        } else {
-          // Pipe-table format in Current Position (#1257): update the | Plan | … |
-          // cell rather than appending after a prepended inline line.
-          const planValue = `1 of ${planCount || '?'}`;
-          const replaced = stateReplaceField(posBody, 'Plan', planValue);
-          if (replaced !== null) posBody = replaced;
-        }
-
-        // Update Status line if present
-        const newStatus = `Status: Executing Phase ${phaseNumber}`;
-        if (/^Status:/m.test(posBody)) {
-          posBody = posBody.replace(/^Status:.*$/m, newStatus);
-        } else {
-          // Pipe-table format in Current Position (#1255)
-          const replaced = stateReplaceField(posBody, 'Status', `Executing Phase ${phaseNumber}`);
-          if (replaced !== null) posBody = replaced;
-        }
-
-        // Update Last activity line if present
-        const newActivity = `Last activity: ${today} — Phase ${phaseNumber} execution started`;
-        if (/^Last activity:/im.test(posBody)) {
-          posBody = posBody.replace(/^Last activity:.*$/im, newActivity);
-        } else {
-          // Pipe-table format in Current Position (#1255)
-          // Value must match the inline branch (date + narrative), not bare date.
-          const activityValue = `${today} — Phase ${phaseNumber} execution started`;
-          const replaced = stateReplaceField(posBody, 'Last Activity', activityValue)
-            ?? stateReplaceField(posBody, 'Last activity', activityValue);
-          if (replaced !== null) posBody = replaced;
-        }
-
-        body = body.slice(0, posBodyStart) + posBody + body.slice(posBodyEnd);
-        updated.push('Current Position');
-      }
-    } else {
-      // Resume path: only update Last activity timestamp in Current Position
-      // (do not touch Plan:, stopped_at, progress.percent, or plan counter)
-      // ADR-1372 T6: positionPattern → tokenizeHeadings; stop at level ≥ 2.
-      const posHsR = tokenizeHeadings(body);
-      const posIdxR = posHsR.findIndex(h => h.level === 2 && /^current\s+position$/i.test(h.text));
-      if (posIdxR !== -1) {
-        const posHR = posHsR[posIdxR];
-        const bodyLinesR = body.split('\n');
-        const posHLR = bodyLinesR[posHR.line - 1];
-        const posBodyStartR = posHR.offset + posHLR.length + 1;
-        let posBodyEndR = body.length;
-        for (let j = posIdxR + 1; j < posHsR.length; j++) {
-          if (STOP_H2_PLUS(posHsR[j].level)) { posBodyEndR = posHsR[j].offset - 1; break; }
-        }
-        let posBody = body.slice(posBodyStartR, posBodyEndR);
-        const resumeActivity = `Last activity: ${today} — Phase ${phaseNumber} execution resumed (wave continue)`;
-        if (/^Last activity:/im.test(posBody)) {
-          posBody = posBody.replace(/^Last activity:.*$/im, resumeActivity);
-          body = body.slice(0, posBodyStartR) + posBody + body.slice(posBodyEndR);
-          updated.push('Last activity (resume)');
-        } else {
-          // Pipe-table format in Current Position (#1255)
-          const replaced = stateReplaceField(posBody, 'Last Activity', resumeActivity)
-            ?? stateReplaceField(posBody, 'Last activity', resumeActivity);
-          if (replaced !== null) {
-            posBody = replaced;
-            body = body.slice(0, posBodyStartR) + posBody + body.slice(posBodyEndR);
-            updated.push('Last activity (resume)');
-          }
-        }
-      }
-    }
-
-    return reassemble(body);
+    const result = transitionCore(content, intent, deps);
+    updated = result.updated;
+    return result.content;
   }, cwd);
 
   output({ updated, phase: phaseNumber, phase_name: phaseName || null, plan_count: planCount || null }, raw, updated.length > 0 ? 'true' : 'false');
