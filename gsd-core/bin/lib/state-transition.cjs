@@ -123,6 +123,8 @@ function transitionCore(content, intent, deps) {
             return plannedPhaseCore(content, intent, deps);
         case 'milestoneSwitch':
             return milestoneSwitchCore(content, intent, deps);
+        case 'milestoneComplete':
+            return milestoneCompleteCore(content, intent, deps);
     }
 }
 // ----------------------------------------------------------------------------
@@ -813,4 +815,92 @@ function milestoneSwitchCore(content, intent, deps) {
     const yamlStr = reconstructFrontmatter(fm);
     const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
     return { content: assembled, updated };
+}
+// ----------------------------------------------------------------------------
+// milestoneComplete — intent implementation (Phase 5)
+// ----------------------------------------------------------------------------
+/**
+ * Apply a `milestoneComplete` transition to STATE.md content.
+ *
+ * Migrates the STATE.md write path inside `cmdMilestoneComplete` (milestone.cts)
+ * onto the substrate. Owns the closure write: Status (`<version> milestone
+ * complete`), Last Activity, Last Activity Description, a ## Current Position
+ * reset to the "Awaiting next milestone" state, and a ## Operator Next Steps
+ * reset pointing at the next-milestone command.
+ *
+ * The adapter (`cmdMilestoneComplete`) retains `writeStateMd` (the writer that
+ * owns the lock + steady-state syncStateFrontmatter post-sync) and resolves the
+ * runtime-specific next-milestone slash command, injecting it via
+ * `intent.nextMilestoneCommand` so the core stays pure.
+ *
+ * The two section resets use raw regex (with the pre-seam `allow-adhoc-markdown`
+ * waivers carried from milestone.cts) rather than tokenizeHeadings because the
+ * `## Operator Next Steps` section is non-canonical (not in STATE_MD_SECTIONS)
+ * and the existing behavior + its tests pin the exact regex semantics. A future
+ * collectSection migration (#1372) can swap both to section primitives.
+ *
+ * Behavior is byte-for-byte with the pre-migration milestone.cts:314-353 block.
+ */
+function milestoneCompleteCore(content, intent, deps) {
+    const updated = [];
+    const today = deps.clock.today();
+    const version = intent.version;
+    for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
+        const cls = getFieldClassification(fmKey);
+        if (cls === null) {
+            throw new Error(`transitionCore milestoneComplete: frontmatter key ${JSON.stringify(fmKey)} is not in FIELD_CLASSIFICATION; ` +
+                `add a row per ADR-1769 §4 before touching it.`);
+        }
+    }
+    // #1255: body-field replacements operate on body only.
+    const existingFm = extractFrontmatter(content);
+    const hasFrontmatter = Object.keys(existingFm).length > 0;
+    let body = stripFrontmatter(content);
+    const reassemble = (b) => hasFrontmatter
+        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
+        : b;
+    // Status — `<version> milestone complete`.
+    const statusAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Status', null, `${version} milestone complete`);
+    if (statusAfter !== body) {
+        body = statusAfter;
+        updated.push('Status');
+    }
+    // Last Activity.
+    const lastActivityAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Last Activity', 'Last activity', today);
+    if (lastActivityAfter !== body) {
+        body = lastActivityAfter;
+        updated.push('Last Activity');
+    }
+    // Last Activity Description.
+    const ladAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Last Activity Description', null, `${version} milestone completed and archived`);
+    if (ladAfter !== body) {
+        body = ladAfter;
+        updated.push('Last Activity Description');
+    }
+    // ## Current Position reset — stop resume/progress flows pointing at closed
+    // execution instructions. allow-adhoc-markdown: pre-seam section write-modify;
+    // pending collectSection migration #1372.
+    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    const closedPositionBody = `\nPhase: Milestone ${version} complete\n` +
+        `Plan: —\n` +
+        `Status: Awaiting next milestone\n` +
+        `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
+    if (positionPattern.test(body)) {
+        body = body.replace(positionPattern, (_m, header) => `${header}${closedPositionBody}`);
+    }
+    else {
+        body = `${body.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
+    }
+    updated.push('Current Position');
+    // ## Operator Next Steps — normalize stale tails that can persist after close.
+    // allow-adhoc-markdown: pre-seam section write-modify; pending collectSection migration #1372.
+    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    if (operatorPattern.test(body)) {
+        body = body.replace(operatorPattern, `$1\n- Start the next milestone with ${intent.nextMilestoneCommand}\n\n`);
+    }
+    else {
+        body = `${body.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${intent.nextMilestoneCommand}\n`;
+    }
+    updated.push('Operator Next Steps');
+    return { content: reassemble(body), updated };
 }

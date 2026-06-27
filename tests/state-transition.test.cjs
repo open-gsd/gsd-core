@@ -915,3 +915,120 @@ describe('ADR-1769 Phase 4: milestoneSwitch transition — milestone reset', () 
     );
   });
 });
+
+// ADR-1769 Phase 5: milestoneComplete
+
+describe('ADR-1769 Phase 5: milestoneComplete transition — closure write', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+  const intent = { kind: 'milestoneComplete', version: 'v1.0', nextMilestoneCommand: '/gsd:new-milestone' };
+
+  function preCloseBody() {
+    return [
+      '# Project State',
+      '',
+      '**Status:** Executing Phase 5',
+      '**Last Activity:** 2026-06-20',
+      '**Last Activity Description:** mid-flight',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 5 — EXECUTING',
+      'Plan: 2 of 3',
+      'Status: Executing Phase 5',
+      'Last activity: 2026-06-20 — running',
+      '',
+      '## Operator Next Steps',
+      '',
+      '- Re-run /gsd:complete-milestone v1.0',
+      '',
+    ].join('\n');
+  }
+
+  test('Status becomes "<version> milestone complete"', () => {
+    const result = transitionCore(preCloseBody(), intent, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'v1.0 milestone complete');
+    assert.ok(result.updated.includes('Status'));
+  });
+
+  test('Last Activity is refreshed to clock.today()', () => {
+    const result = transitionCore(preCloseBody(), intent, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Last Activity'), '2026-06-27');
+  });
+
+  test('Last Activity Description carries the archived narrative', () => {
+    const result = transitionCore(preCloseBody(), intent, deps);
+    assert.strictEqual(
+      stateExtractField(result.content, 'Last Activity Description'),
+      'v1.0 milestone completed and archived',
+    );
+  });
+
+  test('Current Position resets to "Awaiting next milestone" with archived narrative', () => {
+    const result = transitionCore(preCloseBody(), intent, deps);
+    assert.ok(/Phase: Milestone v1\.0 complete/.test(result.content));
+    assert.ok(/Status: Awaiting next milestone/.test(result.content));
+    assert.ok(/Last activity: 2026-06-27 — Milestone v1\.0 completed and archived/.test(result.content));
+    assert.ok(result.updated.includes('Current Position'));
+  });
+
+  test('Operator Next Steps is rewritten to point at the next-milestone command', () => {
+    const result = transitionCore(preCloseBody(), intent, deps);
+    assert.ok(/## Operator Next Steps/.test(result.content));
+    assert.ok(/- Start the next milestone with \/gsd:new-milestone/.test(result.content));
+    // The stale prior instruction must be gone.
+    assert.ok(!/Re-run \/gsd:complete-milestone/.test(result.content),
+      'stale Operator Next Steps tail must be replaced');
+  });
+
+  test('Operator Next Steps section is inserted when absent', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Status:** Executing Phase 5',
+      '**Last Activity:** 2026-06-20',
+      '**Last Activity Description:** mid',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 5 — EXECUTING',
+      'Status: Executing Phase 5',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, intent, deps);
+    assert.ok(/## Operator Next Steps/.test(result.content));
+    assert.ok(/- Start the next milestone with \/gsd:new-milestone/.test(result.content));
+  });
+
+  test('Current Position section is inserted when absent', () => {
+    const input = '# Project State\n\n**Status:** Executing\n**Last Activity:** 2026-06-20\n';
+    const result = transitionCore(input, intent, deps);
+    assert.ok(/## Current Position/.test(result.content));
+    assert.ok(/Status: Awaiting next milestone/.test(result.content));
+  });
+
+  test('frontmatter is preserved across the closure write (#1255)', () => {
+    const input = [
+      '---',
+      'status: executing',
+      'milestone: v1.0',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '**Status:** Executing Phase 5',
+      '**Last Activity:** 2026-06-20',
+      '**Last Activity Description:** mid',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 5 — EXECUTING',
+      'Status: Executing Phase 5',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, intent, deps);
+    // Body Status must be the closure value, not the YAML status key.
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'v1.0 milestone complete');
+    assert.ok(/^---\r?\n[\s\S]*?\r?\n---/.test(result.content), 'frontmatter block preserved');
+    assert.ok(/^milestone: v1\.0/m.test(result.content), 'frontmatter milestone preserved');
+  });
+});
