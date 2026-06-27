@@ -17,6 +17,7 @@
         "GEMINI_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".gemini",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

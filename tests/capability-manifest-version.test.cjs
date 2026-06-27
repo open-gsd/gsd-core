@@ -76,6 +76,7 @@ function runtimeCap(overrides) {
     engines: { gsd: '>=1.6.0' },
     runtime: {
       configHome: { kind: 'dot-home', name: '.demo', env: [] },
+      localConfigDir: '.demo',
       configFormat: 'settings-json',
       artifactLayout: { global: [], local: [] },
       commandStyle: 'slash-hyphen',

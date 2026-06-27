@@ -15,6 +15,7 @@
       "name": ".qoder",
       "env": ["QODER_CONFIG_DIR"]
     },
+    "localConfigDir": ".qoder",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

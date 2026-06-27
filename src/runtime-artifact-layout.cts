@@ -54,11 +54,25 @@ interface ResolvedProfile {
   agents: Set<string>;
 }
 
+/**
+ * Cross-cutting context for descriptor-driven agent staging (ADR-1235 §1).
+ * Passed as the optional second arg to ArtifactKind.stage() for agents kind
+ * entries so that stageAgentsForRuntimeWithConverter can apply the exact
+ * inline-loop transform order: pathRewrites → attribution → converter → normalize.
+ */
+interface AgentCtx {
+  runtime: string;
+  pathPrefix: string;
+  attribution: string | null | undefined;
+}
+
 interface ArtifactKind {
   kind: KimiArtifactKindName;
   destSubpath: string;
   prefix: string;
-  stage: (resolvedProfile: ResolvedProfile) => string;
+  /** For agents kind with a converter, accepts an optional AgentCtx as the second
+   *  arg so cross-cutting can be applied pre-converter (ADR-1235 §1). */
+  stage: (resolvedProfile: ResolvedProfile, agentCtx?: AgentCtx) => string;
 }
 
 interface Layout {
@@ -207,17 +221,21 @@ function convertedAgentsKind(
     kind: 'agents',
     destSubpath,
     prefix,
-    stage: (resolved) => {
+    stage: (resolved, agentCtx) => {
       // isGlobal is threaded so scope-aware agent converters (copilot, antigravity)
       // choose global-home vs workspace-relative paths; converters that only take
       // (content) ignore the extra positional arg. Mirrors skillsKind's scope
       // threading (#1173).
       const converter = conversionExports[converterName] as (content: string, isGlobal?: boolean) => string;
+      // ADR-1235 §1: when agentCtx is provided (by createRuntimeArtifactInstallPlan
+      // for descriptor-driven runtimes), thread it through so stageAgentsForRuntimeWithConverter
+      // can apply the full pre-converter + post-converter sequence in the correct order.
       return stageAgentsForRuntimeWithConverter(
         findAgentsSourceRoot(configDir),
         resolved,
         converter,
         scope === 'global',
+        agentCtx,
       );
     },
   };

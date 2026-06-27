@@ -2632,6 +2632,60 @@ function rewriteStagedCommandBodies(stagedDir, opts) {
   return applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathPrefix, isGlobal, attribution);
 }
 
+/**
+ * Runtimes that use the hyphen-namespace form `/gsd-<cmd>` in agent bodies.
+ * claude/qwen/hermes use hyphen-name:`...` frontmatter; cursor/windsurf/etc
+ * self-convert. Mirrors the `HYPHEN_NAME_AGENT_RUNTIMES` set in bin/install.js.
+ *
+ * @private — export normalizeAgentBodyForRuntime for callers.
+ */
+const HYPHEN_NAME_AGENT_RUNTIMES: ReadonlySet<string> = new Set(['claude', 'qwen', 'hermes']);
+
+/**
+ * Normalize `/gsd:<cmd>` colon refs in the agent body to `/gsd-<cmd>` for
+ * hyphen-`name:` runtimes (claude / qwen / hermes). No-op for all other
+ * runtimes. Mirrors the per-file call in bin/install.js line 9400.
+ *
+ * @param content   raw agent file content (post-converter)
+ * @param runtime   canonical runtime ID
+ * @param cmdNames  gsd command names from readGsdCommandNames()
+ */
+function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames: string[]): string {
+  if (!HYPHEN_NAME_AGENT_RUNTIMES.has(runtime)) return content;
+  return transformContentToHyphen(content, cmdNames);
+}
+
+/**
+ * Apply the 4 base `~/.claude/` path-prefix rewrites to a single agent content
+ * string. Mirrors the inline agent loop in bin/install.js lines 9330-9340:
+ *   ~/\.claude/ → pathPrefix
+ *   $HOME/\.claude/ → pathPrefix
+ *   ~/\.claude\b → normalizedPathPrefix
+ *   $HOME/\.claude\b → normalizedPathPrefix
+ *
+ * Skipped for copilot and antigravity (which do NOT do path rewrites in the
+ * inline loop). NO stamp (_stampNonClaudeRuntimeDefaults) — agents are NOT
+ * stamped in the inline loop.
+ *
+ * ADR-1235 §1: pre-converter cross-cutting for descriptor-driven agent pipeline.
+ * Exported as `applyAgentPathRewrites` for testing and for injection into
+ * stageAgentsForRuntimeWithConverter via agentCtx.
+ *
+ * @param content     raw agent file content
+ * @param runtime     canonical runtime ID
+ * @param pathPrefix  trailing-slash path prefix (e.g. '$HOME/.cursor/')
+ * @returns content with path-prefix rewrites applied (or unchanged for copilot/antigravity)
+ */
+function applyAgentPathRewrites(content: string, runtime: string, pathPrefix: string): string {
+  if (runtime === 'copilot' || runtime === 'antigravity') return content;
+  const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
+  content = content.replace(/~\/\.claude\//g, pathPrefix);
+  content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+  content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+  content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+  return content;
+}
+
 // ── End rewrite engine ────────────────────────────────────────────────────────
 
 /**
@@ -2728,6 +2782,9 @@ export = {
   // High-level wrappers (derive pathPrefix + attribution from opts):
   rewriteStagedSkillBodies,
   rewriteStagedCommandBodies,
+  // ADR-1235 §1: descriptor-driven agent cross-cutting
+  applyAgentPathRewrites,
+  normalizeAgentBodyForRuntime,
   _computePathPrefix: computePathPrefix,
   _applyRuntimeRewrites,
   _stampNonClaudeRuntimeDefaults,
