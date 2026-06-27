@@ -10,6 +10,8 @@
   "bug-170-workflow-fallback-install-hint.test.cjs",
   "bug-1736-local-install-commands.test.cjs",
   "bug-1754-js-hook-guard.test.cjs",
+  "bug-1760-state-prune-noop-template-field.test.cjs",
+  "bug-1761-state-sync-wrong-progress.test.cjs",
   "bug-1817-sh-hook-guard.test.cjs",
   "bug-1818-unknown-flags.test.cjs",
   "bug-1826-phases-clear-confirm.test.cjs",
