@@ -17,8 +17,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const CMD = path.join(ROOT, 'commands', 'gsd', 'start.md');
-const WF = path.join(ROOT, 'gsd-core', 'workflows', 'gsd.md');
+const CMD = path.join(ROOT, 'commands', 'gsd', 'next.md');
+const WF = path.join(ROOT, 'gsd-core', 'workflows', 'smart-entry.md');
 const CMDS_DIR = path.join(ROOT, 'commands', 'gsd');
 
 // NEW_FILE_CAP from tests/workflow-size-budget.test.cjs (#1074).
@@ -40,16 +40,16 @@ function parseFrontmatter(content) {
   return fm;
 }
 
-describe('/gsd-start command file (commands/gsd/start.md)', () => {
+describe('/gsd:next command file (commands/gsd/next.md)', () => {
   const content = read(CMD);
 
   test('exists', () => {
     assert.ok(fs.existsSync(CMD));
   });
 
-  test('frontmatter has name: gsd:start (surfaces as /gsd-start)', () => {
+  test('frontmatter has name: gsd:next (surfaces as /gsd:next)', () => {
     const fm = parseFrontmatter(content);
-    assert.equal(fm.name, 'gsd:start');
+    assert.equal(fm.name, 'gsd:next');
   });
 
   test('has NO requires field (must work pre-project)', () => {
@@ -64,12 +64,12 @@ describe('/gsd-start command file (commands/gsd/start.md)', () => {
     assert.match(fmBlock, /SlashCommand/);
   });
 
-  test('references the gsd workflow', () => {
-    assert.match(content, /workflows\/gsd\.md/);
+  test('references the smart-entry workflow', () => {
+    assert.match(content, /workflows\/smart-entry\.md/);
   });
 });
 
-describe('/gsd workflow (gsd-core/workflows/gsd.md)', () => {
+describe('/gsd:next workflow (gsd-core/workflows/smart-entry.md)', () => {
   const content = read(WF);
 
   test('exists and is under the NEW_FILE_CAP (32 KiB)', () => {
