@@ -2704,6 +2704,163 @@ describe('state sync command', () => {
     const after = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.strictEqual(before, after, 'File should not be modified in verify mode');
   });
+
+  // #1761: When the current milestone cannot be bounded to a ROADMAP section,
+  // extractCurrentMilestone falls back to the whole document and the derived
+  // phase count conflates sibling milestones. state sync must NOT write a
+  // progress value off that conflated denominator — it must leave Progress
+  // untouched and surface a warning instead of silently persisting wrong data.
+  describe('ambiguous milestone scope (#1761)', () => {
+    // Two-milestone ROADMAP with UNVERSIONED headings; STATE anchors to v3.0,
+    // which matches no heading. The current milestone (v3.0) has 2 phases (4,5),
+    // both complete → correct progress is 100%. The whole-document fallback sees
+    // 5 phases across both milestones → would compute a wrong 40%.
+    function setupAmbiguousProject(tmpDir) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+        '# Roadmap',
+        '## Milestone 2: Foundation',
+        '### Phase 1: Setup',
+        '### Phase 2: Scaffold',
+        '### Phase 3: Models',
+        '## Milestone 3: Build',
+        '### Phase 4: API',
+        '### Phase 5: UI',
+      ].join('\n'));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+        '---', 'milestone: v3.0', '---', '',
+        '# Project State', '',
+        'Progress: [██████████] 100%',
+        'Last Activity: 2026-06-01',
+      ].join('\n'));
+      for (const p of ['04-api', '05-ui']) {
+        const dir = path.join(tmpDir, '.planning', 'phases', p);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n');
+        fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n');
+      }
+    }
+
+    test('--verify does not propose a Progress change and reports a warning', () => {
+      setupAmbiguousProject(tmpDir);
+      const result = runGsdTools('state sync --verify', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+
+      const progressChange = (output.changes || []).find(c => /^Progress:/.test(c));
+      assert.strictEqual(progressChange, undefined,
+        'must not propose a Progress change off a conflated denominator');
+      assert.ok(output.warning && /milestone/i.test(output.warning),
+        'should surface a milestone-scope warning');
+    });
+
+    test('write mode leaves both body AND frontmatter progress untouched', () => {
+      // Seed correct progress in BOTH the body line and the YAML frontmatter so
+      // we can prove neither is silently rewritten off the conflated (5-phase)
+      // denominator. Without the frontmatter guard, writeStateMd -> buildState-
+      // Frontmatter would rewrite `percent: 100` to the conflated `percent: 40`.
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+        '# Roadmap',
+        '## Milestone 2: Foundation',
+        '### Phase 1: Setup',
+        '### Phase 2: Scaffold',
+        '### Phase 3: Models',
+        '## Milestone 3: Build',
+        '### Phase 4: API',
+        '### Phase 5: UI',
+      ].join('\n'));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+        '---', 'milestone: v3.0', 'status: in-progress',
+        'progress:', '  total_phases: 2', '  completed_phases: 2',
+        '  total_plans: 2', '  completed_plans: 2', '  percent: 100', '---', '',
+        '# Project State', '',
+        'Progress: [██████████] 100%',
+        'Last Activity: 2026-06-01',
+      ].join('\n'));
+      for (const p of ['04-api', '05-ui']) {
+        const dir = path.join(tmpDir, '.planning', 'phases', p);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n');
+        fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n');
+      }
+
+      const result = runGsdTools('state sync', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const stateAfter = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+      // Body Progress line preserved; the conflated 40% never written anywhere.
+      assert.match(stateAfter, /Progress: \[██████████\] 100%/);
+      assert.doesNotMatch(stateAfter, /40%/);
+      // Frontmatter progress preserved (CRITICAL: not rewritten off 5 phases).
+      assert.match(stateAfter, /percent:\s*100/);
+      assert.match(stateAfter, /total_phases:\s*2/);
+    });
+
+    test('bounded milestone (versioned heading) still syncs progress normally', () => {
+      // Same phases, but headings carry the version → scope bounds correctly,
+      // so the gate must NOT fire and sync proceeds as before.
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+        '# Roadmap',
+        '## v2.0 — Foundation ✅',
+        '### Phase 1: Setup',
+        '## v3.0 — Build 🚧',
+        '### Phase 4: API',
+        '### Phase 5: UI',
+      ].join('\n'));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+        '---', 'milestone: v3.0', '---', '',
+        '# Project State', '',
+        'Progress: [░░░░░░░░░░] 0%',
+        'Last Activity: 2026-06-01',
+      ].join('\n'));
+      for (const p of ['04-api', '05-ui']) {
+        const dir = path.join(tmpDir, '.planning', 'phases', p);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n');
+        fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n');
+      }
+
+      const result = runGsdTools('state sync --verify', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      assert.strictEqual(output.warning, undefined, 'bounded scope must not warn');
+    });
+
+    test('state json does not report conflated progress for an ambiguous scope', () => {
+      // `state json` rebuilds progress via buildStateFrontmatter and bypasses the
+      // write-path guard, so it must apply the same ambiguous-scope guard — else
+      // the machine-readable read path reports the conflated value the write path
+      // refuses to persist.
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+        '# Roadmap',
+        '## Milestone 2: Foundation',
+        '### Phase 1: Setup',
+        '### Phase 2: Scaffold',
+        '### Phase 3: Models',
+        '## Milestone 3: Build',
+        '### Phase 4: API',
+        '### Phase 5: UI',
+      ].join('\n'));
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+        '---', 'milestone: v3.0',
+        'progress:', '  total_phases: 2', '  completed_phases: 2', '  percent: 100', '---', '',
+        '# Project State', '',
+        'Progress: [██████████] 100%',
+      ].join('\n'));
+      for (const p of ['04-api', '05-ui']) {
+        const dir = path.join(tmpDir, '.planning', 'phases', p);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n');
+        fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n');
+      }
+
+      const result = runGsdTools('state json', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+      // Existing (correct) progress preserved; conflated 5-phase/40% not reported.
+      assert.strictEqual(output.progress.total_phases, 2);
+      assert.strictEqual(output.progress.percent, 100);
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

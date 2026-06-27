@@ -32,6 +32,7 @@ const {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
+  currentMilestoneScopeIsAmbiguous,
 } = roadmapParser;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -606,5 +607,182 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     const filter = getMilestonePhaseFilter(tmpDir);
     assert.strictEqual(filter('02-01-setup'), true, 'bracket-prefixed phase 2-01 matched');
     assert.strictEqual(filter('02-02-build'), true, 'bracket-prefixed phase 2-02 matched');
+  });
+});
+
+// ─── currentMilestoneScopeIsAmbiguous (#1761) ─────────────────────────────────
+//
+// The detector exists so `state sync` can refuse to write a progress number
+// derived from extractCurrentMilestone's whole-document fallback when that
+// fallback would conflate sibling milestones. It must fire ONLY when the
+// fallback is demonstrably wrong, never on legacy single-milestone projects.
+describe('roadmap-parser: currentMilestoneScopeIsAmbiguous (#1761)', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('true: multi-milestone, unversioned headings, anchor matches no heading', () => {
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## Milestone 2: Foundation',
+      '### Phase 1: Setup',
+      '### Phase 2: Scaffold',
+      '## Milestone 3: Build',
+      '### Phase 4: API',
+      '### Phase 5: UI',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v3.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), true);
+  });
+
+  test('false: single-milestone unversioned heading (whole-doc scope is correct)', () => {
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## Milestone 1: Everything',
+      '### Phase 1: Setup',
+      '### Phase 2: Build',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v1.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('false: anchor resolves to a versioned milestone heading', () => {
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## v2.0 — Foundation ✅',
+      '### Phase 1: Setup',
+      '## v3.0 — Build 🚧',
+      '### Phase 4: API',
+      '### Phase 5: UI',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v3.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('false: no milestone anchor at all (legacy whole-doc scope intended)', () => {
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## Milestone 2: Foundation',
+      '### Phase 1: Setup',
+      '## Milestone 3: Build',
+      '### Phase 4: API',
+    ].join('\n'));
+    writeState(tmpDir, { phase: 'some-phase' }); // no `milestone:` field
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('false: anchor resolves via a <summary> in a shipped <details> block', () => {
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '<details><summary>v2.0 — Foundation</summary>',
+      '### Phase 1: Setup',
+      '</details>',
+      '## Milestone 3: Build',
+      '### Phase 4: API',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v2.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('true: mixed roadmap — current versioned but section bleeds into an unversioned sibling', () => {
+    // extractCurrentMilestone's section end only stops on versioned/marked
+    // headings, so `## v3.0` scope bleeds past the unversioned `## Milestone 4`,
+    // conflating its phases. The scope-based count catches this even though the
+    // anchor itself resolves to a heading.
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## v3.0 — Build 🚧',
+      '### Phase 4: API',
+      '### Phase 5: UI',
+      '## Milestone 4: Later',
+      '### Phase 6: Polish',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v3.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), true);
+  });
+
+  test('false: a non-milestone "## Milestone Notes" prose heading does not count as a milestone', () => {
+    // The numeric `Milestone \d` requirement keeps prose headings from being
+    // mistaken for milestone-section boundaries (would otherwise false-positive).
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## v3.0 — Build 🚧',
+      '### Phase 4: API',
+      '## Milestone Notes',
+      'Some running notes.',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v3.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('false: deeper marker-bearing subheadings inside a bounded milestone do not count', () => {
+    // extractCurrentMilestone bounds `## v3.0` correctly; the scope legitimately
+    // contains deeper `### v3.0 Notes` / `### Milestone 4 Risks` subheadings.
+    // Only the shallowest milestone level counts, so this stays bounded (false).
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## v3.0 — Build 🚧',
+      '### Phase 4: API',
+      '### v3.0 Notes',
+      '### Milestone 4 Risks',
+      '### Phase 5: UI',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v3.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('false: #730 split layout — a milestone + its (Phase Details) continuation count once', () => {
+    // extractCurrentMilestone appends the current milestone's `(Phase Details)`
+    // section to its scope. Boundary heading and continuation share the same
+    // version identity, so the scope spans ONE distinct milestone — not ambiguous.
+    writeRoadmap(tmpDir, [
+      '# Roadmap: Example',
+      '',
+      '## Phases',
+      '',
+      '- [x] **Phase 1: Setup**',
+      '',
+      '### Milestone v1.1 — Second milestone (added 2026-01-01)',
+      '',
+      '- [ ] **Phase 2: Feature**',
+      '',
+      '## Phase Details',
+      '',
+      '### Phase 1: Setup',
+      '**Goal:** scaffold.',
+      '',
+      '## Milestone v1.1 — Second milestone (Phase Details)',
+      '',
+      '### Phase 2: Feature',
+      '**Goal:** build.',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v1.1' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
+  });
+
+  test('false (documented limitation): free-form Sprint/Release headings are not detected', () => {
+    // `## Sprint N` / `## Release N` carry no milestone marker and no `Milestone`
+    // label, so the detector stays conservative and preserves existing behavior
+    // rather than guessing. Pinned so a future change to this boundary is deliberate.
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '## Sprint 2',
+      '### Phase 1: Setup',
+      '## Sprint 3',
+      '### Phase 4: API',
+    ].join('\n'));
+    writeState(tmpDir, { milestone: 'v3.0' });
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.strictEqual(currentMilestoneScopeIsAmbiguous(roadmap, tmpDir), false);
   });
 });

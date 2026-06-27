@@ -347,6 +347,96 @@ function getMilestoneInfo(cwd: string): MilestoneInfo {
   }
 }
 
+/**
+ * Derives a stable identity for a milestone-boundary heading, or null when the
+ * heading is not a milestone boundary. Identity is the version token if present
+ * (`v3.0`, `v3.0-B`), else a numeric `Milestone N` label, else — for an
+ * emoji-marked heading carrying neither — its normalized text. The `(Phase
+ * Details)` suffix is stripped so a milestone's split continuation heading shares
+ * its boundary heading's identity (#730 split layouts). A non-numeric prose
+ * heading like `## Milestone Notes` yields null (not a boundary).
+ */
+function milestoneHeadingIdentity(headingText: string): string | null {
+  const ver = headingText.match(/v\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*/i);
+  if (ver) return 'v:' + ver[0].toLowerCase();
+  const mnum = headingText.match(/\bMilestone\s+(\d+)/i);
+  if (mnum) return 'm:' + mnum[1];
+  if (/✅|📋|🚧|🔄/u.test(headingText)) {
+    return 't:' + headingText.replace(/\(Phase\s+Details\)/i, '').replace(/[✅📋🚧🔄]/gu, '').trim().toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * Counts the number of DISTINCT milestones a block of ROADMAP text spans, used
+ * to decide whether a resolved milestone scope conflates siblings (#1761).
+ *
+ * Only milestone-boundary headings at the SHALLOWEST matched level are counted —
+ * deeper marker-bearing subheadings (e.g. `### v3.0 Notes`, `### Milestone 4
+ * Risks`) inside a section are not milestone boundaries. Boundaries are then
+ * deduplicated by milestone identity, so a milestone heading and its same-version
+ * `(Phase Details)` continuation count once (#730 split layouts), while genuinely
+ * distinct siblings count separately.
+ */
+function countMilestoneHeadings(text: string): number {
+  const matched: Array<{ level: number; id: string }> = [];
+  for (const h of tokenizeHeadings(text)) {
+    if (h.level < 1 || h.level > 3) continue;
+    if (/^Phase\s+\S/i.test(h.text)) continue;
+    const id = milestoneHeadingIdentity(h.text);
+    if (id) matched.push({ level: h.level, id });
+  }
+  if (matched.length === 0) return 0;
+  const base = Math.min(...matched.map(m => m.level));
+  return new Set(matched.filter(m => m.level === base).map(m => m.id)).size;
+}
+
+/**
+ * Detects when the current milestone cannot be bounded to a single ROADMAP
+ * section, so any phase count derived from the resolved scope would conflate
+ * phases from sibling milestones (#1761).
+ *
+ * Works on the SCOPE that `extractCurrentMilestone` actually returns, counting
+ * the milestone-boundary headings inside it. A correctly bounded milestone yields
+ * exactly one; >= 2 means the scope conflates siblings — whether because the
+ * version anchor matched no heading (whole-document fallback) or because the
+ * section bled past an unversioned sibling milestone (extractCurrentMilestone's
+ * computeSectionEnd only stops on versioned/marked headings).
+ *
+ * Returns true only when BOTH hold:
+ *   1. A milestone version anchor is resolvable — STATE.md's `milestone:` field,
+ *      else a `🚧/🔄 **vX.Y` in-progress marker in the ROADMAP. Without an anchor
+ *      the project has not declared a current milestone and whole-document scope
+ *      is the intended reading, so we never fire.
+ *   2. The resolved scope contains >= 2 milestone-boundary headings.
+ *
+ * A single-milestone ROADMAP (one heading in scope) or a version that resolves
+ * cleanly to one section both return false, so callers proceed exactly as before.
+ */
+function currentMilestoneScopeIsAmbiguous(roadmapContent: string, cwd?: string): boolean {
+  // (1) Resolve the version anchor exactly as extractCurrentMilestone does.
+  let version: string | null = null;
+  if (cwd) {
+    try {
+      const stateRaw = platformReadSync(path.join(planningDir(cwd), 'STATE.md'));
+      if (stateRaw !== null) {
+        const m = stateRaw.match(/^milestone:\s*(.+)/m);
+        if (m) version = m[1].trim();
+      }
+    } catch { /* ignore */ }
+  }
+  if (!version) {
+    const inProgress = roadmapContent.match(/(?:🚧|🔄)\s*\*\*v(\d+\.\d+)\s/);
+    if (inProgress) version = 'v' + inProgress[1];
+  }
+  if (!version) return false; // No anchor → legacy whole-document scope is intended.
+
+  // (2) Count milestone-boundary headings within the RESOLVED scope. >= 2 means
+  // the scope conflates more than one milestone.
+  const scope = extractCurrentMilestone(roadmapContent, cwd);
+  return countMilestoneHeadings(scope) >= 2;
+}
+
 // ─── Milestone phase filter ───────────────────────────────────────────────────
 
 type MilestonePhaseFilter = ((dirName: string) => boolean) & {
@@ -487,4 +577,5 @@ export = {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
+  currentMilestoneScopeIsAmbiguous,
 };
