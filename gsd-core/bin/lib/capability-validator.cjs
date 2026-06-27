@@ -687,6 +687,7 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeCommandToTraeSkill',
   'convertClaudeCommandToWindsurfSkill',
   'convertClaudeCommandToWindsurfWorkflow',
+  'convertClaudeCommandToQoderSkill',
   // agent converters (#1173 — descriptor-driven agent conversion wiring)
   'convertClaudeAgentToCopilotAgent',
   'convertClaudeAgentToAntigravityAgent',
@@ -696,6 +697,7 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeAgentToTraeAgent',
   'convertClaudeAgentToCodebuddyAgent',
   'convertClaudeAgentToClineAgent',
+  'convertClaudeAgentToQoderAgent',
   'convertClaudeAgentToCodexAgent',
 ]);
 

@@ -302,6 +302,11 @@ describe('getConfigDirFromHome — spot-checks', () => {
     assert.strictEqual(getConfigDirFromHome('trae', true), "'.trae'");
   });
 
+  test('qoder returns .qoder for both scopes', () => {
+    assert.strictEqual(getConfigDirFromHome('qoder', false), "'.qoder'");
+    assert.strictEqual(getConfigDirFromHome('qoder', true), "'.qoder'");
+  });
+
   test('antigravity returns .agents (local) and legacy fallback global path when no 2.x dirs exist', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-empty-'));
     const savedHome = process.env.HOME;
@@ -522,6 +527,121 @@ describe('install/uninstall — trae (nested skills/gsd-<router>/skills/<stem>/ 
   });
 });
 
+describe('install/uninstall — qoder (flat skills/gsd-<stem>/ layout)', () => {
+  let tmpDir;
+  let previousCwd;
+
+  beforeEach(() => {
+    tmpDir = createTempDir('gsd-qoder-install-');
+    previousCwd = process.cwd();
+    process.chdir(tmpDir);
+  });
+
+  afterEach(() => {
+    process.chdir(previousCwd);
+    cleanup(tmpDir);
+  });
+
+  test('installs GSD into ./.qoder and removes it cleanly', () => {
+    const result = install(false, 'qoder');
+    const targetDir = path.join(tmpDir, '.qoder');
+
+    assert.strictEqual(result.runtime, 'qoder');
+    assert.strictEqual(result.configDir, fs.realpathSync(targetDir));
+
+    // qoder uses flat layout: skills/gsd-<stem>/SKILL.md
+    const skillsDir = path.join(targetDir, 'skills');
+    assert.ok(fs.existsSync(skillsDir), 'skills/ must exist after install');
+    const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.ok(skillEntries.length > 0, 'at least one gsd-* skill must be installed');
+    const helpDir = path.join(skillsDir, 'gsd-help');
+    assert.ok(fs.existsSync(path.join(helpDir, 'SKILL.md')),
+      'gsd-help/SKILL.md must exist in flat layout');
+    assert.ok(fs.existsSync(path.join(targetDir, 'gsd-core', 'VERSION')));
+    assert.ok(fs.existsSync(path.join(targetDir, 'agents')));
+
+    uninstall(false, 'qoder');
+    assert.ok(!fs.existsSync(path.join(helpDir, 'SKILL.md')));
+    assert.ok(!fs.existsSync(path.join(targetDir, 'gsd-core')));
+  });
+
+  test('installed SKILL.md has no residual .claude references', () => {
+    install(false, 'qoder');
+    const targetDir = path.join(tmpDir, '.qoder');
+    const skillsDir = path.join(targetDir, 'skills');
+    const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
+    assert.ok(skillEntries.length > 0, 'pre-condition: at least one skill installed');
+
+    for (const entry of skillEntries) {
+      const skillFile = path.join(skillsDir, entry.name, 'SKILL.md');
+      if (!fs.existsSync(skillFile)) continue;
+      const content = fs.readFileSync(skillFile, 'utf8');
+      // Allow CLAUDE_* env var names; disallow all other bare .claude references
+      const lines = content.split('\n');
+      const leakLines = lines.filter(l => {
+        if (!/\.claude/.test(l)) return false;
+        if (/^.*\bCLAUDE_\w+/.test(l) && !/\.claude\//.test(l)) return false;
+        return true;
+      });
+      assert.strictEqual(leakLines.length, 0,
+        `${entry.name}/SKILL.md has residual .claude references:\n${leakLines.join('\n')}`);
+    }
+    uninstall(false, 'qoder');
+  });
+
+  test('installed agent files have no residual .claude references', () => {
+    install(false, 'qoder');
+    const targetDir = path.join(tmpDir, '.qoder');
+    const agentsDir = path.join(targetDir, 'agents');
+    assert.ok(fs.existsSync(agentsDir));
+    const agentFiles = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'));
+    assert.ok(agentFiles.length > 0);
+
+    const leaks = agentFiles.filter(f => {
+      const c = fs.readFileSync(path.join(agentsDir, f), 'utf8');
+      return /\.claude\//.test(c) || /\bCLAUDE\.md\b/.test(c) || /\bClaude Code\b/.test(c);
+    }).map(f => path.relative(tmpDir, path.join(agentsDir, f)));
+    assert.strictEqual(leaks.length, 0, `Leaking agents: ${leaks.join(', ')}`);
+    uninstall(false, 'qoder');
+  });
+
+  test('registers GSD hooks in settings for Qoder (hooksSurface=settings-json)', () => {
+    // install() returns the in-memory settings object; finishInstall() writes
+    // it to disk.  We verify the in-memory hook event-key structure here —
+    // the on-disk write is gated on plan.writesSharedSettings (now true)
+    // and tested via integration.  We assert that hook event arrays are
+    // present and non-empty (other runtime tests like hermes/qwen/trae
+    // assert artifact structure, not hook-command text).
+    const result = install(false, 'qoder');
+    const settings = result.settings;
+
+    assert.ok(settings, 'install() must return a settings object for Qoder');
+    assert.ok(settings.hooks, 'settings must contain a hooks object');
+
+    // Qoder supports PreToolUse, PostToolUse, and Stop events.
+    // SessionStart is also registered (dormant until Qoder adds support).
+    assert.ok(Array.isArray(settings.hooks.PreToolUse) && settings.hooks.PreToolUse.length > 0,
+      'PreToolUse event must be registered and non-empty');
+    assert.ok(Array.isArray(settings.hooks.PostToolUse) && settings.hooks.PostToolUse.length > 0,
+      'PostToolUse event must be registered and non-empty');
+    assert.ok(Array.isArray(settings.hooks.Stop) && settings.hooks.Stop.length > 0,
+      'Stop event must be registered and non-empty');
+
+    // Verify that each event carries at least one hook entry with a command.
+    for (const event of ['PreToolUse', 'PostToolUse', 'Stop']) {
+      const hooks = settings.hooks[event];
+      assert.ok(hooks.length > 0, `${event} must have at least one hook group`);
+      const commands = hooks.flatMap(e => (e.hooks || []).map(h => h.command || ''));
+      assert.ok(commands.length > 0,
+        `${event} must contain at least one hook command`);
+    }
+
+    uninstall(false, 'qoder');
+  });
+});
+
 // ─── Section 3: Uninstall skills cleanup — parameterised ─────────────────────
 
 describe('uninstall skills cleanup — hermes', () => {
@@ -573,7 +693,7 @@ describe('uninstall skills cleanup — hermes', () => {
 
 // ─── Section 4: No Claude references leak into non-Claude runtimes ────────────
 
-for (const runtime of ['hermes', 'qwen']) {
+for (const runtime of ['hermes', 'qwen', 'qoder']) {
   describe(`no Claude references leak into ${runtime} install`, () => {
     let tmpDir;
     let previousCwd;
@@ -864,6 +984,22 @@ describe('Kilo integration — install/uninstall behaviour', () => {
     // now lives in the tested update-context projection (#498).
     assert.ok(updateContextSrc.includes('kilo.jsonc'));
     assert.ok(updateContextSrc.includes('KILO_CONFIG'));
+  });
+});
+
+describe('install — --qoder CLI flag and runtime prompt (#860)', () => {
+  test('--qoder flag routes to qoder runtime via selectRuntimesFromArgs', () => {
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--qoder']), ['qoder']);
+  });
+
+  test('runtimeMap has Qoder as option 17', () => {
+    assert.strictEqual(runtimeMap['17'], 'qoder');
+  });
+
+  test('prompt text shows Qoder at option 17 and All at 18', () => {
+    const plain = stripAnsi(buildRuntimePromptText());
+    assert.ok(/\b17\)\s*Qoder\b/.test(plain), 'prompt must show 17) Qoder');
+    assert.ok(/\b18\)\s*All\b/.test(plain), 'prompt must show 18) All');
   });
 });
 

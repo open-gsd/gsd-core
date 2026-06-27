@@ -84,7 +84,7 @@ interface InstallPlan extends RuntimeConfigIntent {
 
 type RuntimeDescriptorMap = Record<string, { runtime: Record<string, unknown> | undefined }>;
 
-/** The complete set of 16 supported runtimes for config-adapter dispatch. */
+/** The complete set of 17 supported runtimes for config-adapter dispatch. */
 const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(
   Object.entries(runtimes)
     .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime['installSurface'] === 'string')
