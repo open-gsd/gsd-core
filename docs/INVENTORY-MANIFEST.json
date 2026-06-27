@@ -394,6 +394,7 @@
       "stale-bake-guard.cjs",
       "state-command-router.cjs",
       "state-document.cjs",
+      "state-transition.cjs",
       "state.cjs",
       "surface.cjs",
       "task-command-router.cjs",
