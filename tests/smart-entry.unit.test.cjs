@@ -187,6 +187,67 @@ describe('smart-entry: priority ordering', () => {
   });
 });
 
+describe('smart-entry: real STATE.md schema (nested progress YAML + body Phase field)', () => {
+  afterEach(removeAll);
+
+  // Mirrors this repo's actual .planning/STATE.md: status + nested progress{}
+  // in frontmatter, phase number in the body as `Phase: N`. Codex review found
+  // the classifier originally misread this as needs-first-phase (#P1).
+  function realState({ status, phase, totalPhases, percent }) {
+    const fm = [
+      '---',
+      'gsd_state_version: 1.0',
+      `status: ${status}`,
+      'last_activity: 2026-06-13',
+      'progress:',
+      `  total_phases: ${totalPhases}`,
+      `  percent: ${percent}`,
+      '---',
+      '',
+      '# Project State',
+      '',
+      `Phase: ${phase}`,
+      '',
+      `**Status:** ${status}`,
+      '',
+    ].join('\n');
+    return fm;
+  }
+
+  test('reads current_phase from body `Phase:` + total_phases/percent from nested progress{}', () => {
+    const dir = track(makeProject({
+      state: realState({ status: 'verifying', phase: 3, totalPhases: 5, percent: 40 }),
+      roadmap: true,
+    }));
+    const signals = detectSignals(dir);
+    assert.equal(signals.current_phase, 3, 'current_phase from body Phase: field');
+    assert.equal(signals.total_phases, 5, 'total_phases from nested progress.total_phases');
+    assert.equal(signals.progress, 40, 'percent from nested progress.percent');
+    assert.equal(signals.status, 'verifying');
+  });
+
+  test('classifies verify-pending (not needs-first-phase) for an active real-schema project', () => {
+    const dir = track(makeProject({
+      state: realState({ status: 'verifying', phase: 3, totalPhases: 5, percent: 40 }),
+      roadmap: true,
+    }));
+    const result = classifyProject(dir);
+    assert.equal(result.situation, 'verify-pending');
+    assert.equal(result.recommended, 'verify-work');
+    assert.match(result.summary, /Phase 3 of 5/);
+  });
+
+  test('executing status with nested progress schema classifies executing', () => {
+    const dir = track(makeProject({
+      state: realState({ status: 'executing', phase: 2, totalPhases: 5, percent: 60 }),
+      roadmap: true,
+    }));
+    const result = classifyProject(dir);
+    assert.equal(result.situation, 'executing');
+    assert.equal(result.recommended, 'execute-phase');
+  });
+});
+
 describe('smart-entry: JSON shape invariants', () => {
   afterEach(removeAll);
 
