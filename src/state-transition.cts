@@ -171,8 +171,10 @@ export type StateTransitionIntent =
       isLastPhase: boolean;
       planCount: number;
       summaryCount: number;
-    };
-// Phases 4–7 add the remaining intent kinds to this discriminated union.
+    }
+  | { kind: 'plannedPhase'; phaseNumber: string | number; planCount: number | null }
+  | { kind: 'milestoneSwitch'; version: string; name: string };
+// Phases 5–7 add the remaining intent kinds to this discriminated union.
 
 export type StateTransitionResult = {
   content: string;
@@ -207,6 +209,10 @@ export function transitionCore(
       return advancePlanCore(content, deps);
     case 'completePhase':
       return completePhaseCore(content, intent, deps);
+    case 'plannedPhase':
+      return plannedPhaseCore(content, intent, deps);
+    case 'milestoneSwitch':
+      return milestoneSwitchCore(content, intent, deps);
   }
 }
 
@@ -808,4 +814,199 @@ function completePhaseCore(
   }
 
   return { content: reassemble(body), updated };
+}
+
+// ----------------------------------------------------------------------------
+// plannedPhase — intent implementation (Phase 4)
+// ----------------------------------------------------------------------------
+
+/**
+ * Apply a `plannedPhase` transition to STATE.md content.
+ *
+ * Migrates `cmdStatePlannedPhase` (state.cts) onto the substrate. Updates the
+ * per-phase body fields after plan-phase runs: Status (template-aware — only
+ * replaces handler-generated values, preserving executor-authored ones),
+ * Total Plans in Phase, Last Activity (template-aware), Last Activity
+ * Description, and the ## Current Position section. The adapter wraps this in
+ * `readModifyWriteStateMd({ resync: false })` so the milestone-wide progress.*
+ * frontmatter is NOT re-derived from a half-planned disk snapshot (#500 RC1).
+ *
+ * Uses `mutateCurrentPositionForAdvance` (the inlined twin of state.cts's
+ * `updateCurrentPositionFields`) so the Knuth template-default invariant
+ * applies inside the Current Position section too.
+ */
+function plannedPhaseCore(
+  content: string,
+  intent: { kind: 'plannedPhase'; phaseNumber: string | number; planCount: number | null },
+  deps: StateTransitionDeps,
+): StateTransitionResult {
+  const updated: string[] = [];
+  const today = deps.clock.today();
+
+  for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
+    const cls = getFieldClassification(fmKey);
+    if (cls === null) {
+      throw new Error(
+        `transitionCore plannedPhase: frontmatter key ${JSON.stringify(fmKey)} is not in FIELD_CLASSIFICATION; ` +
+        `add a row per ADR-1769 §4 before touching it.`,
+      );
+    }
+  }
+
+  // #1255: body-field replacements operate on body only.
+  const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+  const hasFrontmatter = Object.keys(existingFm).length > 0;
+  let body = stripFrontmatter(content);
+  const reassemble = (b: string): string =>
+    hasFrontmatter
+      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
+      : b;
+
+  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
+
+  // Status — template-aware (preserve executor-authored values).
+  const statusAfter = stateReplaceFieldIfTemplate(body, 'Status', statusDefaults, 'Ready to execute');
+  if (statusAfter !== null && statusAfter !== body) {
+    body = statusAfter;
+    updated.push('Status');
+  }
+
+  // Total Plans in Phase — system-derived; always replaced when a count is given.
+  if (intent.planCount !== null && intent.planCount !== undefined) {
+    const result = stateReplaceField(body, 'Total Plans in Phase', String(intent.planCount));
+    if (result) {
+      body = result;
+      updated.push('Total Plans in Phase');
+    }
+  }
+
+  // Last Activity — template-aware.
+  const lastActivityAfter = stateReplaceFieldIfTemplate(body, 'Last Activity', lastActivityDefaults, today);
+  if (lastActivityAfter !== null && lastActivityAfter !== body) {
+    body = lastActivityAfter;
+    updated.push('Last Activity');
+  }
+
+  // Last Activity Description.
+  const ladResult = stateReplaceField(
+    body,
+    'Last Activity Description',
+    `Phase ${intent.phaseNumber} planning complete — ${intent.planCount || '?'} plans ready`,
+  );
+  if (ladResult) {
+    body = ladResult;
+    updated.push('Last Activity Description');
+  }
+
+  // ## Current Position section — Status + Last activity (template-aware).
+  const beforePos = body;
+  body = mutateCurrentPositionForAdvance(
+    body,
+    {
+      status: 'Ready to execute',
+      lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
+    },
+    statusDefaults,
+    lastActivityDefaults,
+  );
+  if (body !== beforePos) updated.push('Current Position');
+
+  return { content: reassemble(body), updated };
+}
+
+// ----------------------------------------------------------------------------
+// milestoneSwitch — intent implementation (Phase 4)
+// ----------------------------------------------------------------------------
+
+/**
+ * Apply a `milestoneSwitch` transition to STATE.md content.
+ *
+ * Migrates `cmdStateMilestoneSwitch` (state.cts) onto the substrate. Resets
+ * STATE.md for a new milestone cycle: rewrites the frontmatter (milestone,
+ * milestone_name, status='planning', last_updated, last_activity, and the
+ * progress block zeroed) and rewrites the ## Current Position body to the
+ * "defining requirements" starting state. `gsd_state_version` is preserved.
+ * Body content OUTSIDE Current Position (e.g. Accumulated Context) is
+ * preserved.
+ *
+ * This is a destructive reset intent: it intentionally overwrites the curated
+ * `progress` / `current_phase_name` fields (classified preserve-always) because
+ * a new milestone starts from zero. That is the intent's contract, not a
+ * violation of the field-classification table — the table governs the steady-
+ * state RMW transitions; a milestone boundary is an explicit reset.
+ *
+ * The adapter wraps this in `acquireStateLock` + `platformWriteSync` (NOT
+ * `readModifyWriteStateMd`) because milestoneSwitch rebuilds frontmatter
+ * directly and must not run the steady-state `syncStateFrontmatter` post-sync.
+ */
+function milestoneSwitchCore(
+  content: string,
+  intent: { kind: 'milestoneSwitch'; version: string; name: string },
+  deps: StateTransitionDeps,
+): StateTransitionResult {
+  const today = deps.clock.today();
+  const updated: string[] = [
+    'milestone',
+    'milestone_name',
+    'status',
+    'last_updated',
+    'last_activity',
+    'progress',
+    'Current Position',
+  ];
+
+  const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+  const body = stripFrontmatter(content);
+  const resolvedName = (intent.name && intent.name.trim()) || 'milestone';
+
+  // ## Current Position reset body (mirrors state.cts:2371-2375).
+  const resetPositionBody =
+    `\nPhase: Not started (defining requirements)\n` +
+    `Plan: —\n` +
+    `Status: Defining requirements\n` +
+    `Last activity: ${today} — Milestone ${intent.version} started\n\n`;
+
+  let newBody: string;
+  const hs = tokenizeHeadings(body);
+  const posIdx = hs.findIndex((h) => h.level === 2 && /^current\s+position$/i.test(h.text));
+  if (posIdx !== -1) {
+    const h = hs[posIdx];
+    const lines = body.split('\n');
+    const hl = lines[h.line - 1];
+    const bodyStart = h.offset + hl.length + 1;
+    let bodyEnd = body.length;
+    for (let j = posIdx + 1; j < hs.length; j++) {
+      if (STOP_H2_PLUS(hs[j].level)) {
+        bodyEnd = hs[j].offset - 1;
+        break;
+      }
+    }
+    newBody = body.slice(0, bodyStart) + resetPositionBody + body.slice(bodyEnd);
+  } else {
+    const preface = body.trim().length > 0 ? body : '# Project State\n';
+    newBody = `${preface.trimEnd()}\n\n## Current Position\n${resetPositionBody}`;
+  }
+
+  // Rebuilt frontmatter — curated fields are intentionally reset (milestone
+  // boundary). gsd_state_version is preserved.
+  const fm: Record<string, unknown> = {
+    gsd_state_version: existingFm['gsd_state_version'] || '1.0',
+    milestone: intent.version,
+    milestone_name: resolvedName,
+    status: 'planning',
+    last_updated: deps.clock.nowIso(),
+    last_activity: today,
+    progress: {
+      total_phases: 0,
+      completed_phases: 0,
+      total_plans: 0,
+      completed_plans: 0,
+      percent: 0,
+    },
+  };
+
+  const yamlStr = reconstructFrontmatter(fm as unknown as Frontmatter);
+  const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
+  return { content: assembled, updated };
 }

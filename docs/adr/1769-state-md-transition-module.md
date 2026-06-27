@@ -211,7 +211,7 @@ alongside, leave callbacks — parallel worlds don't converge (ADR-857's failure
 | 1 | Substrate + `beginPhase` | #1771 | #1255, #1257, #3242 |
 | 2 | `advancePlan` | #1782 | — |
 | 3 | `completePhase` + `phase.cts:1770` | #1784 | — |
-| 4 | `plannedPhase` + `milestoneSwitch` | TBD | — |
+| 4 | `plannedPhase` + `milestoneSwitch` | #1786 | — |
 | 5 | `milestoneComplete` + `milestone.cts:352` | TBD | — |
 | 6 | `patch` | TBD | #1743, #1695 |
 | 7 | `sync`, `prune`, `update` | TBD | #1760, #1761 |
