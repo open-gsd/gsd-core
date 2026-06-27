@@ -10,6 +10,7 @@
  *   - phaseMarkdownRegexSource
  *   - phaseMarkdownRegexSourceExact
  *   - getMilestoneFromPhaseId
+ *   - isBacklogPhaseId
  *   - getPhaseDirFromPhaseId
  *   - core.cjs re-export shims resolve to the exact same functions (single instance)
  *
@@ -381,6 +382,22 @@ describe('getMilestoneFromPhaseId', () => {
   test('coerces non-string values', () => {
     // numeric doesn't match the milestone pattern — returns null
     assert.strictEqual(phaseId.getMilestoneFromPhaseId(42), null);
+  });
+});
+
+// ─── isBacklogPhaseId ────────────────────────────────────────────────────────
+
+describe('isBacklogPhaseId', () => {
+  test('identifies 999 and 999.x backlog sentinel phase ids', () => {
+    assert.strictEqual(phaseId.isBacklogPhaseId('999'), true);
+    assert.strictEqual(phaseId.isBacklogPhaseId('999.1'), true);
+    assert.strictEqual(phaseId.isBacklogPhaseId('PROJ-999.2'), true);
+  });
+
+  test('does not treat nearby non-backlog ids as sentinel phases', () => {
+    assert.strictEqual(phaseId.isBacklogPhaseId('99.9'), false);
+    assert.strictEqual(phaseId.isBacklogPhaseId('1000'), false);
+    assert.strictEqual(phaseId.isBacklogPhaseId('999A'), false);
   });
 });
 

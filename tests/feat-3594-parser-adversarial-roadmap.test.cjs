@@ -14,7 +14,7 @@
  * Several fixtures encode known historical regressions:
  *   - fenced-code-block headings shadowing real phases (#2787)
  *   - decimal phase prefix collisions (#3537)
- *   - HTML-comment heading false positives
+ *   - HTML-comment sentinel fixtures
  *
  * Pre-existing parser bugs surfaced by these fixtures are NOT fixed in
  * this PR — fixing them is out of scope for "add adversarial test
@@ -90,27 +90,12 @@ describe('feat-3594: roadmap parser and fenced-code-block headings (#2787)', () 
     assert.match(result.parsed.phase_name, /real phase one/);
   });
 
-  test('phase 999 inside a fenced block: CJS parser currently STILL matches it (open: needs fence-stripping)', (t) => {
+  test('phase 999 inside a fenced block is ignored by CJS roadmap lookup (#1588)', (t) => {
     const projectDir = projectWithFixture(t, 'phase-heading-inside-fenced-code.md');
     const result = getPhase(projectDir, '999');
     assert.equal(result.hasStackTrace, false, 'no stack trace');
-    // The CJS regex parser does not strip fenced code blocks before
-    // matching. The SDK roadmap parser tracks fenced blocks (per #2787
-    // comment in sdk/src/query/roadmap.ts) — the CJS path has not caught
-    // up. This test pins the current behavior so the day someone wires
-    // CJS fence-stripping, flipping `found: true` to `found: false`
-    // becomes the regression guard.
     assert.ok(result.parsed, `expected JSON payload, got: ${result.raw}`);
-    assert.equal(result.parsed.found, true, 'CJS parser currently matches inside fences (known open bug)');
-    // The matched heading is the one INSIDE the fenced block. Match
-    // its distinctive substring so a future "fix" that strips fences
-    // and instead matches a different (real) phase 999 (which we don't
-    // have in this fixture, so impossible) still fails the right test.
-    assert.match(
-      result.parsed.phase_name,
-      /fenced code block/i,
-      'currently-matched heading must be the one inside the fence',
-    );
+    assert.equal(result.parsed.found, false, 'phase heading inside a fenced block must not be treated as a real phase');
   });
 });
 
@@ -205,15 +190,13 @@ describe('feat-3594: roadmap parser and HTML-commented headings', () => {
     assert.equal(result.parsed.phase_name, 'real phase');
   });
 
-  test('phase 999 inside an HTML comment: CJS parser currently STILL matches it (open: needs comment-stripping)', (t) => {
+  test('phase 999 sentinel is not activated even when it only appears inside an HTML comment (#1588)', (t) => {
     const projectDir = projectWithFixture(t, 'markdown-headings-inside-html-comment.md');
     const result = getPhase(projectDir, '999');
     assert.equal(result.hasStackTrace, false, 'no stack trace');
-    // Same shape as the fenced-code-block case: the CJS regex parser
-    // doesn't strip HTML comments before matching.
     assert.ok(result.parsed, `expected JSON payload, got: ${result.raw}`);
-    assert.equal(result.parsed.found, true, 'CJS parser currently matches inside HTML comments (known open bug)');
-    assert.match(result.parsed.phase_name, /HTML comment/);
+    // This pins the backlog sentinel guard; tokenizeHeadings does not strip HTML comments.
+    assert.equal(result.parsed.found, false, '999 sentinel phases must not be activated by get-phase fallback');
   });
 });
 

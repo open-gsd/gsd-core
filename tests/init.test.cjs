@@ -461,6 +461,59 @@ describe('init commands', () => {
     assert.strictEqual(output.phase_found, true);
     assert.strictEqual(output.phase_name, 'Details Block Regression');
   });
+
+  test('init plan-phase ignores fenced flat details and does not activate 999.x backlog (#1588)', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.1',
+      'milestone_name: Samsung Health 0-to-1',
+      'status: planning',
+      '---',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '<details open>',
+      '<summary>v1.1 Current (Phases 8-9) - PLANNED</summary>',
+      '',
+      '- [ ] **Phase 9: Real Phase**',
+      '',
+      '</details>',
+      '',
+      '## Phase Details',
+      '',
+      '```markdown',
+      '### Phase 9: Fenced Example Phase',
+      '**Goal**: This example must not be treated as roadmap structure.',
+      '```',
+      '',
+      '### Phase 9: Real Phase',
+      '**Goal**: Use the real phase details outside the fenced block.',
+      '**Requirements**: REAL-01',
+      '',
+      '## Backlog',
+      '',
+      '### Phase 999.1: Backlog Thing',
+      '**Goal**: Future backlog item.',
+      '',
+    ].join('\n'));
+
+    const realPhase = runGsdTools('init plan-phase 9', tmpDir);
+    assert.ok(realPhase.success, `init plan-phase 9 failed: ${realPhase.error}`);
+    const realOutput = JSON.parse(realPhase.output);
+    assert.strictEqual(realOutput.phase_found, true);
+    assert.strictEqual(realOutput.phase_name, 'Real Phase');
+    assert.strictEqual(realOutput.phase_req_ids, 'REAL-01');
+    assert.match(realOutput.expected_phase_dir, /09-real-phase$/);
+
+    const backlogPhase = runGsdTools('init plan-phase 999.1', tmpDir);
+    assert.ok(backlogPhase.success, `init plan-phase 999.1 failed: ${backlogPhase.error}`);
+    const backlogOutput = JSON.parse(backlogPhase.output);
+    assert.strictEqual(backlogOutput.phase_found, false);
+    assert.strictEqual(backlogOutput.phase_name, null);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

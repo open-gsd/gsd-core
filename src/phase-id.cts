@@ -67,6 +67,10 @@ function getMilestoneFromPhaseId(phaseId: unknown): string | null {
   return `v${major}.0`;
 }
 
+function isBacklogPhaseId(phaseNum: unknown): boolean {
+  return /^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum));
+}
+
 function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | undefined, projectCode: string | null | undefined): string | null {
   const stripped = stripProjectCodePrefix(phaseId);
   const m = stripped.match(/^0*(\d+)-(0*(\d+(?:-\d+)*))$/);
@@ -223,6 +227,7 @@ export = {
   stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,
+  isBacklogPhaseId,
   getPhaseDirFromPhaseId,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
