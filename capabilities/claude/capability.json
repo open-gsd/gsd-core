@@ -17,6 +17,7 @@
         "CLAUDE_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".claude",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

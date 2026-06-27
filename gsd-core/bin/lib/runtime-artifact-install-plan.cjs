@@ -60,10 +60,34 @@ function createRuntimeArtifactInstallPlan(args) {
         platform,
         resolveAttribution,
     };
+    // ADR-1235 §1: build agentCtx once per plan so agents kind entries can apply
+    // the CORRECT pre-converter cross-cutting (path rewrites → attribution → converter
+    // → normalize). This mirrors the exact per-file order in the inline agent loop
+    // in bin/install.js (lines 9330-9415). agentCtx is passed as the second arg
+    // to kind.stage() for agents kind entries with a converter (convertedAgentsKind).
+    // NO _stampNonClaudeRuntimeDefaults — agents are NOT stamped in the inline loop.
+    const os = _require('node:os');
+    const homedirFn = homedir ?? (() => os.homedir());
+    const resolvedTarget = path.resolve(layout.configDir).replace(/\\/g, '/');
+    const homeDir = homedirFn().replace(/\\/g, '/');
+    const isGlobal = scope === 'global';
+    const isOpencode = layout.runtime === 'opencode';
+    const isWindowsHost = (platform ?? process.platform) === 'win32';
+    const pathPrefix = conversionExports._computePathPrefix({ isGlobal, isOpencode, isWindowsHost, resolvedTarget, homeDir });
+    const attribution = resolveAttribution ? resolveAttribution(layout.runtime) : undefined;
+    const agentCtx = { runtime: layout.runtime, pathPrefix, attribution };
     for (const kind of layout.kinds) {
         let stagedDir;
         try {
-            stagedDir = kind.stage(resolvedProfile);
+            if (kind.kind === 'agents') {
+                // ADR-1235 §1: pass agentCtx so stageAgentsForRuntimeWithConverter applies
+                // the full inline-loop order: pathRewrites → attribution → converter → normalize.
+                // The cross-cutting is now PRE-converter (inside staging), not POST.
+                stagedDir = kind.stage(resolvedProfile, agentCtx);
+            }
+            else {
+                stagedDir = kind.stage(resolvedProfile);
+            }
         }
         catch (err) {
             return { ok: false, kind: 'stage_failed', message: errorMessage(err), cleanupDirs, failedKind: kind.kind };
@@ -78,6 +102,8 @@ function createRuntimeArtifactInstallPlan(args) {
                 const rewrittenDir = rewriteStagedSkillBodies(stagedDir, rewriteOpts);
                 sourceDir = addCleanupDir(cleanupDirs, stagedDir, rewrittenDir);
             }
+            // agents kind: cross-cutting already applied INSIDE kind.stage() via agentCtx.
+            // No POST-step needed. sourceDir stays as stagedDir.
         }
         catch (err) {
             return { ok: false, kind: 'rewrite_failed', message: errorMessage(err), cleanupDirs, failedKind: kind.kind };

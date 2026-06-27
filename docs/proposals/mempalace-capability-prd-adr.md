@@ -239,12 +239,29 @@ All steps/contributions are `onError: skip`. No gates.
 | **0 — Spike** | `mempalace init`/`mine`/`search`/`wake-up` against gsd-core's own `.planning/`; confirm wing/room mapping feels right | manual: recall surfaces real prior decisions |
 | **1 — Manifest + registry** | `capabilities/mempalace/capability.json` + `gen-capability-registry.cjs --write`; CI staleness gate green; consistency gate (id≠CLUSTERS collision) | `--check` passes |
 | **2 — Skills + agent + fragments** | the two skills, the curator agent, two fragment files; `augment` mode only | recall/capture work when invoked manually |
-| **3 — Config + federated flow** | all `mempalace.*` keys resolve via federated config; `capability-state` resolver reports the capability | state resolver shows installed/surfaced + hook activity |
+| **3 — Config + federated flow** | all `mempalace.*` keys resolve via federated config; `capability-state` resolver reports the capability | state resolver shows installed/surfaced + hook activity; **user can run `gsd capability enable mempalace` and `config-set mempalace.enabled true`** (inherited ADR-857 capability surface — UX-enable) |
 | **4 — Modes** | `kg_backend` then `replace`; `gsd-graphify` routing seam | each mode round-trips a decision |
 | **5 — Passive hooks + autonomous** | `auto_capture_hooks` installs native hooks; CLI-path capture verified headless (`/gsd-autonomous`, cron) | headless run captures with no MCP |
-| **6 — Loop wiring (blocked on ADR-857 phase-6)** | `loop render-hooks` called from `plan-phase.md`/`execute-phase.md`/etc. so hooks auto-fire | end-to-end auto recall/capture |
+| **6 — Loop wiring (shipped via ADR-857)** | the host-loop workflows call `loop render-hooks` at each canonical point, so registered capability hooks auto-fire | with `mempalace.enabled`, a `/gsd-execute-phase` run **auto-produces `MEMORY-RECALL.md` at `plan:pre`**, files capture at `plan:post`/`verify:post` with **no manual invocation**, and the curator spawns at `ship:post` — **verified** (`gsd-tools loop render-hooks plan:pre` returns the `mempalace-recall` step) |
 
-Phases 1–5 ship value **before** ADR-857's phase-6 cutover (the skills are invocable directly). Phase 6 flips them to automatic.
+ADR-857 (the capability system + `loop render-hooks` infrastructure) is **released**, so the Phase-6 loop wiring is shipped: the host-loop workflows call `loop render-hooks` at each canonical point, and MemPalace auto-fires through it when `mempalace.enabled`. The skills (`/gsd:mempalace-recall`, `/gsd:mempalace-capture`) are also invocable directly for manual use.
+
+### 15.1 Decision → Phase ownership (traceability)
+
+Every design decision (§10) and user-facing capability is the explicit responsibility of exactly one phase. Cross-cutting policies are assigned a **primary** owner (the phase that first embodies them) with later phases that extend them noted:
+
+| Decision / capability | Primary owner | Notes |
+|---|---|---|
+| D1 role=`feature` · D10 manifest · **D6 `onError:skip` no-gate policy** | **Phase 1** | D6 is encoded in the manifest's per-step `onError:skip`; every later phase inherits it. |
+| D3 transport (MCP-primary / CLI-fallback) · D4 verbatim drawers · D8 wing/room taxonomy · UX-recall · UX-capture | **Phase 2** | D3's MCP-primary rendering lives in the skills/fragments; the CLI-fallback *headless* path is exercised in Phase 5 (UX-headless). |
+| D2 tier=`full` opt-in · D11 federated config · UX-enable | **Phase 3** | UX-enable is the **inherited** `gsd capability enable mempalace` + `config-set` surface (ADR-857's CLI), verified in this phase — not a MemPalace-specific command. |
+| D5 three modes | **Phase 4** | Deferred from Phase 2 ("augment only"); Phase 4 owns `kg_backend`/`replace` + the `gsd-graphify` routing seam. |
+| D7 passive auto-capture · UX-passive · UX-headless | **Phase 5** | Native-hook install + the headless CLI-path transport (D3 fallback). |
+| D9 loop-point map (7 points) · UX-auto · UX-curator | **Phase 6** | Wired via the **shipped** ADR-857 `loop render-hooks` infrastructure (ADR-857 is released); auto-fires when `mempalace.enabled` — verified end-to-end. |
+
+### 15.2 Loop wiring status
+
+ADR-857 (the capability system + the `loop render-hooks` resolver + the workflow call sites) is **released**. The host-loop workflows (`plan-phase.md`, `execute-phase.md`, `verify-work.md`, `ship.md`, `discuss-phase.md`) call `loop render-hooks <point>` at each canonical point, so any registered capability — including `mempalace` — auto-fires when its `when` gate is true. **Verified:** `gsd-tools loop render-hooks plan:pre --raw` with `mempalace.enabled: true` returns the `mempalace-recall` step (`capId: mempalace`, `produces: MEMORY-RECALL.md`), rendered into the workflow markdown. There is therefore **no outstanding cross-doc gating dependency** for UX-auto / UX-curator — the earlier "blocked on ADR-857 *Migrate*" framing (in the original §15 and a prior audit comment) is retracted: that phase shipped. The manual skills (`/gsd:mempalace-recall`, `/gsd:mempalace-capture`) remain available for direct invocation independent of the loop.
 
 ## 16. Registration tax (per ADR-857 + repo checklists)
 
@@ -262,12 +279,14 @@ Phases 1–5 ship value **before** ADR-857's phase-6 cutover (the skills are inv
 
 ## 17. Open questions
 
-1. **Wing identity** — one wing per repo (`project_code`) vs one per milestone? Recommendation: per-repo wing, milestone/phase as KG validity windows + rooms; revisit if wings get too coarse.
-2. **`replace` migration** — do we backfill existing `.planning/graphs/` into the palace KG, or only forward-fill? Recommendation: ship a one-shot `mempalace mine .planning/` + KG import as part of mode switch.
-3. **Curator agent tier** — the curator is operational (branches, API calls, error recovery) ⇒ `sonnet` model. Confirm.
-4. **Headless MCP availability** — verify MemPalace's stdio MCP server *is* reachable under `/gsd-autonomous`/cron, or commit fully to the CLI path there (FR-T1).
-5. **Phase-6 dependency** — accept shipping 1–5 ahead of loop wiring, or hold until phase-6 lands? Recommendation: ship ahead; the manual-invocation value is real and de-risks phase-6.
-6. **Diary `agent_name`** — namespace per GSD role (`gsd-orchestrator`) or per repo? Recommendation: per repo+role so diaries don't collide across projects.
+Each open question is traced to the phase whose acceptance must **resolve** it (so a decision doesn't sit ownerless between phases):
+
+1. **Wing identity** _(resolve in **Phase 0** spike)_ — one wing per repo (`project_code`) vs one per milestone? Recommendation: per-repo wing, milestone/phase as KG validity windows + rooms; revisit if wings get too coarse. The Phase-0 spike gate ("recall surfaces real prior decisions") is where this is validated.
+2. **`replace` migration** _(resolve in **Phase 4**)_ — do we backfill existing `.planning/graphs/` into the palace KG, or only forward-fill? Recommendation: ship a one-shot `mempalace mine .planning/` + KG import as part of mode switch. Owned by the Phase-4 "Modes" gate.
+3. **Curator agent tier** _(resolve in **Phase 2**)_ — the curator is operational (branches, API calls, error recovery) ⇒ `sonnet` model. Confirm at Phase-2 agent delivery.
+4. **Headless MCP availability** _(resolve in **Phase 5**)_ — verify MemPalace's stdio MCP server *is* reachable under `/gsd-autonomous`/cron, or commit fully to the CLI path there (FR-T1). Owned by the Phase-5 headless gate.
+5. **Loop wiring** _(resolved — shipped)_ — ADR-857 is released and the host-loop workflows call `loop render-hooks`, so Phase-6 auto-fire is wired and verified end-to-end (§15.2). The manual skills (`/gsd:mempalace-recall`, `/gsd:mempalace-capture`) remain available for direct use.
+6. **Diary `agent_name`** _(resolve in **Phase 6**)_ — namespace per GSD role (`gsd-orchestrator`) or per repo? Recommendation: per repo+role so diaries don't collide across projects. Owned by the Phase-6 curator wiring (UX-curator).
 
 ---
 

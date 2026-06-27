@@ -75,6 +75,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
+      'gsd-core/bin/lib/assumption-delta.cjs',
+      'gsd-core/bin/lib/state-transition.cjs',
       'gsd-core/bin/lib/command-arg-projection.cjs',
       'gsd-core/bin/lib/clock.cjs',
       'gsd-core/bin/lib/ui-safety-gate.cjs',
@@ -192,6 +194,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/git-base-branch.cjs',
       // ADR-1213: tsc-generated runtime artifact — lint the src/capability-writer.cts source.
       'gsd-core/bin/lib/capability-writer.cjs',
+      // issue #1754: tsc-generated runtime artifact — lint the src/cli-skew-check.cts source.
+      'gsd-core/bin/lib/cli-skew-check.cjs',
       // issue #1355: tsc-generated runtime artifact — lint the src/teams-status.cts source.
       'gsd-core/bin/lib/teams-status.cjs',
       // ADR-1372: tsc-generated runtime artifact — lint the src/markdown-sectionizer.cts source.
