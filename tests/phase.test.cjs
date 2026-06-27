@@ -239,6 +239,200 @@ describe('phases list command', () => {
 // roadmap get-phase command
 // ─────────────────────────────────────────────────────────────────────────────
 
+// #1729 regression: a phase header may carry a parenthetical tag BEFORE the
+// colon — `### Phase 26 (Cluster B): Title`. The header regexes built
+// `Phase\s+<num>` immediately followed by the colon delimiter, so the resolver
+// returned found:false and phase commands silently no-op'd (the failure is
+// silent — not-found, not an error — so an author can lose work without a
+// signal). The fix injects a shared OPTIONAL_PHASE_TAG_SOURCE fragment at every
+// header call site, mirroring how `[...]` is already tolerated before `Phase`.
+//
+// Parity assertion (per the #3537/#3599 generative-fix discipline): a pre-colon
+// tag must resolve the SAME phase as the equivalent post-colon tag, padding
+// tolerance must survive, and the optional tag must not enable cross-phase
+// false matches. A shared seam + parity test keeps the next call site from
+// drifting back undetected.
+describe('#1729 regression: parenthetical tag before the colon in a phase header', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writeRoadmap(lines) {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      ['# Roadmap', ''].concat(lines, ['']).join('\n'),
+    );
+  }
+
+  function getPhase(query) {
+    const result = runGsdTools(['roadmap', 'get-phase', String(query)], tmpDir);
+    assert.ok(result.success, `get-phase ${query} failed: ${result.error}`);
+    return JSON.parse(result.output);
+  }
+
+  test('resolves a header whose tag sits before the colon (the reported bug)', () => {
+    writeRoadmap([
+      '### Phase 26 (Cluster B): Engine-adapter caveats',
+      'Plans: 2',
+    ]);
+    const phase = getPhase(26);
+    assert.equal(phase.found, true, 'pre-colon-tagged phase must resolve');
+    assert.equal(
+      phase.phase_name,
+      'Engine-adapter caveats',
+      'the pre-colon tag must be excluded from the resolved name',
+    );
+  });
+
+  test('a pre-colon tag resolves the same phase as a post-colon tag', () => {
+    // Post-colon placement is the documented workaround and already worked.
+    // Both placements must resolve found:true for the same phase number; the
+    // only contracted difference is that a post-colon tag is part of the title.
+    writeRoadmap(['### Phase 26: Engine-adapter caveats (Cluster B)', 'Plans: 2']);
+    const post = getPhase(26);
+    assert.equal(post.found, true);
+    assert.equal(post.phase_name, 'Engine-adapter caveats (Cluster B)');
+
+    writeRoadmap(['### Phase 26 (Cluster B): Engine-adapter caveats', 'Plans: 2']);
+    const pre = getPhase(26);
+    assert.equal(pre.found, true, 'pre-colon placement must resolve like post-colon');
+    assert.equal(pre.phase_number, post.phase_number);
+  });
+
+  test('padding tolerance (#3537) survives: both `6` and `06` resolve a tagged header', () => {
+    writeRoadmap(['### Phase 6 (Cluster B): Padded test', 'Plans: 1']);
+    const unpadded = getPhase(6);
+    const padded = getPhase('06');
+    assert.equal(unpadded.found, true, 'unpadded query must resolve');
+    assert.equal(padded.found, true, 'padded query must resolve');
+    assert.equal(padded.phase_name, unpadded.phase_name, 'padded/unpadded must agree');
+    assert.equal(unpadded.phase_name, 'Padded test');
+  });
+
+  test('decimal sub-phase headers tolerate a pre-colon tag', () => {
+    writeRoadmap([
+      '### Phase 26 (Cluster B): Base',
+      'Plans: 1',
+      '',
+      '### Phase 26.1 (Sub tag): Decimal subphase',
+      'Plans: 1',
+    ]);
+    const sub = getPhase('26.1');
+    assert.equal(sub.found, true, 'decimal sub-phase with pre-colon tag must resolve');
+    assert.equal(sub.phase_name, 'Decimal subphase');
+  });
+
+  test('the optional tag does not enable a cross-phase false match', () => {
+    // `0*2` must not latch onto `Phase 26 (...)`: querying phase 2 against a
+    // roadmap that only has phase 26 must still report not-found.
+    writeRoadmap(['### Phase 26 (Cluster B): Engine caveats', 'Plans: 1']);
+    assert.equal(getPhase(2).found, false, 'phase 2 must not match phase 26');
+    assert.equal(getPhase(26).found, true, 'sanity: phase 26 still resolves');
+  });
+
+  test('exposes a shared OPTIONAL_PHASE_TAG_SOURCE seam to prevent call-site drift', () => {
+    const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+    assert.equal(
+      typeof phaseId.OPTIONAL_PHASE_TAG_SOURCE,
+      'string',
+      'the shared tag fragment must be exported so every header site composes it',
+    );
+    const re = new RegExp(`Phase\\s+0*26${phaseId.OPTIONAL_PHASE_TAG_SOURCE}:`);
+    assert.ok(re.test('### Phase 26 (Cluster B): X'), 'seam matches a pre-colon tag');
+    assert.ok(re.test('### Phase 26: X'), 'seam stays optional when no tag is present');
+  });
+
+  test('enumeration (roadmap analyze) lists a pre-colon-tagged phase, not just the resolver', () => {
+    // The resolver (get-phase) and the capture-all enumeration regexes are
+    // separate code paths. Fixing only the resolver left `roadmap analyze`
+    // silently dropping a tagged phase from its phase list — wrong phase_count,
+    // progress_percent, and next_phase. Both a tagged and an untagged phase must
+    // appear so the enumeration is coherent with the resolver.
+    writeRoadmap([
+      '### Phase 26 (Cluster B): Engine-adapter caveats',
+      'Plans: 1',
+      '',
+      '### Phase 27: Coordinator playbook',
+      'Plans: 1',
+    ]);
+    const result = runGsdTools(['roadmap', 'analyze'], tmpDir);
+    assert.ok(result.success, `roadmap analyze failed: ${result.error}`);
+    const analysis = JSON.parse(result.output);
+    const numbers = analysis.phases.map((p) => p.number);
+    assert.ok(numbers.includes('26'), 'tagged phase 26 must appear in enumeration');
+    assert.ok(numbers.includes('27'), 'untagged phase 27 must appear in enumeration');
+    assert.equal(analysis.phase_count, 2, 'tagged phase must count toward phase_count');
+    const p26 = analysis.phases.find((p) => p.number === '26');
+    assert.equal(p26.name, 'Engine-adapter caveats', 'pre-colon tag must be excluded from the enumerated name');
+  });
+
+  test('phase remove renumbers a later tagged header and preserves its tag', () => {
+    // The renumber-on-removal rewrite (phase.cts) captured `(num)(\s*:)`, so a
+    // later pre-colon-tagged header was skipped — leaving a stale/duplicate
+    // number after an earlier phase was removed. The tag must survive the
+    // rewrite (it is folded into the re-emitted suffix, not dropped).
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal:** Setup',
+        '',
+        '### Phase 2: Auth',
+        '**Goal:** Authentication',
+        '',
+        '### Phase 3 (Cluster B): Features',
+        '**Goal:** Core features',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-auth'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03-features'), { recursive: true });
+
+    const result = runGsdTools('phase remove 2', tmpDir);
+    assert.ok(result.success, `phase remove failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      /###\s*Phase 2 \(Cluster B\): Features/.test(roadmap),
+      `tagged header must renumber 3->2 and keep its tag; got:\n${roadmap}`,
+    );
+    assert.ok(!/Phase 3 \(Cluster B\)/.test(roadmap), 'old number 3 must be gone');
+  });
+
+  test('the literal enumeration mirror stays equivalent to the exported seam (drift guard)', () => {
+    // Resolver sites compose OPTIONAL_PHASE_TAG_SOURCE; literal enumeration sites
+    // inline `(?:\s*\([^)\n]*\))?`. If one is edited without the other the two
+    // header families silently diverge. Assert behavioral equivalence over a
+    // representative header corpus so the split cannot drift undetected.
+    const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+    const LITERAL_MIRROR = '(?:\\s*\\([^)\\n]*\\))?';
+    const seam = new RegExp(`^Phase\\s+26${phaseId.OPTIONAL_PHASE_TAG_SOURCE}\\s*:`);
+    const mirror = new RegExp(`^Phase\\s+26${LITERAL_MIRROR}\\s*:`);
+    for (const sample of [
+      'Phase 26: X',
+      'Phase 26 (Cluster B): X',
+      'Phase 26 (a) (b): X',
+      'Phase 26 (unterminated: X',
+      'Phase 26  :  X',
+    ]) {
+      assert.equal(
+        seam.test(sample),
+        mirror.test(sample),
+        `seam and literal mirror must agree on: ${JSON.stringify(sample)}`,
+      );
+    }
+  });
+});
+
 
 describe('phase next-decimal command', () => {
   let tmpDir;
