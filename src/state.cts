@@ -2864,7 +2864,15 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   const keepRecent = parseInt(String(options.keepRecent), 10) || 3;
   const dryRun = !!options.dryRun;
-  const currentPhaseRaw = stateExtractField(fs.readFileSync(statePath, 'utf-8'), 'Current Phase');
+  // STATE.md from the canonical template emits the position as a prose
+  // `Phase: [X] of [Y]` field and never `Current Phase:` (#1760). Without the
+  // prose fallback, `Current Phase` is absent → currentPhase = 0 → prune always
+  // bails with "Only 0 phases". Mirror the fallback buildStateFrontmatter and
+  // cmdStateSync already use so prune resolves the phase on a template file.
+  const pruneContent = fs.readFileSync(statePath, 'utf-8');
+  const currentPhaseRaw =
+    stateExtractField(pruneContent, 'Current Phase') ??
+    parseProsePhaseField(stateExtractField(pruneContent, 'Phase')).phase;
   const currentPhase = parseInt(currentPhaseRaw as string, 10) || 0;
   const cutoff = currentPhase - keepRecent;
 
