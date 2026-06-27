@@ -1742,7 +1742,7 @@ const capabilities = {
   "qoder": {
     "id": "qoder",
     "role": "runtime",
-    "version": "1.6.0-rc.3",
+    "version": "1.6.0",
     "title": "Qoder",
     "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; settings-json hook surface (PreToolUse/PostToolUse/Stop); Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4101,7 +4101,7 @@ const runtimes = {
   "qoder": {
     "id": "qoder",
     "role": "runtime",
-    "version": "1.6.0-rc.3",
+    "version": "1.6.0",
     "title": "Qoder",
     "description": "Qoder CLI — flat skills layout at ~/.qoder/skills/; agents at ~/.qoder/agents/; settings-json hook surface (PreToolUse/PostToolUse/Stop); Claude hook event dialect; tier-2 support.",
     "tier": "core",
