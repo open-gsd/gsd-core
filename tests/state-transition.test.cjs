@@ -1085,3 +1085,128 @@ describe('ADR-1769 Phase 6: patch transition — field updates', () => {
     assert.deepStrictEqual(result.data && result.data.updated, ['stopped_at']);
   });
 });
+
+// ADR-1769 Phase 7: update, prune, sync
+
+describe('ADR-1769 Phase 7: update transition — single body field', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('replaces a body field and reports updated:true', () => {
+    const input = '# Project State\n\n**Status:** Planning\n**Current Plan:** 2\n';
+    const result = transitionCore(input, { kind: 'update', field: 'Current Plan', value: '3' }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Current Plan'), '3');
+    assert.strictEqual(result.data && result.data.updated, true);
+  });
+
+  test('reports updated:false when the field is absent', () => {
+    const input = '# Project State\n\n**Status:** Planning\n';
+    const result = transitionCore(input, { kind: 'update', field: 'Nonexistent', value: 'x' }, deps);
+    assert.strictEqual(result.content, input);
+    assert.strictEqual(result.data && result.data.updated, false);
+  });
+
+  test('preserves frontmatter across the body update', () => {
+    const input = ['---', 'status: planning', '---', '', '# State', '', '**Status:** Planning', ''].join('\n');
+    const result = transitionCore(input, { kind: 'update', field: 'Status', value: 'Paused' }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Paused');
+    assert.ok(/^---\r?\n[\s\S]*?\r?\n---/.test(result.content));
+  });
+});
+
+describe('ADR-1769 Phase 7: prune transition — section pruning', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('archives Decisions entries at or below the cutoff phase', () => {
+    const input = [
+      '# Session State',
+      '',
+      '## Decisions',
+      '',
+      '- [Phase 1]: Old',
+      '- [Phase 3]: Older',
+      '- [Phase 9]: Recent',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'prune', cutoff: 7 }, deps);
+    const archived = (result.data && result.data.archivedSections) || [];
+    assert.strictEqual(result.content.includes('[Phase 1]: Old'), false);
+    assert.strictEqual(result.content.includes('[Phase 3]: Older'), false);
+    assert.ok(result.content.includes('[Phase 9]: Recent'));
+    const decisions = archived.find((s) => s.section === 'Decisions');
+    assert.ok(decisions, 'Decisions archive entry must exist');
+    assert.strictEqual(decisions.count, 2);
+  });
+
+  test('archives Performance Metrics table rows at or below the cutoff', () => {
+    const input = [
+      '# State',
+      '',
+      '## Performance Metrics',
+      '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '| --- | --- | --- | --- |',
+      '| 1 | 4 | 8 | 2 |',
+      '| 9 | 2 | 4 | 2 |',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'prune', cutoff: 7 }, deps);
+    assert.ok(result.content.includes('| 9 | 2 | 4 | 2 |'), 'phase-9 row must remain');
+    assert.strictEqual(result.content.includes('| 1 | 4 | 8 | 2 |'), false, 'phase-1 row must be archived');
+    assert.ok(result.content.includes('| Phase | Plans |'), 'header row preserved');
+  });
+
+  test('no-op when nothing is old enough (totalPruned === 0)', () => {
+    const input = '# State\n\n## Decisions\n\n- [Phase 9]: Recent\n';
+    const result = transitionCore(input, { kind: 'prune', cutoff: 7 }, deps);
+    assert.strictEqual(result.content, input);
+    assert.strictEqual((result.data && result.data.totalPruned) || 0, 0);
+  });
+});
+
+describe('ADR-1769 Phase 7: sync transition — body writes + #1761', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('updates Total Plans in Phase + Progress bar + Last Activity when bounded', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Total Plans in Phase:** 2',
+      '**Last Activity:** 2026-06-20',
+      '**Progress:** [████░░░░░░] 40%',
+      '',
+    ].join('\n');
+    const result = transitionCore(
+      input,
+      { kind: 'sync', totalPlansInPhase: 5, percent: 60 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Total Plans in Phase'), '5');
+    assert.strictEqual(stateExtractField(result.content, 'Last Activity'), '2026-06-27');
+    assert.ok(/\[██████░░░░\] 60%/.test(result.content), 'Progress bar must be 60%');
+  });
+
+  test('#1761: leaves Progress untouched when percent is null (milestone unbounded)', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Total Plans in Phase:** 2',
+      '**Last Activity:** 2026-06-20',
+      '**Progress:** [█████░░░░░] 50%',
+      '',
+    ].join('\n');
+    const result = transitionCore(
+      input,
+      { kind: 'sync', totalPlansInPhase: 5, percent: null },
+      deps,
+    );
+    // Total Plans + Last Activity still advance; Progress bar is left untouched.
+    assert.strictEqual(stateExtractField(result.content, 'Total Plans in Phase'), '5');
+    assert.ok(/\[█████░░░░░\] 50%/.test(result.content), 'Progress bar must be unchanged when percent is null');
+  });
+
+  test('skips Total Plans write when totalPlansInPhase is null', () => {
+    const input = '# Project State\n\n**Total Plans in Phase:** 2\n**Progress:** 40%\n';
+    const result = transitionCore(input, { kind: 'sync', totalPlansInPhase: null, percent: null }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Total Plans in Phase'), '2');
+  });
+});

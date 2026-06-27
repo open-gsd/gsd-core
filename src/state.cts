@@ -435,20 +435,20 @@ function cmdStateUpdate(cwd: string, field: string | undefined, value: string | 
   try {
     let updated = false;
     const shouldResync = shouldResyncStateProgress([field as string]);
+    // ADR-1769 Phase 7: dispatches to the STATE.md Transition Module. The
+    // body-strip/reassemble single-field update is the pure `updateCore` in
+    // src/state-transition.cts. readModifyWriteStateMd still owns the lock, the
+    // #1230/#1264/#1695 post-sync preservation, and the no-op write guard.
     // Preserve curated progress for body-only updates, but allow fields that
     // directly project into progress.* frontmatter to rebuild after mutation.
     readModifyWriteStateMd(statePath, (content) => {
-      const body = stripFrontmatter(content);
-      const result = stateReplaceField(body, field as string, value as string);
-      if (result) {
-        updated = true;
-        const existingFm = extractFrontmatter(content) as Record<string, unknown>;
-        if (Object.keys(existingFm).length > 0) {
-          return `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${result}`;
-        }
-        return result;
-      }
-      return content;
+      const result = transitionCore(
+        content,
+        { kind: 'update', field: field as string, value: value as string },
+        { clock: realClock, progressProvider: () => null },
+      );
+      updated = (result.data as { updated: boolean } | undefined)?.updated === true;
+      return result.content;
     }, cwd, { resync: shouldResync });
     if (updated) {
       output({ updated: true }, false, undefined);
@@ -2362,7 +2362,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   const content = fs.readFileSync(statePath, 'utf-8');
   const changes: string[] = [];
   let modified = content;
-  const today = realClock.today();
+
 
   const phasesDir = planningPaths(cwd).phases;
   if (!fs.existsSync(phasesDir)) {
@@ -2375,10 +2375,12 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   // exactly as buildStateFrontmatter does — otherwise `state sync --verify`
   // would keep re-deriving the inflated denominator and report "no drift".
   let syncRoadmapScope: string | null = null;
+  let syncRoadmapRaw: string | null = null;
   let syncRetiredPhaseNums = new Set<string>();
   try {
     const roadmapRaw = platformReadSync(path.join(planningDir(cwd), 'ROADMAP.md'));
     if (roadmapRaw !== null) {
+      syncRoadmapRaw = roadmapRaw;
       syncRoadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
       syncRetiredPhaseNums = extractRetiredPhaseNumbers(syncRoadmapScope);
     }
@@ -2456,46 +2458,36 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     }
   } catch { /* intentionally empty */ }
 
-  // Sync Total Plans in Phase
-  if (highestIncompletePhase) {
-    const currentPlansField = stateExtractField(modified, 'Total Plans in Phase');
-    if (currentPlansField && parseInt(currentPlansField, 10) !== highestIncompletePhaseplanCount) {
-      changes.push(`Total Plans in Phase: ${currentPlansField} -> ${highestIncompletePhaseplanCount}`);
-      const result = stateReplaceField(modified, 'Total Plans in Phase', String(highestIncompletePhaseplanCount));
-      if (result) modified = result;
-    }
+  // ADR-1769 Phase 7: the body writes (Total Plans in Phase, Progress bar, Last
+  // Activity) are the pure `syncCore` in src/state-transition.cts.
+  // #1761: when a milestone version is set in frontmatter but the ROADMAP has no
+  // versioned heading for it, the milestone cannot be bounded to a versioned phase
+  // set — leave Progress untouched (percent=null) rather than silently writing
+  // fallback-derived wrong values. Projects without a milestone version (the common
+  // sync-test shape) are unaffected: the gate only fires when a version is asserted.
+  const fmVersion = (extractFrontmatter(content) as Record<string, unknown>).milestone;
+  const versionStr = typeof fmVersion === 'string' && fmVersion.trim() ? fmVersion.trim() : null;
+  let milestoneBounded = true;
+  if (versionStr !== null && syncRoadmapRaw !== null) {
+    const versionedHeading = new RegExp(`^#{1,3}\\s+(?!Phase\\s+\\S).*${escapeRegex(versionStr)}`, 'mi');
+    milestoneBounded = versionedHeading.test(syncRoadmapRaw);
   }
-
-  // Sync Progress — use shared helper so formula stays in one place (#3242 Bug B).
-  // computeProgressPercent applies min(plan_fraction, phase_fraction) so unrealised
-  // ROADMAP phases cap the reported percent rather than allowing a false 100%.
-  const percent = (() => {
+  let percent: number | null = null;
+  if (!milestoneBounded) {
+    changes.push(`Progress: skipped — milestone ${versionStr} cannot be bounded to a versioned ROADMAP phase set (#1761)`);
+  } else {
     const p = computeProgressPercent(totalDiskSummaries, totalDiskPlans, diskCompletedPhases, syncTotalPhases);
-    return p !== null ? p : 0;
-  })();
-  const currentProgress = stateExtractField(modified, 'Progress');
-  if (currentProgress) {
-    const currentPercent = parseInt(currentProgress.replace(/[^\d]/g, ''), 10);
-    if (currentPercent !== percent) {
-      const barWidth = 10;
-      const filled = Math.round(percent / 100 * barWidth);
-      const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
-      const progressStr = `[${bar}] ${percent}%`;
-      changes.push(`Progress: ${currentProgress} -> ${progressStr}`);
-      const result = stateReplaceField(modified, 'Progress', progressStr);
-      if (result) modified = result;
-    }
+    percent = p !== null ? p : 0;
   }
 
-  // Sync Last Activity
-  const result = stateReplaceField(modified, 'Last Activity', today);
-  if (result) {
-    const oldActivity = stateExtractField(modified, 'Last Activity');
-    if (oldActivity !== today) {
-      changes.push(`Last Activity: ${oldActivity} -> ${today}`);
-    }
-    modified = result;
-  }
+  const syncResult = transitionCore(
+    modified,
+    { kind: 'sync', totalPlansInPhase: highestIncompletePhase ? highestIncompletePhaseplanCount : null, percent },
+    { clock: realClock, progressProvider: () => null },
+  );
+  modified = syncResult.content;
+  const coreChanges = (syncResult.data as { changes?: string[] } | undefined)?.changes ?? [];
+  changes.push(...coreChanges);
 
   if (verify) {
     output({ synced: false, changes, dry_run: true }, raw, undefined);
@@ -2526,8 +2518,13 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   const keepRecent = parseInt(String(options.keepRecent), 10) || 3;
   const dryRun = !!options.dryRun;
-  const currentPhaseRaw = stateExtractField(fs.readFileSync(statePath, 'utf-8'), 'Current Phase');
-  const currentPhase = parseInt(currentPhaseRaw as string, 10) || 0;
+  // #1760: the canonical STATE.md template emits `Phase: [X] of [Y]`, not
+  // `Current Phase:`. Read both (mirroring buildStateFrontmatter /
+  // resolvePhaseIdForCompletePhase) so prune engages on template-conformant
+  // STATE.md instead of bailing with "Only 0 phases — nothing to prune".
+  const rawState = fs.readFileSync(statePath, 'utf-8');
+  const currentPhaseRaw = stateExtractField(rawState, 'Current Phase') || stateExtractField(rawState, 'Phase');
+  const currentPhase = parseInt(String(currentPhaseRaw), 10) || 0;
   const cutoff = currentPhase - keepRecent;
 
   if (cutoff <= 0) {
@@ -2538,119 +2535,22 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   const archivePath = path.join(path.dirname(statePath), 'STATE-ARCHIVE.md');
   const archived: PrunedSection[] = [];
 
-  // Shared pruning logic applied to both dry-run and real passes.
-  // Returns { newContent, archivedSections }.
-  // ADR-1372 T6: all four inline section-collect regexes replaced with
-  // tokenizeHeadings + untrimmed-span splicing for byte-identical writes.
-  function prunePass(content: string): { newContent: string; archivedSections: PrunedSection[] } {
-    const sections: PrunedSection[] = [];
-
-    // Helper: locate a heading matching pred, extract untrimmed body [bs, se),
-    // apply transform, and splice back. Returns updated content.
-    // All prune-section patterns stop at level 2 or 3 (STOP_H2_H3).
-    function pruneSectionSpan(
-      c: string,
-      pred: (lv: number, text: string) => boolean,
-      transform: (body: string) => { keep: string[]; archive: string[] },
-      sectionName: string,
-    ): string {
-      const hs = tokenizeHeadings(c);
-      const i = hs.findIndex(h => pred(h.level, h.text));
-      if (i === -1) return c;
-      const h = hs[i];
-      const ls = c.split('\n');
-      const hl = ls[h.line - 1];
-      const bs = h.offset + hl.length + 1;
-      let se = c.length;
-      for (let j = i + 1; j < hs.length; j++) {
-        if (STOP_H2_H3(hs[j].level)) { se = hs[j].offset - 1; break; }
-      }
-      const body = c.slice(bs, se);
-      const { keep, archive } = transform(body);
-      if (archive.length > 0) {
-        sections.push({ section: sectionName, count: archive.length, lines: archive });
-        return c.slice(0, bs) + keep.join('\n') + c.slice(se);
-      }
-      return c;
-    }
-
-    // Prune Decisions section: entries like "- [Phase N]: ..."
-    content = pruneSectionSpan(
-      content,
-      (lv, text) => (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text),
-      (body) => {
-        const keep: string[] = [], archive: string[] = [];
-        for (const line of body.split('\n')) {
-          const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
-          if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
-        }
-        return { keep, archive };
-      },
-      'Decisions',
-    );
-
-    // Prune Recently Completed section: entries mentioning phase numbers
-    content = pruneSectionSpan(
-      content,
-      (lv, text) => (lv === 2 || lv === 3) && /^recently\s+completed$/i.test(text),
-      (body) => {
-        const keep: string[] = [], archive: string[] = [];
-        for (const line of body.split('\n')) {
-          const phaseMatch = line.match(/Phase\s+(\d+)/i);
-          if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
-        }
-        return { keep, archive };
-      },
-      'Recently Completed',
-    );
-
-    // Prune resolved blockers: lines marked as resolved (strikethrough ~~text~~
-    // or "[RESOLVED]" prefix) with a phase reference older than cutoff
-    content = pruneSectionSpan(
-      content,
-      (lv, text) => (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)$/i.test(text),
-      (body) => {
-        const keep: string[] = [], archive: string[] = [];
-        for (const line of body.split('\n')) {
-          const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
-          const phaseMatch = line.match(/Phase\s+(\d+)/i);
-          if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) { archive.push(line); } else { keep.push(line); }
-        }
-        return { keep, archive };
-      },
-      'Blockers (resolved)',
-    );
-
-    // Prune Performance Metrics table rows: keep only rows for phases > cutoff.
-    // Preserves header rows (| Phase | ... and |---|...) and any prose around the table.
-    content = pruneSectionSpan(
-      content,
-      (lv, text) => (lv === 2 || lv === 3) && /^performance\s+metrics$/i.test(text),
-      (body) => {
-        const keep: string[] = [], archive: string[] = [];
-        for (const line of body.split('\n')) {
-          // Table data row: starts with | followed by a number (phase)
-          const tableRowMatch = line.match(/^\|\s*(\d+)\s*\|/);
-          if (tableRowMatch) {
-            const rowPhase = parseInt(tableRowMatch[1], 10);
-            if (rowPhase <= cutoff) { archive.push(line); } else { keep.push(line); }
-          } else {
-            // Header row, separator row, or prose — always keep
-            keep.push(line);
-          }
-        }
-        return { keep, archive };
-      },
-      'Performance Metrics',
-    );
-
-    return { newContent: content, archivedSections: sections };
-  }
+  // ADR-1769 Phase 7: the section-pruning is the pure `pruneCore` in
+  // src/state-transition.cts (byte-identical tokenizeHeadings section splicing).
+  // This adapter owns currentPhase derivation (#1760 `Phase`/`Current Phase`
+  // fallback above), dry-run, and STATE-ARCHIVE.md writes.
+  const runPruneCore = (content: string): { newContent: string; archivedSections: PrunedSection[] } => {
+    const result = transitionCore(content, { kind: 'prune', cutoff }, { clock: realClock, progressProvider: () => null });
+    return {
+      newContent: result.content,
+      archivedSections: ((result.data as { archivedSections?: PrunedSection[] } | undefined)?.archivedSections) ?? [],
+    };
+  };
 
   if (dryRun) {
     // Dry-run: compute what would be pruned without writing anything
     const content = fs.readFileSync(statePath, 'utf-8');
-    const result = prunePass(content);
+    const result = runPruneCore(content);
     const totalPruned = result.archivedSections.reduce((sum, s) => sum + s.count, 0);
     emit({
       pruned: false,
@@ -2665,7 +2565,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   }
 
   readModifyWriteStateMd(statePath, (content) => {
-    const result = prunePass(content);
+    const result = runPruneCore(content);
     archived.push(...result.archivedSections);
     return result.newContent;
   }, cwd);

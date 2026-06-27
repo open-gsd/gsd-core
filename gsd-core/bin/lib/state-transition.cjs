@@ -127,6 +127,12 @@ function transitionCore(content, intent, deps) {
             return milestoneCompleteCore(content, intent, deps);
         case 'patch':
             return patchCore(content, intent);
+        case 'update':
+            return updateCore(content, intent);
+        case 'prune':
+            return pruneCore(content, intent);
+        case 'sync':
+            return syncCore(content, intent, deps);
     }
 }
 // ----------------------------------------------------------------------------
@@ -940,4 +946,200 @@ function patchCore(content, intent) {
         }
     }
     return { content: result, updated, data: { updated, failed } };
+}
+// ----------------------------------------------------------------------------
+// update — intent implementation (Phase 7)
+// ----------------------------------------------------------------------------
+/**
+ * Apply an `update` transition to STATE.md content.
+ *
+ * Migrates `cmdStateUpdate` (state.cts) onto the substrate. A single-field
+ * body-only update (the field is replaced in the body; frontmatter is preserved
+ * as-is and re-synced by the adapter's `readModifyWriteStateMd` post-sync).
+ * Mirrors the pre-migration body-strip/reassemble contract.
+ */
+function updateCore(content, intent) {
+    const existingFm = extractFrontmatter(content);
+    const hasFrontmatter = Object.keys(existingFm).length > 0;
+    const body = stripFrontmatter(content);
+    const result = (0, state_document_cjs_1.stateReplaceField)(body, intent.field, intent.value);
+    if (result === null) {
+        return { content, updated: [], data: { updated: false } };
+    }
+    const reassembled = hasFrontmatter
+        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${result}`
+        : result;
+    return { content: reassembled, updated: [intent.field], data: { updated: true } };
+}
+// Stop predicate for prune section slicing: a level-2 OR level-3 heading ends
+// the section (mirrors state.cts STOP_H2_H3 — Decisions / Recently Completed /
+// Blockers / Performance Metrics live at H2 or H3).
+const STOP_H2_H3 = (lv) => lv === 2 || lv === 3;
+/**
+ * Apply a `prune` transition to STATE.md content.
+ *
+ * Migrates the section-pruning half of `cmdStatePrune` (state.cts) onto the
+ * substrate. Pure `content → {content, archivedSections}` given a cutoff phase:
+ * archives Decisions / Recently Completed / resolved Blockers / Performance
+ * Metrics table rows whose phase number is <= cutoff. ADR-1372 T6
+ * tokenizeHeadings + untrimmed-span splicing, byte-identical to the pre-migration
+ * `prunePass`.
+ *
+ * The adapter owns currentPhase derivation (with the #1760 `Phase` / `Current
+ * Phase` fallback), keepRecent/dryRun, and STATE-ARCHIVE.md writes.
+ */
+function pruneCore(content, intent) {
+    const cutoff = intent.cutoff;
+    const sections = [];
+    let c = content;
+    // Helper: locate a heading matching pred, extract untrimmed body [bs, se),
+    // apply transform, splice back. All prune sections stop at level 2 or 3.
+    const pruneSectionSpan = (pred, transform, sectionName) => {
+        const hs = (0, markdown_sectionizer_cjs_1.tokenizeHeadings)(c);
+        const i = hs.findIndex((h) => pred(h.level, h.text));
+        if (i === -1)
+            return;
+        const h = hs[i];
+        const ls = c.split('\n');
+        const hl = ls[h.line - 1];
+        const bs = h.offset + hl.length + 1;
+        let se = c.length;
+        for (let j = i + 1; j < hs.length; j++) {
+            if (STOP_H2_H3(hs[j].level)) {
+                se = hs[j].offset - 1;
+                break;
+            }
+        }
+        const body = c.slice(bs, se);
+        const { keep, archive } = transform(body);
+        if (archive.length > 0) {
+            sections.push({ section: sectionName, count: archive.length, lines: archive });
+            c = c.slice(0, bs) + keep.join('\n') + c.slice(se);
+        }
+    };
+    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^(?:Decisions|Decisions Made|Accumulated.*Decisions)$/i.test(text), (body) => {
+        const keep = [], archive = [];
+        for (const line of body.split('\n')) {
+            const phaseMatch = line.match(/^\s*-\s*\[Phase\s+(\d+)/i);
+            if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
+                archive.push(line);
+            }
+            else {
+                keep.push(line);
+            }
+        }
+        return { keep, archive };
+    }, 'Decisions');
+    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^recently\s+completed$/i.test(text), (body) => {
+        const keep = [], archive = [];
+        for (const line of body.split('\n')) {
+            const phaseMatch = line.match(/Phase\s+(\d+)/i);
+            if (phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
+                archive.push(line);
+            }
+            else {
+                keep.push(line);
+            }
+        }
+        return { keep, archive };
+    }, 'Recently Completed');
+    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^(?:Blockers|Blockers\/Concerns|Blockers\s*&\s*Concerns)$/i.test(text), (body) => {
+        const keep = [], archive = [];
+        for (const line of body.split('\n')) {
+            const isResolved = /~~.*~~|\[RESOLVED\]/i.test(line);
+            const phaseMatch = line.match(/Phase\s+(\d+)/i);
+            if (isResolved && phaseMatch && parseInt(phaseMatch[1], 10) <= cutoff) {
+                archive.push(line);
+            }
+            else {
+                keep.push(line);
+            }
+        }
+        return { keep, archive };
+    }, 'Blockers (resolved)');
+    pruneSectionSpan((lv, text) => (lv === 2 || lv === 3) && /^performance\s+metrics$/i.test(text), (body) => {
+        const keep = [], archive = [];
+        for (const line of body.split('\n')) {
+            const tableRowMatch = line.match(/^\|\s*(\d+)\s*\|/);
+            if (tableRowMatch) {
+                const rowPhase = parseInt(tableRowMatch[1], 10);
+                if (rowPhase <= cutoff) {
+                    archive.push(line);
+                }
+                else {
+                    keep.push(line);
+                }
+            }
+            else {
+                keep.push(line);
+            }
+        }
+        return { keep, archive };
+    }, 'Performance Metrics');
+    const totalPruned = sections.reduce((sum, s) => sum + s.count, 0);
+    return {
+        content: c,
+        updated: totalPruned > 0 ? ['pruned'] : [],
+        data: { archivedSections: sections, totalPruned },
+    };
+}
+// ----------------------------------------------------------------------------
+// sync — intent implementation (Phase 7)
+// ----------------------------------------------------------------------------
+/**
+ * Apply a `sync` transition to STATE.md content.
+ *
+ * Migrates the body-write half of `cmdStateSync` (state.cts) onto the substrate.
+ * Updates Total Plans in Phase, the Progress bar, and Last Activity from
+ * disk-derived numbers (injected via the intent). Returns the per-field change
+ * log via `data.changes` so the adapter can build the CLI output.
+ *
+ * #1761: when the current milestone cannot be bounded to a versioned phase set,
+ * the adapter passes `percent: null` and this core leaves Progress untouched
+ * (rather than silently writing fallback-derived wrong values).
+ */
+function syncCore(content, intent, deps) {
+    const today = deps.clock.today();
+    const changes = [];
+    let modified = content;
+    const updated = [];
+    if (intent.totalPlansInPhase !== null) {
+        const currentPlansField = (0, state_document_cjs_1.stateExtractField)(modified, 'Total Plans in Phase');
+        if (currentPlansField && parseInt(currentPlansField, 10) !== intent.totalPlansInPhase) {
+            changes.push(`Total Plans in Phase: ${currentPlansField} -> ${intent.totalPlansInPhase}`);
+            const result = (0, state_document_cjs_1.stateReplaceField)(modified, 'Total Plans in Phase', String(intent.totalPlansInPhase));
+            if (result) {
+                modified = result;
+                updated.push('Total Plans in Phase');
+            }
+        }
+    }
+    if (intent.percent !== null) {
+        const currentProgress = (0, state_document_cjs_1.stateExtractField)(modified, 'Progress');
+        if (currentProgress) {
+            const currentPercent = parseInt(currentProgress.replace(/[^\d]/g, ''), 10);
+            if (currentPercent !== intent.percent) {
+                const barWidth = 10;
+                const filled = Math.round((intent.percent / 100) * barWidth);
+                const bar = '█'.repeat(filled) + '░'.repeat(barWidth - filled);
+                const progressStr = `[${bar}] ${intent.percent}%`;
+                changes.push(`Progress: ${currentProgress} -> ${progressStr}`);
+                const result = (0, state_document_cjs_1.stateReplaceField)(modified, 'Progress', progressStr);
+                if (result) {
+                    modified = result;
+                    updated.push('Progress');
+                }
+            }
+        }
+    }
+    const lastActivityResult = (0, state_document_cjs_1.stateReplaceField)(modified, 'Last Activity', today);
+    if (lastActivityResult) {
+        const oldActivity = (0, state_document_cjs_1.stateExtractField)(modified, 'Last Activity');
+        if (oldActivity !== today) {
+            changes.push(`Last Activity: ${oldActivity} -> ${today}`);
+            updated.push('Last Activity');
+        }
+        modified = lastActivityResult;
+    }
+    return { content: modified, updated, data: { changes } };
 }

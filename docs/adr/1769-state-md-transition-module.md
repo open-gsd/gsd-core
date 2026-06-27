@@ -1,7 +1,7 @@
 # ADR-1769: STATE.md Transition Module — intent-based transitions over scattered RMW callbacks
 
-- **Status:** Proposed (Phase 0); **Accepted** at Phase 7 closeout
-- **Date:** 2026-06-27 (Phase 0)
+- **Status:** Accepted (Phase 7 closeout — all 10 lifecycle/maintenance transitions migrated; bug cluster #1760/#1761/#1743/#1695/#1264/#1255/#1257/#3242 retired)
+- **Date:** 2026-06-27 (Phase 0); Phase 7 closeout 2026-06-27
 - **Issue:** [#1769](https://github.com/open-gsd/gsd-core/issues/1769) — epic
 - **Supersedes:** the policy portions of `syncStateFrontmatter` (`src/state.cts:1667–1743`),
   `readModifyWriteStateMd`'s post-sync preservation block (`src/state.cts:2008–2119`), and
@@ -214,4 +214,4 @@ alongside, leave callbacks — parallel worlds don't converge (ADR-857's failure
 | 4 | `plannedPhase` + `milestoneSwitch` | #1786 | — |
 | 5 | `milestoneComplete` + `milestone.cts:352` | #1789 | — |
 | 6 | `patch` | #1791 | #1743, #1695 |
-| 7 | `sync`, `prune`, `update` | TBD | #1760, #1761 |
+| 7 | `sync`, `prune`, `update` | #1793 | #1760, #1761 |
