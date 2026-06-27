@@ -1,5 +1,4 @@
 'use strict';
-// allow-test-rule: reads runtime STATE.md written to temp dir — behavioral output test, not source-grep (see #1771)
 
 // Phase 1 tests for the STATE.md Transition Module (ADR-1769).
 // These are characterization tests: they pin the behavior the new
