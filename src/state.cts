@@ -19,7 +19,7 @@ import phaseIdMod = require('./phase-id.cjs');
 const { escapeRegex, normalizePhaseName, extractPhaseToken } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
+const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone, currentMilestoneScopeIsAmbiguous } = roadmapParserMod;
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -1664,6 +1664,31 @@ function stripFrontmatter(content: string): string {
   return result;
 }
 
+/**
+ * #1761 progress guard, shared by the write path (syncStateFrontmatter) and the
+ * read path (cmdStateJson `state json`). When the current milestone cannot be
+ * bounded to a ROADMAP section, buildStateFrontmatter derived `progress`
+ * (total_phases, percent, …) from a scope that conflates sibling milestones.
+ * Prefer the existing frontmatter progress over that conflated derivation; when
+ * none exists, drop the block rather than report/persist a wrong denominator.
+ * Mutates `fm` in place. No-op for the common (bounded) case.
+ */
+function applyAmbiguousMilestoneProgressGuard(
+  fm: Record<string, unknown>,
+  existingFm: Record<string, unknown> | null | undefined,
+  cwd: string | undefined,
+): void {
+  if (!cwd || !fm['progress']) return;
+  let roadmapRaw: string | null = null;
+  try { roadmapRaw = platformReadSync(path.join(planningDir(cwd), 'ROADMAP.md')); } catch { /* ignore */ }
+  if (roadmapRaw === null || !currentMilestoneScopeIsAmbiguous(roadmapRaw, cwd)) return;
+  if (existingFm && existingFm['progress']) {
+    fm['progress'] = normalizeProgressNumbers(existingFm['progress']);
+  } else {
+    delete fm['progress'];
+  }
+}
+
 function syncStateFrontmatter(content: string, cwd: string | undefined): string {
   // Read existing frontmatter BEFORE stripping — it may contain values
   // that the body no longer has (e.g., Status field removed by an agent).
@@ -1737,6 +1762,9 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   if (!derivedFm['progress'] && existingFm['progress']) {
     derivedFm['progress'] = normalizeProgressNumbers(existingFm['progress']);
   }
+  // #1761: prefer existing progress (or drop it) when the milestone scope is
+  // ambiguous so frontmatter is not silently rewritten off a conflated count.
+  applyAmbiguousMilestoneProgressGuard(derivedFm, existingFm, cwd);
 
   const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
   return `---\n${yamlStr}\n---\n\n${body}`;
@@ -2162,6 +2190,11 @@ function cmdStateJson(cwd: string, raw: boolean): void {
   if (existingFm && shouldPreserveExistingProgress(existingFm['progress'], built['progress'])) {
     built['progress'] = normalizeProgressNumbers(existingFm['progress']);
   }
+  // #1761: `state json` rebuilds progress directly via buildStateFrontmatter and
+  // bypasses syncStateFrontmatter, so apply the same ambiguous-scope guard here —
+  // otherwise the machine-readable read path reports the conflated progress the
+  // write path now refuses to persist.
+  applyAmbiguousMilestoneProgressGuard(built, existingFm, cwd);
 
   output(built, raw, JSON.stringify(built, null, 2));
 }
@@ -2714,11 +2747,18 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   // would keep re-deriving the inflated denominator and report "no drift".
   let syncRoadmapScope: string | null = null;
   let syncRetiredPhaseNums = new Set<string>();
+  // #1761: when the current milestone cannot be bounded to a ROADMAP section,
+  // extractCurrentMilestone falls back to the whole document and the derived
+  // phase count conflates sibling milestones. Detect that case so we skip the
+  // progress write (off a wrong denominator) and warn instead of silently
+  // persisting incorrect numbers.
+  let milestoneScopeAmbiguous = false;
   try {
     const roadmapRaw = platformReadSync(path.join(planningDir(cwd), 'ROADMAP.md'));
     if (roadmapRaw !== null) {
       syncRoadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
       syncRetiredPhaseNums = extractRetiredPhaseNumbers(syncRoadmapScope);
+      milestoneScopeAmbiguous = currentMilestoneScopeIsAmbiguous(roadmapRaw, cwd);
     }
   } catch { /* fall through: no roadmap scope → no retired exclusion */ }
 
@@ -2811,8 +2851,12 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     const p = computeProgressPercent(totalDiskSummaries, totalDiskPlans, diskCompletedPhases, syncTotalPhases);
     return p !== null ? p : 0;
   })();
+  // #1761: skip the progress write when the milestone scope is ambiguous —
+  // `percent` would be computed off a denominator that conflates sibling
+  // milestones. Leave the existing Progress line untouched and warn instead of
+  // silently persisting a wrong value.
   const currentProgress = stateExtractField(modified, 'Progress');
-  if (currentProgress) {
+  if (currentProgress && !milestoneScopeAmbiguous) {
     const currentPercent = parseInt(currentProgress.replace(/[^\d]/g, ''), 10);
     if (currentPercent !== percent) {
       const barWidth = 10;
@@ -2835,8 +2879,15 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     modified = result;
   }
 
+  // #1761: surface the ambiguous-scope skip so the progress mismatch is visible
+  // rather than silent. Emitted on stderr (human) and in the JSON result.
+  const warning = milestoneScopeAmbiguous
+    ? 'Current milestone could not be bounded to a ROADMAP section (no versioned milestone heading matched the STATE.md milestone anchor). Progress left untouched to avoid writing a count that conflates sibling milestones. Add a versioned milestone heading (e.g. "## vX.Y — Name") or correct the STATE.md `milestone:` anchor.'
+    : null;
+  if (warning) console.warn(`[gsd] ${warning}`);
+
   if (verify) {
-    output({ synced: false, changes, dry_run: true }, raw, undefined);
+    output({ synced: false, changes, dry_run: true, ...(warning ? { warning } : {}) }, raw, undefined);
     return;
   }
 
@@ -2844,7 +2895,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     writeStateMd(statePath, modified, cwd);
   }
 
-  output({ synced: true, changes, dry_run: false }, raw, undefined);
+  output({ synced: true, changes, dry_run: false, ...(warning ? { warning } : {}) }, raw, undefined);
 }
 
 /**
