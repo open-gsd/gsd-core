@@ -70,37 +70,40 @@ export type FieldClassification = { source: FieldSource; preservation: FieldPres
  * function). Use `getFieldClassification()` for lookups.
  */
 export const FIELD_CLASSIFICATION: Readonly<Record<string, FieldClassification>> = Object.freeze(
-  Object.assign(Object.create(null), {
-    // Schema
-    gsd_state_version: { source: 'free', preservation: 'derive' } as FieldClassification,
+  Object.assign(
+    Object.create(null) as Record<string, FieldClassification>,
+    {
+      // Schema
+      gsd_state_version: { source: 'free', preservation: 'derive' } as FieldClassification,
 
-    // Milestone (external — from ROADMAP.md)
-    milestone: { source: 'external', preservation: 'preserve-if-placeholder' } as FieldClassification,
-    milestone_name: { source: 'external', preservation: 'preserve-if-placeholder' } as FieldClassification,
+      // Milestone (external — from ROADMAP.md)
+      milestone: { source: 'external', preservation: 'preserve-if-placeholder' } as FieldClassification,
+      milestone_name: { source: 'external', preservation: 'preserve-if-placeholder' } as FieldClassification,
 
-    // Phase / plan position (body-derived)
-    current_phase: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
-    current_phase_name: { source: 'curated', preservation: 'preserve-always' } as FieldClassification, // #1743, #1695
-    current_plan: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+      // Phase / plan position (body-derived)
+      current_phase: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+      current_phase_name: { source: 'curated', preservation: 'preserve-always' } as FieldClassification, // #1743, #1695
+      current_plan: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
 
-    // Status / lifecycle (body-derived; #1230 delta heuristic applies)
-    status: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
-    stopped_at: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
-    paused_at: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+      // Status / lifecycle (body-derived; #1230 delta heuristic applies)
+      status: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+      stopped_at: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+      paused_at: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
 
-    // Activity log
-    last_updated: { source: 'free', preservation: 'derive' } as FieldClassification, // realClock.nowIso()
-    last_activity: { source: 'body', preservation: 'derive' } as FieldClassification, // always refresh on transition
-    last_activity_desc: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+      // Activity log
+      last_updated: { source: 'free', preservation: 'derive' } as FieldClassification, // realClock.nowIso()
+      last_activity: { source: 'body', preservation: 'derive' } as FieldClassification, // always refresh on transition
+      last_activity_desc: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
 
-    // Progress block (disk-derived, except the curated progress ratchet)
-    progress: { source: 'curated', preservation: 'preserve-always' } as FieldClassification, // #3242, #1446
-    'progress.total_phases': { source: 'disk', preservation: 'derive' } as FieldClassification,
-    'progress.completed_phases': { source: 'disk', preservation: 'derive' } as FieldClassification,
-    'progress.total_plans': { source: 'disk', preservation: 'derive' } as FieldClassification,
-    'progress.completed_plans': { source: 'disk', preservation: 'derive' } as FieldClassification,
-    'progress.percent': { source: 'disk', preservation: 'derive' } as FieldClassification,
-  } satisfies Record<string, FieldClassification>),
+      // Progress block (disk-derived, except the curated progress ratchet)
+      progress: { source: 'curated', preservation: 'preserve-always' } as FieldClassification, // #3242, #1446
+      'progress.total_phases': { source: 'disk', preservation: 'derive' } as FieldClassification,
+      'progress.completed_phases': { source: 'disk', preservation: 'derive' } as FieldClassification,
+      'progress.total_plans': { source: 'disk', preservation: 'derive' } as FieldClassification,
+      'progress.completed_plans': { source: 'disk', preservation: 'derive' } as FieldClassification,
+      'progress.percent': { source: 'disk', preservation: 'derive' } as FieldClassification,
+    } satisfies Record<string, FieldClassification>,
+  ),
 );
 
 /**
