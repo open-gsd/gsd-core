@@ -22,6 +22,56 @@ If the prompt contains a `<required_reading>` block, load every file listed ther
 
 @~/.claude/gsd-core/references/untrusted-input-boundary.md
 
+<extraction_discipline>
+This is **rule-application, not generation.** Apply the taxonomy / precedence rules directly to what the source actually contains. Do not infer, embellish, summarize creatively, or add any content not present in the source. Output only the required structure; when the source is silent on a field, mark it absent rather than guessing. (2505.11423 — applies here as a simple mechanical constraint: mark absent rather than fabricate.)
+</extraction_discipline>
+
+<few_shot_exemplars>
+These worked examples show the exact input→output contract for per-type extraction. Apply the same pattern.
+
+**Exemplar 1 — Clean ADR extraction**
+
+Input: classified ADR `docs/adr/0003-choose-postgres.md` with `locked: true`, decision statement: "Use PostgreSQL 15+ for all relational data."
+
+Output entry for `INTEL_DIR/decisions.md`:
+```
+## ADR-0003: Use PostgreSQL as primary datastore
+- source: docs/adr/0003-choose-postgres.md
+- status: locked (Accepted)
+- decision: Use PostgreSQL 15+ for all relational data.
+- scope: primary datastore, relational data
+```
+
+**Exemplar 2 — UNKNOWN / low-confidence doc (conflict surfacing)**
+
+Input: classified doc `docs/notes/meeting-2024-01-15.md` with `type: UNKNOWN`, `confidence: low`.
+
+Output: do NOT extract to any intel file. Instead, add to `unresolved-blockers` in `CONFLICTS_PATH`:
+```
+[BLOCKER] UNKNOWN classification — user must type-tag
+  Found: docs/notes/meeting-2024-01-15.md classified UNKNOWN (low confidence)
+  Signals observed: prose-only meeting notes, no ADR/PRD/SPEC markers
+  → Re-tag via --manifest before re-running ingest
+```
+Mark absent fields as absent in the entry — do not infer a type.
+
+**Exemplar 3 — Edge case: competing PRD acceptance criteria**
+
+Input: two PRD classifications for the same scope "user-auth":
+- `docs/prd/auth-v1.md` → requirement: "login via email+password"
+- `docs/prd/auth-v2.md` → requirement: "login via SSO only"
+
+Output: do NOT pick one. Write both to `competing-variants` bucket in `CONFLICTS_PATH`:
+```
+[WARNING] Competing acceptance variants for REQ-user-auth
+  Found: docs/prd/auth-v1.md requires "email+password"
+  Found: docs/prd/auth-v2.md requires "SSO only" — same scope "user authentication"
+  Impact: Synthesis cannot pick without losing intent
+  → Choose one variant or split into two requirements before routing
+```
+Emit both variants verbatim to `INTEL_DIR/requirements.md` under separate IDs (REQ-user-auth-v1, REQ-user-auth-v2).
+</few_shot_exemplars>
+
 <why_this_matters>
 You are the precedence-enforcing layer. Silent merges, lost locked decisions, or naive dedupes here corrupt every downstream plan. When in doubt, surface the conflict rather than pick.
 </why_this_matters>
@@ -110,6 +160,17 @@ Apply the `doc-conflict-engine` severity semantics:
 - `competing-variants` maps to [WARNING] — user must pick before routing
 - `auto-resolved` maps to [INFO] — recorded for transparency
 </step>
+
+<terminal_output_schema_restatement>
+**Output contract reminder (2506.00069 — restate schema immediately before writing):**
+Per-type intel files must use these exact formats — no omissions, no extra fields:
+- `decisions.md`: each entry has `## {title}`, `- source:`, `- status: locked|proposed`, `- decision:`, `- scope:`
+- `requirements.md`: each entry has `## REQ-{slug}`, `- source:`, `- description:`, `- acceptance:`, `- scope:`
+- `constraints.md`: each entry has `## {title}`, `- source:`, `- type: api-contract|schema|nfr|protocol`, `- content:`
+- `context.md`: topic-keyed entries with `- source:` attribution
+Absent fields → mark absent (empty / omit), never fabricate. LOCKED-vs-LOCKED → always BLOCKER, never auto-resolve.
+`CONFLICTS_PATH` must have exactly three sections: `### BLOCKERS`, `### WARNINGS`, `### INFO`.
+</terminal_output_schema_restatement>
 
 <step name="write_conflicts_report">
 Write `CONFLICTS_PATH` using the format from `references/doc-conflict-engine.md`. Three buckets, plain text, no tables.
