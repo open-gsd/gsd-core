@@ -1,5 +1,5 @@
 ---
-name: gsd:start
+name: gsd:next
 description: GSD smart entry — the state-aware front door. Reads your project state and routes you to the right next action.
 effort: low
 allowed-tools:
@@ -16,7 +16,7 @@ This is a launcher/router only. It never does the work itself. It reads project 
 </objective>
 
 <execution_context>
-@~/.claude/gsd-core/workflows/gsd.md
+@~/.claude/gsd-core/workflows/smart-entry.md
 @~/.claude/gsd-core/references/ui-brand.md
 </execution_context>
 
@@ -25,5 +25,5 @@ Arguments: $ARGUMENTS
 </context>
 
 <process>
-Follow ~/.claude/gsd-core/workflows/gsd.md. Detect the situation, present the menu, and dispatch exactly one command. Then stop.
+Follow ~/.claude/gsd-core/workflows/smart-entry.md. Detect the situation, present the menu, and dispatch exactly one command. Then stop.
 </process>
