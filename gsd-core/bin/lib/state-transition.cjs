@@ -23,6 +23,7 @@ const frontmatter = require("./frontmatter.cjs");
 const state_document_cjs_1 = require("./state-document.cjs");
 const state_document_cjs_2 = require("./state-document.cjs");
 const markdown_sectionizer_cjs_1 = require("./markdown-sectionizer.cjs");
+const phase_lifecycle_cjs_1 = require("./phase-lifecycle.cjs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const phaseIdMod = require("./phase-id.cjs");
 const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
@@ -116,6 +117,8 @@ function transitionCore(content, intent, deps) {
             return beginPhaseCore(content, intent, deps);
         case 'advancePlan':
             return advancePlanCore(content, deps);
+        case 'completePhase':
+            return completePhaseCore(content, intent, deps);
     }
 }
 // ----------------------------------------------------------------------------
@@ -488,4 +491,164 @@ function advancePlanCore(content, deps) {
         updated,
         data: { advanced: true, previous_plan: currentPlan, current_plan: newPlan, total_plans: totalPlans },
     };
+}
+// ----------------------------------------------------------------------------
+// completePhase — intent implementation (Phase 3)
+// ----------------------------------------------------------------------------
+/**
+ * Apply a `completePhase` transition to STATE.md content.
+ *
+ * Migrates the inline STATE.md transform that lived inside `cmdPhaseComplete`
+ * (phase.cts) onto the substrate. Owns the field-classification-governed body
+ * mutations: Current Phase (preserving the `of total` shape and phase name),
+ * Current Phase Name, Status (`Milestone complete` on the last phase, else
+ * `Ready to plan`), Current Plan (`Not started`), Last Activity + Description,
+ * and the Completed/Total Phases + Progress percent block (re-derived from the
+ * roadmap via the injected `roadmapProvider`).
+ *
+ * The adapter (`cmdPhaseComplete`) retains two concerns that are NOT pure field
+ * updates: `updatePerformanceMetricsSection` (a section table upsert) and
+ * `syncStateFrontmatter` (the disk-scan post-sync). It also retains the
+ * multi-file atomic transaction (`writePlanningFileSet`) that writes ROADMAP,
+ * REQUIREMENTS, and STATE together — `readModifyWriteStateMd` is not used here
+ * because STATE.md is committed atomically with the other two files.
+ *
+ * Behavior is byte-for-byte with the pre-migration `phase.cts:1671-1772` block
+ * (verified by characterization tests in tests/state-transition.test.cjs).
+ */
+function completePhaseCore(content, intent, deps) {
+    const updated = [];
+    const today = deps.clock.today();
+    // Consult the field-classification table for the frontmatter keys this
+    // transition touches (same guard beginPhaseCore applies). A missing row is a
+    // substrate defect — fail loudly rather than silently re-encoding policy.
+    for (const fmKey of [
+        'current_phase',
+        'current_phase_name',
+        'status',
+        'current_plan',
+        'last_activity',
+        'last_activity_desc',
+        'progress',
+    ]) {
+        const cls = getFieldClassification(fmKey);
+        if (cls === null) {
+            throw new Error(`transitionCore completePhase: frontmatter key ${JSON.stringify(fmKey)} is not in FIELD_CLASSIFICATION; ` +
+                `add a row per ADR-1769 §4 before touching it.`);
+        }
+    }
+    // #1255: body-field replacements operate on body only (frontmatter stripped),
+    // so the YAML `status:` / `current_phase:` keys cannot shadow the body fields.
+    const existingFm = extractFrontmatter(content);
+    const hasFrontmatter = Object.keys(existingFm).length > 0;
+    let body = stripFrontmatter(content);
+    const reassemble = (b) => hasFrontmatter
+        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
+        : b;
+    // Current Phase — preserve the existing `of <total>` shape and the phase name
+    // in parens (mirrors phase.cts:1675-1697 byte-for-behaviour).
+    const phaseValue = intent.nextPhaseNum || intent.phaseNum;
+    const nextPhaseDisplayName = intent.nextPhaseName;
+    const existingPhaseField = (0, state_document_cjs_1.stateExtractField)(body, 'Current Phase') || (0, state_document_cjs_1.stateExtractField)(body, 'Phase');
+    let newPhaseValue = String(phaseValue);
+    if (existingPhaseField) {
+        const totalMatch = existingPhaseField.match(/of\s+(\d+)/);
+        const nameMatch = existingPhaseField.match(/\(([^)]+)\)/);
+        if (totalMatch) {
+            const total = totalMatch[1];
+            const nameStr = nextPhaseDisplayName
+                ? ` (${nextPhaseDisplayName})`
+                : nameMatch
+                    ? ` (${nameMatch[1]})`
+                    : '';
+            newPhaseValue = `${phaseValue} of ${total}${nameStr}`;
+        }
+        else if (nextPhaseDisplayName) {
+            newPhaseValue = `${phaseValue} — ${nextPhaseDisplayName}`;
+        }
+    }
+    const phaseAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Current Phase', 'Phase', newPhaseValue);
+    if (phaseAfter !== body) {
+        body = phaseAfter;
+        updated.push('Current Phase');
+    }
+    // Current Phase Name — only written when a next-phase display name is known
+    // (#1743/#1695: classified curated/preserve-always, so an absent name does
+    // NOT clear an existing curated value).
+    if (nextPhaseDisplayName) {
+        const after = (0, state_document_cjs_1.stateReplaceField)(body, 'Current Phase Name', nextPhaseDisplayName);
+        if (after) {
+            body = after;
+            updated.push('Current Phase Name');
+        }
+    }
+    // Status — `Milestone complete` on the final phase, otherwise `Ready to plan`.
+    const statusValue = intent.isLastPhase ? 'Milestone complete' : 'Ready to plan';
+    const statusAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Status', null, statusValue);
+    if (statusAfter !== body) {
+        body = statusAfter;
+        updated.push('Status');
+    }
+    // Current Plan — reset for the next phase.
+    const planAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Current Plan', 'Plan', 'Not started');
+    if (planAfter !== body) {
+        body = planAfter;
+        updated.push('Current Plan');
+    }
+    // Last Activity — prefer the prose `Last activity:` line (date + narrative)
+    // when present, else the bold `Last Activity:` date field.
+    const lastActivityDescription = `Phase ${intent.phaseNum} complete${intent.nextPhaseNum ? `, transitioned to Phase ${intent.nextPhaseNum}` : ''}`;
+    if (/^Last activity:/m.test(body)) {
+        const after = (0, state_document_cjs_1.stateReplaceField)(body, 'Last activity', `${today} — ${lastActivityDescription}`);
+        if (after) {
+            body = after;
+            updated.push('Last Activity');
+        }
+    }
+    else {
+        const after = (0, state_document_cjs_1.stateReplaceField)(body, 'Last Activity', today);
+        if (after) {
+            body = after;
+            updated.push('Last Activity');
+        }
+    }
+    const ladAfter = (0, state_document_cjs_1.stateReplaceField)(body, 'Last Activity Description', lastActivityDescription);
+    if (ladAfter) {
+        body = ladAfter;
+        updated.push('Last Activity Description');
+    }
+    // Progress block — re-derive completed/total phases from the roadmap when
+    // available (milestone-wide source of truth), then recompute the percent.
+    // Only runs when a Completed Phases field exists (the existing guard).
+    const completedRaw = (0, state_document_cjs_1.stateExtractField)(body, 'Completed Phases');
+    if (completedRaw !== null) {
+        let newCompleted = parseInt(completedRaw, 10);
+        let derivedTotalPhases = null;
+        const roadmapContent = deps.roadmapProvider ? deps.roadmapProvider() : null;
+        if (roadmapContent) {
+            const derived = (0, phase_lifecycle_cjs_1.deriveProgressFromRoadmap)(roadmapContent);
+            if (derived.completedPhases !== null)
+                newCompleted = derived.completedPhases;
+            if (derived.totalPhases !== null)
+                derivedTotalPhases = derived.totalPhases;
+        }
+        const completedAfter = (0, state_document_cjs_1.stateReplaceField)(body, 'Completed Phases', String(newCompleted));
+        if (completedAfter) {
+            body = completedAfter;
+            updated.push('Completed Phases');
+        }
+        const totalRaw = (0, state_document_cjs_1.stateExtractField)(body, 'Total Phases');
+        const totalPhases = derivedTotalPhases || (totalRaw ? parseInt(totalRaw, 10) : null);
+        if (totalPhases && totalPhases > 0) {
+            const newPercent = (0, phase_lifecycle_cjs_1.clampPercent)(newCompleted, totalPhases);
+            const progAfter = (0, state_document_cjs_1.stateReplaceField)(body, 'Progress', `${newPercent}%`);
+            if (progAfter) {
+                body = progAfter;
+                updated.push('Progress');
+            }
+            // Inline `percent:` token (frontmatter / progress sub-block).
+            body = body.replace(/(percent:\s*)\d+/, `$1${newPercent}`);
+        }
+    }
+    return { content: reassemble(body), updated };
 }

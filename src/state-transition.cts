@@ -16,9 +16,10 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate } from './state-document.cjs';
+import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS } from './state-document.cjs';
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 
@@ -147,12 +148,31 @@ export type ProgressRecord = Record<string, unknown>;
 export type StateTransitionDeps = {
   progressProvider: () => ProgressRecord | null;
   clock: { today: () => string; nowIso: () => string };
+  /**
+   * Roadmap content provider for transitions that re-derive milestone-wide
+   * progress from ROADMAP.md (completePhase). Optional: transitions that don't
+   * consult the roadmap ignore it. Injected (not imported) so the core stays
+   * pure and testable without disk I/O.
+   */
+  roadmapProvider?: () => string | null;
 };
 
 export type StateTransitionIntent =
   | { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
-  | { kind: 'advancePlan' };
-// Phases 3–7 add the remaining 8 intent kinds to this discriminated union.
+  | { kind: 'advancePlan' }
+  | {
+      kind: 'completePhase';
+      phaseNum: string;
+      /** Next phase number, or null when completing the final phase. */
+      nextPhaseNum: string | null;
+      /** Display name for the next phase (may be null when unknown). */
+      nextPhaseName: string | null;
+      /** True when this is the final phase in the milestone. */
+      isLastPhase: boolean;
+      planCount: number;
+      summaryCount: number;
+    };
+// Phases 4–7 add the remaining intent kinds to this discriminated union.
 
 export type StateTransitionResult = {
   content: string;
@@ -185,6 +205,8 @@ export function transitionCore(
       return beginPhaseCore(content, intent, deps);
     case 'advancePlan':
       return advancePlanCore(content, deps);
+    case 'completePhase':
+      return completePhaseCore(content, intent, deps);
   }
 }
 
@@ -601,4 +623,189 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
     updated,
     data: { advanced: true, previous_plan: currentPlan, current_plan: newPlan, total_plans: totalPlans },
   };
+}
+
+// ----------------------------------------------------------------------------
+// completePhase — intent implementation (Phase 3)
+// ----------------------------------------------------------------------------
+
+/**
+ * Apply a `completePhase` transition to STATE.md content.
+ *
+ * Migrates the inline STATE.md transform that lived inside `cmdPhaseComplete`
+ * (phase.cts) onto the substrate. Owns the field-classification-governed body
+ * mutations: Current Phase (preserving the `of total` shape and phase name),
+ * Current Phase Name, Status (`Milestone complete` on the last phase, else
+ * `Ready to plan`), Current Plan (`Not started`), Last Activity + Description,
+ * and the Completed/Total Phases + Progress percent block (re-derived from the
+ * roadmap via the injected `roadmapProvider`).
+ *
+ * The adapter (`cmdPhaseComplete`) retains two concerns that are NOT pure field
+ * updates: `updatePerformanceMetricsSection` (a section table upsert) and
+ * `syncStateFrontmatter` (the disk-scan post-sync). It also retains the
+ * multi-file atomic transaction (`writePlanningFileSet`) that writes ROADMAP,
+ * REQUIREMENTS, and STATE together — `readModifyWriteStateMd` is not used here
+ * because STATE.md is committed atomically with the other two files.
+ *
+ * Behavior is byte-for-byte with the pre-migration `phase.cts:1671-1772` block
+ * (verified by characterization tests in tests/state-transition.test.cjs).
+ */
+function completePhaseCore(
+  content: string,
+  intent: {
+    kind: 'completePhase';
+    phaseNum: string;
+    nextPhaseNum: string | null;
+    nextPhaseName: string | null;
+    isLastPhase: boolean;
+    planCount: number;
+    summaryCount: number;
+  },
+  deps: StateTransitionDeps,
+): StateTransitionResult {
+  const updated: string[] = [];
+  const today = deps.clock.today();
+
+  // Consult the field-classification table for the frontmatter keys this
+  // transition touches (same guard beginPhaseCore applies). A missing row is a
+  // substrate defect — fail loudly rather than silently re-encoding policy.
+  for (const fmKey of [
+    'current_phase',
+    'current_phase_name',
+    'status',
+    'current_plan',
+    'last_activity',
+    'last_activity_desc',
+    'progress',
+  ]) {
+    const cls = getFieldClassification(fmKey);
+    if (cls === null) {
+      throw new Error(
+        `transitionCore completePhase: frontmatter key ${JSON.stringify(fmKey)} is not in FIELD_CLASSIFICATION; ` +
+        `add a row per ADR-1769 §4 before touching it.`,
+      );
+    }
+  }
+
+  // #1255: body-field replacements operate on body only (frontmatter stripped),
+  // so the YAML `status:` / `current_phase:` keys cannot shadow the body fields.
+  const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+  const hasFrontmatter = Object.keys(existingFm).length > 0;
+  let body = stripFrontmatter(content);
+  const reassemble = (b: string): string =>
+    hasFrontmatter
+      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
+      : b;
+
+  // Current Phase — preserve the existing `of <total>` shape and the phase name
+  // in parens (mirrors phase.cts:1675-1697 byte-for-behaviour).
+  const phaseValue = intent.nextPhaseNum || intent.phaseNum;
+  const nextPhaseDisplayName = intent.nextPhaseName;
+  const existingPhaseField =
+    stateExtractField(body, 'Current Phase') || stateExtractField(body, 'Phase');
+  let newPhaseValue = String(phaseValue);
+  if (existingPhaseField) {
+    const totalMatch = existingPhaseField.match(/of\s+(\d+)/);
+    const nameMatch = existingPhaseField.match(/\(([^)]+)\)/);
+    if (totalMatch) {
+      const total = totalMatch[1];
+      const nameStr = nextPhaseDisplayName
+        ? ` (${nextPhaseDisplayName})`
+        : nameMatch
+          ? ` (${nameMatch[1]})`
+          : '';
+      newPhaseValue = `${phaseValue} of ${total}${nameStr}`;
+    } else if (nextPhaseDisplayName) {
+      newPhaseValue = `${phaseValue} — ${nextPhaseDisplayName}`;
+    }
+  }
+  const phaseAfter = stateReplaceFieldWithFallback(body, 'Current Phase', 'Phase', newPhaseValue);
+  if (phaseAfter !== body) {
+    body = phaseAfter;
+    updated.push('Current Phase');
+  }
+
+  // Current Phase Name — only written when a next-phase display name is known
+  // (#1743/#1695: classified curated/preserve-always, so an absent name does
+  // NOT clear an existing curated value).
+  if (nextPhaseDisplayName) {
+    const after = stateReplaceField(body, 'Current Phase Name', nextPhaseDisplayName);
+    if (after) {
+      body = after;
+      updated.push('Current Phase Name');
+    }
+  }
+
+  // Status — `Milestone complete` on the final phase, otherwise `Ready to plan`.
+  const statusValue = intent.isLastPhase ? 'Milestone complete' : 'Ready to plan';
+  const statusAfter = stateReplaceFieldWithFallback(body, 'Status', null, statusValue);
+  if (statusAfter !== body) {
+    body = statusAfter;
+    updated.push('Status');
+  }
+
+  // Current Plan — reset for the next phase.
+  const planAfter = stateReplaceFieldWithFallback(body, 'Current Plan', 'Plan', 'Not started');
+  if (planAfter !== body) {
+    body = planAfter;
+    updated.push('Current Plan');
+  }
+
+  // Last Activity — prefer the prose `Last activity:` line (date + narrative)
+  // when present, else the bold `Last Activity:` date field.
+  const lastActivityDescription = `Phase ${intent.phaseNum} complete${intent.nextPhaseNum ? `, transitioned to Phase ${intent.nextPhaseNum}` : ''}`;
+  if (/^Last activity:/m.test(body)) {
+    const after = stateReplaceField(body, 'Last activity', `${today} — ${lastActivityDescription}`);
+    if (after) {
+      body = after;
+      updated.push('Last Activity');
+    }
+  } else {
+    const after = stateReplaceField(body, 'Last Activity', today);
+    if (after) {
+      body = after;
+      updated.push('Last Activity');
+    }
+  }
+
+  const ladAfter = stateReplaceField(body, 'Last Activity Description', lastActivityDescription);
+  if (ladAfter) {
+    body = ladAfter;
+    updated.push('Last Activity Description');
+  }
+
+  // Progress block — re-derive completed/total phases from the roadmap when
+  // available (milestone-wide source of truth), then recompute the percent.
+  // Only runs when a Completed Phases field exists (the existing guard).
+  const completedRaw = stateExtractField(body, 'Completed Phases');
+  if (completedRaw !== null) {
+    let newCompleted = parseInt(completedRaw, 10);
+    let derivedTotalPhases: number | null = null;
+    const roadmapContent = deps.roadmapProvider ? deps.roadmapProvider() : null;
+    if (roadmapContent) {
+      const derived = deriveProgressFromRoadmap(roadmapContent);
+      if (derived.completedPhases !== null) newCompleted = derived.completedPhases;
+      if (derived.totalPhases !== null) derivedTotalPhases = derived.totalPhases;
+    }
+    const completedAfter = stateReplaceField(body, 'Completed Phases', String(newCompleted));
+    if (completedAfter) {
+      body = completedAfter;
+      updated.push('Completed Phases');
+    }
+
+    const totalRaw = stateExtractField(body, 'Total Phases');
+    const totalPhases = derivedTotalPhases || (totalRaw ? parseInt(totalRaw, 10) : null);
+    if (totalPhases && totalPhases > 0) {
+      const newPercent = clampPercent(newCompleted, totalPhases);
+      const progAfter = stateReplaceField(body, 'Progress', `${newPercent}%`);
+      if (progAfter) {
+        body = progAfter;
+        updated.push('Progress');
+      }
+      // Inline `percent:` token (frontmatter / progress sub-block).
+      body = body.replace(/(percent:\s*)\d+/, `$1${newPercent}`);
+    }
+  }
+
+  return { content: reassemble(body), updated };
 }

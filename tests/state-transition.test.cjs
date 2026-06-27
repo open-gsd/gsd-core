@@ -515,3 +515,234 @@ describe('ADR-1769 Phase 2: advancePlan with frontmatter (#1255 pattern — code
     assert.strictEqual(result.data && result.data.advanced, true);
   });
 });
+
+// Shared fixture for completePhase: a STATE.md body mid-execution with the
+// progress fields the cmdPhaseComplete transform touches. Mirrors the shape
+// state.cts:buildStateFrontmatter emits.
+function completePhaseBody() {
+  return [
+    '# Project State',
+    '',
+    '**Current Phase:** 3 of 5 (Old Name)',
+    '**Current Phase Name:** Old Name',
+    '**Current Plan:** 2',
+    '**Status:** Executing Phase 3',
+    '**Last Activity:** 2026-06-20',
+    '**Last Activity Description:** mid-flight',
+    '**Completed Phases:** 2',
+    '**Total Phases:** 5',
+    '**Progress:** 40%',
+    'percent: 40',
+    '',
+  ].join('\n');
+}
+
+// A roadmap with a progress table: 3 of 5 phases Complete → deriveProgressFromRoadmap
+// returns { completedPhases: 3, totalPhases: 5 }.
+const ROADMAP_3_OF_5 = [
+  '## Roadmap',
+  '',
+  '| Phase | Title | Status | Completed |',
+  '| --- | --- | --- | --- |',
+  '| 1 | A | Complete | 2026-01-01 |',
+  '| 2 | B | Complete | 2026-02-01 |',
+  '| 3 | C | Complete | 2026-03-01 |',
+  '| 4 | D | In Progress | - |',
+  '| 5 | E | Pending | - |',
+  '',
+].join('\n');
+
+describe('ADR-1769 Phase 3: completePhase transition — body field updates', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress, roadmapProvider: () => ROADMAP_3_OF_5 };
+
+  test('Current Phase advances to nextPhaseNum, preserving "of total" and appending the next name', () => {
+    const intent = {
+      kind: 'completePhase',
+      phaseNum: '3',
+      nextPhaseNum: '4',
+      nextPhaseName: 'Design Phase',
+      isLastPhase: false,
+      planCount: 3,
+      summaryCount: 3,
+    };
+    const result = transitionCore(completePhaseBody(), intent, deps);
+    const cp = stateExtractField(result.content, 'Current Phase');
+    assert.ok(
+      /^4 of 5 \(Design Phase\)$/.test(cp || ''),
+      `Current Phase should be "4 of 5 (Design Phase)"; got ${JSON.stringify(cp)}`,
+    );
+    assert.ok(result.updated.includes('Current Phase'));
+  });
+
+  test('Current Phase Name is set to nextPhaseName when provided', () => {
+    const intent = {
+      kind: 'completePhase',
+      phaseNum: '3',
+      nextPhaseNum: '4',
+      nextPhaseName: 'Design Phase',
+      isLastPhase: false,
+      planCount: 3,
+      summaryCount: 3,
+    };
+    const result = transitionCore(completePhaseBody(), intent, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Current Phase Name'), 'Design Phase');
+  });
+
+  test('Status becomes "Ready to plan" when not the last phase', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: 'Design Phase', isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Ready to plan');
+  });
+
+  test('Status becomes "Milestone complete" when isLastPhase is true', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '5', nextPhaseNum: null, nextPhaseName: null, isLastPhase: true, planCount: 2, summaryCount: 2 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Milestone complete');
+  });
+
+  test('Current Plan resets to "Not started"', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Current Plan'), 'Not started');
+  });
+
+  test('Last Activity Description carries transition narrative', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    assert.strictEqual(
+      stateExtractField(result.content, 'Last Activity Description'),
+      'Phase 3 complete, transitioned to Phase 4',
+    );
+  });
+
+  test('Last Activity Description has no transition clause when there is no next phase', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '5', nextPhaseNum: null, nextPhaseName: null, isLastPhase: true, planCount: 2, summaryCount: 2 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Last Activity Description'), 'Phase 5 complete');
+  });
+});
+
+describe('ADR-1769 Phase 3: completePhase progress derivation (roadmap)', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress, roadmapProvider: () => ROADMAP_3_OF_5 };
+
+  test('Completed Phases is re-derived from the roadmap progress table', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Completed Phases'), '3');
+  });
+
+  test('Progress percent is recomputed and the inline percent: token is updated', () => {
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Progress'), '60%');
+    assert.ok(/percent:\s*60/.test(result.content), `inline percent: token should be 60; content was:\n${result.content}`);
+  });
+
+  test('when roadmapProvider yields null, existing Completed Phases / Progress are preserved (no crash)', () => {
+    const nullDeps = { clock: fixedClock, progressProvider: noProgress, roadmapProvider: () => null };
+    const result = transitionCore(
+      completePhaseBody(),
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      nullDeps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Completed Phases'), '2');
+    assert.strictEqual(stateExtractField(result.content, 'Progress'), '40%');
+  });
+});
+
+describe('ADR-1769 Phase 3: completePhase edge cases', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress, roadmapProvider: () => ROADMAP_3_OF_5 };
+
+  test('falls back to the "Phase:" field when "Current Phase:" is absent (stateReplaceFieldWithFallback)', () => {
+    const input = [
+      '# Project State',
+      '',
+      'Phase: 3 of 5',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-20',
+      '**Completed Phases:** 2',
+      '**Total Phases:** 5',
+      '**Progress:** 40%',
+      '',
+    ].join('\n');
+    const result = transitionCore(
+      input,
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    const phase = stateExtractField(result.content, 'Phase');
+    assert.ok(/^4 of 5/.test(phase || ''), `Phase should advance to "4 of 5"; got ${JSON.stringify(phase)}`);
+  });
+
+  test('updates body Status, not the YAML status key, when frontmatter is present (#1255)', () => {
+    const input = [
+      '---',
+      'status: executing',
+      'current_phase: "3"',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '**Current Phase:** 3 of 5',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-20',
+      '**Completed Phases:** 2',
+      '**Total Phases:** 5',
+      '**Progress:** 40%',
+      '',
+    ].join('\n');
+    const result = transitionCore(
+      input,
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    // Body Status line must read "Ready to plan".
+    const bodyStatus = stateExtractField(result.content, 'Status');
+    assert.strictEqual(bodyStatus, 'Ready to plan');
+    // Frontmatter must remain a block and keep its YAML keys (not be mangled).
+    assert.ok(/^---\r?\n[\s\S]*?\r?\n---/.test(result.content), 'frontmatter block must be preserved');
+    const fmLine = result.content.split('\n').find((l) => /^status:/.test(l));
+    assert.ok(fmLine && /executing/.test(fmLine), `YAML status key must be untouched; got ${JSON.stringify(fmLine)}`);
+  });
+
+  test('when nextPhaseName is absent and Current Phase had no "of total", value is the bare phase number', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Current Phase:** 3',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-20',
+      '**Completed Phases:** 2',
+      '**Total Phases:** 5',
+      '**Progress:** 40%',
+      '',
+    ].join('\n');
+    const result = transitionCore(
+      input,
+      { kind: 'completePhase', phaseNum: '3', nextPhaseNum: '4', nextPhaseName: null, isLastPhase: false, planCount: 3, summaryCount: 3 },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Current Phase'), '4');
+  });
+});

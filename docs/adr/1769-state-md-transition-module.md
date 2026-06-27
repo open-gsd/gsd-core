@@ -208,9 +208,9 @@ alongside, leave callbacks — parallel worlds don't converge (ADR-857's failure
 | Phase | Scope | Closes issue | Bug coverage |
 |---|---|---|---|
 | 0 | ADR + CONTEXT.md update | #1769 | — |
-| 1 | Substrate + `beginPhase` | TBD | #1255, #1257, #3242 |
-| 2 | `advancePlan` | TBD | — |
-| 3 | `completePhase` + `phase.cts:1770` | TBD | — |
+| 1 | Substrate + `beginPhase` | #1771 | #1255, #1257, #3242 |
+| 2 | `advancePlan` | #1782 | — |
+| 3 | `completePhase` + `phase.cts:1770` | #1784 | — |
 | 4 | `plannedPhase` + `milestoneSwitch` | TBD | — |
 | 5 | `milestoneComplete` + `milestone.cts:352` | TBD | — |
 | 6 | `patch` | TBD | #1743, #1695 |
