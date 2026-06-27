@@ -746,3 +746,172 @@ describe('ADR-1769 Phase 3: completePhase edge cases', () => {
     assert.strictEqual(stateExtractField(result.content, 'Current Phase'), '4');
   });
 });
+
+// ADR-1769 Phase 4: plannedPhase + milestoneSwitch
+
+function plannedPhaseBody() {
+  return [
+    '# Project State',
+    '',
+    '**Status:** Planning',
+    '**Total Plans in Phase:** 0',
+    '**Last Activity:** 2026-06-20',
+    '**Last Activity Description:** previous planning',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 3 (Test Phase) — EXECUTING',
+    'Plan: —',
+    'Status: Executing Phase 3',
+    'Last activity: 2026-06-20 — mid-flight',
+    '',
+  ].join('\n');
+}
+
+describe('ADR-1769 Phase 4: plannedPhase transition — body field updates', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('Status advances to "Ready to execute" when the existing value is a template default (Planning)', () => {
+    const result = transitionCore(plannedPhaseBody(), { kind: 'plannedPhase', phaseNumber: 3, planCount: 4 }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Ready to execute');
+    assert.ok(result.updated.includes('Status'));
+  });
+
+  test('Total Plans in Phase is set to planCount', () => {
+    const result = transitionCore(plannedPhaseBody(), { kind: 'plannedPhase', phaseNumber: 3, planCount: 4 }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Total Plans in Phase'), '4');
+    assert.ok(result.updated.includes('Total Plans in Phase'));
+  });
+
+  test('Last Activity is refreshed to clock.today() when the existing value is a date (template default)', () => {
+    const result = transitionCore(plannedPhaseBody(), { kind: 'plannedPhase', phaseNumber: 3, planCount: 4 }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Last Activity'), '2026-06-27');
+  });
+
+  test('Last Activity Description carries the planning-complete narrative', () => {
+    const result = transitionCore(plannedPhaseBody(), { kind: 'plannedPhase', phaseNumber: 3, planCount: 4 }, deps);
+    assert.strictEqual(
+      stateExtractField(result.content, 'Last Activity Description'),
+      'Phase 3 planning complete — 4 plans ready',
+    );
+  });
+
+  test('Current Position Status + Last activity are updated', () => {
+    const result = transitionCore(plannedPhaseBody(), { kind: 'plannedPhase', phaseNumber: 3, planCount: 4 }, deps);
+    assert.ok(result.updated.includes('Current Position'),
+      `updated should include Current Position; got ${JSON.stringify(result.updated)}`);
+    // The Current Position section should now carry the planning-complete narrative.
+    assert.ok(/Phase 3 planning complete/.test(result.content));
+  });
+
+  test('executor-authored Status is preserved (Knuth invariant — non-template value not overwritten)', () => {
+    const custom = plannedPhaseBody().replace('**Status:** Planning', '**Status:** Awaiting human design review');
+    const result = transitionCore(custom, { kind: 'plannedPhase', phaseNumber: 3, planCount: 4 }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Awaiting human design review');
+    assert.ok(!result.updated.includes('Status'),
+      `Status must not be in updated for an executor-authored value; got ${JSON.stringify(result.updated)}`);
+  });
+
+  test('planCount=null leaves Total Plans in Phase untouched', () => {
+    const result = transitionCore(plannedPhaseBody(), { kind: 'plannedPhase', phaseNumber: 3, planCount: null }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Total Plans in Phase'), '0');
+    assert.ok(!result.updated.includes('Total Plans in Phase'));
+  });
+
+  test('frontmatter is preserved and body Status (not YAML status) is updated (#1255)', () => {
+    const input = [
+      '---',
+      'status: planning',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '**Status:** Planning',
+      '**Total Plans in Phase:** 0',
+      '**Last Activity:** 2026-06-20',
+      '**Last Activity Description:** prev',
+      '',
+      '## Current Position',
+      '',
+      'Status: Executing Phase 3',
+      'Last activity: 2026-06-20 — mid',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'plannedPhase', phaseNumber: 3, planCount: 2 }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Ready to execute');
+    assert.ok(/^---\r?\n[\s\S]*?\r?\n---/.test(result.content), 'frontmatter block preserved');
+  });
+});
+
+describe('ADR-1769 Phase 4: milestoneSwitch transition — milestone reset', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  function milestoneBody() {
+    return [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'milestone_name: Old Milestone',
+      'status: executing',
+      'current_phase: "3"',
+      'progress:',
+      '  total_phases: 5',
+      '  completed_phases: 2',
+      '  percent: 40',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 3 — EXECUTING',
+      'Plan: 2 of 5',
+      'Status: Executing Phase 3',
+      'Last activity: 2026-06-20 — mid-flight',
+      '',
+    ].join('\n');
+  }
+
+  test('frontmatter milestone + milestone_name are reset to the new version', () => {
+    const result = transitionCore(milestoneBody(), { kind: 'milestoneSwitch', version: 'v2.0', name: 'New Milestone' }, deps);
+    const fmLine = (key) => result.content.split('\n').find((l) => new RegExp(`^${key}:`).test(l));
+    assert.strictEqual(fmLine('milestone'), 'milestone: v2.0');
+    assert.strictEqual(fmLine('milestone_name'), 'milestone_name: New Milestone');
+  });
+
+  test('frontmatter status resets to planning and progress resets to zero', () => {
+    const result = transitionCore(milestoneBody(), { kind: 'milestoneSwitch', version: 'v2.0', name: 'New Milestone' }, deps);
+    assert.strictEqual(result.content.split('\n').find((l) => /^status:/.test(l)), 'status: planning');
+    assert.ok(/total_phases:\s*0/.test(result.content), 'total_phases should reset to 0');
+    assert.ok(/completed_phases:\s*0/.test(result.content), 'completed_phases should reset to 0');
+    assert.ok(/percent:\s*0/.test(result.content), 'percent should reset to 0');
+  });
+
+  test('gsd_state_version is preserved across the reset', () => {
+    const result = transitionCore(milestoneBody(), { kind: 'milestoneSwitch', version: 'v2.0', name: 'New Milestone' }, deps);
+    assert.ok(/gsd_state_version:\s*1\.0/.test(result.content), 'gsd_state_version must be preserved');
+  });
+
+  test('Current Position section is reset to "Not started (defining requirements)"', () => {
+    const result = transitionCore(milestoneBody(), { kind: 'milestoneSwitch', version: 'v2.0', name: 'New Milestone' }, deps);
+    assert.ok(/Phase: Not started \(defining requirements\)/.test(result.content));
+    assert.ok(/Status: Defining requirements/.test(result.content));
+    assert.ok(new RegExp(`Last activity: 2026-06-27 — Milestone v2.0 started`).test(result.content));
+  });
+
+  test('Accumulated Context / body content outside Current Position is preserved', () => {
+    const input = milestoneBody() +
+      '\n## Accumulated Context\n\n- An important decision we must keep.\n';
+    const result = transitionCore(input, { kind: 'milestoneSwitch', version: 'v2.0', name: 'New Milestone' }, deps);
+    assert.ok(/An important decision we must keep/.test(result.content),
+      'Accumulated Context must survive the milestone reset');
+  });
+
+  test('blank name falls back to the "milestone" placeholder', () => {
+    const result = transitionCore(milestoneBody(), { kind: 'milestoneSwitch', version: 'v2.0', name: '' }, deps);
+    assert.strictEqual(
+      result.content.split('\n').find((l) => /^milestone_name:/.test(l)),
+      'milestone_name: milestone',
+    );
+  });
+});
