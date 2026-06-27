@@ -52,12 +52,26 @@ function parseDecisions(content) {
     const out = [];
     let category = '';
     let inDiscretion = false;
-    // Bullet line: `- **D-NN[ [tags]]:** text`
-    // Phase 6 (#3575): aligned to CJS regex — accepts alphanumeric IDs (D-01, D-INFRA-01, D-FOO_BAR)
-    // in addition to numeric-only IDs (D-42). The first character after `D-` must
-    // be alphanumeric, so malformed shapes like `D--foo` or `D-_bar` are rejected.
+    // Bullet line: `- **D-NN[ [tag]][ Title][:]** [`[tag]`][:] text`
+    // Accepts alphanumeric IDs (D-01, D-INFRA-01, D-FOO_BAR) in addition to
+    // numeric-only IDs (D-42). The first character after `D-` must be
+    // alphanumeric, so malformed shapes like `D--foo` or `D-_bar` are rejected.
+    //
+    // The bold lead-in may close with ANY punctuation, not only a colon: the
+    // terminator is `[^*]*\*\*` (consume the rest of the title up to the closing
+    // `**`), which makes period-terminated bullets like `- **D-PS-01 New field.**`
+    // parse instead of silently dropping. Before this, the terminator was
+    // `:\*\*`, which required a literal `...:**` and dropped every other shape —
+    // the post-planning gate then counted only what parsed and returned a
+    // vacuous pass over a fraction of the real decisions.
+    //
+    // Capture groups: 1=ID, 2=tag inside the bold (`[tag] Title:**`),
+    // 3=tag outside the bold (`** `[tag]`:` or `** [tag]:`), 4=body. The tag is
+    // resolved as (m[2] || m[3]); back-compat with `- **D-NN [deferred]:** text`
+    // is preserved (the colon and tag are absorbed by `[^*]*` / the optionals).
+    // Residual: a lone `*` inside a title still terminates the bold prematurely.
     // CJS callers consume {id, text} and ignore the optional extras.
-    const bulletRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?\s*:\*\*\s*(.*)$/;
+    const bulletRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([^\]]+)\])?[^*]*\*\*\s*`?(?:\[([^\]]+)\])?`?\s*:?\s*(.*)$/;
     let current = null;
     const flush = () => {
         if (current) {
@@ -88,14 +102,17 @@ function parseDecisions(content) {
         if (bulletMatch) {
             flush();
             const id = `D-${bulletMatch[1]}`;
-            const tags = bulletMatch[2]
-                ? bulletMatch[2]
+            // Tag may appear inside the bold (`[tag] Title:**`, group 2) or
+            // outside it (`** [tag]:` / `` ** `[tag]`: ``, group 3); take whichever matched.
+            const rawTag = bulletMatch[2] || bulletMatch[3];
+            const tags = rawTag
+                ? rawTag
                     .split(',')
                     .map((t) => t.trim().toLowerCase())
                     .filter(Boolean)
                 : [];
             const trackable = !inDiscretion && !tags.some((t) => NON_TRACKABLE_TAGS.has(t));
-            current = { id, text: bulletMatch[3], category, tags, trackable };
+            current = { id, text: bulletMatch[4], category, tags, trackable };
             continue;
         }
         // Continuation line for current decision (indented with space OR tab,

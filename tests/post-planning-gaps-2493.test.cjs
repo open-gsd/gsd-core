@@ -123,6 +123,67 @@ After the block. - **D-77:** Also not real.
     const ds = parseDecisions(md);
     assert.deepStrictEqual(ds.map(d => d.id), ['D-01']);
   });
+
+  // Regression: bulletRe required a colon to close the bold lead-in (`...:**`),
+  // so a bullet whose bold ends with any other punctuation — e.g.
+  // `- **D-NN Title.** body` (bold ends `.**`, not `:**`) — silently failed to
+  // parse and the decision was DROPPED. The post-planning gate counts only what
+  // parsed, so dropping bullets produced a vacuous pass (total:2 covered:2 when
+  // the real block had 8 decisions). These tests assert the backward-compatible
+  // superset terminator parses every shape with ZERO drops.
+
+  test('parses all decision bullet terminator shapes with zero drops', () => {
+    const md = `
+<decisions>
+## CONTEXT Decisions
+
+### Implementation
+- **D-00 [informational] Framing:** establishes the framing
+- **D-PS-01 New field.** adds the persisted column
+- **D-CARRY-2 Column trap:** carried over from the prior phase
+- **D-NN [deferred]:** revisit next milestone
+</decisions>
+`;
+    const ds = parseDecisions(md);
+    assert.strictEqual(ds.length, 4, 'all four bullets must parse — zero silent drops');
+    assert.deepStrictEqual(ds.map(d => d.id), ['D-00', 'D-PS-01', 'D-CARRY-2', 'D-NN']);
+    // informational + deferred are non-trackable; the two plain bullets are trackable.
+    assert.strictEqual(ds.filter(d => d.trackable).length, 2,
+      'only the non-tagged bullets are trackable; informational/deferred are excluded');
+  });
+
+  test('period-terminated bullet (`Title.**`) parses as trackable (the bug case)', () => {
+    const ds = parseDecisions('<decisions>\n- **D-PS-01 New field.** adds the persisted column\n</decisions>');
+    assert.strictEqual(ds.length, 1, 'period-terminated bullet must not be dropped');
+    assert.strictEqual(ds[0].id, 'D-PS-01');
+    assert.strictEqual(ds[0].text, 'adds the persisted column');
+    assert.strictEqual(ds[0].trackable, true);
+  });
+
+  test('colon-in-title bullet (`Title:**`) parses as trackable (back-compat)', () => {
+    const ds = parseDecisions('<decisions>\n- **D-CARRY-2 Column trap:** carried over from the prior phase\n</decisions>');
+    assert.strictEqual(ds.length, 1, 'colon-in-title bullet must parse');
+    assert.strictEqual(ds[0].id, 'D-CARRY-2');
+    assert.strictEqual(ds[0].text, 'carried over from the prior phase');
+    assert.strictEqual(ds[0].trackable, true);
+  });
+
+  test('inside-bold [informational] tag parses and marks the decision non-trackable', () => {
+    const ds = parseDecisions('<decisions>\n- **D-00 [informational] Framing:** establishes the framing\n</decisions>');
+    assert.strictEqual(ds.length, 1, 'informational bullet must parse');
+    assert.strictEqual(ds[0].id, 'D-00');
+    assert.deepStrictEqual(ds[0].tags, ['informational']);
+    assert.strictEqual(ds[0].trackable, false);
+  });
+
+  test('canonical `- **D-NN [deferred]:** text` bullet parses with deferred tag (back-compat)', () => {
+    const ds = parseDecisions('<decisions>\n- **D-NN [deferred]:** text\n</decisions>');
+    assert.strictEqual(ds.length, 1, 'canonical deferred bullet must parse');
+    assert.strictEqual(ds[0].id, 'D-NN');
+    assert.strictEqual(ds[0].text, 'text');
+    assert.deepStrictEqual(ds[0].tags, ['deferred']);
+    assert.strictEqual(ds[0].trackable, false);
+  });
 });
 
 // ─── Gap analysis CLI ────────────────────────────────────────────────────────
