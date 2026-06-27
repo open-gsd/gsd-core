@@ -224,6 +224,49 @@ Example:
 }
 ```
 
+### Reviewer instances for `/gsd-review` (#1517)
+
+Use `review.reviewer_instances` to run one model-capable adapter as several independent
+reviewer identities — e.g. two OpenCode-backed reviews with different models in a single
+`/gsd-review` pass. Each entry maps an instance name to `{ cli, model?, agent? }`.
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `review.reviewer_instances.<name>.cli` | string | (required) | A known reviewer adapter the instance reuses (e.g. `opencode`). Must be a built-in slug; never an arbitrary shell command. |
+| `review.reviewer_instances.<name>.model` | string | (adapter default) | Opaque `provider/model` id passed through verbatim to the adapter's `--model`. GSD does not parse it. |
+| `review.reviewer_instances.<name>.agent` | string | (none) | Opaque agent name; honoured only by adapters with a native agent concept (OpenCode `--agent` in v1). |
+
+Instance names must match `^[a-z0-9][a-z0-9-]*$` and must not equal a built-in reviewer slug.
+Instances participate ONLY through `review.default_reviewers` (there are no per-instance CLI
+flags). Instance references are expanded before built-in slugs; an instance is available iff
+its `cli` is detected. An entry that is neither a defined instance nor a built-in slug is a
+hard error (a typo'd instance name must be loud). When two or more selected instances share
+the same `cli`, `REVIEWS.md` prints a one-line shared-adapter caveat so review consensus is
+not silently overstated. See [ADR-1517](adr/1517-reviewer-instances-config-surface.md).
+
+Example:
+
+```json
+{
+  "review": {
+    "reviewer_instances": {
+      "opencode-deepseek": { "cli": "opencode", "model": "deepseek/deepseek-v4-pro", "agent": "review" },
+      "opencode-mimo": { "cli": "opencode", "model": "xiaomi/mimo-v2.5-pro" }
+    },
+    "default_reviewers": ["opencode-deepseek", "opencode-mimo", "codex"]
+  }
+}
+```
+
+Set each field via `config-set`:
+
+```bash
+gsd config-set review.reviewer_instances.opencode-deepseek.cli opencode
+gsd config-set review.reviewer_instances.opencode-deepseek.model deepseek/deepseek-v4-pro
+gsd config-set review.reviewer_instances.opencode-deepseek.agent review
+gsd config-set review.default_reviewers '["opencode-deepseek","opencode-mimo","codex"]'
+```
+
 ### Agent-skill injection (dynamic)
 
 `agent_skills.<agent-type>` extends the `agent_skills` map documented below. Slug is validated against `[a-zA-Z0-9_-]+` — no path separators, no whitespace, no shell metacharacters. Configured interactively via `/gsd-config --integrations`.

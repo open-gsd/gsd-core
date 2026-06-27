@@ -6,6 +6,14 @@
  *
  * Owns reviewer-selection policy projection for /gsd:review:
  * explicit flags > --all > review.default_reviewers > all detected.
+ *
+ * Reviewer instances (#1517): a bounded config surface
+ * `review.reviewer_instances.<name> = {cli, model?, agent?}` lets one
+ * model-capable adapter (e.g. opencode) run as several independent reviewer
+ * identities. Instances participate ONLY in the config_default branch (no
+ * per-instance CLI flags). An instance is available iff its base `cli` is
+ * detected. The instance→cli mapping lives HERE (single source; see the parity
+ * test in tests/review-reviewer-instances.test.cjs — DEFECT.GENERATIVE-FIX).
  */
 
 export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = [
@@ -22,10 +30,32 @@ export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = [
   'llama_cpp',
 ];
 
+/** Instance names are lowercase slugs that must not shadow a built-in slug. */
+export const INSTANCE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
 export interface NormalizedDefaultReviewers {
   absent: boolean;
   values: string[];
   errors: string[];
+}
+
+export interface ReviewerInstance {
+  cli: string;
+  model?: string;
+  agent?: string;
+}
+
+export interface NormalizedReviewerInstances {
+  instances: Record<string, ReviewerInstance>;
+  errors: string[];
+}
+
+export interface ResolvedReviewer {
+  identity: string;
+  kind: 'builtin' | 'instance';
+  cli: string;
+  model?: string;
+  agent?: string;
 }
 
 export interface ReviewerSelectionInput {
@@ -33,6 +63,8 @@ export interface ReviewerSelectionInput {
   explicitFlags?: unknown[];
   allFlag?: unknown;
   configuredDefaultReviewers?: unknown;
+  /** #1517: the `review.reviewer_instances` config object. */
+  reviewerInstances?: unknown;
 }
 
 export interface ReviewerSelectionResult {
@@ -41,6 +73,10 @@ export interface ReviewerSelectionResult {
   warnings: string[];
   infos: string[];
   errors: string[];
+  /** #1517: per-identity resolution (builtin slug or expanded instance). */
+  resolvedInstances: ResolvedReviewer[];
+  /** #1517: true when ≥2 selected instances share a base cli (consensus caveat). */
+  sharedAdapterCaveat: boolean;
 }
 
 export function normalizeConfiguredDefaultReviewers(
@@ -86,6 +122,76 @@ export function normalizeConfiguredDefaultReviewers(
   return { absent: false, values: normalized, errors };
 }
 
+/**
+ * Validate the `review.reviewer_instances` config object (#1517).
+ * `cli` MUST be a known adapter (never an arbitrary shell command — Kerckhoffs /
+ * Postel: strict at the invocation boundary). `model`/`agent` are opaque
+ * pass-through strings; they are never interpolated into shell strings by this
+ * module. Instance names must not collide with a built-in slug.
+ */
+export function normalizeReviewerInstances(
+  rawValue: unknown,
+): NormalizedReviewerInstances {
+  if (rawValue === undefined || rawValue === null) {
+    return { instances: {}, errors: [] };
+  }
+  if (typeof rawValue !== 'object' || Array.isArray(rawValue)) {
+    return {
+      instances: {},
+      errors: ['review.reviewer_instances must be a JSON object mapping instance names to {cli,model,agent}'],
+    };
+  }
+
+  const obj = rawValue as Record<string, unknown>;
+  const instances: Record<string, ReviewerInstance> = {};
+  const errors: string[] = [];
+
+  for (const [name, spec] of Object.entries(obj)) {
+    if (!INSTANCE_NAME_PATTERN.test(name)) {
+      errors.push(
+        `invalid reviewer instance name '${name}': must match ^[a-z0-9][a-z0-9-]*$`,
+      );
+      continue;
+    }
+    if (KNOWN_REVIEWER_SLUGS.includes(name)) {
+      errors.push(
+        `reviewer instance name '${name}' must not equal a built-in reviewer slug`,
+      );
+      continue;
+    }
+    if (spec === null || typeof spec !== 'object' || Array.isArray(spec)) {
+      errors.push(`reviewer_instances.${name} must be an object with at least {cli}`);
+      continue;
+    }
+    const s = spec as Record<string, unknown>;
+    const cli = s.cli;
+    if (typeof cli !== 'string' || !KNOWN_REVIEWER_SLUGS.includes(cli)) {
+      errors.push(
+        `reviewer_instances.${name}.cli must be a known reviewer adapter (got: ${JSON.stringify(cli)})`,
+      );
+      continue;
+    }
+    const instance: ReviewerInstance = { cli };
+    if (s.model !== undefined && s.model !== null) {
+      if (typeof s.model !== 'string') {
+        errors.push(`reviewer_instances.${name}.model must be a string`);
+        continue;
+      }
+      instance.model = s.model;
+    }
+    if (s.agent !== undefined && s.agent !== null) {
+      if (typeof s.agent !== 'string') {
+        errors.push(`reviewer_instances.${name}.agent must be a string`);
+        continue;
+      }
+      instance.agent = s.agent;
+    }
+    instances[name] = instance;
+  }
+
+  return { instances, errors };
+}
+
 export function resolveReviewerSelection(
   input: ReviewerSelectionInput,
 ): ReviewerSelectionResult {
@@ -99,10 +205,13 @@ export function resolveReviewerSelection(
   const normalizedDefaults = normalizeConfiguredDefaultReviewers(
     input.configuredDefaultReviewers,
   );
+  const normalizedInstances = normalizeReviewerInstances(input.reviewerInstances);
+  const instances = normalizedInstances.instances;
+  const instancesConfigured = Object.keys(instances).length > 0;
 
   const warnings: string[] = [];
   const infos: string[] = [];
-  const errors: string[] = [...normalizedDefaults.errors];
+  const errors: string[] = [...normalizedDefaults.errors, ...normalizedInstances.errors];
 
   let source = 'no_config_all_detected';
   let selected: string[] = [];
@@ -122,19 +231,37 @@ export function resolveReviewerSelection(
     selected = [...detected];
   } else if (!normalizedDefaults.absent) {
     source = 'config_default';
-    const knownDefaults: string[] = [];
-    for (const slug of normalizedDefaults.values) {
-      if (!KNOWN_REVIEWER_SLUGS.includes(slug)) {
-        warnings.push(`unknown reviewer slug in review.default_reviewers: ${slug}`);
+    // #1517: expand instance references BEFORE the built-in-slug check. An
+    // instance name and a built-in slug are the two legal kinds of entry.
+    for (const entry of normalizedDefaults.values) {
+      if (instances[entry]) {
+        // Instance reference — available iff its base cli is detected.
+        const cli = instances[entry].cli;
+        if (!detected.has(cli)) {
+          infos.push(`configured instance ${entry} not detected (cli ${cli} missing on this host)`);
+        } else {
+          selected.push(entry);
+        }
+      } else if (KNOWN_REVIEWER_SLUGS.includes(entry)) {
+        if (!detected.has(entry)) {
+          infos.push(`configured reviewers not detected on this host: ${entry}`);
+        } else {
+          selected.push(entry);
+        }
       } else {
-        knownDefaults.push(slug);
+        // Neither a defined instance nor a built-in slug.
+        if (instancesConfigured) {
+          // Most likely a typo'd instance name — must be loud (#1517 design Q2).
+          errors.push(
+            `reviewer instance '${entry}' referenced in review.default_reviewers is not defined in review.reviewer_instances`,
+          );
+        } else {
+          // Backward-compatible behaviour: unknown slug with no instances
+          // configured warns and is dropped.
+          warnings.push(`unknown reviewer slug in review.default_reviewers: ${entry}`);
+        }
       }
     }
-    const undetected = knownDefaults.filter((slug) => !detected.has(slug));
-    if (undetected.length > 0) {
-      infos.push(`configured reviewers not detected on this host: ${undetected.join(', ')}`);
-    }
-    selected = knownDefaults.filter((slug) => detected.has(slug));
     if (selected.length === 0 && errors.length === 0) {
       errors.push('all configured default reviewers are unavailable on this host');
     }
@@ -142,11 +269,38 @@ export function resolveReviewerSelection(
     selected = [...detected];
   }
 
+  const selectedSorted = selected.sort();
+
+  // Single-source instance→cli resolution projected onto the selected set.
+  const resolvedInstances: ResolvedReviewer[] = selectedSorted.map((identity) => {
+    const inst = instances[identity];
+    if (inst) {
+      return {
+        identity,
+        kind: 'instance' as const,
+        cli: inst.cli,
+        model: inst.model,
+        agent: inst.agent,
+      };
+    }
+    return { identity, kind: 'builtin' as const, cli: identity };
+  });
+
+  const cliCounts: Record<string, number> = {};
+  for (const r of resolvedInstances) {
+    if (r.kind === 'instance') {
+      cliCounts[r.cli] = (cliCounts[r.cli] ?? 0) + 1;
+    }
+  }
+  const sharedAdapterCaveat = Object.values(cliCounts).some((c) => c >= 2);
+
   return {
     source,
-    selected: selected.sort(),
+    selected: selectedSorted,
     warnings,
     infos,
     errors,
+    resolvedInstances,
+    sharedAdapterCaveat,
   };
 }
