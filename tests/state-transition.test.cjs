@@ -15,6 +15,7 @@ const fc = require('fast-check');
 const {
   transitionCore,
   FIELD_CLASSIFICATION,
+  getFieldClassification,
   STATE_MD_SECTIONS,
 } = require('../gsd-core/bin/lib/state-transition.cjs');
 const { stateExtractField } = require('../gsd-core/bin/lib/state-document.cjs');
@@ -27,32 +28,80 @@ const fixedClock = Object.freeze({
 const noProgress = () => null;
 
 describe('ADR-1769 substrate: field-classification table', () => {
-  test('every classified field has a known FieldClass enum value', () => {
-    const allowed = new Set([
-      'derived-from-body',
-      'derived-from-disk',
-      'derived-from-external',
-      'curated',
-      'free',
-    ]);
+  const allowedSources = new Set(['body', 'disk', 'external', 'curated', 'free']);
+  const allowedPreservation = new Set([
+    'derive',
+    'preserve-when-unchanged',
+    'preserve-always',
+    'preserve-if-placeholder',
+    'clear',
+  ]);
+
+  test('every classified field has a { source, preservation } row with known enum values', () => {
     for (const [field, cls] of Object.entries(FIELD_CLASSIFICATION)) {
       assert.ok(
-        allowed.has(cls),
-        `field ${JSON.stringify(field)} has unknown class ${JSON.stringify(cls)}`,
+        allowedSources.has(cls.source),
+        `field ${JSON.stringify(field)} has unknown source ${JSON.stringify(cls.source)}`,
+      );
+      assert.ok(
+        allowedPreservation.has(cls.preservation),
+        `field ${JSON.stringify(field)} has unknown preservation ${JSON.stringify(cls.preservation)}`,
       );
     }
   });
 
-  test('current_phase_name is curated (ADR-1769 §4 — kills #1743/#1695 by construction)', () => {
-    assert.strictEqual(FIELD_CLASSIFICATION['current_phase_name'], 'curated');
+  test('current_phase_name is curated / preserve-always (ADR-1769 §4 — kills #1743/#1695 by construction)', () => {
+    const cls = getFieldClassification('current_phase_name');
+    assert.strictEqual(cls && cls.source, 'curated');
+    assert.strictEqual(cls && cls.preservation, 'preserve-always');
   });
 
-  test('progress is curated (ADR-1769 §4 — curated-progress ratchet)', () => {
-    assert.strictEqual(FIELD_CLASSIFICATION['progress'], 'curated');
+  test('progress is curated / preserve-always (ADR-1769 §4 — curated-progress ratchet)', () => {
+    const cls = getFieldClassification('progress');
+    assert.strictEqual(cls && cls.source, 'curated');
+    assert.strictEqual(cls && cls.preservation, 'preserve-always');
+  });
+
+  test('table covers every frontmatter key emitted by buildStateFrontmatter (codex Phase 1 review)', () => {
+    // Verified against src/state.cts:1633-1653 (buildStateFrontmatter emit block).
+    const requiredFields = [
+      'gsd_state_version',
+      'milestone',
+      'milestone_name',
+      'current_phase',
+      'current_phase_name',
+      'current_plan',
+      'status',
+      'stopped_at',
+      'paused_at',
+      'last_updated',
+      'last_activity',
+      'last_activity_desc',
+      'progress',
+      'progress.total_phases',
+      'progress.completed_phases',
+      'progress.total_plans',
+      'progress.completed_plans',
+      'progress.percent',
+    ];
+    for (const f of requiredFields) {
+      assert.ok(getFieldClassification(f) !== null,
+        `frontmatter key ${JSON.stringify(f)} must have a classification row`);
+    }
+  });
+
+  test('getFieldClassification returns null for unknown fields AND inherited prototype methods', () => {
+    // Classic prototype-pollution guard: queries for 'toString' / 'valueOf' / '__proto__'
+    // must return null, not inherited Object.prototype functions.
+    assert.strictEqual(getFieldClassification('toString'), null);
+    assert.strictEqual(getFieldClassification('valueOf'), null);
+    assert.strictEqual(getFieldClassification('hasOwnProperty'), null);
+    assert.strictEqual(getFieldClassification('__proto__'), null);
+    assert.strictEqual(getFieldClassification('not-a-real-field'), null);
   });
 });
 
-describe('ADR-1769 substrate: STATE_MD_SECTIONS constants', () => {
+describe('ADR-1769 substrate: STATE_MD_SECTIONS constants (aligned to gsd-core/templates/state.md)', () => {
   test('every section heading starts with "## "', () => {
     for (const [name, heading] of Object.entries(STATE_MD_SECTIONS)) {
       assert.ok(
@@ -62,8 +111,13 @@ describe('ADR-1769 substrate: STATE_MD_SECTIONS constants', () => {
     }
   });
 
-  test('currentPosition heading matches the body section cmdStateBeginPhase mutates', () => {
+  test('matches the six canonical top-level sections of the STATE.md template', () => {
+    assert.strictEqual(STATE_MD_SECTIONS.projectReference, '## Project Reference');
     assert.strictEqual(STATE_MD_SECTIONS.currentPosition, '## Current Position');
+    assert.strictEqual(STATE_MD_SECTIONS.performanceMetrics, '## Performance Metrics');
+    assert.strictEqual(STATE_MD_SECTIONS.accumulatedContext, '## Accumulated Context');
+    assert.strictEqual(STATE_MD_SECTIONS.deferredItems, '## Deferred Items');
+    assert.strictEqual(STATE_MD_SECTIONS.sessionContinuity, '## Session Continuity');
   });
 });
 
@@ -343,21 +397,20 @@ describe('ADR-1769 Phase 1: property tests (RULESET.TESTS.property-based-testing
     );
   });
 
-  test('FIELD_CLASSIFICATION own-property lookup always returns one of the 5 known enum values', () => {
-    // Note: queries for non-own properties (e.g. "toString", "valueOf") return
-    // inherited Object.prototype methods — not undefined. The contract is on
-    // OWN properties only: every key declared in the table maps to a valid class.
-    const allowed = new Set([
-      'derived-from-body',
-      'derived-from-disk',
-      'derived-from-external',
-      'curated',
-      'free',
+  test('getFieldClassification own-property lookup always returns null or a valid {source, preservation} row', () => {
+    const allowedSources = new Set(['body', 'disk', 'external', 'curated', 'free']);
+    const allowedPreservation = new Set([
+      'derive',
+      'preserve-when-unchanged',
+      'preserve-always',
+      'preserve-if-placeholder',
+      'clear',
     ]);
     fc.assert(
       fc.property(fc.string(), (s) => {
-        if (!Object.prototype.hasOwnProperty.call(FIELD_CLASSIFICATION, s)) return true;
-        return allowed.has(FIELD_CLASSIFICATION[s]);
+        const cls = getFieldClassification(s);
+        if (cls === null) return true;
+        return allowedSources.has(cls.source) && allowedPreservation.has(cls.preservation);
       }),
       { numRuns: 200 },
     );

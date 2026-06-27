@@ -30,13 +30,30 @@ const STOP_H2_PLUS = (lv: number): boolean => lv >= 2;
 // ----------------------------------------------------------------------------
 // Field-classification table (ADR-1769 §4)
 // ----------------------------------------------------------------------------
+//
+// Two-column shape per ADR: `{ source, preservation }`. Source alone is
+// insufficient because two fields can share a source but need different
+// preservation rules (e.g. `current_phase` and `last_activity` are both
+// `derived-from-body`, but `current_phase` preserves-when-unchanged per #1230
+// while `last_activity` always re-derives). Codex review of Phase 1 caught
+// the collapsed-enum shape as a substrate defect that wouldn't survive
+// Phases 2–7.
 
-export type FieldClass =
-  | 'derived-from-body' // re-derive from body; preserve if body unchanged (#1230 delta heuristic)
-  | 'derived-from-disk' // always re-derive from progressProvider
-  | 'derived-from-external' // re-derive from ROADMAP; preserve if placeholder (#948)
-  | 'curated' // preserve always unless explicitly named (#1743 / #1695)
-  | 'free'; // caller's word is law
+export type FieldSource =
+  | 'body' // value is derived from a body field (Phase:, Status:, etc.)
+  | 'disk' // value is derived from a disk scan (.planning/phases/* counts)
+  | 'external' // value is derived from an external file (ROADMAP.md milestone)
+  | 'curated' // value is set by humans/tools; preserve unless explicitly overwritten
+  | 'free'; // caller's word is law (no preservation)
+
+export type FieldPreservation =
+  | 'derive' // always re-derive from source
+  | 'preserve-when-unchanged' // #1230 delta heuristic: keep existing if body source field unchanged
+  | 'preserve-always' // never overwrite unless the caller explicitly names this field
+  | 'preserve-if-placeholder' // overwrite only when derived value is a known placeholder (#948)
+  | 'clear'; // remove the field entirely
+
+export type FieldClassification = { source: FieldSource; preservation: FieldPreservation };
 
 /**
  * Single source of truth for "which fields win when frontmatter and body
@@ -44,43 +61,77 @@ export type FieldClass =
  * consults the table to apply the preservation policy uniformly.
  *
  * Adding a new STATE.md field = one row here, not 9 transition edits.
+ *
+ * Field set verified against `buildStateFrontmatter` (state.cts:1474) — every
+ * frontmatter key emitted there has a row here.
+ *
+ * Frozen null-prototype object: prevents prototype-pollution lookups
+ * (`FIELD_CLASSIFICATION['toString']` returns undefined, not the inherited
+ * function). Use `getFieldClassification()` for lookups.
  */
-export const FIELD_CLASSIFICATION: Record<string, FieldClass> = {
-  // Frontmatter keys (the derived side)
-  status: 'derived-from-body',
-  current_phase: 'derived-from-body',
-  current_phase_name: 'curated', // #1743, #1695 impossible-by-construction
-  current_plan: 'derived-from-body',
-  total_phases: 'derived-from-disk',
-  total_plans: 'derived-from-disk',
-  completed_phases: 'derived-from-disk',
-  completed_plans: 'derived-from-disk',
-  percent: 'derived-from-disk',
-  milestone: 'derived-from-external',
-  milestone_name: 'derived-from-external',
-  last_activity: 'derived-from-body',
-  stopped_at: 'derived-from-body',
-  paused_at: 'derived-from-body',
-  progress: 'curated', // curated-progress ratchet (#3242, #1446)
-};
+export const FIELD_CLASSIFICATION: Readonly<Record<string, FieldClassification>> = Object.freeze(
+  Object.assign(Object.create(null), {
+    // Schema
+    gsd_state_version: { source: 'free', preservation: 'derive' } as FieldClassification,
+
+    // Milestone (external — from ROADMAP.md)
+    milestone: { source: 'external', preservation: 'preserve-if-placeholder' } as FieldClassification,
+    milestone_name: { source: 'external', preservation: 'preserve-if-placeholder' } as FieldClassification,
+
+    // Phase / plan position (body-derived)
+    current_phase: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+    current_phase_name: { source: 'curated', preservation: 'preserve-always' } as FieldClassification, // #1743, #1695
+    current_plan: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+
+    // Status / lifecycle (body-derived; #1230 delta heuristic applies)
+    status: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+    stopped_at: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+    paused_at: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+
+    // Activity log
+    last_updated: { source: 'free', preservation: 'derive' } as FieldClassification, // realClock.nowIso()
+    last_activity: { source: 'body', preservation: 'derive' } as FieldClassification, // always refresh on transition
+    last_activity_desc: { source: 'body', preservation: 'preserve-when-unchanged' } as FieldClassification,
+
+    // Progress block (disk-derived, except the curated progress ratchet)
+    progress: { source: 'curated', preservation: 'preserve-always' } as FieldClassification, // #3242, #1446
+    'progress.total_phases': { source: 'disk', preservation: 'derive' } as FieldClassification,
+    'progress.completed_phases': { source: 'disk', preservation: 'derive' } as FieldClassification,
+    'progress.total_plans': { source: 'disk', preservation: 'derive' } as FieldClassification,
+    'progress.completed_plans': { source: 'disk', preservation: 'derive' } as FieldClassification,
+    'progress.percent': { source: 'disk', preservation: 'derive' } as FieldClassification,
+  } satisfies Record<string, FieldClassification>),
+);
+
+/**
+ * Own-property classification lookup. Returns `null` for unknown fields
+ * (including inherited prototype methods like `toString`/`valueOf`).
+ */
+export function getFieldClassification(field: string): FieldClassification | null {
+  if (!Object.prototype.hasOwnProperty.call(FIELD_CLASSIFICATION, field)) return null;
+  return FIELD_CLASSIFICATION[field];
+}
 
 // ----------------------------------------------------------------------------
 // Body section constants (ADR-1769 §6 — single writer after migration)
 // ----------------------------------------------------------------------------
 
 /**
- * The set of body section headings the Transition Module may mutate.
- * Inline literals are forbidden outside this constants block.
+ * Top-level STATE.md section headings (H2). Aligned byte-for-byte with the
+ * canonical template at `gsd-core/templates/state.md`. Sub-headings (H3) like
+ * `### Decisions` / `### Pending Todos` / `### Blockers/Concerns` live under
+ * `## Accumulated Context` and are not mutated by any Phase 1–7 transition;
+ * they will be added here if a future transition needs them.
+ *
+ * Verified against `gsd-core/templates/state.md` (codex Phase 1 review).
  */
 export const STATE_MD_SECTIONS = {
-  currentPosition: '## Current Position',
-  session: '## Session',
-  decisions: '## Decisions',
-  operatorNextSteps: '## Operator Next Steps',
-  performanceMetrics: '## Performance Metrics',
-  sessionLog: '## Session Log',
   projectReference: '## Project Reference',
-  roadmapEvolution: '## Roadmap Evolution',
+  currentPosition: '## Current Position',
+  performanceMetrics: '## Performance Metrics',
+  accumulatedContext: '## Accumulated Context',
+  deferredItems: '## Deferred Items',
+  sessionContinuity: '## Session Continuity',
 } as const;
 
 // ----------------------------------------------------------------------------
@@ -164,7 +215,26 @@ function beginPhaseCore(
 
   const today = deps.clock.today();
 
+  // Consult the field-classification table for the frontmatter keys this
+  // transition touches (codex Phase 1 review: "table not consulted by
+  // transitionCore"). The table tracks FRONTMATTER keys (lowercase: `status`,
+  // `current_phase`, `last_activity`); body field names like `Status` /
+  // `Current Phase` are aliases and aren't enforced here — they're driven by
+  // the first-time/resume branching below, which encodes the same rules.
+  // Phase 2+ will dispatch preservation based on this lookup.
+  for (const fmKey of ['status', 'current_phase', 'current_plan', 'last_activity']) {
+    const cls = getFieldClassification(fmKey);
+    if (cls === null) {
+      throw new Error(
+        `transitionCore beginPhase: frontmatter key ${JSON.stringify(fmKey)} is not in FIELD_CLASSIFICATION; ` +
+        `add a row per ADR-1769 §4 before touching it.`,
+      );
+    }
+  }
+
   // Helper: try to replace a body field; push to `updated` on success.
+  // Body field names (Title Case: 'Status', 'Current Phase') are not in the
+  // table — they're body-side aliases of classified frontmatter keys.
   const tryField = (name: string, value: string): void => {
     const replaced = stateReplaceField(body, name, value);
     if (replaced !== null) {
