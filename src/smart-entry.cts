@@ -118,6 +118,15 @@ function fmScalar(fm: Record<string, unknown>, body: string, key: string, bodyFi
   return stateExtractField(body, bodyField);
 }
 
+/** Read a scalar value from a nested frontmatter object (e.g. progress.total_phases). */
+function fmScalarKey(obj: unknown, key: string): string | null {
+  if (!obj || typeof obj !== 'object') return null;
+  const v = (obj as Record<string, unknown>)[key];
+  if (typeof v === 'string' && v.trim()) return v.trim();
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  return null;
+}
+
 function parseIntOrNull(s: string | null): number | null {
   if (s === null) return null;
   const cleaned = s.replace('%', '').trim();
@@ -251,12 +260,32 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
   if (!parsed) return empty;
   const { fm, body } = parsed;
 
-  const currentPhaseRaw = fmScalar(fm, body, 'current_phase', 'Current Phase');
-  const totalPhasesRaw = fmScalar(fm, body, 'total_phases', 'Total Phases');
+  // STATE.md has two lineages of schemas (see state.cjs parseProsePhaseField):
+  //   - scalar frontmatter: `current_phase: 3`, `total_phases: 5`
+  //   - nested frontmatter: `progress: { total_phases: 5, percent: 40 }`
+  //   - body prose:         `Phase: 3`, `**Status:** verifying`, `Total Phases: 5`
+  // Read each field across every form, scalar-first then nested then body, so
+  // the classifier works on real STATE.md files written by current GSD.
   const statusRaw = fmScalar(fm, body, 'status', 'Status');
-  const progressRaw = fmScalar(fm, body, 'progress', 'Progress');
   const pausedAtRaw = fmScalar(fm, body, 'paused_at', 'Paused At');
   const lastActivityRaw = fmScalar(fm, body, 'last_activity', 'Last Activity');
+
+  // current_phase: scalar fm → nested (none) → body "Current Phase" → body "Phase".
+  // The body `Phase:` field is the canonical location in prose-form STATE.md
+  // (e.g. "Phase: 3" or "Phase: 3 — ui-review"); parse the leading number.
+  const currentPhaseRaw =
+    fmScalar(fm, body, 'current_phase', 'Current Phase') ??
+    stateExtractField(body, 'Phase');
+
+  // total_phases & percent: nested `progress:` object takes precedence in the
+  // nested schema; scalar fm / body fields cover the flat schema.
+  const progressFm = typeof fm.progress === 'object' ? fm.progress : null;
+  const totalPhasesRaw: string | null =
+    fmScalarKey(progressFm, 'total_phases') ??
+    fmScalar(fm, body, 'total_phases', 'Total Phases');
+  const progressRaw: string | null =
+    fmScalarKey(progressFm, 'percent') ??
+    fmScalar(fm, body, 'progress', 'Progress');
 
   // Blockers list: `- <text>` items under a `## Blockers` heading.
   const blockers: string[] = [];
