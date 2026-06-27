@@ -125,6 +125,8 @@ function transitionCore(content, intent, deps) {
             return milestoneSwitchCore(content, intent, deps);
         case 'milestoneComplete':
             return milestoneCompleteCore(content, intent, deps);
+        case 'patch':
+            return patchCore(content, intent);
     }
 }
 // ----------------------------------------------------------------------------
@@ -878,9 +880,8 @@ function milestoneCompleteCore(content, intent, deps) {
         updated.push('Last Activity Description');
     }
     // ## Current Position reset — stop resume/progress flows pointing at closed
-    // execution instructions. allow-adhoc-markdown: pre-seam section write-modify;
-    // pending collectSection migration #1372.
-    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    // execution instructions.
+    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify carried from milestone.cts; pending collectSection migration #1372
     const closedPositionBody = `\nPhase: Milestone ${version} complete\n` +
         `Plan: —\n` +
         `Status: Awaiting next milestone\n` +
@@ -893,8 +894,7 @@ function milestoneCompleteCore(content, intent, deps) {
     }
     updated.push('Current Position');
     // ## Operator Next Steps — normalize stale tails that can persist after close.
-    // allow-adhoc-markdown: pre-seam section write-modify; pending collectSection migration #1372.
-    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i;
+    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify carried from milestone.cts; pending collectSection migration #1372
     if (operatorPattern.test(body)) {
         body = body.replace(operatorPattern, `$1\n- Start the next milestone with ${intent.nextMilestoneCommand}\n\n`);
     }
@@ -903,4 +903,41 @@ function milestoneCompleteCore(content, intent, deps) {
     }
     updated.push('Operator Next Steps');
     return { content: reassemble(body), updated };
+}
+// ----------------------------------------------------------------------------
+// patch — intent implementation (Phase 6)
+// ----------------------------------------------------------------------------
+/**
+ * Apply a `patch` transition to STATE.md content.
+ *
+ * Migrates `cmdStatePatch` (state.cts) onto the substrate. Applies each
+ * caller-supplied `{field: value}` pair via `stateReplaceField` over the full
+ * content (body + frontmatter — patch can target either), tracking which fields
+ * were updated vs. not found.
+ *
+ * The curated-field preservation that fixes #1743/#1695 is NOT in this core —
+ * it lives in `readModifyWriteStateMd`'s post-sync delta (table-driven via
+ * `getFieldClassification('current_phase_name').preservation === 'preserve-always'`).
+ * `patch` consulting the table "refuses to overwrite" curated fields implicitly:
+ * when the patch does not change a curated field's body source line, the
+ * existing frontmatter value wins over the sync re-derivation. The adapter
+ * still owns field-name validation (security) and the resync-progress decision.
+ *
+ * `data.updated` / `data.failed` mirror the pre-migration CLI output shape.
+ */
+function patchCore(content, intent) {
+    const updated = [];
+    const failed = [];
+    let result = content;
+    for (const [field, value] of Object.entries(intent.patches)) {
+        const replaced = (0, state_document_cjs_1.stateReplaceField)(result, field, value);
+        if (replaced !== null) {
+            result = replaced;
+            updated.push(field);
+        }
+        else {
+            failed.push(field);
+        }
+    }
+    return { content: result, updated, data: { updated, failed } };
 }

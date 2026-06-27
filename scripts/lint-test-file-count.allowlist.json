@@ -99,6 +99,7 @@
     },
     "state": {
       "files": [
+        "bug-1695-state-patch-clobbers-phase-name.test.cjs",
         "bug-21-state-md-template-frontmatter.test.cjs",
         "bug-2630-state-frontmatter-milestone-switch.test.cjs",
         "bug-3127-state-begin-phase-idempotent.test.cjs",

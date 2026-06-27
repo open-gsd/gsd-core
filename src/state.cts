@@ -32,7 +32,7 @@ const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateTransitionMod = require('./state-transition.cjs');
-const { transitionCore } = stateTransitionMod;
+const { transitionCore, getFieldClassification } = stateTransitionMod;
 type StateTransitionIntent = stateTransitionMod.StateTransitionIntent;
 type StateTransitionDeps = stateTransitionMod.StateTransitionDeps;
 import {
@@ -397,21 +397,19 @@ function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolea
 
   const statePath = planningPaths(cwd).state;
   try {
-    const results: { updated: string[]; failed: string[] } = { updated: [], failed: [] };
     const shouldResync = shouldResyncStateProgress(Object.keys(patches));
 
-    // Use atomic read-modify-write to prevent lost updates from concurrent agents
+    // ADR-1769 Phase 6: dispatches to the STATE.md Transition Module. The
+    // per-patch stateReplaceField loop is the pure `patchCore` in
+    // src/state-transition.cts. readModifyWriteStateMd still owns the lock, the
+    // #1230/#1264 post-sync preservation, AND the #1695 curated-current_phase_name
+    // delta (table-driven) that this phase adds. Field-name validation (security)
+    // and the resync-progress decision stay in this adapter.
+    let results: { updated: string[]; failed: string[] } = { updated: [], failed: [] };
     readModifyWriteStateMd(statePath, (content) => {
-      for (const [field, value] of Object.entries(patches)) {
-        const result = stateReplaceField(content, field, value);
-        if (result) {
-          content = result;
-          results.updated.push(field);
-        } else {
-          results.failed.push(field);
-        }
-      }
-      return content;
+      const result = transitionCore(content, { kind: 'patch', patches }, { clock: realClock, progressProvider: () => null });
+      results = (result.data as { updated: string[]; failed: string[] }) ?? results;
+      return result.content;
     }, cwd, { resync: shouldResync });
 
     output(results, raw, results.updated.length > 0 ? 'true' : 'false');
@@ -1892,6 +1890,14 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     const preSessionScope = preSessionMatch ? preSessionMatch[1] : preBody;
     const preBodyStoppedAt = stateExtractField(preSessionScope, 'Stopped At') || stateExtractField(preSessionScope, 'Stopped at');
 
+    // ADR-1769 Phase 6 / #1743 / #1695: snapshot the body source for the curated
+    // current_phase_name (the `Phase:` line parseProsePhaseField harvests). When
+    // this write does NOT change that line, the curated frontmatter value must
+    // win over syncStateFrontmatter's body re-derivation (which can harvest a
+    // wrong parenthetical aside — #1695). Gated by the field-classification
+    // table's preserve-always row so the rule lives in one place.
+    const preBodyPhaseSource = stateExtractField(preBody, 'Phase');
+
     const modified = transformFn(content);
 
     // Bug #948: no-op guard — if the transform produced no change, do NOT write
@@ -1922,6 +1928,9 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     const postSessionMatch = matchSessionSection(postBody);
     const postSessionScope = postSessionMatch ? postSessionMatch[1] : postBody;
     const postBodyStoppedAt = stateExtractField(postSessionScope, 'Stopped At') || stateExtractField(postSessionScope, 'Stopped at');
+    // ADR-1769 Phase 6 / #1695: post-transform body Phase source for the
+    // current_phase_name delta comparison.
+    const postBodyPhaseSource = stateExtractField(postBody, 'Phase');
 
     let mutated = false;
     const postFm = extractFrontmatter(synced) as Record<string, unknown>;
@@ -1960,6 +1969,26 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
       postFm['stopped_at'] !== preFmSnapshot['stopped_at']
     ) {
       postFm['stopped_at'] = preFmSnapshot['stopped_at'];
+      mutated = true;
+    }
+
+    // ADR-1769 Phase 6 / #1743 / #1695: same delta heuristic for the curated
+    // current_phase_name. Gated by the field-classification table (preserve-always).
+    // When this write did NOT change the body `Phase:` source line, the curated
+    // frontmatter current_phase_name wins over syncStateFrontmatter's body
+    // re-derivation (parseProsePhaseField can harvest a wrong parenthetical
+    // aside — #1695). begin/planned/complete-phase rewrite their body Phase line,
+    // so the delta does not fire for them and current_phase_name still advances.
+    const phaseNameCls = getFieldClassification('current_phase_name');
+    if (
+      phaseNameCls !== null &&
+      phaseNameCls.preservation === 'preserve-always' &&
+      postBodyPhaseSource === preBodyPhaseSource &&
+      typeof preFmSnapshot['current_phase_name'] === 'string' &&
+      preFmSnapshot['current_phase_name'].length > 0 &&
+      postFm['current_phase_name'] !== preFmSnapshot['current_phase_name']
+    ) {
+      postFm['current_phase_name'] = preFmSnapshot['current_phase_name'];
       mutated = true;
     }
 

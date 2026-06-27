@@ -5,6 +5,7 @@
   "bug-1367-claude-local-flat-command-layout.test.cjs",
   "bug-14-progress-auto-flag-dropped.test.cjs",
   "bug-167-query-meta-command.test.cjs",
+  "bug-1695-state-patch-clobbers-phase-name.test.cjs",
   "bug-17-askuserquestion-option-cap.test.cjs",
   "bug-170-workflow-fallback-install-hint.test.cjs",
   "bug-1736-local-install-commands.test.cjs",

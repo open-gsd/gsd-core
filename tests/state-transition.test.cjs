@@ -1032,3 +1032,56 @@ describe('ADR-1769 Phase 5: milestoneComplete transition — closure write', () 
     assert.ok(/^milestone: v1\.0/m.test(result.content), 'frontmatter milestone preserved');
   });
 });
+
+// ADR-1769 Phase 6: patch
+
+describe('ADR-1769 Phase 6: patch transition — field updates', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('applies each patched field and reports the updated set', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Status:** Planning',
+      '**Current Plan:** 2',
+      '**Total Plans in Phase:** 5',
+      '',
+    ].join('\n');
+    const result = transitionCore(
+      input,
+      { kind: 'patch', patches: { Status: 'Paused', 'Current Plan': '3' } },
+      deps,
+    );
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Paused');
+    assert.strictEqual(stateExtractField(result.content, 'Current Plan'), '3');
+    assert.deepStrictEqual(result.data && result.data.updated, ['Status', 'Current Plan']);
+  });
+
+  test('reports failed fields (no matching field in content)', () => {
+    const input = '# Project State\n\n**Status:** Planning\n';
+    const result = transitionCore(
+      input,
+      { kind: 'patch', patches: { Status: 'Paused', Nonexistent: 'x' } },
+      deps,
+    );
+    assert.deepStrictEqual(result.data && result.data.updated, ['Status']);
+    assert.deepStrictEqual(result.data && result.data.failed, ['Nonexistent']);
+  });
+
+  test('leaves content unchanged when no patch matches (no-op)', () => {
+    const input = '# Project State\n\n**Status:** Planning\n';
+    const result = transitionCore(input, { kind: 'patch', patches: { Nonexistent: 'x' } }, deps);
+    assert.strictEqual(result.content, input);
+    assert.deepStrictEqual(result.data && result.data.updated, []);
+    assert.deepStrictEqual(result.data && result.data.failed, ['Nonexistent']);
+  });
+
+  test('patching a frontmatter YAML key directly updates the YAML line', () => {
+    // patch operates on the full content (body + frontmatter), so a lowercase
+    // frontmatter key like `stopped_at` is matched and replaced.
+    const input = ['---', 'status: executing', 'stopped_at: 2026-01-01', '---', '', '# State', ''].join('\n');
+    const result = transitionCore(input, { kind: 'patch', patches: { stopped_at: '2026-06-27' } }, deps);
+    assert.ok(/^stopped_at: 2026-06-27$/m.test(result.content), 'YAML stopped_at must be patched');
+    assert.deepStrictEqual(result.data && result.data.updated, ['stopped_at']);
+  });
+});

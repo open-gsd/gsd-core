@@ -179,8 +179,9 @@ export type StateTransitionIntent =
       version: string;
       /** Resolved runtime slash command for the Operator Next Steps hint (e.g. '/gsd:new-milestone'). */
       nextMilestoneCommand: string;
-    };
-// Phases 6–7 add the remaining intent kinds to this discriminated union.
+    }
+  | { kind: 'patch'; patches: Record<string, string> };
+// Phase 7 adds the remaining intent kinds to this discriminated union.
 
 export type StateTransitionResult = {
   content: string;
@@ -221,6 +222,8 @@ export function transitionCore(
       return milestoneSwitchCore(content, intent, deps);
     case 'milestoneComplete':
       return milestoneCompleteCore(content, intent, deps);
+    case 'patch':
+      return patchCore(content, intent);
   }
 }
 
@@ -1127,4 +1130,47 @@ function milestoneCompleteCore(
   updated.push('Operator Next Steps');
 
   return { content: reassemble(body), updated };
+}
+
+// ----------------------------------------------------------------------------
+// patch — intent implementation (Phase 6)
+// ----------------------------------------------------------------------------
+
+/**
+ * Apply a `patch` transition to STATE.md content.
+ *
+ * Migrates `cmdStatePatch` (state.cts) onto the substrate. Applies each
+ * caller-supplied `{field: value}` pair via `stateReplaceField` over the full
+ * content (body + frontmatter — patch can target either), tracking which fields
+ * were updated vs. not found.
+ *
+ * The curated-field preservation that fixes #1743/#1695 is NOT in this core —
+ * it lives in `readModifyWriteStateMd`'s post-sync delta (table-driven via
+ * `getFieldClassification('current_phase_name').preservation === 'preserve-always'`).
+ * `patch` consulting the table "refuses to overwrite" curated fields implicitly:
+ * when the patch does not change a curated field's body source line, the
+ * existing frontmatter value wins over the sync re-derivation. The adapter
+ * still owns field-name validation (security) and the resync-progress decision.
+ *
+ * `data.updated` / `data.failed` mirror the pre-migration CLI output shape.
+ */
+function patchCore(
+  content: string,
+  intent: { kind: 'patch'; patches: Record<string, string> },
+): StateTransitionResult {
+  const updated: string[] = [];
+  const failed: string[] = [];
+  let result = content;
+
+  for (const [field, value] of Object.entries(intent.patches)) {
+    const replaced = stateReplaceField(result, field, value);
+    if (replaced !== null) {
+      result = replaced;
+      updated.push(field);
+    } else {
+      failed.push(field);
+    }
+  }
+
+  return { content: result, updated, data: { updated, failed } };
 }
