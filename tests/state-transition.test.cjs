@@ -415,3 +415,103 @@ describe('ADR-1769 Phase 1: property tests (RULESET.TESTS.property-based-testing
     );
   });
 });
+
+describe('ADR-1769 Phase 2: advancePlan transition', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('advances Current Plan from N to N+1 (legacy format)', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Current Plan:** 02',
+      '**Total Plans in Phase:** 05',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-26',
+      '',
+      '## Current Position',
+      '',
+      'Plan: 2 of 5',
+      'Status: Executing Phase 3',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'advancePlan' }, deps);
+    assert.strictEqual(stateExtractField(result.content, 'Current Plan'), '3');
+    assert.strictEqual(result.data && result.data.advanced, true);
+    assert.strictEqual(result.data && result.data.current_plan, 3);
+    assert.strictEqual(result.data && result.data.total_plans, 5);
+  });
+
+  test('phase-complete branch when currentPlan >= totalPlans', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Current Plan:** 05',
+      '**Total Plans in Phase:** 05',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-26',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'advancePlan' }, deps);
+    assert.strictEqual(result.data && result.data.advanced, false);
+    assert.strictEqual(result.data && result.data.reason, 'last_plan');
+    assert.strictEqual(result.data && result.data.status, 'ready_for_verification');
+  });
+
+  test('error when plan fields are unparseable', () => {
+    const input = '# Project State\n\nNo plan fields here.\n';
+    const result = transitionCore(input, { kind: 'advancePlan' }, deps);
+    assert.strictEqual(result.data && result.data.error, true);
+    assert.deepStrictEqual(result.updated, []);
+  });
+
+  test('compound format: "Plan: 2 of 6" preserves compound shape', () => {
+    const input = [
+      '# Project State',
+      '',
+      '**Plan:** 2 of 6',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-26',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'advancePlan' }, deps);
+    const plan = stateExtractField(result.content, 'Plan');
+    assert.ok(/3 of 6/.test(plan || ''), `Plan should be "3 of 6"; got ${JSON.stringify(plan)}`);
+    assert.strictEqual(result.data && result.data.advanced, true);
+  });
+});
+
+describe('ADR-1769 Phase 2: advancePlan with frontmatter (#1255 pattern — codex review)', () => {
+  const deps = { clock: fixedClock, progressProvider: noProgress };
+
+  test('advances plan correctly when STATE.md has YAML frontmatter (body Status not YAML status)', () => {
+    const input = [
+      '---',
+      'status: Executing Phase 3',
+      'current_phase: "03"',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '**Current Plan:** 02',
+      '**Total Plans in Phase:** 05',
+      '**Status:** Executing Phase 3',
+      '**Last Activity:** 2026-06-26',
+      '',
+      '## Current Position',
+      '',
+      'Plan: 2 of 5',
+      'Status: Executing Phase 3',
+      '',
+    ].join('\n');
+    const result = transitionCore(input, { kind: 'advancePlan' }, deps);
+    // Body Current Plan must advance to 3.
+    assert.strictEqual(stateExtractField(result.content, 'Current Plan'), '3');
+    // Body Status must be updated (not the YAML status key).
+    const bodyStatus = stateExtractField(result.content, 'Status');
+    assert.ok(
+      /Ready to execute/.test(bodyStatus || ''),
+      `body Status should be "Ready to execute"; got ${JSON.stringify(bodyStatus)}`,
+    );
+    assert.strictEqual(result.data && result.data.advanced, true);
+  });
+});

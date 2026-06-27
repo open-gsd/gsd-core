@@ -591,80 +591,33 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
 
-  const today = realClock.today();
-  let result: Record<string, unknown> | null = null;
+  // ADR-1769 Phase 2: dispatches to the STATE.md Transition Module. The
+  // ~80-line RMW callback that used to live here (plan parsing, advance vs
+  // phase-complete branching, template-default-aware field replacement,
+  // Current Position section mutation) is now the pure `advancePlanCore`
+  // function in src/state-transition.cts.
+  const intent: StateTransitionIntent = { kind: 'advancePlan' };
+  const deps: StateTransitionDeps = {
+    clock: realClock,
+    progressProvider: () => null,
+  };
 
+  let resultData: Record<string, unknown> | undefined;
   readModifyWriteStateMd(statePath, (content) => {
-    // Try legacy separate fields first, then compound "Plan: X of Y" format
-    const legacyPlan = stateExtractField(content, 'Current Plan');
-    const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
-    const planField = stateExtractField(content, 'Plan');
-
-    let currentPlan: number, totalPlans: number;
-    let useCompoundFormat = false;
-
-    if (legacyPlan && legacyTotal) {
-      currentPlan = parseInt(legacyPlan, 10);
-      totalPlans = parseInt(legacyTotal, 10);
-    } else if (planField) {
-      // Compound format: "2 of 6 in current phase" or "2 of 6"
-      currentPlan = parseInt(planField, 10);
-      const ofMatch = planField.match(/of\s+(\d+)/);
-      totalPlans = ofMatch ? parseInt(ofMatch[1], 10) : NaN;
-      useCompoundFormat = true;
-    } else {
-      currentPlan = NaN;
-      totalPlans = NaN;
-    }
-
-    if (isNaN(currentPlan) || isNaN(totalPlans)) {
-      result = { error: true };
-      return content;
-    }
-
-    const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
-    const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
-
-    if (currentPlan >= totalPlans) {
-      // Phase-complete branch — only replace Status/Last Activity when the existing
-      // value is a known template default (Knuth invariant: preserve executor-authored).
-      content = stateReplaceFieldIfTemplate(content, 'Status', statusDefaults, 'Phase complete — ready for verification');
-      content = stateReplaceFieldIfTemplate(content, 'Last Activity', lastActivityDefaults, today);
-      // stateReplaceFieldWithFallback tries 'Last activity' alias too
-      content = stateReplaceFieldIfTemplate(content, 'Last activity', lastActivityDefaults, today);
-      content = updateCurrentPositionFields(content, { status: 'Phase complete — ready for verification', lastActivity: today });
-      result = { advanced: false, reason: 'last_plan', current_plan: currentPlan, total_plans: totalPlans, status: 'ready_for_verification' };
-    } else {
-      const newPlan = currentPlan + 1;
-      let planDisplayValue: string;
-      if (useCompoundFormat) {
-        // Preserve compound format: "X of Y in current phase" → replace X only
-        planDisplayValue = (planField as string).replace(/^\d+/, String(newPlan));
-        content = stateReplaceField(content, 'Plan', planDisplayValue) || content;
-      } else {
-        planDisplayValue = `${newPlan} of ${totalPlans}`;
-        content = stateReplaceField(content, 'Current Plan', String(newPlan)) || content;
-      }
-      // Normal advance — only replace Status/Last Activity when the existing value is
-      // a known template default (Knuth invariant: preserve executor-authored).
-      content = stateReplaceFieldIfTemplate(content, 'Status', statusDefaults, 'Ready to execute');
-      content = stateReplaceFieldIfTemplate(content, 'Last Activity', lastActivityDefaults, today);
-      content = stateReplaceFieldIfTemplate(content, 'Last activity', lastActivityDefaults, today);
-      content = updateCurrentPositionFields(content, { status: 'Ready to execute', lastActivity: today, plan: planDisplayValue });
-      result = { advanced: true, previous_plan: currentPlan, current_plan: newPlan, total_plans: totalPlans };
-    }
-    return content;
+    const result = transitionCore(content, intent, deps);
+    resultData = result.data;
+    return result.content;
   }, cwd);
 
-  if (!result || (result as Record<string, unknown>)['error']) {
+  if (!resultData || resultData['error']) {
     output({ error: 'Cannot parse Current Plan or Total Plans in Phase from STATE.md' }, raw, undefined);
     return;
   }
 
-  if ((result as Record<string, unknown>)['advanced'] === false) {
-    output(result, raw, 'false');
+  if (resultData['advanced'] === false) {
+    output(resultData, raw, 'false');
   } else {
-    output(result, raw, 'true');
+    output(resultData, raw, 'true');
   }
 }
 

@@ -16,7 +16,8 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-import { stateReplaceField, stateExtractField } from './state-document.cjs';
+import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate } from './state-document.cjs';
+import { KNOWN_TEMPLATE_DEFAULTS } from './state-document.cjs';
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
@@ -149,10 +150,17 @@ export type StateTransitionDeps = {
 };
 
 export type StateTransitionIntent =
-  | { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null };
-// Phases 2–7 add the remaining 9 intent kinds to this discriminated union.
+  | { kind: 'beginPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
+  | { kind: 'advancePlan' };
+// Phases 3–7 add the remaining 8 intent kinds to this discriminated union.
 
-export type StateTransitionResult = { content: string; updated: string[] };
+export type StateTransitionResult = {
+  content: string;
+  updated: string[];
+  /** Intent-specific output (e.g. advancePlan returns {advanced, currentPlan, totalPlans}).
+   * Adapters read this to construct the CLI output shape. */
+  data?: Record<string, unknown>;
+};
 
 // ----------------------------------------------------------------------------
 // transitionCore — pure dispatch (ADR-1769 §3)
@@ -175,6 +183,8 @@ export function transitionCore(
   switch (intent.kind) {
     case 'beginPhase':
       return beginPhaseCore(content, intent, deps);
+    case 'advancePlan':
+      return advancePlanCore(content, deps);
   }
 }
 
@@ -433,4 +443,162 @@ function stripFrontmatter(content: string): string {
     result = stripped;
   }
   return result;
+}
+
+/**
+ * Update fields within the ## Current Position section for advancePlan.
+ * Mirrors `updateCurrentPositionFields` (state.cts:496) byte-for-behaviour:
+ * only replaces Status / Last Activity when the existing value is a known
+ * template default (Knuth invariant: preserve executor-authored values).
+ * Plan is always replaced (system-derived, never executor-authored).
+ *
+ * Cannot import `updateCurrentPositionFields` from state.cjs directly (circular
+ * dep: state.cjs → state-transition.cjs → state.cjs), so the mutation is
+ * inlined here using the same primitives.
+ */
+function mutateCurrentPositionForAdvance(
+  content: string,
+  fields: { status?: string; lastActivity?: string; plan?: string },
+  statusDefaults: string[] | null | undefined,
+  lastActivityDefaults: string[] | null | undefined,
+): string {
+  const span = locateCurrentPosition(content);
+  if (span === null) return content;
+  let sectionBody = content.slice(span.start, span.end);
+  let mutated = false;
+
+  if (fields.status) {
+    const replaced = stateReplaceFieldIfTemplate(sectionBody, 'Status', statusDefaults, fields.status);
+    if (replaced !== null && replaced !== sectionBody) { sectionBody = replaced; mutated = true; }
+  }
+
+  if (fields.lastActivity) {
+    const replaced =
+      stateReplaceFieldIfTemplate(sectionBody, 'Last Activity', lastActivityDefaults, fields.lastActivity) ??
+      stateReplaceFieldIfTemplate(sectionBody, 'Last activity', lastActivityDefaults, fields.lastActivity);
+    if (replaced !== null && replaced !== sectionBody) { sectionBody = replaced; mutated = true; }
+  }
+
+  if (fields.plan) {
+    // Plan is always replaced — system-derived, not executor-authored.
+    if (/^Plan:/m.test(sectionBody)) {
+      sectionBody = sectionBody.replace(/^Plan:.*$/m, `Plan: ${fields.plan}`);
+      mutated = true;
+    } else {
+      const replaced = stateReplaceField(sectionBody, 'Plan', fields.plan);
+      if (replaced !== null) { sectionBody = replaced; mutated = true; }
+    }
+  }
+
+  if (!mutated) return content;
+  return content.slice(0, span.start) + sectionBody + content.slice(span.end);
+}
+
+// ----------------------------------------------------------------------------
+// advancePlan — intent implementation (Phase 2)
+// ----------------------------------------------------------------------------
+
+/**
+ * Apply an `advancePlan` transition to STATE.md content.
+ *
+ * Parses Current Plan / Total Plans (legacy separate fields or compound
+ * "Plan: X of Y" format), increments the plan number, updates body fields
+ * and the ## Current Position section. When currentPlan >= totalPlans,
+ * takes the phase-complete branch (sets Status to "Phase complete — ready
+ * for verification") instead of advancing.
+ *
+ * Uses `stateReplaceFieldIfTemplate` (template-default-aware) to preserve
+ * executor-authored field values (Knuth invariant from cmdStateAdvancePlan).
+ *
+ * Returns `data.advanced` / `data.currentPlan` / `data.totalPlans` for the
+ * adapter to construct CLI output.
+ */
+function advancePlanCore(content: string, deps: StateTransitionDeps): StateTransitionResult {
+  const today = deps.clock.today();
+
+  // #1255: body-field replacements operate on body only (frontmatter stripped),
+  // not on the full content. The YAML `status:` key matches `^Status:\s*`
+  // before the body field if full content is passed (codex Phase 2 review:
+  // HIGH blocking finding — same pattern beginPhaseCore already handles).
+  const existingFm = extractFrontmatter(content) as Record<string, unknown>;
+  const hasFrontmatter = Object.keys(existingFm).length > 0;
+  let body = stripFrontmatter(content);
+  const reassemble = (b: string): string =>
+    hasFrontmatter
+      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
+      : b;
+
+  // Parse plan number — legacy first, then compound.
+  const legacyPlan = stateExtractField(content, 'Current Plan');
+  const legacyTotal = stateExtractField(content, 'Total Plans in Phase');
+  const planField = stateExtractField(content, 'Plan');
+
+  let currentPlan: number;
+  let totalPlans: number;
+  let useCompoundFormat = false;
+
+  if (legacyPlan && legacyTotal) {
+    currentPlan = parseInt(legacyPlan, 10);
+    totalPlans = parseInt(legacyTotal, 10);
+  } else if (planField) {
+    currentPlan = parseInt(planField, 10);
+    const ofMatch = planField.match(/of\s+(\d+)/);
+    totalPlans = ofMatch ? parseInt(ofMatch[1], 10) : NaN;
+    useCompoundFormat = true;
+  } else {
+    currentPlan = NaN;
+    totalPlans = NaN;
+  }
+
+  if (isNaN(currentPlan) || isNaN(totalPlans)) {
+    return { content: reassemble(body), updated: [], data: { error: true } };
+  }
+
+  const updated: string[] = [];
+
+  const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
+  const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
+
+  if (currentPlan >= totalPlans) {
+    // Phase-complete branch.
+    body = stateReplaceFieldIfTemplate(body, 'Status', statusDefaults, 'Phase complete — ready for verification') || body;
+    body = stateReplaceFieldIfTemplate(body, 'Last Activity', lastActivityDefaults, today) || body;
+    body = stateReplaceFieldIfTemplate(body, 'Last activity', lastActivityDefaults, today) || body;
+    body = mutateCurrentPositionForAdvance(body, {
+      status: 'Phase complete — ready for verification',
+      lastActivity: today,
+    }, statusDefaults, lastActivityDefaults);
+    updated.push('Status', 'Last Activity', 'Current Position');
+    return {
+      content: reassemble(body),
+      updated,
+      data: { advanced: false, reason: 'last_plan', current_plan: currentPlan, total_plans: totalPlans, status: 'ready_for_verification' },
+    };
+  }
+
+  // Normal advance branch.
+  const newPlan = currentPlan + 1;
+  let planDisplayValue: string;
+  if (useCompoundFormat) {
+    planDisplayValue = (planField as string).replace(/^\d+/, String(newPlan));
+    body = stateReplaceField(body, 'Plan', planDisplayValue) || body;
+  } else {
+    planDisplayValue = `${newPlan} of ${totalPlans}`;
+    body = stateReplaceField(body, 'Current Plan', String(newPlan)) || body;
+  }
+  body = stateReplaceFieldIfTemplate(body, 'Status', statusDefaults, 'Ready to execute') || body;
+  body = stateReplaceFieldIfTemplate(body, 'Last Activity', lastActivityDefaults, today) || body;
+  body = stateReplaceFieldIfTemplate(body, 'Last activity', lastActivityDefaults, today) || body;
+  body = mutateCurrentPositionForAdvance(body, {
+    status: 'Ready to execute',
+    lastActivity: today,
+    plan: planDisplayValue,
+  }, statusDefaults, lastActivityDefaults);
+  updated.push('Current Plan', 'Status', 'Last Activity', 'Current Position');
+
+  return {
+    content: reassemble(body),
+    updated,
+    data: { advanced: true, previous_plan: currentPlan, current_plan: newPlan, total_plans: totalPlans },
+  };
 }
