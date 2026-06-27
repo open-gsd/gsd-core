@@ -333,7 +333,7 @@
   "gsd-core/workflows/update.md": "4166fd3e3ca72a7b",
   "gsd-core/workflows/validate-phase.md": "4e94708c9ca15d70",
   "gsd-core/workflows/verify-phase.md": "b81bd1c061c9e6d3",
-  "gsd-core/workflows/verify-work.md": "92fb4e876d75ded5",
+  "gsd-core/workflows/verify-work.md": "1482cd4f8af40387",
   "hooks/gsd-check-update.js": "79c846cd8dd54caa",
   "hooks/gsd-context-monitor.js": "caa8614524452835",
   "scripts/changeset/README.md": "86ff89331dfd94b2",

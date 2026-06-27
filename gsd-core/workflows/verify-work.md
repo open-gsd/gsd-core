@@ -514,8 +514,6 @@ Resolve the security review failure before advancing to the next phase.
 All tests passed, but phase advancement is blocked until security review produces SECURITY.md.
 
 - `/gsd:secure-phase {phase}` — security review (required before advancing)
-- `/gsd:plan-phase {next}` — Plan next phase
-- `/gsd:execute-phase {next}` — Execute next phase
 - `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 
