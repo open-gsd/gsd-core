@@ -279,6 +279,7 @@
     ],
     "cli_modules": [
       "active-workstream-store.cjs",
+      "adapter-declarative.cjs",
       "adr-parser.cjs",
       "agent-command-router.cjs",
       "agent-install-check.cjs",
@@ -324,6 +325,7 @@
       "edge-probe.cjs",
       "eval-command-router.cjs",
       "eval.cjs",
+      "embedding-adapter.cjs",
       "fallow-runner.cjs",
       "federated-config.cjs",
       "frontmatter.cjs",
