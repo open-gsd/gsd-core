@@ -207,6 +207,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/model-adapter.cjs',
       'gsd-core/bin/lib/hook-bus.cjs',
       'gsd-core/bin/lib/state-io.cjs',
+      'gsd-core/bin/lib/external-descriptor-trust.cjs',
     ],
   },
 
