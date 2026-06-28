@@ -16,9 +16,6 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 function writeStateMd(tmpDir, content) {
   fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
 }
-function readStateMd(tmpDir) {
-  return fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
-}
 
 describe('#1760: state prune engages on template-conformant STATE.md (Phase: X of Y)', () => {
   let tmpDir;
