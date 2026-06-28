@@ -256,7 +256,7 @@ export default tseslint.config(
   // bin/install.js is ~12k lines of generated code; the ADR's mandate is the
   // portability defect surface, not a broader generated-code style sweep.
   {
-    files: ['bin/install.js', 'scripts/build-hooks.js'],
+    files: ['bin/install.js', 'bin/gsd-mcp-server.js', 'scripts/build-hooks.js'],
     plugins: {
       local: localPlugin,
     },
