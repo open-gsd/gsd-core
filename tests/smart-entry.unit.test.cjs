@@ -176,6 +176,24 @@ describe('smart-entry: priority ordering', () => {
     assert.equal(result.signals.verify_failed, true);
   });
 
+  test('verify-failed includes decimal phase directories in latest phase ordering', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'executing', total_phases: 10, current_phase: 10 }),
+      roadmap: true,
+    }));
+    const phaseSeven = path.join(dir, '.planning', 'phases', '07-base-phase');
+    const phaseSevenOne = path.join(dir, '.planning', 'phases', '07.1-inserted-phase');
+    fs.mkdirSync(phaseSeven, { recursive: true });
+    fs.mkdirSync(phaseSevenOne, { recursive: true });
+    fs.writeFileSync(path.join(phaseSeven, '07-VERIFICATION.md'), 'STATUS: passed\n');
+    fs.writeFileSync(path.join(phaseSevenOne, '07.1-VERIFICATION.md'), 'STATUS: failed\n');
+
+    const result = classifyProject(dir);
+
+    assert.equal(result.situation, 'verify-failed');
+    assert.equal(result.signals.verify_failed, true);
+  });
+
   test('paused beats blocked (earlier row wins)', () => {
     const dir = track(makeProject({
       // paused_at set AND blockers present AND a phase loop: must resolve paused.

@@ -33,6 +33,9 @@ const { extractFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateDocument = require('./state-document.cjs');
 const { stateExtractField } = stateDocument;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseId = require('./phase-id.cjs');
+const { comparePhaseNum, extractPhaseToken } = phaseId;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -134,11 +137,9 @@ function parseIntOrNull(s: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function phaseNumberFromDirName(name: string): number | null {
-  const match = name.match(/^(\d+)(?:-|$)/);
-  if (!match) return null;
-  const n = Number.parseInt(match[1], 10);
-  return Number.isFinite(n) ? n : null;
+function phaseTokenFromDirName(name: string): string | null {
+  const token = extractPhaseToken(name);
+  return /^\d+(?:[A-Z])?(?:\.\d+)*(?:-|$)/i.test(token) ? token : null;
 }
 
 /**
@@ -194,9 +195,9 @@ function detectVerifyFailed(cwd: string): boolean {
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(phasesDir)
-      .map((name) => ({ name, phaseNumber: phaseNumberFromDirName(name) }))
-      .filter((entry): entry is { name: string; phaseNumber: number } => entry.phaseNumber !== null)
-      .sort((a, b) => a.phaseNumber - b.phaseNumber || a.name.localeCompare(b.name))
+      .map((name) => ({ name, phaseToken: phaseTokenFromDirName(name) }))
+      .filter((entry): entry is { name: string; phaseToken: string } => entry.phaseToken !== null)
+      .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken) || a.name.localeCompare(b.name))
       .map((entry) => entry.name);
   } catch {
     return false;
