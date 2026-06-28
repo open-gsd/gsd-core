@@ -2648,7 +2648,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
   - `/gsd-config` — folds settings-advanced (`--advanced`), settings-integrations (`--integrations`), set-profile (`--profile`)
   - `/gsd-workspace` — folds new-workspace (`--new`), list-workspaces (`--list`), remove-workspace (`--remove`)
 - REQ-CONSOLIDATE-02: Six existing parents absorb wrap-up / sub-operations as flags: `/gsd-update --sync`, `/gsd-update --reapply`, `/gsd-sketch --wrap-up`, `/gsd-spike --wrap-up`, `/gsd-map-codebase --fast`, `/gsd-map-codebase --query`, `/gsd-code-review --fix`, `/gsd-progress --do`, `/gsd-progress --next`.
-- REQ-CONSOLIDATE-03: `/gsd-next` is not the retired workflow-advance command; it is reserved for the state-aware smart-entry launcher. Workflow advancement remains under `/gsd-progress --next`.
+- REQ-CONSOLIDATE-03: `/gsd:next` is not the retired workflow-advance command; it is reserved for the state-aware smart-entry launcher. Workflow advancement remains under `/gsd-progress --next`.
 - REQ-CONSOLIDATE-04: Deleted micro-skill slash forms (the bare `gsd-add-todo`, `gsd-add-backlog`, `gsd-plant-seed`, `gsd-check-todos`, `gsd-add-phase`, `gsd-insert-phase`, `gsd-remove-phase`, `gsd-edit-phase`, `gsd-new-workspace`, `gsd-list-workspaces`, `gsd-remove-workspace`, `gsd-settings-advanced`, `gsd-settings-integrations`, `gsd-set-profile`, `gsd-sketch-wrap-up`, `gsd-spike-wrap-up`, `gsd-reapply-patches`, `gsd-code-review-fix`, …) MUST resolve to "Unknown command" — no shadow stubs.
 - REQ-CONSOLIDATE-05: `autonomous.md` invokes `/gsd-code-review --fix` (was previously calling the deleted `gsd-code-review-fix`).
 
@@ -3216,7 +3216,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 **Reference:** [`gsd capability` command reference](reference/gsd-capability-command.md) · [ADR-1244](adr/1244-capability-ecosystem.md)
 ### 148. Smart Entry Launcher
 
-**Command:** `/gsd-next`
+**Command:** `/gsd:next`
 
 **Tool:** `gsd-tools smart-entry [--json]`
 

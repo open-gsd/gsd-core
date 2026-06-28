@@ -95,7 +95,7 @@ Returns JSON with: current position, phase, plan, status, decisions, blockers, m
 
 ### Smart Entry
 
-Read-only situation classifier used by `/gsd-next`.
+Read-only situation classifier used by `/gsd:next`.
 
 ```bash
 node gsd-tools.cjs smart-entry          # Human summary + recommended route

@@ -123,7 +123,7 @@ These six routers are descriptor-only entries that the model picks first; the bo
 
 | Command | Role | Source |
 |---------|------|--------|
-| `/gsd-next` | State-aware smart-entry launcher — reads project state, shows a contextual menu, and dispatches one existing GSD command. | [commands/gsd/next.md](../commands/gsd/next.md) |
+| `/gsd:next` | State-aware smart-entry launcher — reads project state, shows a contextual menu, and dispatches one existing GSD command. | [commands/gsd/next.md](../commands/gsd/next.md) |
 | `/gsd-progress` | Check project progress, show context, and route to next action; use `--next` to advance automatically or `--do` to run a freeform task. | [commands/gsd/progress.md](../commands/gsd/progress.md) |
 | `/gsd-capture` | Capture ideas, tasks, notes, and seeds — todo (default), `--note`, `--backlog`, `--seed`, or `--list` pending todos. | [commands/gsd/capture.md](../commands/gsd/capture.md) |
 | `/gsd-stats` | Display project statistics — phases, plans, requirements, git metrics, timeline. | [commands/gsd/stats.md](../commands/gsd/stats.md) |

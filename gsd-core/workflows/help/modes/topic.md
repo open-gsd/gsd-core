@@ -7,6 +7,7 @@ Emit a section from the full reference for the topic in `$ARGUMENTS`. Read `work
 
 | Topic alias(es) | Section heading in `full.md` |
 |---|---|
+| `next`, `smart-entry` | `### Smart Entry` |
 | `workflow`, `core`, `core-workflow` | `## Core Workflow` (entire section through end of `### Quick Mode`) |
 | `init`, `new-project` | `### Project Initialization` |
 | `map`, `map-codebase` | The `/gsd:map-codebase` block under `### Project Initialization` |

@@ -578,7 +578,7 @@ node gsd-tools.cjs phase uat-passed 3 --raw                  # Machine-readable 
 
 ## Navigation Commands
 
-### `/gsd-next`
+### `/gsd:next`
 
 Open the state-aware smart-entry launcher. It reads `.planning/STATE.md`, `ROADMAP.md`, verification artifacts, and git status, classifies the current situation, shows a short menu, then dispatches exactly one existing GSD command.
 
@@ -587,12 +587,12 @@ This is a launcher/router only — it never performs project work directly. Dete
 **Situations detected:** no project, paused work, blockers, failed verification, first-phase setup, planning, executing, pending verification, idle stranded work, complete milestone, or unknown state.
 
 ```bash
-/gsd-next                          # Detect state and route to the best next action
+/gsd:next                          # Detect state and route to the best next action
 ```
 
 ### `/gsd-progress`
 
-Show status, next steps, and automatically advance to the next logical workflow step. Reads project state and determines the appropriate action. Use `/gsd-next` when you want an interactive smart-entry menu before dispatch; use `/gsd-progress --next` when you want GSD to advance directly.
+Show status, next steps, and automatically advance to the next logical workflow step. Reads project state and determines the appropriate action. Use `/gsd:next` when you want an interactive smart-entry menu before dispatch; use `/gsd-progress --next` when you want GSD to advance directly.
 
 | Flag | Description |
 |------|-------------|
