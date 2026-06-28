@@ -37,7 +37,7 @@ const {
 // installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
 // conversion module's rewrite engine can consume it without importing
 // bin/install.js. Re-exported below for back-compat consumers/tests.
-const { getDirName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+const { getDirName, getRuntimeLabel } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
@@ -6960,21 +6960,9 @@ function uninstall(isGlobal, runtime = 'claude') {
     ? targetDir.replace(os.homedir(), '~')
     : targetDir.replace(process.cwd(), '.');
 
-  let runtimeLabel = 'Claude Code';
-  if (runtime === 'opencode') runtimeLabel = 'OpenCode';
-  if (runtime === 'gemini') runtimeLabel = 'Gemini';
-  if (runtime === 'kilo') runtimeLabel = 'Kilo';
-  if (runtime === 'codex') runtimeLabel = 'Codex';
-  if (runtime === 'copilot') runtimeLabel = 'Copilot';
-  if (runtime === 'antigravity') runtimeLabel = 'Antigravity';
-  if (runtime === 'cursor') runtimeLabel = 'Cursor';
-  if (runtime === 'windsurf') runtimeLabel = 'Windsurf';
-  if (runtime === 'augment') runtimeLabel = 'Augment';
-  if (runtime === 'trae') runtimeLabel = 'Trae';
-  if (runtime === 'qwen') runtimeLabel = 'Qwen Code';
-  if (runtime === 'hermes') runtimeLabel = 'Hermes Agent';
-  if (runtime === 'kimi') runtimeLabel = 'Kimi CLI';
-  if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
+  // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
+  // Phase B / #1679) — collapses the prior 15-line assignment chain.
+  const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
@@ -8599,22 +8587,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     homeDir,
   });
 
-  let runtimeLabel = 'Claude Code';
-  if (isOpencode) runtimeLabel = 'OpenCode';
-  if (isGemini) runtimeLabel = 'Gemini';
-  if (isKilo) runtimeLabel = 'Kilo';
-  if (isCodex) runtimeLabel = 'Codex';
-  if (isCopilot) runtimeLabel = 'Copilot';
-  if (isAntigravity) runtimeLabel = 'Antigravity';
-  if (isCursor) runtimeLabel = 'Cursor';
-  if (isWindsurf) runtimeLabel = 'Windsurf';
-  if (isAugment) runtimeLabel = 'Augment';
-  if (isTrae) runtimeLabel = 'Trae';
-  if (isQwen) runtimeLabel = 'Qwen Code';
-  if (isHermes) runtimeLabel = 'Hermes Agent';
-  if (isKimi) runtimeLabel = 'Kimi';
-  if (isCodebuddy) runtimeLabel = 'CodeBuddy';
-  if (isCline) runtimeLabel = 'Cline';
+  // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
+  // Phase B / #1679) — collapses the prior 16-line assignment chain.
+  const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Installing for ${cyan}${runtimeLabel}${reset} to ${cyan}${locationLabel}${reset}\n`);
 

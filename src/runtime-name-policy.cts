@@ -151,3 +151,60 @@ export function getDirName(runtime: string): string {
   if (typeof dir === 'string' && dir.length > 0) return dir;
   return '.claude';
 }
+
+/**
+ * Curated short display labels for the install/uninstall console output, keyed
+ * by canonical runtime id. The SINGLE source of truth consumed by both
+ * `install()` and `uninstall()` in bin/install.js via `getRuntimeLabel`.
+ *
+ * Collapses the two duplicated `runtimeLabel` assignment chains that previously
+ * lived inline in bin/install.js (ADR-1239 Phase B, #1679) — the add-a-host tax:
+ * a new runtime meant remembering to add a label line in BOTH chains, and they
+ * had drifted out of sync (uninstall omitted `cline` and used a different
+ * `kimi` value than install). This table is the curated canonical resolution:
+ *   - kimi:  install 'Kimi' / uninstall 'Kimi CLI'  → 'Kimi CLI' (majority + descriptor title)
+ *   - cline: install 'Cline' / uninstall (omitted)  → 'Cline'    (majority + descriptor title)
+ *
+ * Voice: these are the SHORT UI labels, intentionally distinct from the
+ * descriptor `title` (the long product name — e.g. "OpenAI Codex CLI",
+ * "GitHub Copilot", "Gemini CLI") which serves documentation/registry display,
+ * not the install console. A future slice may relocate this to a
+ * `runtime.label` descriptor field; until then this table is the source.
+ *
+ * Lookup is RAW-ID only (no alias expansion) — callers pass an already-
+ * canonicalized runtime id, keeping the label surface explicit. Unknown/empty
+ * ids fall back to 'Claude Code' (the always-safe default, fail-closed).
+ *
+ * The drift-guard test (tests/runtime-label-policy.test.cjs) pins this table's
+ * id set to the capability-registry runtime id set, so adding/removing a runtime
+ * forces a deliberate update here.
+ */
+const RUNTIME_LABELS: Readonly<Record<string, string>> = {
+  claude: 'Claude Code',
+  opencode: 'OpenCode',
+  gemini: 'Gemini',
+  kilo: 'Kilo',
+  codex: 'Codex',
+  copilot: 'Copilot',
+  antigravity: 'Antigravity',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  augment: 'Augment',
+  trae: 'Trae',
+  qwen: 'Qwen Code',
+  hermes: 'Hermes Agent',
+  kimi: 'Kimi CLI',
+  codebuddy: 'CodeBuddy',
+  cline: 'Cline',
+};
+
+/**
+ * Map a canonical runtime id to its short display label for the
+ * install/uninstall console output. Unknown/empty inputs fall back to
+ * 'Claude Code'. Sibling to `getDirName`; pure (no I/O).
+ */
+export function getRuntimeLabel(runtime: string): string {
+  if (!runtime) return 'Claude Code';
+  const label = RUNTIME_LABELS[runtime];
+  return typeof label === 'string' && label.length > 0 ? label : 'Claude Code';
+}
