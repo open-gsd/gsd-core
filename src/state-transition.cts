@@ -118,6 +118,114 @@ export function getFieldClassification(field: string): FieldClassification | nul
 }
 
 // ----------------------------------------------------------------------------
+// applyStatePreservation — table-driven post-sync preservation (ADR-1769 #1796)
+// ----------------------------------------------------------------------------
+//
+// Absorbs the post-sync preservation block that previously lived inline in
+// `readModifyWriteStateMd` (state.cts). One pure, field-classification-table-
+// driven implementation replaces the three drifting encodings (the RMW post-sync
+// block, `syncStateFrontmatter`, and `cmdStateBuildFrontmatter`'s read-path
+// copy). Every preserved field — progress, status, stopped_at, current_phase_name
+// — is governed by its FIELD_CLASSIFICATION row, so a policy change is a one-row
+// table edit rather than a per-call-site patch. Behavior is byte-identical to
+// the pre-#1796 inline block; this is the consolidation ADR-1769 / CONTEXT.md
+// already claimed shipped. See issue #1796 (Path A: finish the consolidation).
+
+export type StatePreservationInput = {
+  /** Pre-transform frontmatter; `null` when the transition re-derives from disk (resync=true). */
+  preFm: Record<string, unknown> | null;
+  /** Post-`syncStateFrontmatter` frontmatter (the freshly recomputed one). */
+  postFm: Record<string, unknown>;
+  /** Always-present pre-transform frontmatter snapshot (drives the #1230 deltas). */
+  preFmSnapshot: Record<string, unknown>;
+  /** True when the caller asked for a full disk re-derivation (sync / advancePlan / completePhase). */
+  resync: boolean;
+  preBodyStatus: string | null;
+  postBodyStatus: string | null;
+  preBodyStoppedAt: string | null;
+  postBodyStoppedAt: string | null;
+  preBodyPhaseSource: string | null;
+  postBodyPhaseSource: string | null;
+};
+
+export type StatePreservationResult = {
+  postFm: Record<string, unknown>;
+  mutated: boolean;
+};
+
+/**
+ * Pure, table-driven post-sync preservation. Mutates `postFm` in place to
+ * mirror the pre-consolidation inline block (which also mutated in place) and
+ * returns whether any field was restored.
+ */
+export function applyStatePreservation(input: StatePreservationInput): StatePreservationResult {
+  const { preFm, postFm, preFmSnapshot, resync } = input;
+  let mutated = false;
+
+  // Curated progress ratchet (#3242/#1446; closes the #1264 class by routing
+  // the policy through the table). Restored only when the table says preserve-
+  // always AND this transition is not re-deriving from disk (!resync). sync and
+  // the lifecycle transitions pass resync=true and recompute; patch/update and
+  // body-only writes pass resync=false and keep the curated counters.
+  const progressCls = getFieldClassification('progress');
+  if (
+    progressCls !== null &&
+    progressCls.preservation === 'preserve-always' &&
+    !resync &&
+    preFm &&
+    preFm['progress']
+  ) {
+    postFm['progress'] = preFm['progress'];
+    mutated = true;
+  }
+
+  // status — #1230 body-delta heuristic. Table: preserve-when-unchanged.
+  const statusCls = getFieldClassification('status');
+  if (
+    statusCls !== null &&
+    statusCls.preservation === 'preserve-when-unchanged' &&
+    input.postBodyStatus === input.preBodyStatus &&
+    typeof preFmSnapshot['status'] === 'string' &&
+    preFmSnapshot['status'].length > 0 &&
+    preFmSnapshot['status'] !== 'unknown' &&
+    postFm['status'] !== preFmSnapshot['status']
+  ) {
+    postFm['status'] = preFmSnapshot['status'];
+    mutated = true;
+  }
+
+  // stopped_at — same #1230 body-delta heuristic. Table: preserve-when-unchanged.
+  const stoppedCls = getFieldClassification('stopped_at');
+  if (
+    stoppedCls !== null &&
+    stoppedCls.preservation === 'preserve-when-unchanged' &&
+    input.postBodyStoppedAt === input.preBodyStoppedAt &&
+    typeof preFmSnapshot['stopped_at'] === 'string' &&
+    preFmSnapshot['stopped_at'].length > 0 &&
+    postFm['stopped_at'] !== preFmSnapshot['stopped_at']
+  ) {
+    postFm['stopped_at'] = preFmSnapshot['stopped_at'];
+    mutated = true;
+  }
+
+  // current_phase_name — curated (#1743/#1695). Table: preserve-always.
+  const phaseNameCls = getFieldClassification('current_phase_name');
+  if (
+    phaseNameCls !== null &&
+    phaseNameCls.preservation === 'preserve-always' &&
+    input.postBodyPhaseSource === input.preBodyPhaseSource &&
+    typeof preFmSnapshot['current_phase_name'] === 'string' &&
+    preFmSnapshot['current_phase_name'].length > 0 &&
+    postFm['current_phase_name'] !== preFmSnapshot['current_phase_name']
+  ) {
+    postFm['current_phase_name'] = preFmSnapshot['current_phase_name'];
+    mutated = true;
+  }
+
+  return { postFm, mutated };
+}
+
+// ----------------------------------------------------------------------------
 // Body section constants (ADR-1769 §6 — single writer after migration)
 // ----------------------------------------------------------------------------
 

@@ -17,6 +17,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.STATE_MD_SECTIONS = exports.FIELD_CLASSIFICATION = void 0;
 exports.getFieldClassification = getFieldClassification;
+exports.applyStatePreservation = applyStatePreservation;
 exports.transitionCore = transitionCore;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const frontmatter = require("./frontmatter.cjs");
@@ -78,6 +79,64 @@ function getFieldClassification(field) {
     if (!Object.prototype.hasOwnProperty.call(exports.FIELD_CLASSIFICATION, field))
         return null;
     return exports.FIELD_CLASSIFICATION[field];
+}
+/**
+ * Pure, table-driven post-sync preservation. Mutates `postFm` in place to
+ * mirror the pre-consolidation inline block (which also mutated in place) and
+ * returns whether any field was restored.
+ */
+function applyStatePreservation(input) {
+    const { preFm, postFm, preFmSnapshot, resync } = input;
+    let mutated = false;
+    // Curated progress ratchet (#3242/#1446; closes the #1264 class by routing
+    // the policy through the table). Restored only when the table says preserve-
+    // always AND this transition is not re-deriving from disk (!resync). sync and
+    // the lifecycle transitions pass resync=true and recompute; patch/update and
+    // body-only writes pass resync=false and keep the curated counters.
+    const progressCls = getFieldClassification('progress');
+    if (progressCls !== null &&
+        progressCls.preservation === 'preserve-always' &&
+        !resync &&
+        preFm &&
+        preFm['progress']) {
+        postFm['progress'] = preFm['progress'];
+        mutated = true;
+    }
+    // status — #1230 body-delta heuristic. Table: preserve-when-unchanged.
+    const statusCls = getFieldClassification('status');
+    if (statusCls !== null &&
+        statusCls.preservation === 'preserve-when-unchanged' &&
+        input.postBodyStatus === input.preBodyStatus &&
+        typeof preFmSnapshot['status'] === 'string' &&
+        preFmSnapshot['status'].length > 0 &&
+        preFmSnapshot['status'] !== 'unknown' &&
+        postFm['status'] !== preFmSnapshot['status']) {
+        postFm['status'] = preFmSnapshot['status'];
+        mutated = true;
+    }
+    // stopped_at — same #1230 body-delta heuristic. Table: preserve-when-unchanged.
+    const stoppedCls = getFieldClassification('stopped_at');
+    if (stoppedCls !== null &&
+        stoppedCls.preservation === 'preserve-when-unchanged' &&
+        input.postBodyStoppedAt === input.preBodyStoppedAt &&
+        typeof preFmSnapshot['stopped_at'] === 'string' &&
+        preFmSnapshot['stopped_at'].length > 0 &&
+        postFm['stopped_at'] !== preFmSnapshot['stopped_at']) {
+        postFm['stopped_at'] = preFmSnapshot['stopped_at'];
+        mutated = true;
+    }
+    // current_phase_name — curated (#1743/#1695). Table: preserve-always.
+    const phaseNameCls = getFieldClassification('current_phase_name');
+    if (phaseNameCls !== null &&
+        phaseNameCls.preservation === 'preserve-always' &&
+        input.postBodyPhaseSource === input.preBodyPhaseSource &&
+        typeof preFmSnapshot['current_phase_name'] === 'string' &&
+        preFmSnapshot['current_phase_name'].length > 0 &&
+        postFm['current_phase_name'] !== preFmSnapshot['current_phase_name']) {
+        postFm['current_phase_name'] = preFmSnapshot['current_phase_name'];
+        mutated = true;
+    }
+    return { postFm, mutated };
 }
 // ----------------------------------------------------------------------------
 // Body section constants (ADR-1769 §6 — single writer after migration)
