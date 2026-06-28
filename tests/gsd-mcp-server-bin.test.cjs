@@ -12,7 +12,7 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const { PROTOCOL_VERSION } = require('../gsd-core/bin/lib/mcp-server.cjs');
 
-const SHIM = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-mcp-server.cjs');
+const SHIM = path.join(__dirname, '..', 'bin', 'gsd-mcp-server.js');
 
 function run(stdin) {
   return spawnSync(process.execPath, [SHIM], {
