@@ -205,6 +205,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/adapter-declarative.cjs',
       'gsd-core/bin/lib/adapter-imperative.cjs',
       'gsd-core/bin/lib/model-adapter.cjs',
+      'gsd-core/bin/lib/hook-bus.cjs',
+      'gsd-core/bin/lib/state-io.cjs',
     ],
   },
 
