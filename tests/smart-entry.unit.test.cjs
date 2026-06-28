@@ -158,6 +158,24 @@ describe('smart-entry: idle-stranded (git-dependent)', () => {
 describe('smart-entry: priority ordering', () => {
   afterEach(removeAll);
 
+  test('verify-failed uses numerically latest phase artifact', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'executing', total_phases: 10, current_phase: 10 }),
+      roadmap: true,
+    }));
+    const phaseNinetyNine = path.join(dir, '.planning', 'phases', '99-old-phase');
+    const phaseOneHundred = path.join(dir, '.planning', 'phases', '100-current-phase');
+    fs.mkdirSync(phaseNinetyNine, { recursive: true });
+    fs.mkdirSync(phaseOneHundred, { recursive: true });
+    fs.writeFileSync(path.join(phaseNinetyNine, '99-VERIFICATION.md'), 'STATUS: passed\n');
+    fs.writeFileSync(path.join(phaseOneHundred, '100-VERIFICATION.md'), 'STATUS: failed\n');
+
+    const result = classifyProject(dir);
+
+    assert.equal(result.situation, 'verify-failed');
+    assert.equal(result.signals.verify_failed, true);
+  });
+
   test('paused beats blocked (earlier row wins)', () => {
     const dir = track(makeProject({
       // paused_at set AND blockers present AND a phase loop: must resolve paused.

@@ -134,6 +134,13 @@ function parseIntOrNull(s: string | null): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function phaseNumberFromDirName(name: string): number | null {
+  const match = name.match(/^(\d+)(?:-|$)/);
+  if (!match) return null;
+  const n = Number.parseInt(match[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Parse a `last_activity` value that may be an ISO date or a free-form string
  * into an epoch-ms timestamp. Returns null when unparseable.
@@ -186,7 +193,11 @@ function detectVerifyFailed(cwd: string): boolean {
   const phasesDir = path.join(planningPaths(cwd).phases);
   let entries: string[] = [];
   try {
-    entries = fs.readdirSync(phasesDir).sort();
+    entries = fs.readdirSync(phasesDir)
+      .map((name) => ({ name, phaseNumber: phaseNumberFromDirName(name) }))
+      .filter((entry): entry is { name: string; phaseNumber: number } => entry.phaseNumber !== null)
+      .sort((a, b) => a.phaseNumber - b.phaseNumber || a.name.localeCompare(b.name))
+      .map((entry) => entry.name);
   } catch {
     return false;
   }
@@ -200,7 +211,7 @@ function detectVerifyFailed(cwd: string): boolean {
   } catch {
     return false;
   }
-  const candidates = files.filter((f) => /summary|verify|uat/i.test(f));
+  const candidates = files.filter((f) => /summary|verif(?:y|ication)|uat/i.test(f));
   for (const name of candidates) {
     let content = '';
     try {
