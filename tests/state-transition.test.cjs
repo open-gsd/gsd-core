@@ -13,6 +13,7 @@ const fc = require('fast-check');
 
 const {
   transitionCore,
+  applyStatePreservation,
   FIELD_CLASSIFICATION,
   getFieldClassification,
   STATE_MD_SECTIONS,
@@ -1208,5 +1209,107 @@ describe('ADR-1769 Phase 7: sync transition — body writes + #1761', () => {
     const input = '# Project State\n\n**Total Plans in Phase:** 2\n**Progress:** 40%\n';
     const result = transitionCore(input, { kind: 'sync', totalPlansInPhase: null, percent: null }, deps);
     assert.strictEqual(stateExtractField(result.content, 'Total Plans in Phase'), '2');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADR-1769 #1796: applyStatePreservation — table-driven post-sync consolidation
+//
+// Path A ("finish the consolidation"): the post-sync preservation block that
+// lived inline in readModifyWriteStateMd (state.cts) is absorbed into the
+// Transition Module as a pure, field-classification-table-driven function.
+// Every preserved field (progress, status, stopped_at, current_phase_name) is
+// governed by its FIELD_CLASSIFICATION row — one policy source, not three
+// drifting encodings. Behavior is identical to the pre-consolidation block;
+// these tests pin the table-driven contract. See issue #1796.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ADR-1769 #1796: applyStatePreservation — table-driven post-sync consolidation', () => {
+  // Shared no-op deltas for tests that only exercise one field.
+  const untouched = {
+    preBodyStatus: null, postBodyStatus: null,
+    preBodyStoppedAt: null, postBodyStoppedAt: null,
+    preBodyPhaseSource: null, postBodyPhaseSource: null,
+  };
+
+  test('progress: restores curated block when table=preserve-always and transition is not re-deriving (!resync)', () => {
+    const curated = { progress: { total_phases: 4, completed_phases: 3, percent: 75 } };
+    const r = applyStatePreservation({
+      preFm: curated,
+      preFmSnapshot: curated,
+      postFm: { progress: { total_phases: 5, completed_phases: 0, percent: 0 } }, // disk-derived clobber
+      resync: false,
+      ...untouched,
+    });
+    assert.deepEqual(r.postFm.progress, { total_phases: 4, completed_phases: 3, percent: 75 });
+    assert.equal(r.mutated, true);
+  });
+
+  test('progress: NOT restored when transition re-derives from disk (resync=true) — sync/advancePlan/completePhase path', () => {
+    const recomputed = { progress: { total_phases: 5, completed_phases: 1, percent: 20 } };
+    const r = applyStatePreservation({
+      preFm: null,
+      preFmSnapshot: {},
+      postFm: { ...recomputed },
+      resync: true,
+      ...untouched,
+    });
+    assert.deepEqual(r.postFm.progress, { total_phases: 5, completed_phases: 1, percent: 20 });
+    assert.equal(r.mutated, false);
+  });
+
+  test('status: preserves when body Status source is unchanged (preserve-when-unchanged) and snapshot holds a real status', () => {
+    const r = applyStatePreservation({
+      preFm: null,
+      preFmSnapshot: { status: 'completed' },
+      postFm: { status: 'verifying' },
+      resync: true,
+      preBodyStatus: 'Executing Phase 3', postBodyStatus: 'Executing Phase 3',
+      preBodyStoppedAt: null, postBodyStoppedAt: null,
+      preBodyPhaseSource: null, postBodyPhaseSource: null,
+    });
+    assert.equal(r.postFm.status, 'completed');
+    assert.equal(r.mutated, true);
+  });
+
+  test('status: does NOT preserve when the body Status source line changed this write', () => {
+    const r = applyStatePreservation({
+      preFm: null,
+      preFmSnapshot: { status: 'completed' },
+      postFm: { status: 'verifying' },
+      resync: true,
+      preBodyStatus: 'Executing Phase 3', postBodyStatus: 'Completed Phase 3', // changed
+      preBodyStoppedAt: null, postBodyStoppedAt: null,
+      preBodyPhaseSource: null, postBodyPhaseSource: null,
+    });
+    assert.equal(r.postFm.status, 'verifying');
+    assert.equal(r.mutated, false);
+  });
+
+  test('current_phase_name: preserves curated value when body Phase source unchanged (preserve-always)', () => {
+    const r = applyStatePreservation({
+      preFm: null,
+      preFmSnapshot: { current_phase_name: 'curated-name' },
+      postFm: { current_phase_name: 'wrong-parenthetical-harvest' },
+      resync: true,
+      preBodyStatus: null, postBodyStatus: null,
+      preBodyStoppedAt: null, postBodyStoppedAt: null,
+      preBodyPhaseSource: '3', postBodyPhaseSource: '3',
+    });
+    assert.equal(r.postFm.current_phase_name, 'curated-name');
+    assert.equal(r.mutated, true);
+  });
+
+  test('returns mutated=false and untouched postFm when no preservation rule applies', () => {
+    const postFm = { status: 'executing', progress: { percent: 10 } };
+    const r = applyStatePreservation({
+      preFm: null,
+      preFmSnapshot: {},
+      postFm,
+      resync: true,
+      ...untouched,
+    });
+    assert.equal(r.mutated, false);
+    assert.deepEqual(r.postFm, { status: 'executing', progress: { percent: 10 } });
   });
 });

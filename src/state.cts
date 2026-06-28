@@ -32,7 +32,7 @@ const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateTransitionMod = require('./state-transition.cjs');
-const { transitionCore, getFieldClassification } = stateTransitionMod;
+const { transitionCore, applyStatePreservation } = stateTransitionMod;
 type StateTransitionIntent = stateTransitionMod.StateTransitionIntent;
 type StateTransitionDeps = stateTransitionMod.StateTransitionDeps;
 import {
@@ -1913,14 +1913,9 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
 
     let synced = syncStateFrontmatter(modified, cwd);
 
-    // Compute postFm once and apply BOTH the progress-restore (when !resync)
-    // AND the status/stopped_at preservation (#1230) before reconstructing.
-    // This avoids double-wrapping the frontmatter block.
-    const needsProgressRestore = !resync && preFm && preFm['progress'];
-
     // Post-transform body source fields used for the delta comparison (#1230).
     // Use `modified` (not `synced`): syncStateFrontmatter only rewrites the frontmatter block, so the body is identical in both — and we need the body the transform produced.
-    // Strip frontmatter so the YAML status key cannot shadow the body field.
+    // Strip frontmatter so the YAML status key cannot shadow the body field we are tracking.
     const postBody = stripFrontmatter(modified);
     const postBodyStatus = stateExtractField(postBody, 'Status');
     // Bug #1230 / Change B: scope stopped_at delta to the ## Session section,
@@ -1932,68 +1927,22 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // current_phase_name delta comparison.
     const postBodyPhaseSource = stateExtractField(postBody, 'Phase');
 
-    let mutated = false;
+    // ADR-1769 #1796 (Path A — finish the consolidation): the post-sync
+    // preservation block is now the pure, table-driven `applyStatePreservation`
+    // in the STATE.md Transition Module. progress / status / stopped_at /
+    // current_phase_name are all governed by their FIELD_CLASSIFICATION row —
+    // one policy source, not three drifting encodings. Behavior-identical to
+    // the pre-#1796 inline block; this is the absorption ADR-1769 / CONTEXT.md
+    // already claimed shipped.
     const postFm = extractFrontmatter(synced) as Record<string, unknown>;
-
-    if (needsProgressRestore) {
-      // Re-apply the curated progress block that syncStateFrontmatter just
-      // overwrote with disk-derived values.  Only restore keys that were present
-      // in the snapshot — this preserves any new non-progress frontmatter fields
-      // (e.g., status, current_phase) that syncStateFrontmatter legitimately
-      // derived from the updated body.
-      postFm['progress'] = preFm['progress'];
-      mutated = true;
-    }
-
-    // Bug #1230: preserve existing frontmatter status when this write did NOT
-    // change the body's Status field. A write that doesn't touch Status must
-    // not silently revert a hand-set frontmatter status (e.g. 'completed') to
-    // whatever the stale body Status happens to derive (e.g. 'verifying').
-    // Only apply when the existing frontmatter held a real, non-unknown status.
-    if (
-      postBodyStatus === preBodyStatus &&
-      typeof preFmSnapshot['status'] === 'string' &&
-      preFmSnapshot['status'].length > 0 &&
-      preFmSnapshot['status'] !== 'unknown' &&
-      postFm['status'] !== preFmSnapshot['status']
-    ) {
-      postFm['status'] = preFmSnapshot['status'];
-      mutated = true;
-    }
-
-    // Bug #1230: same delta heuristic for stopped_at.
-    if (
-      postBodyStoppedAt === preBodyStoppedAt &&
-      typeof preFmSnapshot['stopped_at'] === 'string' &&
-      preFmSnapshot['stopped_at'].length > 0 &&
-      postFm['stopped_at'] !== preFmSnapshot['stopped_at']
-    ) {
-      postFm['stopped_at'] = preFmSnapshot['stopped_at'];
-      mutated = true;
-    }
-
-    // ADR-1769 Phase 6 / #1743 / #1695: same delta heuristic for the curated
-    // current_phase_name. Gated by the field-classification table (preserve-always).
-    // When this write did NOT change the body `Phase:` source line, the curated
-    // frontmatter current_phase_name wins over syncStateFrontmatter's body
-    // re-derivation (parseProsePhaseField can harvest a wrong parenthetical
-    // aside — #1695). begin/planned/complete-phase rewrite their body Phase line,
-    // so the delta does not fire for them and current_phase_name still advances.
-    const phaseNameCls = getFieldClassification('current_phase_name');
-    if (
-      phaseNameCls !== null &&
-      phaseNameCls.preservation === 'preserve-always' &&
-      postBodyPhaseSource === preBodyPhaseSource &&
-      typeof preFmSnapshot['current_phase_name'] === 'string' &&
-      preFmSnapshot['current_phase_name'].length > 0 &&
-      postFm['current_phase_name'] !== preFmSnapshot['current_phase_name']
-    ) {
-      postFm['current_phase_name'] = preFmSnapshot['current_phase_name'];
-      mutated = true;
-    }
-
-    if (mutated) {
-      const yamlStr = reconstructFrontmatter(postFm as unknown as Frontmatter);
+    const preservation = applyStatePreservation({
+      preFm, postFm, preFmSnapshot, resync,
+      preBodyStatus, postBodyStatus,
+      preBodyStoppedAt, postBodyStoppedAt,
+      preBodyPhaseSource, postBodyPhaseSource,
+    });
+    if (preservation.mutated) {
+      const yamlStr = reconstructFrontmatter(preservation.postFm as unknown as Frontmatter);
       const body = stripFrontmatter(synced);
       synced = `---\n${yamlStr}\n---\n\n${body}`;
     }
