@@ -280,6 +280,7 @@
     "cli_modules": [
       "active-workstream-store.cjs",
       "adapter-declarative.cjs",
+      "adapter-imperative.cjs",
       "adr-parser.cjs",
       "agent-command-router.cjs",
       "agent-install-check.cjs",
