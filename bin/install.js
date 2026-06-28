@@ -37,7 +37,7 @@ const {
 // installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
 // conversion module's rewrite engine can consume it without importing
 // bin/install.js. Re-exported below for back-compat consumers/tests.
-const { getDirName, getRuntimeLabel, getGlobalConfigHomeFragment } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+const { getDirName, getRuntimeLabel, getGlobalConfigHomeFragment, runtimeFlags } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
@@ -6918,19 +6918,7 @@ const GSD_UNINSTALL_HOOKS = [
  * @param {string} runtime - Target runtime ('claude', 'opencode', 'gemini', 'codex', 'copilot')
  */
 function uninstall(isGlobal, runtime = 'claude') {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCodebuddy = runtime === 'codebuddy';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -7915,18 +7903,7 @@ function resolveInstallRelativePath(baseDir, relPath) {
  * Write file manifest after installation for future modification detection
  */
 function writeManifest(configDir, runtime = 'claude', options = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isTrae = runtime === 'trae';
-  const isCline = runtime === 'cline';
-  const isKimi = runtime === 'kimi';
-  const isHermes = runtime === 'hermes';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // commandsDir points to the old location for Gemini (which still uses commands/gsd/).
@@ -8413,21 +8390,7 @@ function reportInstallerMigrationResult(result) {
 }
 
 function install(isGlobal, runtime = 'claude', options = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isGemini = runtime === 'gemini';
-  const isKilo = runtime === 'kilo';
-  const isKimi = runtime === 'kimi';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCodebuddy = runtime === 'codebuddy';
-  const isCline = runtime === 'cline';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -10433,14 +10396,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
  * Apply statusline config, then print completion message
  */
 function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = 'claude', isGlobal = true, configDir = null, bannerOpts = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isTrae = runtime === 'trae';
-  const isCline = runtime === 'cline';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !isOpencode) {
