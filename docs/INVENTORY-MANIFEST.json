@@ -352,6 +352,7 @@
       "loop-resolver.cjs",
       "markdown-sectionizer.cjs",
       "milestone.cjs",
+      "model-adapter.cjs",
       "model-catalog.cjs",
       "model-profiles.cjs",
       "model-resolver.cjs",

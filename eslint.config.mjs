@@ -204,6 +204,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/embedding-adapter.cjs',
       'gsd-core/bin/lib/adapter-declarative.cjs',
       'gsd-core/bin/lib/adapter-imperative.cjs',
+      'gsd-core/bin/lib/model-adapter.cjs',
     ],
   },
 
