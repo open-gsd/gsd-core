@@ -45,6 +45,8 @@ gsd config-set review.default_reviewers '["gemini","codex"]'
 
 For the full integration settings schema (API keys, model overrides per reviewer, local server host addresses), see [Configuration](../CONFIGURATION.md).
 
+If you need multiple independent reviewer voices from the same adapter, configure `review.reviewer_instances` and add those instance names to `review.default_reviewers`. Instance names run only through `review.default_reviewers`; they are not valid `/gsd-review` flags. See [Reviewer instances](../CONFIGURATION.md#reviewer-instances) for the schema.
+
 ---
 
 ## Run a review
