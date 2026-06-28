@@ -14,8 +14,8 @@
  * Concrete host binding (OpenCode/VS Code/pi) is deferred to Phase 5 (#1682,
  * D15/D18). This slice ships the adapter + the composed-registry seam.
  *
- * Minimal interface (per ADR-1239 open wire-shape question): satisfies the same
- * `{kind, runtime, install, uninstall}` contract as the declarative adapter,
+ * Minimal interface (per ADR-1239 open wire-shape question): satisfies the
+ * same `{kind, runtime, install, uninstall}` shape as the declarative adapter,
  * plus an imperative-specific `registry` accessor (the composed loadRegistry
  * result). The full 6-point binding surface grows when a real host consumer
  * fixes the shape.
