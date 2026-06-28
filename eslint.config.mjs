@@ -203,6 +203,7 @@ export default tseslint.config(
       // ADR-1239 Phase C-1 (#1680): tsc-generated — lint src/embedding-adapter.cts + src/adapter-declarative.cts.
       'gsd-core/bin/lib/embedding-adapter.cjs',
       'gsd-core/bin/lib/adapter-declarative.cjs',
+      'gsd-core/bin/lib/adapter-imperative.cjs',
     ],
   },
 
