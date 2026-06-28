@@ -158,9 +158,9 @@ describe('smart-entry: idle-stranded (git-dependent)', () => {
 describe('smart-entry: priority ordering', () => {
   afterEach(removeAll);
 
-  test('verify-failed uses numerically latest phase artifact', () => {
+  test('verify-failed inspects current phase verify artifact', () => {
     const dir = track(makeProject({
-      state: state({ status: 'executing', total_phases: 10, current_phase: 10 }),
+      state: state({ status: 'executing', total_phases: 10, current_phase: 100 }),
       roadmap: true,
     }));
     const phaseNinetyNine = path.join(dir, '.planning', 'phases', '99-old-phase');
@@ -176,9 +176,27 @@ describe('smart-entry: priority ordering', () => {
     assert.equal(result.signals.verify_failed, true);
   });
 
-  test('verify-failed includes decimal phase directories in latest phase ordering', () => {
+  test('verify-failed ignores failure in a higher phase when state is on an earlier phase', () => {
     const dir = track(makeProject({
-      state: state({ status: 'executing', total_phases: 10, current_phase: 10 }),
+      state: state({ status: 'executing', total_phases: 10, current_phase: 2 }),
+      roadmap: true,
+    }));
+    const phaseTwo = path.join(dir, '.planning', 'phases', '02-active-phase');
+    const phaseOneHundred = path.join(dir, '.planning', 'phases', '100-leftover-phase');
+    fs.mkdirSync(phaseTwo, { recursive: true });
+    fs.mkdirSync(phaseOneHundred, { recursive: true });
+    fs.writeFileSync(path.join(phaseTwo, '02-VERIFICATION.md'), 'STATUS: passed\n');
+    fs.writeFileSync(path.join(phaseOneHundred, '100-VERIFICATION.md'), 'STATUS: failed\n');
+
+    const result = classifyProject(dir);
+
+    assert.equal(result.situation, 'executing');
+    assert.equal(result.signals.verify_failed, false);
+  });
+
+  test('verify-failed includes decimal phase directories for the current phase', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'executing', total_phases: 10, current_phase: '7.1' }),
       roadmap: true,
     }));
     const phaseSeven = path.join(dir, '.planning', 'phases', '07-base-phase');

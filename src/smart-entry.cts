@@ -35,7 +35,7 @@ import stateDocument = require('./state-document.cjs');
 const { stateExtractField } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken } = phaseId;
+const { comparePhaseNum, extractPhaseToken, normalizePhaseName, phaseTokenMatches } = phaseId;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -185,12 +185,20 @@ function readGitSignals(cwd: string): GitSignals {
   return { has_git: true, dirty, unpushed };
 }
 
+/** Leading numeric phase token from a STATE.md scalar or body `Phase:` value. */
+function phaseTokenFromState(raw: string | null): string | null {
+  if (!raw?.trim()) return null;
+  const match = raw.trim().match(/^(\d+(?:[A-Z])?(?:\.\d+)*)/i);
+  return match ? match[1] : null;
+}
+
 /**
- * Detect whether the most recent verify report indicates failure. The canonical
- * signal is a phase summary/verify artifact whose STATUS: marker reads blocked,
- * failed, or fail. Returns true only on a clear positive signal.
+ * Detect whether the current phase's verify report indicates failure. The
+ * canonical signal is a phase summary/verify artifact whose STATUS: marker reads
+ * blocked, failed, or fail. Scoped to STATE.md's current phase so a leftover or
+ * newer phase tree cannot skew routing. Returns true only on a clear positive signal.
  */
-function detectVerifyFailed(cwd: string): boolean {
+function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolean {
   const phasesDir = path.join(planningPaths(cwd).phases);
   let entries: string[] = [];
   try {
@@ -203,9 +211,18 @@ function detectVerifyFailed(cwd: string): boolean {
     return false;
   }
   if (entries.length === 0) return false;
-  // Inspect the highest-numbered phase dir's summary/verify artifacts only.
-  const latest = entries[entries.length - 1];
-  const latestDir = path.join(phasesDir, latest);
+
+  const phaseToken = phaseTokenFromState(currentPhaseRaw);
+  let targetDir: string | undefined;
+  if (phaseToken) {
+    const normalized = normalizePhaseName(phaseToken);
+    targetDir = entries.find((name) => phaseTokenMatches(name, normalized));
+    if (!targetDir) return false;
+  } else {
+    // No current phase in state — fall back to the highest-numbered phase dir.
+    targetDir = entries[entries.length - 1];
+  }
+  const latestDir = path.join(phasesDir, targetDir);
   let files: string[] = [];
   try {
     files = fs.readdirSync(latestDir);
@@ -316,10 +333,10 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
   const staleActivity = lastActivityMs !== null && now() - lastActivityMs > IDLE_STALE_MS;
 
   // Verify-failed may be signalled either by STATE.md status or by a failed
-  // STATUS: marker on the latest phase summary/verify artifact.
+  // STATUS: marker on the current phase's summary/verify artifact.
   const verifyFailed =
     /\bverify-fail(ed)?|verification-fail|uat-fail\b/i.test(statusRaw || '') ||
-    detectVerifyFailed(cwd);
+    detectVerifyFailed(cwd, currentPhaseRaw);
 
   return {
     current_phase: parseIntOrNull(currentPhaseRaw),
