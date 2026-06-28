@@ -208,3 +208,52 @@ export function getRuntimeLabel(runtime: string): string {
   const label = RUNTIME_LABELS[runtime];
   return typeof label === 'string' && label.length > 0 ? label : 'Claude Code';
 }
+
+/**
+ * Source-string fragments for the runtime → global config-home path, used by
+ * `getConfigDirFromHome` in bin/install.js to template `path.join()` calls in
+ * generated hook scripts. Each value is a JS-source snippet (embedded quotes /
+ * commas are intentional — it is spliced into generated code as path.join args).
+ *
+ * Collapses the prior 14-branch `if (runtime === 'x') return "'...'"` chain in
+ * bin/install.js (ADR-1239 Phase B / #1679, AC2 slice 2) — the add-a-host tax:
+ * a new runtime meant remembering to add a branch here. Values are preserved
+ * BYTE-FOR-BYTE from the prior chain; golden install parity asserts generated
+ * hook output is unchanged across all 16 runtimes.
+ *
+ * Two runtimes are intentionally absent (handled by the caller, NOT this table):
+ *   - `claude`     → the default; falls through to `DEFAULT_FRAGMENT`.
+ *   - `antigravity`→ resolved dynamically via resolveAntigravityGlobalDir +
+ *                    path.relative (multi-segment, env-overridable).
+ *
+ * Unknown/empty ids fall back to the default (`.claude`).
+ */
+const DEFAULT_CONFIG_HOME_FRAGMENT = "'.claude'";
+const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
+  copilot:   "'.copilot'",
+  opencode:  "'.config', 'opencode'",
+  gemini:    "'.gemini'",
+  kilo:      "'.config', 'kilo'",
+  codex:     "'.codex'",
+  cursor:    "'.cursor'",
+  windsurf:  "'.windsurf'",
+  augment:   "'.augment'",
+  trae:      "'.trae'",
+  qwen:      "'.qwen'",
+  hermes:    "'.hermes'",
+  codebuddy: "'.codebuddy'",
+  cline:     "'.cline'",
+  kimi:      "'.config', 'agents'",
+};
+
+/**
+ * Return the global config-home path-fragment source snippet for a runtime
+ * (for hook path.join() codegen). `claude`/unknown/empty → the default
+ * `'.claude'` fragment. `antigravity` is NOT handled here (caller resolves it
+ * dynamically). Pure: no I/O. Sibling to `getDirName` / `getRuntimeLabel`.
+ */
+export function getGlobalConfigHomeFragment(runtime: string): string {
+  if (!runtime) return DEFAULT_CONFIG_HOME_FRAGMENT;
+  const frag = GLOBAL_CONFIG_HOME_FRAGMENTS[runtime];
+  return typeof frag === 'string' && frag.length > 0 ? frag : DEFAULT_CONFIG_HOME_FRAGMENT;
+}
