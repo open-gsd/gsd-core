@@ -284,3 +284,24 @@ export function runtimeFlags(runtime: string): Readonly<Record<string, boolean>>
   }
   return Object.freeze(flags);
 }
+
+/**
+ * The `/gsd-new-project` invocation syntax per runtime — the post-install
+ * "next step" command string. Most runtimes use the default `/gsd-new-project`;
+ * a few hosts need a different surface syntax. Collapses the 14-line
+ * `if (runtime === 'x') command = ...` chain in bin/install.js's next-step
+ * message (ADR-1239 Phase B / #1679 AC2). Pure: no I/O.
+ */
+const DEFAULT_NEW_PROJECT_COMMAND = '/gsd-new-project';
+const RUNTIME_NEW_PROJECT_COMMANDS: Readonly<Record<string, string>> = {
+  gemini: '/gsd:new-project',
+  codex: '$gsd-new-project',
+  cursor: 'gsd-new-project (mention the skill name)',
+  kimi: '/skill:gsd-new-project',
+};
+
+export function getRuntimeNewProjectCommand(runtime: string): string {
+  if (!runtime) return DEFAULT_NEW_PROJECT_COMMAND;
+  const c = RUNTIME_NEW_PROJECT_COMMANDS[runtime];
+  return typeof c === 'string' && c.length > 0 ? c : DEFAULT_NEW_PROJECT_COMMAND;
+}
