@@ -171,6 +171,10 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
 | `brave_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Brave Search API availability. When unset, GSD checks for `BRAVE_API_KEY` env var or `~/.gsd/brave_api_key` file |
 | `firecrawl` | boolean | `true`/`false` | auto-detected | Override auto-detection of Firecrawl API availability. When unset, GSD checks for `FIRECRAWL_API_KEY` env var or `~/.gsd/firecrawl_api_key` file |
 | `exa_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Exa Search API availability. When unset, GSD checks for `EXA_API_KEY` env var or `~/.gsd/exa_api_key` file |
+| `tavily_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Tavily Search API availability. When unset, GSD checks for `TAVILY_API_KEY` env var or `~/.gsd/tavily_api_key` file |
+| `ref_search` | boolean | `true`/`false` | auto-detected | Override auto-detection of Ref search API availability. When unset, GSD checks for `REF_API_KEY` env var or `~/.gsd/ref_api_key` file |
+| `perplexity` | boolean | `true`/`false` | auto-detected | Override auto-detection of Perplexity API availability. When unset, GSD checks for `PERPLEXITY_API_KEY` env var or `~/.gsd/perplexity_api_key` file |
+| `jina` | boolean | `true`/`false` | `true` | Override auto-detection of Jina API availability. Jina is a terminal fallback in the docs waterfall and defaults to available (`true`); GSD checks for `JINA_API_KEY` env var or `~/.gsd/jina_api_key` file when an explicit override is needed |
 | `search_gitignored` | boolean | `true`/`false` | `false` | Legacy top-level alias for `planning.search_gitignored`. Prefer the namespaced form; this alias is accepted for backward compatibility |
 
 > **Note:** `granularity` was renamed from `depth` in v1.22.3. Existing configs are auto-migrated.
@@ -190,6 +194,10 @@ API key fields accept a string value (the key itself). They can also be set to t
 | `brave_search` | string \| boolean \| null | `null` | Brave Search API key used for web research. Displayed as `****<last-4>` in all UI / `config-set` output; never echoed plaintext |
 | `firecrawl` | string \| boolean \| null | `null` | Firecrawl API key for deep-crawl scraping. Masked in display |
 | `exa_search` | string \| boolean \| null | `null` | Exa Search API key for semantic search. Masked in display |
+| `tavily_search` | string \| boolean \| null | `null` | Tavily Search API key used in the web-discovery waterfall. Masked in display |
+| `ref_search` | string \| boolean \| null | `null` | Ref search API key used in the docs-discovery waterfall. Masked in display |
+| `perplexity` | string \| boolean \| null | `null` | Perplexity API key used in the web-discovery waterfall. Masked in display |
+| `jina` | string \| boolean \| null | `null` | Jina API key (docs / scrape fallback). Masked in display |
 
 **Masking convention (`gsd-core/bin/lib/secrets.cjs`):** keys 8+ characters render as `****<last-4>`; shorter keys render as `****`; `null`/empty renders as `(unset)`. Plaintext is written as-is to `.planning/config.json` — that file is the security boundary — but the CLI, confirmation tables, logs, and `AskUserQuestion` descriptions never display the plaintext. This applies to the `config-set` command output itself: `config-set brave_search <key>` returns a JSON payload with the value masked.
 
@@ -286,6 +294,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.nyquist_validation` | boolean | `true` | Test coverage mapping during plan-phase research |
 | `workflow.ui_phase` | boolean | `true` | Generate UI design contracts for frontend phases |
 | `workflow.ui_safety_gate` | boolean | `true` | Prompt to run /gsd-ui-phase for frontend phases during plan-phase |
+| `workflow.assumption_delta` | boolean | `true` | Advisory architecture checkpoint during planning. When a phase makes something **plural, optional, or chosen** that used to be **singular, required, or derived** (e.g. a second auth method, a required field becoming optional, a constant becoming a parameter), the planner is prompted to re-ask whether the primary key / identity model still names the right thing (promote the new general representation vs. add it alongside). Non-blocking; fires only on a detected signal. Bare "or" is intentionally excluded (prose false-positives). Inspect a phase with `gsd query assumption-delta scan <phase>`. Added in #1561 |
 | `workflow.ui_review` | boolean | `true` | Run visual quality audit (`/gsd-ui-review`) after phase execution in autonomous mode. When `false`, the UI audit step is skipped. |
 | `workflow.node_repair` | boolean | `true` | Autonomous task repair on verification failure |
 | `workflow.node_repair_budget` | number | `2` | Max repair attempts per failed task |

@@ -1,0 +1,45 @@
+{
+  "id": "assumption-delta",
+  "role": "feature",
+  "version": "1.6.0",
+  "title": "Assumption-delta architecture checkpoint",
+  "description": "Rarely-firing advisory checkpoint that triggers when a phase makes something plural, optional, or chosen that used to be singular, required, or derived. Surfaces one identity-model question (promote the new general representation to primary, or add it alongside?) so a silent primary-key drift does not accumulate into a later user-facing bug. Non-blocking; fires only on a detected signal.",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "config": {
+    "workflow.assumption_delta": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable the assumption-delta architecture checkpoint during planning. When a pluralization/optional/chosen signal is detected in the phase scope, the planner is prompted to re-ask whether the primary key / identity model still names the right thing. Advisory (non-blocking)."
+    }
+  },
+  "steps": [],
+  "contributions": [
+    {
+      "point": "plan:pre",
+      "into": "planner",
+      "fragment": {
+        "path": "fragments/plan-pre.md"
+      },
+      "produces": [],
+      "consumes": [
+        "CONTEXT.md"
+      ],
+      "when": "workflow.assumption_delta",
+      "onError": "skip"
+    }
+  ],
+  "gates": []
+}

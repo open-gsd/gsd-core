@@ -75,6 +75,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
+      'gsd-core/bin/lib/assumption-delta.cjs',
+      'gsd-core/bin/lib/state-transition.cjs',
       'gsd-core/bin/lib/command-arg-projection.cjs',
       'gsd-core/bin/lib/clock.cjs',
       'gsd-core/bin/lib/ui-safety-gate.cjs',
@@ -198,6 +200,15 @@ export default tseslint.config(
       'gsd-core/bin/lib/teams-status.cjs',
       // ADR-1372: tsc-generated runtime artifact — lint the src/markdown-sectionizer.cts source.
       'gsd-core/bin/lib/markdown-sectionizer.cjs',
+      // ADR-1239 Phase C-1 (#1680): tsc-generated — lint src/embedding-adapter.cts + src/adapter-declarative.cts.
+      'gsd-core/bin/lib/embedding-adapter.cjs',
+      'gsd-core/bin/lib/adapter-declarative.cjs',
+      'gsd-core/bin/lib/adapter-imperative.cjs',
+      'gsd-core/bin/lib/model-adapter.cjs',
+      'gsd-core/bin/lib/hook-bus.cjs',
+      'gsd-core/bin/lib/state-io.cjs',
+      'gsd-core/bin/lib/external-descriptor-trust.cjs',
+      'gsd-core/bin/lib/mcp-server.cjs',
     ],
   },
 
@@ -245,7 +256,7 @@ export default tseslint.config(
   // bin/install.js is ~12k lines of generated code; the ADR's mandate is the
   // portability defect surface, not a broader generated-code style sweep.
   {
-    files: ['bin/install.js', 'scripts/build-hooks.js'],
+    files: ['bin/install.js', 'bin/gsd-mcp-server.js', 'scripts/build-hooks.js'],
     plugins: {
       local: localPlugin,
     },

@@ -78,8 +78,11 @@ function coerceTruthToString(t: unknown): string {
     return String(t);
   }
   if (typeof t === 'object') {
-    // Prefer common title-bearing keys produced by parseMustHavesBlock
-    for (const k of ['title', 'text', 'name', 'rule', 'path', 'provides']) {
+    // Prefer common title-bearing keys produced by parseMustHavesBlock. `statement` is the canonical
+    // truth/prohibition payload field — and the carrier of #1154's object-form backstop truth
+    // `{ statement, verification: backstop }`, so it leads (a non-inferable truth must be coerced by
+    // its statement, never dropped — the Hyrum backward-compat guard for the new marker).
+    for (const k of ['statement', 'title', 'text', 'name', 'rule', 'path', 'provides']) {
       const v = (t as Record<string, unknown>)[k];
       if (typeof v === 'string' && v.trim()) return v;
       if (typeof v === 'number' || typeof v === 'boolean') return String(v);

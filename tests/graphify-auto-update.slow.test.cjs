@@ -613,6 +613,62 @@ describe('auto-update', () => {
       );
     });
 
+    // #1772 — agent runtimes (Claude Code's Bash tool among them) routinely
+    // emit HEAD-advancing commits as multi-line scripts (`cd /path` then
+    // `git add` then `git commit …`). The hook joins tool_name + "\n" +
+    // tool_input.command and must match the command across ALL its lines
+    // (line 2 through EOF), not just line 2 — otherwise a `git commit` that
+    // is not on the first command line silently no-ops the rebuild.
+    for (const cmd of [
+      "cd /tmp/repo\ngit add .\ngit commit -m 'multi-line commit'",
+      "cd /tmp/repo\ngit merge feature-branch",
+      "git fetch origin\ngit pull --ff-only",
+    ]) {
+      test(`dispatches on multi-line command (#1772): ${cmd.split('\n').slice(0, 2).join(' ⏎ ')}…`, async (t) => {
+        const tmpDir = createTempGitRepo({
+          config: { graphify: { enabled: true, auto_update: true } },
+        });
+        t.after(() => cleanupHookRepo(tmpDir));
+        const mockBin = makeMockGraphifyBin(tmpDir, { sleepMs: 100 });
+        runHook(
+          tmpDir,
+          { tool_name: 'Bash', tool_input: { command: cmd } },
+          { pathPrepend: mockBin },
+        );
+        const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
+        await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+        assert.ok(
+          fs.existsSync(statusPath),
+          `must dispatch for multi-line command where the HEAD-advancing op is not on line 1 (#1772): ${cmd}`,
+        );
+      });
+    }
+
+    test('multi-line command with NO HEAD-advancing op still no-ops (#1772 no-regression)', (t) => {
+      const tmpDir = createTempGitRepo({
+        config: { graphify: { enabled: true, auto_update: true } },
+      });
+      t.after(() => cleanupHookRepo(tmpDir));
+      const mockBin = makeMockGraphifyBin(tmpDir, { sleepMs: 100 });
+      const r = runHook(
+        tmpDir,
+        {
+          tool_name: 'Bash',
+          tool_input: {
+            // Multi-line, but only non-HEAD-advancing ops. Widening line
+            // extraction to 2..EOF must not cause a spurious dispatch.
+            command: 'cd /tmp/repo\nls -la\necho done',
+          },
+        },
+        { pathPrepend: mockBin },
+      );
+      assert.strictEqual(r.status, 0);
+      assert.ok(
+        !fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+        'multi-line command without a HEAD-advancing git op must still no-op (#1772)',
+      );
+    });
+
     // #3653 — only the SDK `commit` verb invokes git internally. Other
     // `gsd-tools query` verbs (phase.complete, roadmap.update-plan-progress,
     // state.begin-phase) mutate .md files but do NOT advance HEAD; matching

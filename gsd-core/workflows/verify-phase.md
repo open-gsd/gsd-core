@@ -117,6 +117,8 @@ For each truth: identify supporting artifacts → check artifact status → chec
 
 **Behavior-dependent truths:** when a truth asserts a state transition or a cancellation/cleanup/ordering invariant, symbol presence + wiring is necessary but not sufficient — the code can be present and wired yet still leak state on the path the invariant covers. Mark such a truth ✓ VERIFIED only when a pre-existing test exercises the transition/invariant and passes (one named test, never the full suite); otherwise mark it ⚠️ PRESENT_BEHAVIOR_UNVERIFIED, emit a human-verification item, and exclude it from the verified score.
 
+**Non-inferable (`backstop`) truths (#1154):** a `must_haves.truths` item in object form `{ statement, verification: backstop }` is non-inferable — the correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would false-pass it confidently. Branch on the `verification: backstop` field (read via `truthVerification()`, never prose): if confirmable with **explicit evidence** (a passing wired held-out/property test, or a directly-observed behavior) → ✓ VERIFIED; otherwise **abstain** — mark ⚠️ `insufficient_spec`, emit an `unverified — held-out test recommended` human-verification item, exclude from the verified score (routes to `human_needed`). Exogenous only (never a self-judged "abstain if unsure"); an inferable truth is never abstained. See `references/honest-verifier.md`.
+
 **Example:** Truth "User can see existing messages" depends on Chat.tsx (renders), /api/chat GET (provides), Message model (schema). If Chat.tsx is a stub or API returns hardcoded [] → FAILED. If all exist, are substantive, and connected → VERIFIED.
 </step>
 
@@ -488,17 +490,22 @@ Classify status using this decision tree IN ORDER (most restrictive first):
    - **judgment-tier, autonomous run** (non-authoritative LLM-judge verdict): emit the `unverified-prohibition — human review recommended` flag and classify → **human_needed** (autonomous completion reads "complete with N flagged prohibitions"; never a silent pass, never a hard halt).
    - **judgment-tier, interactive run**: route to the end-of-phase human checkpoint → **human_needed**.
 
-3. IF the previous step produced ANY human verification items — this includes every ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth:
+2b. IF any `must_haves.truths` item carries the `verification: backstop` marker (#1154 — the verify-time truth-axis mirror of ADR-550 D4) AND the verifier cannot confirm it with **explicit evidence** (a wired held-out/property-based test that PASSES, or a directly-observed behavior — i.e. `dispositionForUnverifiableTruth()` returns `status: 'unverified'`, `flagged: true`, `reason: 'insufficient_spec'`):
+   - **abstain → human_needed**, NEVER `passed` and never silently graded green. Emit a prominent `unverified — held-out test recommended` flag carrying the distinguishable `reason: insufficient_spec` (so it is not conflated with ordinary manual-UAT `human_needed`).
+   - *Autonomous run:* record it and continue — completion reads "complete with N unverified non-inferable checks"; never a hard halt of an AFK run. *Interactive run:* route to the end-of-phase human checkpoint.
+   - **Exogenous only:** abstention fires SOLELY on the `backstop` tag, never a self-judged "abstain if unsure" (N17). An **inferable** truth is NEVER abstained (over-abstention guard); a `backstop` truth WITH a passing wired held-out test reaches **passed**. Reliable on capable tiers (`sonnet`+); the budget `haiku` tier degrades — see `references/honest-verifier.md`.
+
+3. IF the previous step produced ANY human verification items — this includes every ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth and every abstained `insufficient_spec` backstop truth:
    → **human_needed** (even if all other truths VERIFIED)
 
-4. IF all checks pass AND no human verification items AND no flagged prohibitions:
+4. IF all checks pass AND no human verification items AND no flagged prohibitions AND no abstained (`insufficient_spec`) truths:
    → **passed**
 
-**passed is ONLY valid when no human verification items AND no flagged prohibitions exist.** A prohibition (must-NOT) can never be silently absorbed into a `passed` verdict — that is the core failure mode ADR-550 D4 forbids.
+**passed is ONLY valid when no human verification items, no flagged prohibitions, AND no abstained `insufficient_spec` truths exist.** Neither a prohibition (must-NOT) nor an unconfirmable non-inferable truth can ever be silently absorbed into a `passed` verdict — that is the core failure mode ADR-550 D4 forbids (now closed on both the prohibition and truth axes).
 
 A ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truth is never FAILED and never VERIFIED: it does not trigger gaps_found (the code is present and wired) and is not counted as verified (its runtime behavior was not exercised). It routes through the existing human_needed sink — no new overall status.
 
-**Score:** `verified_truths / total_truths` — `verified_truths` counts ✓ VERIFIED truths plus PASSED (override) truths; ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths are the only ones excluded, reported separately as the `behavior_unverified` count. A headline N/N therefore certifies behavioral evidence for every behavior-dependent truth, not merely symbol presence.
+**Score:** `verified_truths / total_truths` — `verified_truths` counts ✓ VERIFIED truths plus PASSED (override) truths; excluded are ⚠️ PRESENT_BEHAVIOR_UNVERIFIED truths (the `behavior_unverified` count) and abstained ⚠️ `insufficient_spec` backstop truths (#1154) — both are not ✓ VERIFIED and both route to `human_needed`. A headline N/N therefore certifies behavioral evidence for every behavior-dependent truth and explicit evidence for every non-inferable one, not merely symbol presence.
 </step>
 
 <step name="filter_deferred_items">
