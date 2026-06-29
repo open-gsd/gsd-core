@@ -375,7 +375,7 @@
   "hooks/gsd-cursor-post-tool.js": "d61ee04f6ee7858c",
   "hooks/gsd-cursor-session-start.js": "148b8ec4e2c97f00",
   "hooks/gsd-ensure-canonical-path.js": "a5c67a1a7abc90c0",
-  "hooks/gsd-graphify-update.sh": "396ebda3c6705dc9",
+  "hooks/gsd-graphify-update.sh": "845aeecb0d82dd6e",
   "hooks/gsd-phase-boundary.sh": "6aa3ba9af3d465d9",
   "hooks/gsd-prompt-guard.js": "4b08c2dce0233e2d",
   "hooks/gsd-read-guard.js": "b602f88f046a7551",
