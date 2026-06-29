@@ -41,7 +41,7 @@
   "gsd-core/bin/gsd-tools.cjs": "74594e8bf36e5580",
   "gsd-core/bin/gsd_run": "62d9b647ede212e6",
   "gsd-core/bin/shared/config-defaults.manifest.json": "517e6a7c1e9f4f16",
-  "gsd-core/bin/shared/config-schema.manifest.json": "65dea848d50969a2",
+  "gsd-core/bin/shared/config-schema.manifest.json": "7d398e94c44e5268",
   "gsd-core/bin/shared/model-catalog.json": "dbe26e683236d8c6",
   "gsd-core/bin/shared/runtime-aliases.manifest.json": "f6c8b3af10dcfdc4",
   "gsd-core/bin/verify-reapply-patches.cjs": "caec5dbce11e3904",
