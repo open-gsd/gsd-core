@@ -17,6 +17,7 @@
         "CURSOR_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".cursor",
     "configFormat": "none",
     "artifactLayout": {
       "global": [
@@ -35,6 +36,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCursorCommand"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCursorAgent"
         }
       ],
       "local": [
@@ -53,6 +62,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCursorCommand"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCursorAgent"
         }
       ]
     },

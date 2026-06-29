@@ -52,6 +52,9 @@ Module owning projection from dispatch results/errors to CLI `{ exitCode, stdout
 ### STATE.md Document Module
 Module owning STATE.md parse, field extraction, field replacement, status normalization, and frontmatter reconstruction. It does not scan `.planning/phases` and does not own persistence or locking; phase/plan/summary counts arrive from inventory/progress Modules as inputs, and read-modify-write paths remain Adapters. Source of truth: `gsd-core/bin/lib/state-document.cjs`.
 
+### STATE.md Transition Module
+Module owning STATE.md lifecycle/maintenance transitions as intent-based methods (`beginPhase`, `advancePlan`, `completePhase`, `plannedPhase`, `milestoneSwitch`, `milestoneComplete`, `patch`, `sync`, `prune`, `update`). Pure core `(content, intent, deps) → newContent` with injected I/O (file read/write, lock, disk scan); consults a field-classification table that names each STATE.md field's class (`derived-from-body` | `derived-from-disk` | `derived-from-external` | `curated` | `free`) and its preservation policy. Supersedes the 14 scattered RMW callbacks in `state.cts` and the direct `writeStateMd` callers in `milestone.cts:352` and `phase.cts:1770`; verify's `regenerateState` factory-reset primitive stays as a direct `writeStateMd` call. Absorbs `syncStateFrontmatter` + `readModifyWriteStateMd`'s post-sync preservation block; Encoding 3 (`cmdStateBuildFrontmatter`) stays separate — read path concern. Sibling/super-module of the STATE.md Document Module; consumes its `stateReplaceField`/`stateExtractField` primitives. Body section structure (`## Current Position`, `## Session`, etc.) lives as a constants block inside the Module. Append-only transitions (`addDecision`, `addBlocker`, etc.) stay on today's RMW seam for now. Targets the #1760/#1761/#1743/#1695/#1264/#1255/#1257/#3242 bug cluster. Migration per ADR-1372 §T6 sequenced as substrate + `beginPhase` first (PR1), then transition-by-transition with characterization tests first per transition. Source of truth: `gsd-core/bin/lib/state-transition.cjs` (generated from `src/state-transition.cts`).
+
 ### Query Execution Policy Module
 Module owning query transport routing policy projection (`preferNative`, fallback policy, workstream subprocess forcing) at execution seam.
 
@@ -711,8 +714,8 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 
 `DEFECT.WINDOWS-FS-OPS.symptom=fs.renameSync / fs.copyFileSync hits EPERM/EBUSY on Windows when antivirus or another process holds a transient handle on the target`
 `DEFECT.WINDOWS-FS-OPS.examples=c47c2c5d build-hooks rename → copy fallback, d2412271 install Windows persistent SDK shim`
-`DEFECT.WINDOWS-FS-OPS.detect=any rename/copy in build/install path without try/catch fallback`
-`DEFECT.WINDOWS-FS-OPS.fix-forward=catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry, surface degraded-mode message; never silently swallow`
+`DEFECT.WINDOWS-FS-OPS.detect=ADR-1703 Phase 6: enforced by local/require-fs-op-fallback (AST ESLint rule, error) over src/**/*.cts + bin/install.js + scripts/build-hooks.js — flags an unguarded fs.rename/fs.renameSync (the atomic-publish primitive named in .symptom) that lacks a transient-errno retry or a Windows platform guard; a catch that silently swallows or cleans-up-and-rethrows without an errno check does NOT satisfy the .fix-forward clause. copyFile/unlink are the fallback primitives (out of scope); delegated retry helpers (retryRenameSync from shell-command-projection) are the recognized compliant shape`
+`DEFECT.WINDOWS-FS-OPS.fix-forward=catch EPERM/EBUSY/EACCES, fall back to copy + unlink with retry, surface degraded-mode message; never silently swallow; the canonical production cure is retryRenameSync (shell-command-projection.cjs) or a bounded RENAME_RETRY_ERRNOS = new Set(['EPERM','EBUSY','EACCES']) loop`
 
 `DEFECT.UNBOUNDED-SUBPROCESS.symptom=git/npm subprocess shelled out without timeout; CLI hangs indefinitely on stuck remote, large repo, or missing network`
 `DEFECT.UNBOUNDED-SUBPROCESS.examples=a33cbe72 worktree fix bound git subprocesses with timeout`

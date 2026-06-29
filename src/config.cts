@@ -26,7 +26,7 @@ const { VALID_PROFILES, getAgentToModelMapForProfile, formatAgentToModelMapAsTab
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, isValidConfigKey, getCapabilityConfigSchema } = configSchema;
 import { isSecretKey, maskSecret } from './secrets.cjs';
-import { normalizeConfiguredDefaultReviewers } from './review-reviewer-selection.cjs';
+import { normalizeConfiguredDefaultReviewers, INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS } from './review-reviewer-selection.cjs';
 import { migrateOnDisk } from './configuration.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -693,6 +693,33 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
       error(normalized.errors[0]);
     }
     parsedValue = normalized.values;
+  }
+
+  // #1517: validate review.reviewer_instances.<name>.<field> leaves at the
+  // invocation boundary (Postel/Kerckhoffs — strict at accept). The config
+  // schema dynamic pattern admits the path; this block validates the name + the
+  // field value so a misconfigured instance is rejected at config-set time, not
+  // silently at review time. Single-source validators live in
+  // review-reviewer-selection.cjs (INSTANCE_NAME_PATTERN, KNOWN_REVIEWER_SLUGS).
+  const instanceLeaf = kp.match(/^review\.reviewer_instances\.([a-zA-Z0-9_-]+)\.(cli|model|agent)$/);
+  if (instanceLeaf) {
+    const [, instanceName, field] = instanceLeaf;
+    if (!INSTANCE_NAME_PATTERN.test(instanceName)) {
+      error(`Invalid reviewer instance name '${instanceName}'. Must match ^[a-z0-9][a-z0-9-]*$.`);
+    }
+    if (KNOWN_REVIEWER_SLUGS.includes(instanceName)) {
+      error(`Reviewer instance name '${instanceName}' must not equal a built-in reviewer slug.`);
+    }
+    if (field === 'cli') {
+      if (typeof parsedValue !== 'string' || !KNOWN_REVIEWER_SLUGS.includes(parsedValue)) {
+        error(`Invalid reviewer_instances.${instanceName}.cli '${val}'. Must be a known reviewer adapter: ${KNOWN_REVIEWER_SLUGS.join(', ')}.`);
+      }
+    } else {
+      // model | agent — opaque pass-through strings (never interpolated into shell).
+      if (typeof parsedValue !== 'string') {
+        error(`Invalid reviewer_instances.${instanceName}.${field} '${val}'. Must be a string.`);
+      }
+    }
   }
 
   const setConfigValueResult = setConfigValue(cwd, kp, parsedValue);

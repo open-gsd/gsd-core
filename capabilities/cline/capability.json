@@ -17,6 +17,7 @@
         "CLINE_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".cline",
     "configFormat": "markdown-dir",
     "artifactLayout": {
       "global": [

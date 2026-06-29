@@ -204,11 +204,31 @@ const projectRoot = require('./lib/project-root.cjs');
 // against any require/load-ordering edge where the export isn't bound yet
 // when this entrypoint is first required (#604).
 const findProjectRoot = (...args) => projectRoot.findProjectRoot(...args);
+
+// #1754: CLI skew detection — warn (stderr, non-blocking) if this gsd-tools.cjs
+// is NOT the project-local install while a project-local install exists. Catches
+// the shadowing scenario from #1748 (stale global canary shadowing project-local).
+try {
+  const _skew = require('./lib/cli-skew-check.cjs');
+  const _skewRoot = findProjectRoot(process.cwd());
+  if (_skewRoot) {
+    const _skewLocal = path.join(_skewRoot, '.claude', 'gsd-core', 'bin', 'gsd-tools.cjs');
+    const _skewWarn = _skew.checkCliSkew({
+      resolvedPath: path.resolve(__filename),
+      projectRoot: _skewRoot,
+      projectLocalExists: fs.existsSync(_skewLocal),
+    });
+    if (_skewWarn) process.stderr.write(_skewWarn + '\n');
+  }
+} catch { /* advisory — never block */ }
+
 const { getActiveWorkstream } = require('./lib/planning-workspace.cjs');
 const { resolveActiveWorkstream, applyResolvedWorkstreamEnv } = require('./lib/active-workstream-store.cjs');
 const state = require('./lib/state.cjs');
 const phase = require('./lib/phase.cjs');
 const roadmap = require('./lib/roadmap.cjs');
+// #1561 — assumption-delta advisory checkpoint detector (pure function).
+const { detectAssumptionDelta } = require('./lib/assumption-delta.cjs');
 const verify = require('./lib/verify.cjs');
 const config = require('./lib/config.cjs');
 const template = require('./lib/template.cjs');
@@ -639,7 +659,7 @@ async function main() {
   // discovery; previously it was a partial subset that didn't include
   // phase / roadmap / milestone / progress / etc.
   const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
-    'Commands: agent, agent-skills, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
+    'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
     'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, ' +
     'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
@@ -1361,6 +1381,43 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         raw,
         error,
       });
+      break;
+    }
+
+    case 'assumption-delta': {
+      // #1561 — advisory architecture checkpoint. `scan <phase>` reads the
+      // phase section via the same resolver as roadmap.get-phase and runs the
+      // deterministic detectAssumptionDelta, emitting the typed IR as JSON.
+      const sub = args[1];
+      if (sub === 'scan') {
+        const phaseNum = args[2];
+        // Reject missing or flag-shaped phase values (QA matrix: values that
+        // look like flags). `scan --json` must not treat "--json" as a phase.
+        if (!phaseNum || phaseNum.startsWith('-')) {
+          error('Usage: assumption-delta scan <phase> [--terms <csv>]', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          break;
+        }
+        // Optional --terms <csv> override (replaces the pluralization cues;
+        // optional/chosen keep defaults). An EMPTY value ("") or a flag-shaped
+        // value restores the curated defaults (does NOT disable pluralization).
+        // Terms are normalized (deduped, alphanumeric-only, capped) by
+        // detectAssumptionDelta's resolveTerms.
+        let termsOverride;
+        const termsIdx = args.indexOf('--terms');
+        const termsVal = termsIdx !== -1 ? args[termsIdx + 1] : undefined;
+        if (typeof termsVal === 'string' && !termsVal.startsWith('-')) {
+          const list = termsVal
+            .split(',')
+            .map((t) => t.trim().toLowerCase())
+            .filter((t) => t.length > 0);
+          termsOverride = list.length > 0 ? { pluralization: list } : undefined;
+        }
+        const section = roadmap.getRoadmapPhaseWithFallback(cwd, phaseNum);
+        const result = detectAssumptionDelta(section ?? '', termsOverride);
+        output(result, raw);
+        break;
+      }
+      error(`Unknown assumption-delta subcommand: ${sub}. Available: scan`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
       break;
     }
 

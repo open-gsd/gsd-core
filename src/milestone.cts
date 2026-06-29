@@ -14,8 +14,10 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformEnsureDir, execGit } from './shell-command-projection.cjs';
+import { platformWriteSync, platformEnsureDir, execGit, retryRenameSync } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { realClock } from './clock.cjs';
+import { transitionCore } from './state-transition.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -30,7 +32,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 const { extractOneLinerFromBody } = coreUtilsMod;
 const { planningPaths } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
-const { writeStateMd, stateReplaceFieldWithFallback } = stateMod;
+const { writeStateMd } = stateMod;
 
 interface MilestoneCompleteOptions {
   name?: string;
@@ -283,7 +285,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // Archive audit file if exists
   const auditFile = path.join(cwd, '.planning', `${version}-MILESTONE-AUDIT.md`);
   if (fs.existsSync(auditFile)) {
-    fs.renameSync(auditFile, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`));
+    retryRenameSync(auditFile, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`));
   }
 
   // Create/append MILESTONES.md entry
@@ -311,45 +313,25 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     platformWriteSync(milestonesPath, `# Milestones\n\n${milestoneEntry}`);
   }
 
-  // Update STATE.md — keep frontmatter/body semantically aligned after closure
+  // Update STATE.md — keep frontmatter/body semantically aligned after closure.
+  // ADR-1769 Phase 5: dispatches to the STATE.md Transition Module. The closure
+  // write (Status, Last Activity, Last Activity Description, Current Position
+  // reset, Operator Next Steps reset) is the pure `milestoneCompleteCore` in
+  // src/state-transition.cts, backed by the field-classification table. The
+  // runtime-specific next-milestone slash command is resolved here and injected
+  // via the intent so the core stays pure. writeStateMd still owns the lock and
+  // the steady-state syncStateFrontmatter post-sync.
   if (fs.existsSync(statePath)) {
-    let stateContent = fs.readFileSync(statePath, 'utf-8');
-
-    stateContent = stateReplaceFieldWithFallback(stateContent, 'Status', null, `${version} milestone complete`);
-    stateContent = stateReplaceFieldWithFallback(stateContent, 'Last Activity', 'Last activity', today);
-    stateContent = stateReplaceFieldWithFallback(
-      stateContent,
-      'Last Activity Description',
-      null,
-      `${version} milestone completed and archived`,
+    const result = transitionCore(
+      fs.readFileSync(statePath, 'utf-8'),
+      {
+        kind: 'milestoneComplete',
+        version,
+        nextMilestoneCommand: formatGsdSlash('new-milestone', resolveRuntime(cwd)) as string,
+      },
+      { clock: realClock, progressProvider: () => null },
     );
-
-    // Reset Current Position narrative so resume/progress flows do not keep
-    // pointing at closed-phase execution instructions.
-    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify in milestone.cts; pending collectSection migration #1372
-    const closedPositionBody =
-      `\nPhase: Milestone ${version} complete\n` +
-      `Plan: —\n` +
-      `Status: Awaiting next milestone\n` +
-      `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
-    if (positionPattern.test(stateContent)) {
-      stateContent = stateContent.replace(positionPattern, (_m, header: string) => `${header}${closedPositionBody}`);
-    } else {
-      stateContent = `${stateContent.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
-    }
-
-    // Normalize operator-next-step tails that can become stale after close.
-    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify in milestone.cts; pending collectSection migration #1372
-    if (operatorPattern.test(stateContent)) {
-      stateContent = stateContent.replace(
-        operatorPattern,
-        `$1\n- Start the next milestone with ${formatGsdSlash('new-milestone', resolveRuntime(cwd)) as string}\n\n`,
-      );
-    } else {
-      stateContent = `${stateContent.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${formatGsdSlash('new-milestone', resolveRuntime(cwd)) as string}\n`;
-    }
-
-    writeStateMd(statePath, stateContent, cwd);
+    writeStateMd(statePath, result.content, cwd);
   }
 
   // Archive phase directories if requested
@@ -364,7 +346,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       let archivedCount = 0;
       for (const dir of phaseDirNames) {
         if (!isDirInMilestone(dir)) continue;
-        fs.renameSync(path.join(phasesDir, dir), path.join(phaseArchiveDir, dir));
+        retryRenameSync(path.join(phasesDir, dir), path.join(phaseArchiveDir, dir));
         archivedCount++;
       }
       phasesArchived = archivedCount > 0;

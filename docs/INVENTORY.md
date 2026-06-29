@@ -313,6 +313,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
 | `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via the discuss-phase/modes progressive-disclosure split, #717). |
 | `revision-loop.md` | Plan revision iteration patterns. |
+| `reviewer-instances.md` | Custom reviewer instances for `/gsd-review` (#1517) — same-adapter multi-model review: config shape, resolution rules, invocation, and the REVIEWS.md contract. Lazily loaded by `review.md` when `review.reviewer_instances` is configured. |
 | `universal-anti-patterns.md` | Universal anti-patterns to detect and avoid. |
 | `worktree-branch-check.md` | Canonical spawn-time worktree HEAD/base guard (worktree_branch_check): verify-only and fail-closed — per-agent-branch assertion, protected-ref refusal (#2924), and an exact-base assertion that halts with `exit 42` on mismatch so the orchestrator (worktree lifecycle owner) performs recovery (#48). Embedded into worktree sub-agent prompts at dispatch. |
 | `worktree-path-safety.md` | Worktree guard suite: HEAD assertion, cwd-drift sentinel (step 0a, #3097), and absolute-path guard (step 0b, #3099) — loaded into executor spawn prompts via `<execution_context>`. |

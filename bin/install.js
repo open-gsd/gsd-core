@@ -37,7 +37,7 @@ const {
 // installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
 // conversion module's rewrite engine can consume it without importing
 // bin/install.js. Re-exported below for back-compat consumers/tests.
-const { getDirName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+const { getDirName, getRuntimeLabel, getGlobalConfigHomeFragment, runtimeFlags, getRuntimeNewProjectCommand } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
@@ -510,18 +510,11 @@ function getConfigDirFromHome(runtime, isGlobal) {
     // Local installs use the same dir name pattern
     return `'${getDirName(runtime)}'`;
   }
-  // Global installs - OpenCode uses XDG path structure
-  if (runtime === 'copilot') return "'.copilot'";
-  if (runtime === 'opencode') {
-    // OpenCode: ~/.config/opencode -> '.config', 'opencode'
-    // Return as comma-separated for path.join() replacement
-    return "'.config', 'opencode'";
-  }
-  if (runtime === 'gemini') return "'.gemini'";
-  if (runtime === 'kilo') return "'.config', 'kilo'";
-  if (runtime === 'codex') return "'.codex'";
+  // Global installs. antigravity's home is resolved dynamically (env-overridable,
+  // multi-segment via resolveAntigravityGlobalDir + path.relative) — not a table
+  // entry. (The prior inner `if (!isGlobal) return "'.agents'"` was unreachable:
+  // !isGlobal returns at the top of this function.)
   if (runtime === 'antigravity') {
-    if (!isGlobal) return "'.agents'";
     const antigravityDir = resolveAntigravityGlobalDir();
     const rel = path.relative(os.homedir(), antigravityDir);
     const segments = rel.split(path.sep).filter(Boolean);
@@ -532,16 +525,9 @@ function getConfigDirFromHome(runtime, isGlobal) {
     // stable legacy template so generated path.join() calls remain valid.
     return "'.gemini', 'antigravity'";
   }
-  if (runtime === 'cursor') return "'.cursor'";
-  if (runtime === 'windsurf') return "'.windsurf'";
-  if (runtime === 'augment') return "'.augment'";
-  if (runtime === 'trae') return "'.trae'";
-  if (runtime === 'qwen') return "'.qwen'";
-  if (runtime === 'hermes') return "'.hermes'";
-  if (runtime === 'codebuddy') return "'.codebuddy'";
-  if (runtime === 'cline') return "'.cline'";
-  if (runtime === 'kimi') return "'.config', 'agents'";
-  return "'.claude'";
+  // All other runtimes: single source-of-truth fragment table (ADR-1239 Phase B,
+  // #1679). claude/unknown fall through to the table's default '.claude'.
+  return getGlobalConfigHomeFragment(runtime);
 }
 
 /**
@@ -6534,6 +6520,125 @@ const _applyRuntimeRewrites = runtimeArtifactConversion._applyRuntimeRewrites;
 const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaudeRuntimeDefaults;
 
 /**
+ * Data-driven dispatch table for copyWithPathReplacement (ADR-1239 Phase B).
+ * Keyed by runtime id. Each entry declares ONLY what that runtime does differently.
+ * The DEFAULT (no entry, or entry with no md/js key) = identity transform after
+ * the uniform steps — covers claude, augment, codebuddy, kimi, etc.
+ *
+ * Entry shape:
+ *   mdSkipGenericRewrite?: boolean  — skip the ~/.claude/ rewrite block (copilot, antigravity)
+ *   md?: (content, ctx) => string   — per-runtime .md transform
+ *   mdReattributeAfter?: boolean    — re-run processAttribution after md() (copilot, antigravity)
+ *   mdTomlRenameOnCommand?: boolean — when isCommand, rename dest .md → .toml (gemini)
+ *   js?: (content, ctx) => string   — per-runtime .cjs/.js transform (absent = plain copyFileSync)
+ *
+ * ctx = { isCommand, isGlobal, dirName, pathPrefix, entryName, runtime }
+ */
+const RUNTIME_CONTENT_DISPATCH = {
+  opencode: {
+    md: (content) => convertClaudeToOpencodeFrontmatter(content),
+  },
+  kilo: {
+    md: (content) => convertClaudeToKiloFrontmatter(content),
+  },
+  gemini: {
+    md: (content, ctx) =>
+      convertClaudeToGeminiMarkdown(content, {
+        isCommand: ctx.isCommand,
+        commandName: ctx.isCommand ? ctx.entryName.replace(/\.md$/, '') : null,
+      }),
+    mdTomlRenameOnCommand: true,
+  },
+  codex: {
+    md: (content) => convertClaudeToCodexMarkdown(content),
+  },
+  copilot: {
+    mdSkipGenericRewrite: true,
+    md: (content, ctx) => convertClaudeToCopilotContent(content, ctx.isGlobal),
+    mdReattributeAfter: true,
+    js: (content, ctx) => convertClaudeToCopilotContent(content, ctx.isGlobal),
+  },
+  antigravity: {
+    mdSkipGenericRewrite: true,
+    md: (content, ctx) => convertClaudeToAntigravityContent(content, ctx.isGlobal),
+    mdReattributeAfter: true,
+    js: (content, ctx) => convertClaudeToAntigravityContent(content, ctx.isGlobal),
+  },
+  cursor: {
+    md: (content) => convertClaudeToCursorMarkdown(content),
+    js: (content) => {
+      content = content.replace(/gsd:/gi, 'gsd-');
+      content = content.replace(/\.claude\/skills\//g, '.cursor/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.cursor/rules/');
+      content = content.replace(/\bClaude Code\b/g, 'Cursor');
+      return content;
+    },
+  },
+  windsurf: {
+    md: (content) => convertClaudeToWindsurfMarkdown(content),
+    js: (content) => {
+      // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
+      content = content.replace(/gsd:/gi, 'gsd-');
+      content = content.replace(/\.claude\/skills\//g, '.devin/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.devin/rules');
+      content = content.replace(/\bClaude Code\b/g, 'Windsurf');
+      return content;
+    },
+  },
+  trae: {
+    md: (content) => convertClaudeToTraeMarkdown(content),
+    js: (content) => {
+      content = content.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
+        return `/gsd-${commandName}`;
+      });
+      content = content.replace(/\.claude\/skills\//g, '.trae/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.trae/rules/');
+      content = content.replace(/\bClaude Code\b/g, 'Trae');
+      return content;
+    },
+  },
+  cline: {
+    md: (content) => convertClaudeToCliineMarkdown(content),
+    js: (content) => {
+      content = content.replace(/\.claude\/skills\//g, '.cline/skills/');
+      content = content.replace(/CLAUDE\.md/g, '.clinerules');
+      content = content.replace(/\bClaude Code\b/g, 'Cline');
+      return content;
+    },
+  },
+  qwen: {
+    md: (content) => {
+      content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
+      content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
+      content = content.replace(/\.claude\//g, '.qwen/');
+      return content;
+    },
+    js: (content) => {
+      content = content.replace(/\.claude\/skills\//g, '.qwen/skills/');
+      content = content.replace(/\.claude\//g, '.qwen/');
+      content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
+      content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
+      return content;
+    },
+  },
+  hermes: {
+    md: (content) => {
+      content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
+      content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
+      content = content.replace(/\.claude\//g, '.hermes/');
+      return content;
+    },
+    js: (content) => {
+      content = content.replace(/\.claude\/skills\//g, '.hermes/skills/');
+      content = content.replace(/\.claude\//g, '.hermes/');
+      content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
+      content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
+      return content;
+    },
+  },
+};
+
+/**
  * Recursively copy directory, replacing paths in .md files
  * Deletes existing destDir first to remove orphaned files from previous versions
  * @param {string} srcDir - Source directory
@@ -6544,19 +6649,6 @@ const _stampNonClaudeRuntimeDefaults = runtimeArtifactConversion._stampNonClaude
  * @param {boolean} isGlobal - Whether the install is global
  */
 function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand = false, isGlobal = false, confinementRoot) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCline = runtime === 'cline';
   const dirName = getDirName(runtime);
 
   // ADR-1239 Phase B write-confinement: refuse to wipe/write a destDir that
@@ -6593,10 +6685,13 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
     if (entry.isDirectory()) {
       copyWithPathReplacement(srcPath, destPath, pathPrefix, runtime, isCommand, isGlobal, confinementRoot);
     } else if (entry.name.endsWith('.md')) {
+      const dispatch = RUNTIME_CONTENT_DISPATCH[runtime] || {};
+      const ctx = { isCommand, isGlobal, dirName, pathPrefix, entryName: entry.name, runtime };
+
       // Replace ~/.claude/ and $HOME/.claude/ and ./.claude/ with runtime-appropriate paths
-      // Skip generic replacement for Copilot — convertClaudeToCopilotContent handles all paths
+      // Skip generic replacement for Copilot/Antigravity — their converters handle all paths
       let content = fs.readFileSync(srcPath, 'utf8');
-      if (!isCopilot && !isAntigravity) {
+      if (!dispatch.mdSkipGenericRewrite) {
         const globalClaudeRegex = /~\/\.claude\//g;
         const globalClaudeHomeRegex = /\$HOME\/\.claude\//g;
         const localClaudeRegex = /\.\/\.claude\//g;
@@ -6631,112 +6726,25 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       // colon-canonical runtimes (Gemini).
       content = normalizeAgentBodyForRuntime(content, runtime, readGsdCommandNames());
 
-      // Convert frontmatter for opencode compatibility
-      if (isOpencode || isKilo) {
-        content = isKilo
-          ? convertClaudeToKiloFrontmatter(content)
-          : convertClaudeToOpencodeFrontmatter(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isGemini) {
-        // Apply Gemini-specific Markdown transformations (slash commands, TOML).
-        // #778: thread the command name (file stem) so per-command TOML
-        // enrichment (live-state injection) can target a specific command.
-        const geminiCommandName = isCommand ? entry.name.replace(/\.md$/, '') : null;
-        const processed = convertClaudeToGeminiMarkdown(content, { isCommand, commandName: geminiCommandName });
-        const finalPath = isCommand ? destPath.replace(/\.md$/, '.toml') : destPath;
-        fs.writeFileSync(finalPath, processed);
-      } else if (isCodex) {
-        content = convertClaudeToCodexMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isCopilot) {
-        content = convertClaudeToCopilotContent(content, isGlobal);
-        content = processAttribution(content, getCommitAttribution(runtime));
-        fs.writeFileSync(destPath, content);
-      } else if (isAntigravity) {
-        content = convertClaudeToAntigravityContent(content, isGlobal);
-        content = processAttribution(content, getCommitAttribution(runtime));
-        fs.writeFileSync(destPath, content);
-      } else if (isCursor) {
-        content = convertClaudeToCursorMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isWindsurf) {
-        content = convertClaudeToWindsurfMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isTrae) {
-        content = convertClaudeToTraeMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isCline) {
-        content = convertClaudeToCliineMarkdown(content);
-        fs.writeFileSync(destPath, content);
-      } else if (isQwen) {
-        content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
-        content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
-        content = content.replace(/\.claude\//g, '.qwen/');
-        fs.writeFileSync(destPath, content);
-      } else if (isHermes) {
-        content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
-        content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
-        content = content.replace(/\.claude\//g, '.hermes/');
+      // Apply per-runtime .md converter (if any)
+      if (dispatch.md) content = dispatch.md(content, ctx);
+
+      // Re-run attribution after converter for runtimes that need it (copilot, antigravity)
+      if (dispatch.mdReattributeAfter) content = processAttribution(content, getCommitAttribution(runtime));
+
+      // Gemini: rename .md → .toml for command files
+      const finalPath = (dispatch.mdTomlRenameOnCommand && isCommand) ? destPath.replace(/\.md$/, '.toml') : destPath;
+      fs.writeFileSync(finalPath, content);
+    } else if (entry.name.endsWith('.cjs') || entry.name.endsWith('.js')) {
+      const dispatch = RUNTIME_CONTENT_DISPATCH[runtime] || {};
+      if (dispatch.js) {
+        const ctx = { isCommand, isGlobal, dirName, pathPrefix, entryName: entry.name, runtime };
+        let content = fs.readFileSync(srcPath, 'utf8');
+        content = dispatch.js(content, ctx);
         fs.writeFileSync(destPath, content);
       } else {
-        fs.writeFileSync(destPath, content);
+        fs.copyFileSync(srcPath, destPath);
       }
-    } else if (isCopilot && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // Copilot: also transform .cjs/.js files for CONV-06 and CONV-07
-      let content = fs.readFileSync(srcPath, 'utf8');
-      content = convertClaudeToCopilotContent(content, isGlobal);
-      fs.writeFileSync(destPath, content);
-    } else if (isAntigravity && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // Antigravity: also transform .cjs/.js files for path/command conversions
-      let content = fs.readFileSync(srcPath, 'utf8');
-      content = convertClaudeToAntigravityContent(content, isGlobal);
-      fs.writeFileSync(destPath, content);
-    } else if (isCursor && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // For Cursor, also convert Claude references in JS/CJS utility scripts
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/gsd:/gi, 'gsd-');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.cursor/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.cursor/rules/');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Cursor');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isWindsurf && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      // For Windsurf/Devin, also convert Claude references in JS/CJS utility scripts.
-      // Workspace skills install to .devin/ (Devin Desktop preferred dir, #1085).
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/gsd:/gi, 'gsd-');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.devin/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.devin/rules');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Windsurf');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isTrae && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => {
-        return `/gsd-${commandName}`;
-      });
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.trae/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.trae/rules/');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Trae');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isCline && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.cline/skills/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, '.clinerules');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Cline');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isQwen && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.qwen/skills/');
-      jsContent = jsContent.replace(/\.claude\//g, '.qwen/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, 'QWEN.md');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Qwen Code');
-      fs.writeFileSync(destPath, jsContent);
-    } else if (isHermes && (entry.name.endsWith('.cjs') || entry.name.endsWith('.js'))) {
-      let jsContent = fs.readFileSync(srcPath, 'utf8');
-      jsContent = jsContent.replace(/\.claude\/skills\//g, '.hermes/skills/');
-      jsContent = jsContent.replace(/\.claude\//g, '.hermes/');
-      jsContent = jsContent.replace(/CLAUDE\.md/g, 'HERMES.md');
-      jsContent = jsContent.replace(/\bClaude Code\b/g, 'Hermes Agent');
-      fs.writeFileSync(destPath, jsContent);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
@@ -6910,19 +6918,7 @@ const GSD_UNINSTALL_HOOKS = [
  * @param {string} runtime - Target runtime ('claude', 'opencode', 'gemini', 'codex', 'copilot')
  */
 function uninstall(isGlobal, runtime = 'claude') {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCodebuddy = runtime === 'codebuddy';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -6938,21 +6934,9 @@ function uninstall(isGlobal, runtime = 'claude') {
     ? targetDir.replace(os.homedir(), '~')
     : targetDir.replace(process.cwd(), '.');
 
-  let runtimeLabel = 'Claude Code';
-  if (runtime === 'opencode') runtimeLabel = 'OpenCode';
-  if (runtime === 'gemini') runtimeLabel = 'Gemini';
-  if (runtime === 'kilo') runtimeLabel = 'Kilo';
-  if (runtime === 'codex') runtimeLabel = 'Codex';
-  if (runtime === 'copilot') runtimeLabel = 'Copilot';
-  if (runtime === 'antigravity') runtimeLabel = 'Antigravity';
-  if (runtime === 'cursor') runtimeLabel = 'Cursor';
-  if (runtime === 'windsurf') runtimeLabel = 'Windsurf';
-  if (runtime === 'augment') runtimeLabel = 'Augment';
-  if (runtime === 'trae') runtimeLabel = 'Trae';
-  if (runtime === 'qwen') runtimeLabel = 'Qwen Code';
-  if (runtime === 'hermes') runtimeLabel = 'Hermes Agent';
-  if (runtime === 'kimi') runtimeLabel = 'Kimi CLI';
-  if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
+  // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
+  // Phase B / #1679) — collapses the prior 15-line assignment chain.
+  const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
@@ -7919,18 +7903,7 @@ function resolveInstallRelativePath(baseDir, relPath) {
  * Write file manifest after installation for future modification detection
  */
 function writeManifest(configDir, runtime = 'claude', options = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isTrae = runtime === 'trae';
-  const isCline = runtime === 'cline';
-  const isKimi = runtime === 'kimi';
-  const isHermes = runtime === 'hermes';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // commandsDir points to the old location for Gemini (which still uses commands/gsd/).
@@ -8417,21 +8390,7 @@ function reportInstallerMigrationResult(result) {
 }
 
 function install(isGlobal, runtime = 'claude', options = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isGemini = runtime === 'gemini';
-  const isKilo = runtime === 'kilo';
-  const isKimi = runtime === 'kimi';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCodebuddy = runtime === 'codebuddy';
-  const isCline = runtime === 'cline';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -8577,22 +8536,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     homeDir,
   });
 
-  let runtimeLabel = 'Claude Code';
-  if (isOpencode) runtimeLabel = 'OpenCode';
-  if (isGemini) runtimeLabel = 'Gemini';
-  if (isKilo) runtimeLabel = 'Kilo';
-  if (isCodex) runtimeLabel = 'Codex';
-  if (isCopilot) runtimeLabel = 'Copilot';
-  if (isAntigravity) runtimeLabel = 'Antigravity';
-  if (isCursor) runtimeLabel = 'Cursor';
-  if (isWindsurf) runtimeLabel = 'Windsurf';
-  if (isAugment) runtimeLabel = 'Augment';
-  if (isTrae) runtimeLabel = 'Trae';
-  if (isQwen) runtimeLabel = 'Qwen Code';
-  if (isHermes) runtimeLabel = 'Hermes Agent';
-  if (isKimi) runtimeLabel = 'Kimi';
-  if (isCodebuddy) runtimeLabel = 'CodeBuddy';
-  if (isCline) runtimeLabel = 'Cline';
+  // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
+  // Phase B / #1679) — collapses the prior 16-line assignment chain.
+  const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Installing for ${cyan}${runtimeLabel}${reset} to ${cyan}${locationLabel}${reset}\n`);
 
@@ -9246,11 +9192,24 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   agentsSrc = _stageAgents(path.join(src, 'agents'));
   const agentsDest = path.join(targetDir, 'agents');
 
+  // ADR-1235 §1: runtimes that have been migrated to the descriptor-driven agent
+  // path (installRuntimeArtifacts → convertedAgentsKind). The descriptor path
+  // applies path-rewrite + attribution + converter + normalize via
+  // stageAgentsForRuntimeWithConverter (with agentCtx pre-converter threading) in
+  // createRuntimeArtifactInstallPlan. Their agents are already written ABOVE
+  // (by installRuntimeArtifacts at line 8912), which also performs its own
+  // stale-file prune pass. The inline stale-removal + inline loop both skip them.
+  // Trivial group (cursor/windsurf/augment/trae/codebuddy) cut over together.
+  // cline is excluded: it takes a rules-only local branch and has a local/global
+  // complication that the descriptor-driven path does not handle correctly.
+  const _DESCRIPTOR_AGENTS_RUNTIMES = new Set(['cursor', 'windsurf', 'augment', 'trae', 'codebuddy']);
+
   // Always remove stale gsd-* agents first so re-installing with
   // `--minimal` actually shrinks a previously-full install.
   // For Codex this also covers per-agent `.toml` files alongside the `.md`
   // sources so a full → minimal switch doesn't leave stale registrations.
-  if (fs.existsSync(agentsDest)) {
+  // Skipped for descriptor-agent runtimes (installRuntimeArtifacts prunes).
+  if (!_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime) && fs.existsSync(agentsDest)) {
     for (const file of fs.readdirSync(agentsDest)) {
       if (
         file.startsWith('gsd-') &&
@@ -9263,6 +9222,10 @@ function install(isGlobal, runtime = 'claude', options = {}) {
 
   if (isKimi) {
     console.log(`  ${dim}↳${reset} Kimi custom agent YAML/prompt artifacts were installed via runtime artifact layout`);
+  } else if (_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime)) {
+    // installRuntimeArtifacts already wrote agents + handles stale-file cleanup
+    // via its own prune pass. No further action needed.
+    console.log(`  ${dim}↳${reset} Agents installed via descriptor-driven layout (${runtime})`);
   } else if (isMinimalMode(_effectiveInstallMode)) {
     // Codex registers agents in `config.toml` via `[agents.gsd-*]` sections.
     // Without stripping them here, a full → minimal reinstall would leave the
@@ -10433,14 +10396,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
  * Apply statusline config, then print completion message
  */
 function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = 'claude', isGlobal = true, configDir = null, bannerOpts = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isTrae = runtime === 'trae';
-  const isCline = runtime === 'cline';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !isOpencode) {
@@ -10563,37 +10519,11 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     }
   }
 
-  let program = 'Claude Code';
-  if (runtime === 'opencode') program = 'OpenCode';
-  if (runtime === 'gemini') program = 'Gemini';
-  if (runtime === 'kilo') program = 'Kilo';
-  if (runtime === 'codex') program = 'Codex';
-  if (runtime === 'copilot') program = 'Copilot';
-  if (runtime === 'antigravity') program = 'Antigravity';
-  if (runtime === 'cursor') program = 'Cursor';
-  if (runtime === 'windsurf') program = 'Windsurf';
-  if (runtime === 'augment') program = 'Augment';
-  if (runtime === 'trae') program = 'Trae';
-  if (runtime === 'cline') program = 'Cline';
-  if (runtime === 'qwen') program = 'Qwen Code';
-  if (runtime === 'hermes') program = 'Hermes Agent';
-  if (runtime === 'kimi') program = 'Kimi CLI';
-
-  let command = '/gsd-new-project';
-  if (runtime === 'opencode') command = '/gsd-new-project';
-  if (runtime === 'kilo') command = '/gsd-new-project';
-  if (runtime === 'gemini') command = '/gsd:new-project';
-  if (runtime === 'codex') command = '$gsd-new-project';
-  if (runtime === 'copilot') command = '/gsd-new-project';
-  if (runtime === 'antigravity') command = '/gsd-new-project';
-  if (runtime === 'cursor') command = 'gsd-new-project (mention the skill name)';
-  if (runtime === 'windsurf') command = '/gsd-new-project';
-  if (runtime === 'augment') command = '/gsd-new-project';
-  if (runtime === 'trae') command = '/gsd-new-project';
-  if (runtime === 'cline') command = '/gsd-new-project';
-  if (runtime === 'qwen') command = '/gsd-new-project';
-  if (runtime === 'hermes') command = '/gsd-new-project';
-  if (runtime === 'kimi') command = '/skill:gsd-new-project';
+  // program + command are now single-source lookups (ADR-1239 Phase B / #1679):
+  // program is the runtime display label; command is the per-host /gsd-new-project
+  // invocation syntax.
+  const program = getRuntimeLabel(runtime);
+  const command = getRuntimeNewProjectCommand(runtime);
 
   // Claude Code global installs use the skills/ format (CC 2.1.88+).
   // Restart is required for CC to pick up newly-installed skills, and the

@@ -17,6 +17,7 @@
         "HERMES_HOME"
       ]
     },
+    "localConfigDir": ".hermes",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

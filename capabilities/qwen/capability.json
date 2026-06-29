@@ -17,6 +17,7 @@
         "QWEN_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".qwen",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

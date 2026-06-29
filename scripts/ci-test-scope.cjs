@@ -214,17 +214,44 @@ const RULES = [
     ],
   },
   {
-    name: 'configuration',
-    match: path => ['config', 'configuration', 'model-catalog', 'model-profile'].some(k => path.includes(k)),
+     name: 'configuration',
+     match: path => ['config', 'configuration', 'model-catalog', 'model-profile'].some(k => path.includes(k)),
+     tests: [
+       'tests/config.test.cjs',
+       'tests/config-get-default.test.cjs',
+       'tests/configuration-migrate-config.test.cjs',
+       'tests/model-catalog-runtime-defaults.test.cjs',
+       'tests/model-profiles.test.cjs',
+     ],
+   },
+  {
+    // ADR-1703 portability lint surface. Editing a rule, the shared vocab/guard
+    // helpers, or the eslint config that wires them must re-run the rule suites
+    // + the disable-ban. The disable-ban also scans bin/install.js and
+    // scripts/build-hooks.js (the Phase 6 glob-expansion surface), so changes
+    // to those files re-run it too.
+    name: 'portability lint rules (ADR-1703)',
+    match: path => path.startsWith('eslint-rules/') ||
+      path === 'eslint.config.mjs' ||
+      path === 'bin/install.js' ||
+      path === 'scripts/build-hooks.js',
     tests: [
-      'tests/config.test.cjs',
-      'tests/config-get-default.test.cjs',
-      'tests/configuration-migrate-config.test.cjs',
-      'tests/model-catalog-runtime-defaults.test.cjs',
-      'tests/model-profiles.test.cjs',
+      'tests/portability-rule-disable-ban.test.cjs',
+      'tests/portability-vocab-drift.test.cjs',
+      // All nine RuleTester suites (P1–P6) — editing any rule / the shared
+      // vocab+guard helpers / the eslint config re-runs the full rule family.
+      'tests/no-path-literal-in-assert.rule.test.cjs',
+      'tests/no-posix-mode-bit-assert.rule.test.cjs',
+      'tests/no-unguarded-nonportable-exec.rule.test.cjs',
+      'tests/no-crlf-fragile-split.rule.test.cjs',
+      'tests/no-hardcoded-tmp.rule.test.cjs',
+      'tests/no-bare-npm-exec.rule.test.cjs',
+      'tests/require-userprofile-with-home.rule.test.cjs',
+      'tests/normalize-path-in-content.rule.test.cjs',
+      'tests/require-fs-op-fallback.rule.test.cjs',
     ],
   },
-];
+ ];
 
 function usage() {
   return [
@@ -331,7 +358,7 @@ function classify(files) {
     // Determine if this file is product/pipeline code.
     // docs/ and root-level .md files are intentionally excluded.
     if (
-      ['bin/', 'src/', 'gsd-core/', 'agents/', 'commands/', 'hooks/', 'tests/', 'scripts/'].some(p => file.startsWith(p)) ||
+      ['bin/', 'src/', 'gsd-core/', 'agents/', 'commands/', 'hooks/', 'tests/', 'scripts/', 'eslint-rules/'].some(p => file.startsWith(p)) ||
       file === 'package.json' || file === 'package-lock.json' ||
       (file.startsWith('tsconfig') && file.endsWith('.json')) ||
       file.startsWith('.github/rulesets/')

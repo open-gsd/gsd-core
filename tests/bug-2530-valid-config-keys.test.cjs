@@ -9,6 +9,9 @@
  * #2535 — sub_repos and plan_checker legacy keys need CONFIG_KEY_SUGGESTIONS migration hints
  * #3162 — resolve_model_ids missing from VALID_CONFIG_KEYS; workflow._auto_chain_active must be
  *          accepted by isValidConfigKey (written by workflows) without being user-visible
+ * #1747 — buildNewProjectConfig emits four search-provider keys (tavily_search, ref_search,
+ *          perplexity, jina) that research-provider.cts consumes but were missing from
+ *          VALID_CONFIG_KEYS, causing /gsd-settings unknown-key warnings on fresh projects
  */
 
 const { describe, test } = require('node:test');
@@ -70,6 +73,48 @@ describe('VALID_CONFIG_KEYS correctness', () => {
       isValidConfigKey('workflow._auto_chain_active'),
       true,
       'workflow._auto_chain_active is written by plan-phase, execute-phase, discuss-phase, transition workflows via config-set'
+    );
+  });
+});
+
+describe('#1747: new-project config emits only schema-recognized provider keys', () => {
+  // buildNewProjectConfig emits seven search-provider availability flags and
+  // research-provider.cts providerAvailability() consumes all seven, but only
+  // three were in VALID_CONFIG_KEYS → /gsd-settings warned on the four
+  // unregistered keys (tavily_search, ref_search, perplexity, jina) for every
+  // freshly generated .planning/config.json.
+
+  // The four keys that were emitted + consumed but missing from the schema.
+  const MISSING_KEYS = ['tavily_search', 'ref_search', 'perplexity', 'jina'];
+
+  // Every config-driven provider flag read by providerAvailability() in
+  // src/research-provider.cts. context7/websearch are excluded: hardcoded
+  // `true`, not config-gated, so no config key to register.
+  const PROVIDER_CONFIG_KEYS = [
+    'brave_search',
+    'firecrawl',
+    'exa_search',
+    'tavily_search',
+    'ref_search',
+    'perplexity',
+    'jina',
+  ];
+
+  test('the four previously-missing provider keys are in VALID_CONFIG_KEYS', () => {
+    const absent = MISSING_KEYS.filter((k) => !VALID_CONFIG_KEYS.has(k));
+    assert.deepStrictEqual(
+      absent,
+      [],
+      `These provider keys are emitted by buildNewProjectConfig and consumed by research-provider.cts but missing from VALID_CONFIG_KEYS:\n  ${absent.join('\n  ')}\n\nAdd them to gsd-core/bin/shared/config-schema.manifest.json (validKeys).`
+    );
+  });
+
+  test('every config-driven research-provider flag is registered in the schema (drift guard)', () => {
+    const drifted = PROVIDER_CONFIG_KEYS.filter((k) => !VALID_CONFIG_KEYS.has(k));
+    assert.deepStrictEqual(
+      drifted,
+      [],
+      `These research-provider config flags are not in VALID_CONFIG_KEYS — a fresh /gsd-new-project config would trigger an unknown-key warning under /gsd-settings:\n  ${drifted.join('\n  ')}\n\nWhen you add a provider to providerAvailability() in src/research-provider.cts, also register its config key in gsd-core/bin/shared/config-schema.manifest.json.`
     );
   });
 });

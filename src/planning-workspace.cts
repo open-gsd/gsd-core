@@ -15,7 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { platformEnsureDir } from './shell-command-projection.cjs';
+import { platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 import { realClock } from './clock.cjs';
 import type { Clock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -276,7 +276,7 @@ function withPlanningLock<T>(cwd: string, fn: () => T, clock?: Clock): T {
             // we must NOT fall through to a delete — back off and retry the create.
             const stolen = lockPath + '.stale-' + process.pid + '-' + clock.now() + '-' + (_planningStealSeq++);
             let renamed = false;
-            try { fs.renameSync(lockPath, stolen); renamed = true; } catch { /* another racer won */ }
+            try { retryRenameSync(lockPath, stolen); renamed = true; } catch { /* another racer won */ }
             if (renamed) {
               try { fs.rmSync(stolen, { force: true }); } catch { /* best-effort */ }
               continue; // dead/garbage/expired holder freed — retry immediately to grab it.

@@ -18,6 +18,7 @@
         "COPILOT_HOME"
       ]
     },
+    "localConfigDir": ".github",
     "configFormat": "markdown",
     "artifactLayout": {
       "global": [
