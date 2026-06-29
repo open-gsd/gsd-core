@@ -1641,6 +1641,28 @@ node gsd-tools.cjs state sync --verify    # Dry-run: show changes without writin
 
 ---
 
+### `state rebuild [--dry-run] [--verbose]`
+
+Re-derive STATE.md body structure from canonical sources (frontmatter + `.planning/phases/` disk scan). Reconciles `## Current Position` prose with frontmatter, drops orphaned rows from the `**By Phase:**` table, clears template-placeholder field values, and de-duplicates `## Session Continuity Archive` blocks down to the 3 most-recent entries. Every mutation is recorded in a structured `## Rebuild Log` audit section appended to STATE.md (ADR-1817 §3).
+
+Heavier and manual counterpart to the lightweight, auto-triggered `state sync`. The two compose non-overlappingly: `sync` patches three frontmatter fields; `rebuild` reconciles body structure. Per ADR-1817 §4, `rebuild` is idempotent — running it twice on a clean file produces no change.
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Compute the rebuild and emit a structured preview, write nothing |
+| `--verbose` | Tee the audit-log entries to stderr in addition to writing them to STATE.md |
+
+**Prerequisites:** `.planning/STATE.md` exists
+**Produces:** Reconciled `STATE.md` with a `## Rebuild Log` audit entry (only when drift was reconciled)
+
+```bash
+node gsd-tools.cjs state rebuild             # Reconcile body structure
+node gsd-tools.cjs state rebuild --dry-run   # Preview the diff without writing
+node gsd-tools.cjs state rebuild --verbose   # Emit audit-log entries to stderr
+```
+
+---
+
 ### `state planned-phase`
 
 Record state transition after plan-phase completes (Planned/Ready to execute).
