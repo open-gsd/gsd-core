@@ -503,6 +503,21 @@ function locateCurrentPosition(body: string): { start: number; end: number } | n
 }
 
 /**
+ * Return the body text of the `## Current Position` section, or `null` when it
+ * is absent. Reuses the fence-aware `locateCurrentPosition` locator (ADR-1372).
+ *
+ * Exposed so callers that must read a position field (e.g. `cmdStatePrune`,
+ * #1776) can scope extraction to the canonical section instead of the whole
+ * document — where `stateExtractField`'s pipe-table fallback could otherwise
+ * latch onto an unrelated `| Phase | N |` row elsewhere in STATE.md. This
+ * scopes the *caller*; the shared extractor is left broad for every other use.
+ */
+export function sliceCurrentPositionSection(body: string): string | null {
+  const span = locateCurrentPosition(body);
+  return span === null ? null : body.slice(span.start, span.end);
+}
+
+/**
  * First-time ## Current Position mutation: update Phase / Plan / Status /
  * Last activity lines. Mirrors state.cts:2261-2324 byte-for-behaviour
  * (inline regex first, pipe-table fallback via stateReplaceField — #1257).
