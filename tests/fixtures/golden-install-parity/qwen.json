@@ -306,7 +306,7 @@
   "hooks/gsd-cursor-post-tool.js": "dd1b12f795de8d72",
   "hooks/gsd-cursor-session-start.js": "a93095ac609a3ea6",
   "hooks/gsd-ensure-canonical-path.js": "4c1626ed20ab7a75",
-  "hooks/gsd-graphify-update.sh": "396ebda3c6705dc9",
+  "hooks/gsd-graphify-update.sh": "845aeecb0d82dd6e",
   "hooks/gsd-phase-boundary.sh": "6aa3ba9af3d465d9",
   "hooks/gsd-prompt-guard.js": "4b08c2dce0233e2d",
   "hooks/gsd-read-guard.js": "9d1b227b6fcb6dba",
