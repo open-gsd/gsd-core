@@ -222,6 +222,7 @@
       "gates.md",
       "git-integration.md",
       "git-planning-commit.md",
+      "honest-verifier.md",
       "ios-scaffold.md",
       "loop-hook-dispatch.md",
       "mandatory-initial-read.md",
