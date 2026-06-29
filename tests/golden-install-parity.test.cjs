@@ -11,10 +11,11 @@
  *
  * After replacing every occurrence of the temp root path with the literal
  * '<HOME>' in file contents, the install output is byte-identical run-to-run
- * for ALL files EXCEPT exactly two volatile metadata files that are EXCLUDED
+ * for ALL files EXCEPT the volatile metadata files that are EXCLUDED
  * from the parity manifest:
  *   - gsd-file-manifest.json    (timestamp + install-time absolute paths)
  *   - gsd-install-state.json    (install-time absolute paths)
+ *   - .gsd-source               (#1477, claude-global: install-time source path)
  *
  * Everything else (≈545–616 files per runtime) is deterministic.
  *
@@ -48,7 +49,11 @@ const UPDATE = process.env.UPDATE_GOLDEN === '1';
 const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'golden-install-parity');
 
 // Volatile metadata files always excluded from the parity manifest.
-const VOLATILE_FILES = new Set(['gsd-file-manifest.json', 'gsd-install-state.json']);
+// .gsd-source (#1477, claude-global only) records the install-time absolute path
+// to the package's commands/gsd source tree, which is the checkout/CI workspace
+// path — NOT the temp HOME root, so it is never normalized to '<HOME>' and its
+// hash varies by environment. Excluded for the same reason as gsd-install-state.json.
+const VOLATILE_FILES = new Set(['gsd-file-manifest.json', 'gsd-install-state.json', '.gsd-source']);
 
 // Hook-registration config files excluded from the parity manifest. These are
 // written by the hook/permission install path (applySettingsJsonHooks /
