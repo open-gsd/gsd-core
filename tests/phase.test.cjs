@@ -2455,6 +2455,94 @@ describe('phase complete command', () => {
     );
   });
 
+  // #1752: the #1591 follow-up — when phase.complete wrongly returned
+  // is_last_phase=true on a <details>-wrapped mid-milestone checklist, the
+  // milestone-complete cascade also DECREMENTED progress.total_phases (e.g.
+  // 8 -> 7) and flipped status. Same root cause, distinct symptom. With the
+  // #1591 fix (is_last_phase=false), the decrement must not occur: with all 8
+  // phase dirs on disk, total_phases stays 8 and status does not flip.
+  test('#1752: <details>-wrapped checklist — total_phases is NOT decremented on a mid-milestone phase', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# ROADMAP',
+        '',
+        '## Phases',
+        '',
+        '<details>',
+        '<summary>✅ v1.0 First (Phases 1–3) — SHIPPED</summary>',
+        '',
+        '- [x] Phase 1: a',
+        '- [x] Phase 2: b',
+        '- [x] Phase 3: c',
+        '',
+        '</details>',
+        '',
+        '<details>',
+        '<summary>🚀 v2.0 Second (Phases 36–43) — IN PLANNING</summary>',
+        '',
+        '- [x] Phase 36: first (completed)',
+        '- [ ] Phase 37: second',
+        '- [ ] Phase 38: third',
+        '- [ ] Phase 39: fourth',
+        '',
+        '</details>',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v2.0',
+        'milestone_name: Second',
+        'current_phase: "36"',
+        'status: executing',
+        'progress:',
+        '  total_phases: 8',
+        '  completed_phases: 5',
+        '  percent: 62',
+        '---',
+        '',
+        '# GSD State',
+        '',
+        '**Current Phase:** 36',
+        '**Status:** Executing Phase 36',
+        '',
+      ].join('\n')
+    );
+    // All 8 phase dirs on disk (Phases 36–43) so the disk count is 8 — the
+    // reporter's real state. Before the #1591 fix, phase.complete 36 returned
+    // is_last_phase=true (no Phase 37+ heading match) and the milestone-complete
+    // path DECREMENTED total_phases 8 -> 7.
+    const names = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth'];
+    for (let i = 0; i < 8; i++) {
+      const num = String(36 + i);
+      const d = path.join(tmpDir, '.planning', 'phases', `${num}-${names[i]}`);
+      fs.mkdirSync(d, { recursive: true });
+      fs.writeFileSync(path.join(d, `${num}-PLAN.md`), '# Plan\n');
+    }
+
+    const result = runVerifiedPhaseComplete('phase complete 36', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.is_last_phase, false, 'is_last_phase must be false (#1752 cascade root)');
+
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      !/Milestone complete/i.test(state),
+      'a mid-milestone phase must not flip STATE.md to "Milestone complete" (#1752)',
+    );
+    const tpMatch = state.match(/total_phases:\s*(\d+)/);
+    assert.ok(tpMatch, 'STATE.md must carry a total_phases value after phase.complete');
+    assert.notStrictEqual(
+      parseInt(tpMatch[1], 10),
+      7,
+      'total_phases must NOT be decremented to 7 — the #1752 cascade of the false is_last_phase',
+    );
+  });
+
   test('updates REQUIREMENTS.md traceability when phase completes', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
