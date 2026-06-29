@@ -253,7 +253,7 @@ re-derives structure.
    derivability contract is *selective* — derived sections re-derive,
    preserved sections survive — which is exactly what a nuke-and-rebuild
    cannot do.
-4. **A `/gsd:state-doctor` workflow outside the transition module.** Rejected:
+4. **A standalone `state-doctor` workflow outside the transition module.** Rejected:
    same drift-from-canonical-shape risk that motivated ADR-1769's
    consolidation. A workflow that bypasses the transition module re-imports
    the lock/scan/preservation machinery and re-creates the bug class.
