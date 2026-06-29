@@ -51,9 +51,12 @@ weakened (e.g. "just bump the baseline") without encountering its rationale.
      largest-per-tier.
    - **Tier hard caps (the outer bound).** XL / LARGE / DEFAULT are absolute red lines with
      real headroom (`XL_CAP = 98304` / 96 KiB, `LARGE_CAP = 61440` / 60 KiB,
-     `DEFAULT_CAP = 40960` / 40 KiB), a few KB above the largest file in each tier — currently
-     the largest XL orchestrator is `plan-phase.md` (≈93,973 bytes), just ahead of
-     `execute-phase.md` (≈93,426 bytes). Hard caps are never raised in normal work; crossing
+     `DEFAULT_CAP = 40960` / 40 KiB), a few KB above the largest file in each tier — the largest
+     XL orchestrators (`plan-phase.md`, `execute-phase.md`) currently sit in the low-90s KB, a
+     few KB under `XL_CAP`. (Exact per-file sizes are not duplicated here: they live in
+     `tests/workflow-size-baseline.json`, the enforced source of truth, and an absolute byte
+     count quoted in prose drifts with every edit.) Hard caps are never raised in normal work;
+     crossing
      one is a signal to do **lazy extraction**, not a `+N` bump. New workflow files default to
      the Codex 32 KiB anchor (`NEW_FILE_CAP = 32768`) unless explicitly tiered in the same PR.
 
