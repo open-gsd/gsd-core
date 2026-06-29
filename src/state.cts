@@ -144,6 +144,7 @@ const _diskScanCache = new Map<string, {
   completedPhases: number;
   totalPlans: number;
   completedPlans: number;
+  milestoneBounded: boolean;
 }>();
 
 // Track all lock files held by this process so they can be removed on exit.
@@ -1359,6 +1360,9 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   let completedPhases: number | null = null;
   let totalPlans: number | null = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
   let completedPlans: number | null = null;
+  // #1761 read-path: set from cached.milestoneBounded inside the disk-scan
+  // block; consumed at the percent computation to mirror the cmdStateSync guard.
+  let milestoneUnbounded = false;
 
   if (cwd) {
     try {
@@ -1373,10 +1377,11 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
           // exclusion (#1514). Computed before the disk scan so retired phases
           // can be dropped from the dir set too.
           let roadmapScope: string | null = null;
+          let roadmapRaw: string | null = null;
           let retiredPhaseNums = new Set<string>();
           try {
             const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
-            const roadmapRaw = platformReadSync(roadmapPath);
+            roadmapRaw = platformReadSync(roadmapPath);
             if (roadmapRaw !== null) {
               roadmapScope = extractCurrentMilestone(roadmapRaw, cwd);
               retiredPhaseNums = extractRetiredPhaseNumbers(roadmapScope);
@@ -1449,20 +1454,39 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
             }
           }
 
-          cached = {
-            totalPhases: roadmapPhaseCount > 0
-              ? Math.max(phaseDirs.length, roadmapPhaseCount)
-              : phaseDirs.length,
-            completedPhases: diskCompletedPhases,
-            totalPlans: diskTotalPlans,
-            completedPlans: diskTotalSummaries,
-          };
+          cached = (() => {
+            // #1761 read-path: mirror the cmdStateSync guard (#1794). When the
+            // asserted milestone version can't be bounded to a versioned ROADMAP
+            // heading, extractCurrentMilestone falls back to the whole document
+            // and roadmapPhaseCount conflates sibling milestones. In that case
+            // don't substitute the whole-doc count — fall back to the on-disk
+            // phase-dir count only, and mark unbounded so percent is skipped
+            // downstream (mirrors the sync write-path guard).
+            let milestoneBounded = true;
+            if (milestone && roadmapRaw !== null) {
+              const versionedHeading = new RegExp(
+                `^#{1,3}\\s+(?!Phase\\s+\\S).*${escapeRegex(String(milestone).trim())}`,
+                'mi',
+              );
+              milestoneBounded = versionedHeading.test(roadmapRaw);
+            }
+            return {
+              totalPhases: (!milestoneBounded || roadmapPhaseCount === 0)
+                ? phaseDirs.length
+                : Math.max(phaseDirs.length, roadmapPhaseCount),
+              milestoneBounded,
+              completedPhases: diskCompletedPhases,
+              totalPlans: diskTotalPlans,
+              completedPlans: diskTotalSummaries,
+            };
+          })();
           _diskScanCache.set(cwd, cached);
         }
         totalPhases = cached.totalPhases;
         completedPhases = cached.completedPhases;
         totalPlans = cached.totalPlans;
         completedPlans = cached.completedPlans;
+        milestoneUnbounded = cached.milestoneBounded === false;
       }
     } catch { /* intentionally empty */ }
   }
@@ -1473,7 +1497,10 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   // instead of a false 100% from plan-only coverage (#3242 Bug B).
   // Falls back to the body Progress: field only when no plan files exist on disk.
   let progressPercent = computeProgressPercent(completedPlans, totalPlans, completedPhases, totalPhases);
-  if (progressPercent === null && progressRaw) {
+  // #1761 read-path: when the milestone can't be bounded, percent would be
+  // derived from a conflated/understated total — skip it (mirror cmdStateSync).
+  if (milestoneUnbounded) progressPercent = null;
+  if (progressPercent === null && progressRaw && !milestoneUnbounded) {
     const pctMatch = progressRaw.match(/(\d+)%/);
     if (pctMatch) progressPercent = parseInt(pctMatch[1], 10);
   }
