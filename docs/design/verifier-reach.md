@@ -96,42 +96,16 @@ Three moves, each a member of the probe family or its enforcement seam:
 | Unwritten **must-NOT** (values/safety) | passes a literal spec while violating intent | prohibition-probe surfaces → test-tier enforced / judgment-tier flagged |
 | Verifier **overconfidence / self-grading** | confident green on a real miss (ECE 0.81) | exogenous grading + abstention (false-pass 100%→17%) |
 
-## The principle generalizes: reach = spec reach at every pipeline seam
-
-The verifier is the sharpest case, but the underlying law is not verifier-specific: **a downstream
-stage can only act on what an upstream stage concretely wrote down.** The same "reach = spec reach"
-shape recurs at any handoff where one stage's output under-determines what the next consumes — so
-the leverage is always to widen the *upstream artifact*, not to make the downstream stage smarter.
-
-A recent measurement at the **plan→execute seam** (the author's research, 2026-06-24) shows this
-directly. GSD runs a plan's tasks in independent waves/contexts; when two tasks share an artifact
-(task 1 builds a helper, task 3 calls it), whether independent executors integrate depends entirely
-on whether the *plan* pinned the shared interface:
-
-- **Unpinned plan → 0/9** independent (helper, button) pairs integrated — each wave invented its own
-  module path and symbol, so no import resolved.
-- **Pinned plan** (an explicit `path + exported signature` interface contract) **→ 9/9** integrated.
-
-The plan — not the executor — owns the seam: the divergence is pure under-specification, and the gap
-closes by widening the *plan's* reach (pin the interface), not by making executors smarter. That is
-the plan→execute analogue of "widen the spec, not the verifier," and it points at a general design
-rule: **at each seam, raise reliability by making the upstream artifact concretely name what the
-downstream stage must rely on** (the plan-phase interface-contract gate is the concrete instance
-here, complementing the spec-phase probes). *Direction-finding, not a headline number: n = 3×3, one
-plan and tier, design-only proxy; the 0%↔100% gap is large and the mechanism (under-specification)
-clear, but magnitude on richer interfaces is unmeasured.*
-
 ## Cross-references
 
 - **ADR-550** — spec-phase probe contract (states the principle in its ADR-857 cross-reference
   section); its "Alternatives considered" holds the recall-side rejections (why not a general
   classifier / deterministic recall engine).
-- **ADR-1606** *(proposed, this batch)* — prohibition-enforcement verify-time seam (the
+- **ADR-1606** *(proposed)* — prohibition-enforcement verify-time seam (the
   test-tier mechanism); its "Alternatives considered" holds the enforcement-side rejections.
 - **ADR-857** — *"Verification substrate vs. plug-in tier (the predicate boundary)"* section
   (decision #6): the verifier↔predicate contract is core, non-toggleable.
 - Refs: `gsd-core/references/{edge-probe,prohibition-probe}.md`; CONTEXT.md predicate
   `PROBE.principle=verifier-reach-equals-spec-reach`.
 - Author's research (internal): non-inferable corpus; edge-probe residual (n=121); N17
-  verifier-abstention; N18 prohibition-elicitation; plan→execute interface determinism
-  (2026-06-24, unpinned 0/9 → pinned 9/9).
+  verifier-abstention; N18 prohibition-elicitation.
