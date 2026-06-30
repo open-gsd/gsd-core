@@ -35,6 +35,7 @@ import stateTransitionMod = require('./state-transition.cjs');
 const { transitionCore, applyStatePreservation } = stateTransitionMod;
 type StateTransitionIntent = stateTransitionMod.StateTransitionIntent;
 type StateTransitionDeps = stateTransitionMod.StateTransitionDeps;
+type PhaseInventoryRecord = stateTransitionMod.PhaseInventoryRecord;
 import {
   computeProgressPercent,
   normalizeProgressNumbers,
@@ -106,6 +107,12 @@ interface StateSnapshotSession {
 interface StatePruneOptions {
   keepRecent?: number | string;
   dryRun?: boolean;
+  silent?: boolean;
+}
+
+interface StateRebuildOptions {
+  dryRun?: boolean;
+  verbose?: boolean;
   silent?: boolean;
 }
 
@@ -2572,6 +2579,113 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 }
 
 /**
+ * Rebuild STATE.md body structure from canonical sources (ADR-1817).
+ *
+ * Implements the `gsd state rebuild` subcommand (issue #1817 Phase 2, #1826).
+ * Wires the pure `rebuildCore` transition (Phase 1, #1827) to the CLI:
+ *   - Locks via `readModifyWriteStateMd` (real path) or reads-only (dry-run).
+ *   - Wires `phaseInventoryProvider` to a real `.planning/phases/` disk scan.
+ *   - `--dry-run`: computes the rebuild, emits a structured diff, writes nothing.
+ *   - `--verbose`: emits the audit-log entries to stderr (in addition to the
+ *     `## Rebuild Log` section that `rebuildCore` already appends to STATE.md).
+ *
+ * Per ADR-1817 §5 this is the heavy/manual counterpart to the lightweight,
+ * auto-triggered `state sync` (3 frontmatter fields). The two compose
+ * non-overlappingly.
+ */
+function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean): void {
+  const silent = !!options.silent;
+  const emit = silent ? () => {} : (result: Record<string, unknown>, r: boolean, v?: string) => output(result, r, v);
+  const statePath = planningPaths(cwd).state;
+  if (!fs.existsSync(statePath)) { emit({ error: 'STATE.md not found' }, raw); return; }
+
+  const dryRun = !!options.dryRun;
+  const verbose = !!options.verbose;
+
+  // Wire phaseInventoryProvider to a real `.planning/phases/` disk scan. This
+  // is the same canonical source `buildStateFrontmatter` consults; the Leaky-
+  // Abstractions guard in `rebuildCore` (ADR-1817 §1) keeps the pure core
+  // testable without this dep — here we provide it.
+  const phaseInventoryProvider = (): PhaseInventoryRecord[] | null => {
+    try {
+      const phasesDir = path.join(planningPaths(cwd).planning, 'phases');
+      if (!fs.existsSync(phasesDir) || !fs.statSync(phasesDir).isDirectory()) return null;
+      const entries = fs.readdirSync(phasesDir);
+      const records: PhaseInventoryRecord[] = [];
+      for (const entry of entries) {
+        const full = path.join(phasesDir, entry);
+        let stat: fs.Stats;
+        try { stat = fs.statSync(full); } catch { continue; }
+        if (!stat.isDirectory()) continue;
+        // Directory-name convention: `<NN>-<slug>` (e.g. `03-test-phase`).
+        const m = entry.match(/^(\d+)-(.+)$/);
+        if (!m) continue;
+        const files = fs.readdirSync(full);
+        const planCount = files.filter(f => /-PLAN\.md$/i.test(f)).length;
+        const summaryCount = files.filter(f => /-SUMMARY\.md$/i.test(f)).length;
+        records.push({ number: m[1], name: m[2], planCount, summaryCount });
+      }
+      return records;
+    } catch {
+      return null;
+    }
+  };
+
+  const deps: StateTransitionDeps = {
+    progressProvider: () => null,
+    clock: realClock,
+    phaseInventoryProvider,
+  };
+
+  const runRebuild = (content: string) => transitionCore(content, { kind: 'rebuild' }, deps);
+
+  const emitVerboseLog = (log: unknown): void => {
+    if (!verbose || !Array.isArray(log)) return;
+    for (const entry of log) {
+      // Treat user-data as data-only (ADR-1577 untrusted-input-boundary).
+      process.stderr.write(`[rebuild] ${JSON.stringify(entry)}\n`);
+    }
+  };
+
+  if (dryRun) {
+    const content = fs.readFileSync(statePath, 'utf-8');
+    const result = runRebuild(content);
+    const data = (result.data ?? {}) as { log?: unknown[]; mutated?: boolean };
+    emitVerboseLog(data.log);
+    const mutated = data.mutated === true;
+    emit({
+      rebuilt: false,
+      dry_run: true,
+      mutations: Array.isArray(data.log) ? data.log.length : 0,
+      mutated,
+      note: mutated ? 'Run without --dry-run to apply changes' : 'Nothing to rebuild',
+    }, raw, mutated ? 'true' : 'false');
+    return;
+  }
+
+  // Real path: lock + RMW via the existing seam. The rebuild log is captured
+  // so we can emit it to stderr under --verbose (the section is also written
+  // to STATE.md by rebuildCore itself, per ADR-1817 §3).
+  let capturedLog: unknown[] = [];
+  let capturedMutated = false;
+  readModifyWriteStateMd(statePath, (content: string) => {
+    const result = runRebuild(content);
+    const data = (result.data ?? {}) as { log?: unknown[]; mutated?: boolean };
+    capturedLog = Array.isArray(data.log) ? data.log : [];
+    capturedMutated = data.mutated === true;
+    return result.content;
+  }, cwd);
+
+  emitVerboseLog(capturedLog);
+
+  emit({
+    rebuilt: capturedMutated,
+    mutations: capturedLog.length,
+    note: capturedMutated ? 'STATE.md rebuilt; see ## Rebuild Log section for the audit trail' : 'Nothing to rebuild',
+  }, raw, capturedMutated ? 'true' : 'false');
+}
+
+/**
  * Mark the current phase as COMPLETE in STATE.md.
  * Updates Status, Last Activity, and the Current Position section to reflect
  * that the phase execution is finished and the project is ready for the next phase.
@@ -2749,6 +2863,7 @@ export = {
   cmdStateValidate,
   cmdStateSync,
   cmdStatePrune,
+  cmdStateRebuild,
   cmdStateMilestoneSwitch,
   cmdSignalWaiting,
   cmdSignalResume,

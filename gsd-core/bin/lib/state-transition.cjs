@@ -192,6 +192,8 @@ function transitionCore(content, intent, deps) {
             return pruneCore(content, intent);
         case 'sync':
             return syncCore(content, intent, deps);
+        case 'rebuild':
+            return rebuildCore(content, intent, deps);
     }
 }
 // ----------------------------------------------------------------------------
@@ -1201,4 +1203,386 @@ function syncCore(content, intent, deps) {
         modified = lastActivityResult;
     }
     return { content: modified, updated, data: { changes } };
+}
+// ----------------------------------------------------------------------------
+// rebuild — intent implementation (ADR-1817, capstone 11th transition)
+// ----------------------------------------------------------------------------
+//
+// Implements the body-structure derivability contract (ADR-1817 §2–§6):
+//   - §2  re-derives derived sections (## Current Position prose, By Phase table
+//         inside ## Performance Metrics), preserves curated sections verbatim
+//         (## Accumulated Context, ## Deferred Items, ## Project Reference, ##
+//         Session Continuity's prose fields) and unknown sections.
+//   - §3  every mutation appends a structured entry to ## Rebuild Log
+//         (ADR-1411 provenance principle — never drop silently).
+//   - §4  idempotency: a no-mutation rebuild appends NO log entry, so two
+//         successive runs on a clean file are byte-identical.
+//   - §5  non-overlapping with sync (sync = 3 frontmatter fields, lightweight,
+//         auto-triggered; rebuild = body structure, heavier, manual).
+//   - §6  orthogonal to auto_prune_state (rebuild reconciles with current
+//         canonical sources; prune removes by retention policy).
+//
+// Section ordering is invariant: rebuild rewrites content IN PLACE; it does
+// not reorder, insert (other than ## Rebuild Log when absent), or remove
+// sections.
+const REBUILD_LOG_SECTION = '## Rebuild Log';
+const REBUILD_LOG_TRUNCATION_LIMIT = 512;
+/**
+ * Truncate a string for inclusion in a rebuild log entry. Per ADR-1817 §3 the
+ * `before` / `after` fields are bounded to REBUILD_LOG_TRUNCATION_LIMIT chars
+ * to prevent unbounded log growth when the drifted content is large.
+ */
+function truncateForLog(s) {
+    if (s.length <= REBUILD_LOG_TRUNCATION_LIMIT)
+        return s;
+    return s.slice(0, REBUILD_LOG_TRUNCATION_LIMIT - 3) + '...';
+}
+/**
+ * Apply a `rebuild` transition to STATE.md content. Pure core per ADR-1769 §3
+ * and ADR-1817 §1. Returns `{ content, updated, data }` where `data.mutated`
+ * is false when no drift was found (idempotency contract, ADR-1817 §4).
+ */
+function rebuildCore(content, _intent, deps) {
+    const timestamp = deps.clock.nowIso();
+    const log = [];
+    let modified = content;
+    // §2 Decision: re-derive derived sections, preserve others. Order is
+    // oldest-section-first so log entries appear in body order.
+    modified = reconcileCurrentPosition(modified, timestamp, log);
+    modified = reconcileByPhaseTable(modified, deps, timestamp, log);
+    modified = stripTemplatePlaceholders(modified, timestamp, log);
+    modified = deduplicateSessionArchive(modified, timestamp, log);
+    // §3 + §4: append the audit log ONLY when mutations occurred. The
+    // log-appends-only-on-mutation rule is what makes idempotency byte-identical
+    // (without it, the second invocation would always append a no-op entry).
+    if (log.length > 0) {
+        modified = appendRebuildLogSection(modified, log);
+    }
+    const updated = log.length > 0 ? ['rebuild'] : [];
+    return {
+        content: modified,
+        updated,
+        data: {
+            mutated: log.length > 0,
+            mutations: log.length,
+            log,
+        },
+    };
+}
+/**
+ * §2 — re-derive `## Current Position` prose fields from frontmatter.
+ *
+ * Drift class: `Phase:`, `Status:` etc. in body contradict frontmatter after
+ * a milestone switch or prune (epic #1817). The body prose is re-derivable
+ * because `buildStateFrontmatter` already derives the canonical values from
+ * disk; rebuild pushes those back into the body prose.
+ *
+ * Implementation: pull each canonical value from frontmatter and replace the
+ * body field via `stateReplaceField`. Skip silently when frontmatter lacks
+ * the key (Leaky-Abstractions guard — don't synthesize values the canonical
+ * source doesn't have).
+ */
+function reconcileCurrentPosition(content, timestamp, log) {
+    const fm = extractFrontmatter(content);
+    if (!fm || typeof fm !== 'object')
+        return content;
+    let modified = content;
+    // Phase prose: frontmatter `current_phase` overrides body `**Current Phase:**`.
+    // The body `Phase:` prose line (e.g. "Phase: 3 of 12 (Test Phase)") is owned
+    // by other transitions (beginPhase / completePhase) and reconstructed from
+    // total-phase counts; rebuild reconciles only the `**Current Phase:**` body
+    // field that frontmatter is the canonical source for.
+    if (fm.current_phase !== undefined && fm.current_phase !== null) {
+        const canonicalPhase = String(fm.current_phase);
+        const existing = (0, state_document_cjs_1.stateExtractField)(modified, 'Current Phase');
+        if (existing !== null && existing !== canonicalPhase) {
+            const replaced = (0, state_document_cjs_1.stateReplaceField)(modified, 'Current Phase', canonicalPhase);
+            if (replaced !== null) {
+                modified = replaced;
+                log.push({
+                    timestamp,
+                    kind: 'current-position-reconciled',
+                    section: exports.STATE_MD_SECTIONS.currentPosition,
+                    before: truncateForLog(existing),
+                    after: truncateForLog(canonicalPhase),
+                    reason: "frontmatter 'current_phase' is canonical; body 'Current Phase' was stale",
+                });
+            }
+        }
+    }
+    // Phase name prose.
+    if (fm.current_phase_name !== undefined && fm.current_phase_name !== null) {
+        const canonicalName = String(fm.current_phase_name);
+        const existing = (0, state_document_cjs_1.stateExtractField)(modified, 'Current Phase Name');
+        if (existing !== null && existing !== canonicalName) {
+            const replaced = (0, state_document_cjs_1.stateReplaceField)(modified, 'Current Phase Name', canonicalName);
+            if (replaced !== null) {
+                modified = replaced;
+                log.push({
+                    timestamp,
+                    kind: 'current-position-reconciled',
+                    section: exports.STATE_MD_SECTIONS.currentPosition,
+                    before: truncateForLog(existing),
+                    after: truncateForLog(canonicalName),
+                    reason: "frontmatter 'current_phase_name' is canonical; body 'Current Phase Name' was stale",
+                });
+            }
+        }
+    }
+    return modified;
+}
+/**
+ * §2 — re-derive the `**By Phase:**` table inside `## Performance Metrics`
+ * from the injected `phaseInventoryProvider`. Drift class: orphaned rows for
+ * phases from a prior milestone, or zero-padded phase IDs that were renamed
+ * (epic #1817).
+ *
+ * Leaky-Abstractions guard (ADR-1817 §1): when `phaseInventoryProvider` is
+ * absent (no disk scan wired), this step is a no-op. The core stays pure and
+ * testable without disk I/O.
+ */
+function reconcileByPhaseTable(content, deps, timestamp, log) {
+    if (!deps.phaseInventoryProvider)
+        return content;
+    const inventory = deps.phaseInventoryProvider();
+    if (!inventory || inventory.length === 0)
+        return content;
+    // The canonical table shape (from gsd-core/templates/state.md):
+    //   | Phase | Plans | Total | Avg/Plan |
+    //   |-------|-------|-------|----------|
+    //   | -     | -     | -     | -        |
+    // rebuild renders one row per inventory record (Phase N: P plans). The
+    // Total/Avg columns are runtime-collected by other commands; rebuild does
+    // NOT re-derive them and resets them to '-' so future plan-completion
+    // repopulates. The canonical reconciliation target is the row SET.
+    const tableRows = inventory.map((r) => `| ${r.number} | ${r.planCount} | - | - |`);
+    const canonicalTable = [
+        '| Phase | Plans | Total | Avg/Plan |',
+        '|-------|-------|-------|----------|',
+        ...tableRows,
+    ];
+    // Line-based splice: find `**By Phase:**` line, then walk forward collecting
+    // the table block (header + separator + body rows), replace the block with
+    // the canonical table preceded by a single blank-line separator.
+    const lines = content.split('\n');
+    const markerIdx = lines.findIndex((l) => l.trim() === '**By Phase:**');
+    if (markerIdx === -1)
+        return content; // unknown shape — preserve verbatim
+    // Walk forward from markerIdx+1 to find the table block span. Skip leading
+    // blank lines; once we see the first table row, consume subsequent table
+    // rows; stop at the first non-table line after we've started.
+    let blockStart = -1;
+    let blockEnd = -1;
+    for (let i = markerIdx + 1; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        const isTable = trimmed.startsWith('|') && trimmed.endsWith('|');
+        if (blockStart === -1) {
+            if (isTable) {
+                blockStart = i;
+                blockEnd = i + 1;
+            }
+            else if (trimmed === '')
+                continue;
+            else
+                break; // non-table, non-blank before any row — unknown shape
+        }
+        else {
+            if (isTable)
+                blockEnd = i + 1;
+            else
+                break;
+        }
+    }
+    if (blockStart === -1)
+        return content; // no table found
+    // Replace lines[blockStart..blockEnd) with canonicalTable.
+    const beforeBlock = lines.slice(0, markerIdx + 1);
+    const afterBlock = lines.slice(blockEnd);
+    // Splice: `**By Phase:**` + blank + canonicalTable rows + (whatever came after)
+    const newLines = [...beforeBlock, '', ...canonicalTable, ...afterBlock];
+    const candidate = newLines.join('\n');
+    if (candidate === content)
+        return content;
+    log.push({
+        timestamp,
+        kind: 'by-phase-table-reconciled',
+        section: exports.STATE_MD_SECTIONS.performanceMetrics,
+        before: truncateForLog(lines.slice(blockStart, blockEnd).join('\n')),
+        after: truncateForLog(canonicalTable.join('\n')),
+        reason: 'phase dirs on disk are canonical; rows for missing phases dropped, missing phases added',
+    });
+    return candidate;
+}
+/**
+ * §2 + epic-#1817 drift class — template-placeholder field values left in
+ * place when an AI agent wrote partial state. The canonical template uses
+ * `[X]`, `[Y]`, `[Phase name]`, `[date]`, `[N]`, etc. (see
+ * `gsd-core/templates/state.md`). Rebuild clears any `**Field:** [placeholder]`
+ * line where the value still matches the placeholder shape.
+ *
+ * "Clears" means: leaves the field in place with the literal text `(pending)`,
+ * signalling that rebuild recognized the placeholder but had no canonical
+ * source to substitute. This is honest — better than silently leaving `[X]`
+ * which looks like a value.
+ */
+const TEMPLATE_PLACEHOLDER_VALUE = /^\s*\[[^\]]+\]\s*$|^\s*-\s*$/;
+function stripTemplatePlaceholders(content, timestamp, log) {
+    // Scan body `**Field:** value` lines; when value matches the placeholder
+    // shape, replace with `(pending)`. We deliberately do NOT touch fields that
+    // other transitions actively maintain (syncCore's three, beginPhase's set,
+    // etc.) — only the template placeholder rows that nothing has touched.
+    const lines = content.split('\n');
+    const replacements = [];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const m = line.match(/^\s*\*\*([^*]+):\*\*\s*(.*)$/);
+        if (!m)
+            continue;
+        const fieldName = m[1];
+        const value = m[2];
+        if (TEMPLATE_PLACEHOLDER_VALUE.test(value)) {
+            const placeholder = value.trim();
+            const cleared = `**${fieldName}:** (pending)`;
+            replacements.push({ lineIdx: i, before: line, after: cleared, fieldName });
+        }
+    }
+    if (replacements.length === 0)
+        return content;
+    for (const r of replacements) {
+        lines[r.lineIdx] = r.after;
+        log.push({
+            timestamp,
+            kind: 'placeholder-removed',
+            section: exports.STATE_MD_SECTIONS.currentPosition,
+            before: truncateForLog(r.before.trim()),
+            after: truncateForLog(r.after),
+            reason: `field ${JSON.stringify(r.fieldName)} still carried template placeholder ${JSON.stringify(r.before.match(/\*\*[^*]+:\*\*\s*(.*)$/)?.[1]?.trim() ?? '')}; no canonical source available — replaced with (pending)`,
+        });
+    }
+    return lines.join('\n');
+}
+/**
+ * §2 + epic-#1817 drift class — duplicate `## Session Continuity Archive`
+ * blocks from repeated `state record-session` calls on a corrupt file. The
+ * canonical template has one `## Session Continuity` section; archived blocks
+ * may accumulate as `### Session — <timestamp>` H3 sub-sections under it.
+ * Rebuild keeps the most-recent N (default 3) and drops older duplicates,
+ * logging each drop.
+ *
+ * Conservative scope: only acts when the section has more than 3 H3
+ * `### Session —` sub-headings; otherwise it's a no-op (preserve verbatim).
+ */
+const DEFAULT_MAX_SESSION_ARCHIVES = 3;
+// `tokenizeHeadings` strips leading `#` markers — `h.text` for `### Session — X`
+// is just `Session — X`. Match the bare heading text.
+const SESSION_ARCHIVE_H3 = /^Session\s+—/;
+function deduplicateSessionArchive(content, timestamp, log) {
+    const hs = (0, markdown_sectionizer_cjs_1.tokenizeHeadings)(content);
+    // Find `## Session Continuity` H2.
+    const sectionIdx = hs.findIndex((h) => h.level === 2 && h.text === 'Session Continuity');
+    if (sectionIdx === -1)
+        return content;
+    // Find the section span: from this H2's offset to the next H2 (or EOF).
+    const sectionStart = hs[sectionIdx].offset;
+    let sectionEnd = content.length;
+    for (let i = sectionIdx + 1; i < hs.length; i++) {
+        if (hs[i].level === 2) {
+            sectionEnd = hs[i].offset;
+            break;
+        }
+    }
+    const sectionContent = content.slice(sectionStart, sectionEnd);
+    // Count `### Session — …` H3 sub-headings inside the section.
+    const archiveHeadings = hs.filter((h) => h.level === 3 && h.offset >= sectionStart && h.offset < sectionEnd && SESSION_ARCHIVE_H3.test(h.text));
+    if (archiveHeadings.length <= DEFAULT_MAX_SESSION_ARCHIVES)
+        return content;
+    // Keep the most-recent N by offset (last N in document order; if timestamps
+    // in the H3 text are in chronological order — the template convention —
+    // last-N == most-recent-N).
+    const dropCount = archiveHeadings.length - DEFAULT_MAX_SESSION_ARCHIVES;
+    const toDrop = archiveHeadings.slice(0, dropCount);
+    // Compute the byte spans to drop: each archived H3 spans from its offset to
+    // the next H3 (or to sectionEnd). Drop with one preceding blank line so we
+    // don't leave a dangling separator.
+    let mutated = content;
+    // Process from the bottom up so offsets don't shift mid-edit.
+    for (let i = toDrop.length - 1; i >= 0; i--) {
+        const h = toDrop[i];
+        let spanEnd = sectionEnd;
+        // Find next H3 at-or-after h.offset (within the section).
+        for (const candidate of hs) {
+            if (candidate.level === 3 && candidate.offset > h.offset && candidate.offset < sectionEnd) {
+                spanEnd = candidate.offset;
+                break;
+            }
+        }
+        const dropStart = h.offset;
+        const before = mutated.slice(0, dropStart);
+        const after = mutated.slice(spanEnd);
+        const droppedText = mutated.slice(dropStart, spanEnd);
+        mutated = before + after;
+        log.push({
+            timestamp,
+            kind: 'session-archive-deduplicated',
+            section: exports.STATE_MD_SECTIONS.sessionContinuity,
+            before: truncateForLog(droppedText),
+            after: '',
+            reason: `archived session ${JSON.stringify(h.text)} exceeded the ${DEFAULT_MAX_SESSION_ARCHIVES}-most-recent retention; dropped`,
+        });
+    }
+    return mutated;
+}
+/**
+ * §3 — append a structured audit entry to `## Rebuild Log`. Per ADR-1817 §3
+ * the section is created if absent; existing entries are preserved verbatim
+ * (append-only).
+ *
+ * Format (yaml-ish, human-readable, machine-parseable):
+ *
+ *   ## Rebuild Log
+ *
+ *   - timestamp: 2026-06-29T19:30:00Z
+ *     kind: placeholder-removed
+ *     section: ## Current Position
+ *     before: ...
+ *     after: ...
+ *     reason: ...
+ */
+function appendRebuildLogSection(content, entries) {
+    const lines = content.split('\n');
+    // Render the new entry block.
+    const rendered = [];
+    for (const e of entries) {
+        rendered.push(`- timestamp: ${e.timestamp}`);
+        rendered.push(`  kind: ${e.kind}`);
+        rendered.push(`  section: ${e.section}`);
+        rendered.push(`  before: ${e.before.replace(/\n/g, ' \\n ')}`);
+        rendered.push(`  after: ${e.after.replace(/\n/g, ' \\n ')}`);
+        rendered.push(`  reason: ${e.reason.replace(/\n/g, ' \\n ')}`);
+    }
+    // Locate an existing `## Rebuild Log` section.
+    const sectionHeaderIdx = lines.findIndex((l) => l.trim() === REBUILD_LOG_SECTION);
+    if (sectionHeaderIdx === -1) {
+        // Create the section at end-of-file, separated by a blank line.
+        const needsLeadingBlank = lines.length > 0 && lines[lines.length - 1].trim() !== '';
+        const trailer = needsLeadingBlank ? ['', REBUILD_LOG_SECTION, '', ...rendered] : [REBUILD_LOG_SECTION, '', ...rendered];
+        return [...lines, ...trailer].join('\n');
+    }
+    // Append to the existing section. Find the end of the existing log entries
+    // (walk forward until the next H2 or EOF). Insert before that boundary.
+    let insertAt = sectionHeaderIdx + 1;
+    while (insertAt < lines.length) {
+        const l = lines[insertAt];
+        if (/^##\s/.test(l))
+            break;
+        insertAt++;
+    }
+    // Preserve a blank-line separator before the new entries if the prior line
+    // is non-blank and non-header.
+    const sep = [];
+    if (insertAt > 0 && lines[insertAt - 1].trim() !== '' && lines[insertAt - 1].trim() !== REBUILD_LOG_SECTION) {
+        sep.push('');
+    }
+    const next = [...lines.slice(0, insertAt), ...sep, ...rendered, ...lines.slice(insertAt)];
+    return next.join('\n');
 }
