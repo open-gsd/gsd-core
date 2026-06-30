@@ -34,8 +34,10 @@ const path = require('node:path');
 const { cleanup, createTempDir } = require('./helpers.cjs');
 
 const ROOT = path.join(__dirname, '..');
-const { convertClaudeCommandToClaudeSkill, installRuntimeArtifacts, skillFrontmatterName } =
+const { convertClaudeCommandToClaudeSkill, skillFrontmatterName } =
   require(path.join(ROOT, 'bin', 'install.js'));
+
+const { installRuntimeArtifacts } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'install-engine.cjs'));
 
 const {
   loadSkillsManifest,

@@ -83,8 +83,9 @@ const lockMod = require('./capability-lock.cjs') as {
   _setLockProbes: (probes: Partial<{ isPidAlive: (pid: number) => boolean; getProcessStartTime: (pid: number) => string | null }>) => void;
   _resetLockProbes: () => void;
 };
-const { platformWriteSync } = require('./shell-command-projection.cjs') as {
+const { platformWriteSync, retryRenameSync } = require('./shell-command-projection.cjs') as {
   platformWriteSync: (filePath: string, content: string) => void;
+  retryRenameSync: (fromPath: string, toPath: string) => void;
 };
 // #1463: numeric major.minor.patch comparison for the outdated check (the SAME compare the resolver
 // and capability list use). -1 (a<b), 0 (equal), 1 (a>b).
@@ -506,14 +507,14 @@ function promoteStagingToFinal(
       ? path.join(parent, backupName)
       // CONC-3: a random nonce in the unnamed-branch backup name prevents same-ms cross-process collision.
       : path.join(parent, newBackupName(path.basename(finalDir)));
-    fs.renameSync(finalDir, backupDir);
+    retryRenameSync(finalDir, backupDir);
     // DUR-3: fsync the parent dir so the old→backup rename is durable BEFORE the second rename —
     // a crash here must not lose the backup (the only recovery path for reconcile).
     fsyncDir(parent);
     try {
-      fs.renameSync(stagingDir, finalDir);
+      retryRenameSync(stagingDir, finalDir);
     } catch (err) {
-      try { fs.renameSync(backupDir, finalDir); } catch { /* best-effort restore */ }
+      try { retryRenameSync(backupDir, finalDir); } catch { /* best-effort restore */ }
       throw err;
     }
     // DUR-3: fsync the parent dir again so the staging→final rename is durable too.
@@ -521,7 +522,7 @@ function promoteStagingToFinal(
     return { backupDir };
   }
   fs.mkdirSync(parent, { recursive: true });
-  fs.renameSync(stagingDir, finalDir);
+  retryRenameSync(stagingDir, finalDir);
   fsyncDir(parent); // DUR-3: durable fresh-install promotion.
   return { backupDir: null };
 }
@@ -1535,8 +1536,8 @@ function reconcileCapabilities(opts: { runtimeDir: string; scope?: 'global' | 'p
               //   - crash after step (a): backup still present + `_pending` still references it → retry.
               //   - crash after step (b): old bundle live at finalDir; only the aside copy leaks → swept.
               const discard = `${finalDir}.discard-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-              if (fs.existsSync(finalDir)) fs.renameSync(finalDir, discard); // (a) set the new dir aside
-              fs.renameSync(backupDir, finalDir);                            // (b) restore the old bundle
+              if (fs.existsSync(finalDir)) retryRenameSync(finalDir, discard); // (a) set the new dir aside
+              retryRenameSync(backupDir, finalDir);                            // (b) restore the old bundle
               fsyncDir(root);                                                // make the restore durable
               try { fs.rmSync(discard, { recursive: true, force: true }); } catch { /* swept later */ }
               restored = true;

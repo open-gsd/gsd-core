@@ -24,6 +24,7 @@
       ],
       "probeExists": "gsd-core/VERSION"
     },
+    "localConfigDir": ".agents",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

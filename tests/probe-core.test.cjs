@@ -513,3 +513,111 @@ describe('probe-core: projectProhibitions descriptor projection (CHK-02)', () =>
     assert.ok(!('check_rule' in projected[0]), 'descriptor-less item gains no check_rule');
   });
 });
+
+// ─── Honest verifier (#1154): truth-axis abstention — the verify-time MIRROR of #644's
+//     prohibition judgment-tier (ADR-550 D4), applied to the edge `backstop` truth tier (D7a).
+//     Per ADR-550 D5 the deterministic, CI-testable surface is the disposition helper + the
+//     projection ROUND-TRIP — NEVER the LLM verdict (a test asserting the model's judgment is
+//     vacuous and rejected). The abstain-on-unconfirmed-backstop case is the REGRESSION
+//     (trek-e review condition 5) that must fail RED on `next` before the fix.
+const FM_SCRIPT = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter.cjs');
+const fm = require(FM_SCRIPT);
+
+// Serialize projected truths into a plan-frontmatter `must_haves.truths` block exactly as
+// plan-phase emits it — a backstop truth as a flat-scalar object (ADR-550 #1278: flat scalars,
+// NEVER a nested object), a plain inferable truth as a bare string.
+function renderTruthsBlock(projected) {
+  const lines = ['---', 'must_haves:', '  truths:'];
+  for (const t of projected) {
+    if (typeof t === 'string') {
+      lines.push(`    - ${t}`);
+    } else {
+      lines.push(`    - statement: ${t.statement}`);
+      if (t.verification) lines.push(`      verification: ${t.verification}`);
+    }
+  }
+  lines.push('---');
+  return lines.join('\n');
+}
+
+describe('probe-core: truthStatement / truthVerification normalizers (#1154, Hyrum backward-compat)', () => {
+  test('truthStatement extracts text from a plain-string truth and an object-form truth identically', () => {
+    assert.equal(pc.truthStatement('Overlapping intervals are merged'), 'Overlapping intervals are merged');
+    assert.equal(
+      pc.truthStatement({ statement: 'Adjacent intervals merge', verification: 'backstop' }),
+      'Adjacent intervals merge',
+    );
+  });
+
+  test('truthVerification returns the tier for an object-form truth and null for a plain string (no spurious tier)', () => {
+    assert.equal(pc.truthVerification({ statement: 'Adjacent intervals merge', verification: 'backstop' }), 'backstop');
+    assert.equal(pc.truthVerification('Overlapping intervals are merged'), null);
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'explicit' }), 'explicit');
+  });
+});
+
+describe('probe-core: dispositionForUnverifiableTruth (#1154, ADR-550 D4 truth-axis mirror)', () => {
+  test('abstain-on-unconfirmed-backstop (condition 5, REGRESSION): a backstop truth with no explicit evidence disposes insufficient_spec/unverified/flagged — never green', () => {
+    const d = pc.dispositionForUnverifiableTruth(
+      { statement: 'Adjacent/touching intervals [1,2],[2,3] merge', verification: 'backstop' },
+      { evidence: [] },
+    );
+    assert.equal(d.status, 'unverified', 'a backstop truth with no explicit evidence is unverified');
+    assert.equal(d.flagged, true, 'and flagged — never a silent pass (ADR-550 D4)');
+    assert.equal(d.tier, 'backstop', 'the backstop tier is echoed unchanged');
+    assert.equal(
+      d.reason,
+      'insufficient_spec',
+      'carries the distinguishable insufficient_spec reason code so human_needed is not conflated with ordinary manual-UAT',
+    );
+  });
+
+  test('pass-on-wired-backstop: a backstop truth WITH explicit evidence (a wired held-out/property test) disposes green — abstention is for the unconfirmable only', () => {
+    const d = pc.dispositionForUnverifiableTruth(
+      { statement: 'Adjacent/touching intervals [1,2],[2,3] merge', verification: 'backstop' },
+      { evidence: [{ test: 'tests/intervals.property.test.cjs', passed: true }] },
+    );
+    assert.equal(d.status, 'green');
+    assert.equal(d.flagged, false);
+    assert.equal(d.tier, 'backstop');
+  });
+
+  test('over-abstention guard (AC#3): a plain inferable truth is NEVER routed to abstention', () => {
+    const d = pc.dispositionForUnverifiableTruth('Overlapping intervals are merged', { evidence: [] });
+    assert.equal(d.status, 'green', 'a plain inferable truth is graded normally, never abstained');
+    assert.equal(d.flagged, false);
+  });
+
+  test('over-abstention guard (AC#3): an explicit-tier truth NEVER abstains even with no evidence (only backstop triggers it)', () => {
+    const d = pc.dispositionForUnverifiableTruth({ statement: 'Symbol X is wired', verification: 'explicit' }, { evidence: [] });
+    assert.equal(d.status, 'green', 'an explicit (inferable) truth never abstains');
+    assert.equal(d.flagged, false);
+  });
+});
+
+describe('probe-core: projectTruths (#1154, conservative serializer — Postel) + round-trip parity (condition 4, ADR-550 D5b)', () => {
+  test('projectTruths emits the flat-scalar backstop marker and collapses inferable truths to plain strings', () => {
+    const projected = pc.projectTruths([
+      { statement: 'Adjacent intervals merge', verification: 'backstop' },
+      'Overlapping intervals are merged',
+      { statement: 'Symbol X is wired', verification: 'explicit' },
+    ]);
+    assert.deepEqual(projected, [
+      { statement: 'Adjacent intervals merge', verification: 'backstop' },
+      'Overlapping intervals are merged',
+      'Symbol X is wired',
+    ], 'only a backstop truth carries a structured marker; explicit/inferable truths stay bare strings (no spurious markers)');
+  });
+
+  test('round-trip parity (SPEC backstop edge → must_haves.truths marker → read-back): the marker survives as a structured field, plain truths byte-identically', () => {
+    const projected = pc.projectTruths([
+      { statement: 'Adjacent intervals merge', verification: 'backstop' },
+      'Overlapping intervals are merged',
+    ]);
+    const parsed = fm.parseMustHavesBlock(renderTruthsBlock(projected), 'truths');
+    assert.equal(pc.truthVerification(parsed[0]), 'backstop', 'the backstop marker survives the round-trip as a structured field, not prose (#1110 fragility avoided)');
+    assert.equal(pc.truthStatement(parsed[0]), 'Adjacent intervals merge');
+    assert.equal(pc.truthStatement(parsed[1]), 'Overlapping intervals are merged');
+    assert.equal(pc.truthVerification(parsed[1]), null, 'a plain truth round-trips with no marker (Hyrum byte-identity backward-compat)');
+  });
+});

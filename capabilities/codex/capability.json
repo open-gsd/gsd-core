@@ -17,6 +17,7 @@
         "CODEX_HOME"
       ]
     },
+    "localConfigDir": ".codex",
     "configFormat": "toml",
     "artifactLayout": {
       "global": [

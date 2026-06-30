@@ -30,7 +30,7 @@ const {
   installOpencodeFamilySkills,
   installRuntimeArtifacts,
   _copyStaged,
-} = require('../bin/install.js');
+} = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 

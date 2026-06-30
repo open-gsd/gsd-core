@@ -78,8 +78,11 @@ function coerceTruthToString(t: unknown): string {
     return String(t);
   }
   if (typeof t === 'object') {
-    // Prefer common title-bearing keys produced by parseMustHavesBlock
-    for (const k of ['title', 'text', 'name', 'rule', 'path', 'provides']) {
+    // Prefer common title-bearing keys produced by parseMustHavesBlock. `statement` is the canonical
+    // truth/prohibition payload field — and the carrier of #1154's object-form backstop truth
+    // `{ statement, verification: backstop }`, so it leads (a non-inferable truth must be coerced by
+    // its statement, never dropped — the Hyrum backward-compat guard for the new marker).
+    for (const k of ['statement', 'title', 'text', 'name', 'rule', 'path', 'provides']) {
       const v = (t as Record<string, unknown>)[k];
       if (typeof v === 'string' && v.trim()) return v;
       if (typeof v === 'number' || typeof v === 'boolean') return String(v);
@@ -318,6 +321,16 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   }> = [];
   let match: RegExpExecArray | null;
 
+  // Phase 0 (pre-milestone) and Phase 999 (backlog) are sentinels, not real
+  // phases. They legitimately have no directory and must never be surfaced as
+  // current/next phase or counted in phase_count. Mirrors the engine-wide
+  // sentinel convention (phase-id getMilestoneFromPhaseId, roadmap-command-router
+  // SENTINELS, the #1445 /^999/ progress filters). (#1580)
+  const isSentinelPhase = (num: string): boolean => {
+    const major = parseInt(num, 10);
+    return major === 0 || major === 999;
+  };
+
   // Build phase directory lookup once (O(1) readdir instead of O(N) per phase)
   const _phaseDirNames = (() => {
     try {
@@ -329,6 +342,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
 
   while ((match = phasePattern.exec(content)) !== null) {
     const phaseNum = match[1];
+    if (isSentinelPhase(phaseNum)) continue;
     const phaseName = match[2].replace(/\(INSERTED\)/i, '').trim();
 
     // Extract goal from the section
@@ -437,7 +451,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     checklistPhases.add(checklistMatch[1]);
   }
   const detailPhases = new Set(phases.map(p => p.number));
-  const missingDetails = [...checklistPhases].filter(p => !detailPhases.has(p));
+  const missingDetails = [...checklistPhases].filter(p => !detailPhases.has(p) && !isSentinelPhase(p));
 
   const result = {
     milestones,

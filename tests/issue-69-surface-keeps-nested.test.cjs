@@ -26,7 +26,7 @@ const os = require('node:os');
 const ROOT = path.join(__dirname, '..');
 const COMMANDS_GSD = path.join(ROOT, 'commands', 'gsd');
 
-const { installRuntimeArtifacts } = require('../bin/install.js');
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 const { applySurface } = require('../gsd-core/bin/lib/surface.cjs');
 const { loadSkillsManifest, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');

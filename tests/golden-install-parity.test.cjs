@@ -63,6 +63,18 @@ const VOLATILE_FILES = new Set(['gsd-file-manifest.json', 'gsd-install-state.jso
 // Codex/Cursor hook surface — both embed the platform-varying node-runner command.
 const HOOK_CONFIG_FILES = new Set(['settings.json', 'hooks.json']);
 
+// Path prefixes excluded from the parity manifest. `gsd-core/bin/lib/` holds the
+// tsc-built runtime artifacts (compiled from src/*.cts) that the install COPIES
+// verbatim — they are NOT produced by installRuntimeArtifacts (the move's parity
+// scope), and their exact bytes depend on the BUILD environment (a clean tsc
+// build vs a stale incremental one yields different output for unchanged sources).
+// Including them made the golden non-portable: CI's clean build legitimately
+// differs from a local incremental build for modules the PR never touched
+// (e.g. milestone.cjs, roadmap.cjs). The .cts sources are type-checked + drift-
+// guarded + coverage-gated elsewhere; this harness asserts the CONVERTED artifact
+// output (skills/commands/agents) that the engine actually emits.
+const EXCLUDED_PREFIXES = ['gsd-core/bin/lib/'];
+
 /**
  * Build a deterministic hash-map of all non-volatile files under configDir.
  *
@@ -86,6 +98,7 @@ function buildParityManifest(configDir, root) {
 
     if (VOLATILE_FILES.has(rel)) continue;
     if (HOOK_CONFIG_FILES.has(path.basename(rel))) continue;
+    if (EXCLUDED_PREFIXES.some((p) => rel.startsWith(p))) continue;
 
     const content = fs.readFileSync(full);
     // Normalize every occurrence of the temp root so hashes are stable across runs.

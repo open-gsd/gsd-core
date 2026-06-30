@@ -21,7 +21,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 
-const { installRuntimeArtifacts } = require('../bin/install.js');
+const { installRuntimeArtifacts, uninstallRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
 const { loadSkillsManifest, resolveProfile } = require('../gsd-core/bin/lib/install-profiles.cjs');
 
@@ -31,12 +31,12 @@ const RESOLVED_CORE = resolveProfile({ modes: ['core'], manifest: MANIFEST });
 
 // ─── Layout contract ─────────────────────────────────────────────────────────
 
-describe('enh-790 — augment layout has commands + skills kinds', () => {
-  test('resolveRuntimeArtifactLayout augment returns 2 kinds', () => {
+describe('enh-790 — augment layout has commands + skills + agents kinds', () => {
+  test('resolveRuntimeArtifactLayout augment returns 3 kinds', () => {
     const layout = resolveRuntimeArtifactLayout('augment', '/tmp/fake-augment-dir');
-    assert.strictEqual(layout.kinds.length, 2, 'augment must have exactly 2 artifact kinds');
+    assert.strictEqual(layout.kinds.length, 3, 'augment must have exactly 3 artifact kinds');
     const kindNames = layout.kinds.map(k => k.kind).sort();
-    assert.deepStrictEqual(kindNames, ['commands', 'skills']);
+    assert.deepStrictEqual(kindNames, ['agents', 'commands', 'skills']);
   });
 
   test('augment commands kind targets commands/ with gsd- prefix', () => {
@@ -177,7 +177,7 @@ describe('enh-790 — uninstallRuntimeArtifacts removes augment commands', () =>
     const configDir = createTempDir('gsd-enh790-uninstall-');
     t.after(() => cleanup(configDir));
 
-    const { uninstallRuntimeArtifacts } = require('../bin/install.js');
+    // uninstallRuntimeArtifacts is imported from install-engine.cjs at the top of this file
 
     // Pre-create: a GSD command + a user-owned command
     const commandsDir = path.join(configDir, 'commands');
