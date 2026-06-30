@@ -71,7 +71,6 @@
   "agents/subagents/gsd-user-profiler.yaml": "645826a29d079159",
   "agents/subagents/gsd-verifier.md": "1536f3fa5a2d4419",
   "agents/subagents/gsd-verifier.yaml": "2d2bd6b37626f382",
-  "gsd-core/CHANGELOG.md": "8bf626da3d88f8af",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/gsd-tools.cjs": "74594e8bf36e5580",
