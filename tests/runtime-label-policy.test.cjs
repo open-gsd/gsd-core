@@ -35,7 +35,7 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const { getRuntimeLabel, getRuntimeNewProjectCommand } = runtimeNamePolicy;
 
-// Golden oracle: hardcoded expected map of all 16 runtime ids to their short
+// Golden oracle: hardcoded expected map of all 17 runtime ids to their short
 // install/uninstall display label. A pinned expected value in a TEST is correct
 // — the test IS the oracle (non-circular). Only PRODUCTION code should derive
 // dynamically. If this map diverges from getRuntimeLabel output, either the
@@ -58,9 +58,10 @@ const GOLDEN_LABEL_MAP = {
   kimi: 'Kimi CLI',
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
+  qoder: 'Qoder',
 };
 
-test('getRuntimeLabel: golden map matches for all 16 known runtime ids', () => {
+test('getRuntimeLabel: golden map matches for all 17 known runtime ids', () => {
   for (const [id, expected] of Object.entries(GOLDEN_LABEL_MAP)) {
     const actual = getRuntimeLabel(id);
     assert.strictEqual(

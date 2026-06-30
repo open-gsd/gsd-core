@@ -24,6 +24,11 @@ const {
   neutralizeAgentReferences,
 } = require('../bin/install.js');
 
+const {
+  convertClaudeToQoderMarkdown,
+  convertClaudeAgentToQoderAgent,
+} = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+
 // Sample Claude agent frontmatter (matches actual GSD agent format)
 const SAMPLE_AGENT = `---
 name: gsd-executor
@@ -475,4 +480,158 @@ describe('convertClaudeCommandToOpencodeSkill / convertClaudeCommandToKiloSkill 
       });
     });
   }
+});
+
+describe('convertClaudeToQoderMarkdown — bare .claude rewriting', () => {
+  test('rewrites ~/.claude to ~/.qoder (bare form, no trailing slash)', () => {
+    const out = convertClaudeToQoderMarkdown('Store config in ~/.claude for best results.');
+    assert.ok(out.includes('~/.qoder'), 'bare ~/.claude rewritten to ~/.qoder');
+    assert.ok(!out.includes('.claude'), 'no unreplaced .claude remains');
+  });
+
+  test('rewrites $HOME/.claude to $HOME/.qoder (bare form)', () => {
+    const out = convertClaudeToQoderMarkdown('export PATH="$HOME/.claude/bin:$PATH"');
+    assert.ok(out.includes('$HOME/.qoder'), '$HOME/.claude rewritten');
+    assert.ok(!out.includes('.claude'), 'no unreplaced .claude remains');
+  });
+
+  test('rewrites ./.claude to ./.qoder (bare form)', () => {
+    const out = convertClaudeToQoderMarkdown('See ./.claude for local config.');
+    assert.ok(out.includes('./.qoder'), './.claude rewritten to ./.qoder');
+    assert.ok(!out.includes('.claude'), 'no unreplaced .claude remains');
+  });
+
+  test('preserves CLAUDE_CONFIG_DIR environment variable name', () => {
+    const input = 'Set CLAUDE_CONFIG_DIR=~/.claude to override the config path.';
+    const out = convertClaudeToQoderMarkdown(input);
+    assert.ok(out.includes('CLAUDE_CONFIG_DIR'), 'CLAUDE_CONFIG_DIR is NOT rewritten');
+    assert.ok(out.includes('~/.qoder'), 'but the path value IS rewritten');
+  });
+
+  test('rewrites all .claude/ slash forms before bare forms', () => {
+    const input = 'Skills in .claude/skills/ and config in ~/.claude and env CLAUDE_CONFIG_DIR.';
+    const out = convertClaudeToQoderMarkdown(input);
+    assert.ok(out.includes('.qoder/skills/'), 'slash form rewritten');
+    assert.ok(out.includes('~/.qoder'), 'bare form rewritten');
+    assert.ok(out.includes('CLAUDE_CONFIG_DIR'), 'env var name preserved');
+    assert.ok(!out.match(/(?<![A-Z])\.claude\b/), 'no bare .claude remains (excluding env var)');
+  });
+
+  test('rewrites CLAUDE.md to AGENTS.md and Claude Code to Qoder', () => {
+    const out = convertClaudeToQoderMarkdown('See CLAUDE.md for Claude Code instructions.');
+    assert.ok(out.includes('AGENTS.md'), 'CLAUDE.md rewritten');
+    assert.ok(out.includes('Qoder'), 'Claude Code rewritten');
+  });
+});
+
+describe('convertClaudeAgentToQoderAgent — frontmatter strip + passthrough', () => {
+  test('strips frontmatter to name+description only, removing tools/color/hooks', () => {
+    const input = `---
+name: gsd-executor
+description: "Executes GSD plans with atomic commits"
+color: blue
+tools:
+  - Read
+  - Bash
+# hooks:
+#   onAgentComplete: "some hook"
+---
+
+Agent body content.
+`;
+
+    const result = convertClaudeAgentToQoderAgent(input);
+    assert.ok(result.startsWith('---'), 'frontmatter present');
+    assert.ok(result.includes('name: gsd-executor'), 'name field present');
+    assert.ok(result.includes('description:'), 'description field present');
+    assert.ok(!result.includes('color:'), 'color field stripped');
+    assert.ok(!result.includes('tools:'), 'tools field stripped');
+    assert.ok(!result.includes('# hooks:'), 'hooks comment stripped');
+    assert.ok(result.includes('Agent body content.'), 'body preserved');
+  });
+
+  test('passes through content without frontmatter unchanged', () => {
+    const input = 'No frontmatter here, just plain agent content.';
+    const result = convertClaudeAgentToQoderAgent(input);
+    assert.strictEqual(result, input, 'no-frontmatter content passes through');
+  });
+});
+
+describe('convertClaudeToQoderMarkdown — property: no residual bare .claude', () => {
+  const fc = require('./helpers/fast-check-setup.cjs');
+
+  // Generate random mixes of .claude path forms
+  const claudePathForms = fc.oneof(
+    fc.constant('~/.claude/skills/gsd-help'),
+    fc.constant('$HOME/.claude/commands/gsd-fast'),
+    fc.constant('./.claude/settings.json'),
+    fc.constant('~/.claude'),
+    fc.constant('$HOME/.claude'),
+    fc.constant('.claude/skills/gsd-plan'),
+    fc.constant('CLAUDE_CONFIG_DIR'),
+    fc.constant('See CLAUDE.md for details'),
+    fc.constant('Claude Code is great'),
+  );
+
+  const mixedContent = fc.array(claudePathForms, { minLength: 1, maxLength: 20 })
+    .map(parts => parts.join('\n'));
+
+  test('output contains no bare .claude except CLAUDE_* env-var names', () => {
+    fc.assert(
+      fc.property(mixedContent, (input) => {
+        const out = convertClaudeToQoderMarkdown(input);
+        // Strip known CLAUDE_* env var references (these should survive)
+        const stripped = out.replace(/CLAUDE_[A-Z_]+/g, '');
+        // No remaining bare .claude (as path or reference)
+        const bareClaudeMatch = stripped.match(/(?<![A-Z])\.claude\b(?!\/)/);
+        return bareClaudeMatch === null;
+      }),
+    );
+  });
+
+  test('CLAUDE_CONFIG_DIR is always preserved', () => {
+    fc.assert(
+      fc.property(mixedContent, (input) => {
+        const withEnvVar = `export PATH="$CLAUDE_CONFIG_DIR/bin:$PATH"\n${input}`;
+        const out = convertClaudeToQoderMarkdown(withEnvVar);
+        return out.includes('CLAUDE_CONFIG_DIR');
+      }),
+    );
+  });
+});
+
+describe('convertClaudeToQoderMarkdown — parity with .cts source', () => {
+  test('produces identical output to runtime-artifact-conversion.cjs implementation', () => {
+    // Import the compiled .cts version
+    const { convertClaudeToQoderMarkdown: ctsConvert } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+    
+    // Test fixture covering all rewrite patterns
+    const fixture = [
+      '/gsd:execute-phase',
+      '/gsd:plan-phase 17',
+      '.claude/skills/gsd-help',
+      './.claude/settings.json',
+      '~/.claude/config',
+      '$HOME/.claude/bin',
+      'CLAUDE_CONFIG_DIR=~/.claude',
+      'See CLAUDE.md for Claude Code instructions.',
+      'Claude Code is great',
+    ].join('\n');
+    
+    const binResult = convertClaudeToQoderMarkdown(fixture);
+    const ctsResult = ctsConvert(fixture);
+    
+    assert.strictEqual(binResult, ctsResult,
+      'bin/install.js and gsd-core/bin/lib/runtime-artifact-conversion.cjs implementations must produce identical output');
+    
+    // Verify key transformations
+    assert.ok(binResult.includes('/gsd-execute-phase'), '/gsd: rewritten to /gsd-');
+    assert.ok(binResult.includes('/gsd-plan-phase'), '/gsd:plan-phase rewritten');
+    assert.ok(binResult.includes('.qoder/skills/'), '.claude/skills/ rewritten');
+    assert.ok(binResult.includes('AGENTS.md'), 'CLAUDE.md rewritten');
+    assert.ok(binResult.includes('Qoder'), 'Claude Code rewritten');
+    assert.ok(binResult.includes('CLAUDE_CONFIG_DIR'), 'CLAUDE_CONFIG_DIR preserved');
+    assert.ok(binResult.includes('~/.qoder'), '~/.claude rewritten');
+    assert.ok(binResult.includes('$HOME/.qoder'), '$HOME/.claude rewritten');
+  });
 });

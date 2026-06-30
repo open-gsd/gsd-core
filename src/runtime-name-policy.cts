@@ -31,6 +31,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   kimi: ['kimi'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
   cline: ['cline', 'cline-cli'],
+  qoder: ['qoder', 'qodercli'],
 };
 
 function normalizeRuntimeToken(value: string): string {
@@ -100,7 +101,7 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
  * Mapping table (per the #1529 issue contract):
  *
  *   claude                      → .claude/CLAUDE.md
- *   codex, opencode, kilo, kimi → AGENTS.md
+ *   codex, opencode, kilo, kimi, qoder → AGENTS.md
  *   copilot                     → .github/copilot-instructions.md
  *   antigravity, gemini         → GEMINI.md
  *   unknown / future runtimes   → AGENTS.md (safe cross-agent default)
@@ -112,7 +113,7 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
  *     https://docs.github.com/en/copilot/how-tos/configure-custom-instructions/add-repository-instructions
  *     (Installer parity: runtime-config-adapter-registry.cts installSurface
  *     'copilot-instructions' writes the same `.github/copilot-instructions.md`.)
- *   - codex/opencode/kilo/kimi: AGENTS.md is the documented cross-agent
+ *   - codex/opencode/kilo/kimi/qoder: AGENTS.md is the documented cross-agent
  *     instruction file (agentsmd/agents.md convention).
  *   - antigravity/gemini: GEMINI.md is Gemini CLI's contextFileName.
  *
@@ -126,7 +127,7 @@ export function getProjectInstructionFile(runtime: unknown): string {
   if (canonical === 'claude') return '.claude/CLAUDE.md';
   if (canonical === 'copilot') return '.github/copilot-instructions.md';
   if (canonical === 'antigravity' || canonical === 'gemini') return 'GEMINI.md';
-  // codex, opencode, kilo, kimi, AND unknown/future runtimes all default to
+  // codex, opencode, kilo, kimi, qoder, AND unknown/future runtimes all default to
   // root AGENTS.md (the safe cross-agent instruction file).
   return 'AGENTS.md';
 }
@@ -196,6 +197,7 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   kimi: 'Kimi CLI',
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
+  qoder: 'Qoder',
 };
 
 /**
@@ -244,6 +246,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   codebuddy: "'.codebuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
+  qoder:     "'.qoder'",
 };
 
 /**
@@ -268,6 +271,7 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi',
+  'qoder',
 ] as const);
 
 /**

@@ -94,6 +94,10 @@ describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
     assert.strictEqual(getProjectInstructionFile('kimi'), 'AGENTS.md');
   });
 
+  test('qoder maps to AGENTS.md (AGENTS.md compatibility per Qoder docs)', () => {
+    assert.strictEqual(getProjectInstructionFile('qoder'), 'AGENTS.md');
+  });
+
   test('copilot maps to .github/copilot-instructions.md (GitHub docs read path)', () => {
     assert.strictEqual(getProjectInstructionFile('copilot'), '.github/copilot-instructions.md');
   });
@@ -122,5 +126,7 @@ describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
     assert.strictEqual(getProjectInstructionFile('gemini-cli'), 'GEMINI.md');
     // github-copilot is an alias for copilot.
     assert.strictEqual(getProjectInstructionFile('github-copilot'), '.github/copilot-instructions.md');
+    // qodercli is an alias for qoder.
+    assert.strictEqual(getProjectInstructionFile('qodercli'), 'AGENTS.md');
   });
 });

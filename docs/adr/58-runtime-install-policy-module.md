@@ -58,3 +58,14 @@ The `InstallPlan` is realized as the exported `resolveInstallPlan(runtime)` in `
 - ADR-0008 — Installer Migration Module (adjacent installer seam).
 - `CONTEXT.md` § Glossary — Domain modules and seams (the architecture seam map / glossary this module is registered in).
 - Installer-refactor chain: #58 (this ADR) → #60 (explicit adapter registry) → #56 (retire legacy directory helpers) → #57.
+
+## Addendum: Qoder runtime (#860)
+
+- **Date:** 2026-06-11
+- **PR:** #1021
+
+Qoder (`qodercli`) registered in the Runtime Config Adapter Registry:
+
+- `qoder: { installSurface: 'settings-json', writesSharedSettings: true, finishPermissionWriter: null }`
+
+Uses the `settings-json` install surface (Claude Code-compatible `settings.json` hook registration). GSD-managed hooks (prompt-guard, context-monitor, read-injection-scanner, worktree-path-guard, etc.) are written to `~/.qoder/settings.json` (global) or `.qoder/settings.json` (local) via `applySettingsJsonHooks`. The `writesSharedSettings: true` flag gates the on-disk write in `finishInstall`. No new adapter logic needed beyond the existing `settings-json` surface; the registry entry exists so `resolveRuntimeConfigIntent('qoder')` resolves without throwing and the layout-driven install/uninstall pipelines include Qoder in their iteration.

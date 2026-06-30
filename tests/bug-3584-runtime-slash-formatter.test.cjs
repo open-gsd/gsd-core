@@ -62,6 +62,14 @@ describe('formatGsdSlash — runtime-aware slash command formatter', () => {
       assert.strictEqual(formatGsdSlash('new-project', 'gemini-cli'), '/gsd-new-project');
       assert.strictEqual(formatGsdSlash('new-project', 'opencode-cli'), '/gsd-new-project');
     });
+
+    test('emits /gsd-<cmd> for qoder', () => {
+      assert.strictEqual(formatGsdSlash('execute-phase', 'qoder'), '/gsd-execute-phase');
+    });
+
+    test('emits /gsd-<cmd> for qoder alias (qodercli)', () => {
+      assert.strictEqual(formatGsdSlash('plan-phase', 'qodercli'), '/gsd-plan-phase');
+    });
   });
 
   describe('codex shell-var form', () => {
