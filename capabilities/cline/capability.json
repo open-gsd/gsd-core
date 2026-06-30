@@ -1,7 +1,7 @@
 {
   "id": "cline",
   "role": "runtime",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "title": "Cline",
   "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
   "tier": "core",
@@ -43,7 +43,14 @@
     "hostIntegration": {
       "embeddingMode": "imperative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": true, "subagentToolkit": "read-only", "backgroundDispatch": false },
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": false,
+        "maxDepth": 1,
+        "background": true,
+        "subagentToolkit": "read-only",
+        "backgroundDispatch": false
+      },
       "modelMode": "active",
       "hookBus": "host",
       "stateIO": "filesystem",

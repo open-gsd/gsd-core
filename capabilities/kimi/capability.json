@@ -1,7 +1,7 @@
 {
   "id": "kimi",
   "role": "runtime",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "title": "Kimi CLI",
   "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
   "tier": "core",
@@ -56,7 +56,14 @@
     "hostIntegration": {
       "embeddingMode": "imperative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": true, "subagentToolkit": "undocumented", "backgroundDispatch": false },
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": false,
+        "maxDepth": 1,
+        "background": true,
+        "subagentToolkit": "undocumented",
+        "backgroundDispatch": false
+      },
       "modelMode": "passive",
       "hookBus": "host",
       "stateIO": "filesystem",
