@@ -1666,8 +1666,9 @@ function reconcileCurrentPosition(
   // by other transitions (beginPhase / completePhase) and reconstructed from
   // total-phase counts; rebuild reconciles only the `**Current Phase:**` body
   // field that frontmatter is the canonical source for.
-  if (fm.current_phase !== undefined && fm.current_phase !== null) {
-    const canonicalPhase = String(fm.current_phase);
+  const fmPhase = fm.current_phase;
+  if (typeof fmPhase === 'string' || typeof fmPhase === 'number') {
+    const canonicalPhase = String(fmPhase);
     const existing = stateExtractField(modified, 'Current Phase');
     if (existing !== null && existing !== canonicalPhase) {
       const replaced = stateReplaceField(modified, 'Current Phase', canonicalPhase);
@@ -1686,8 +1687,9 @@ function reconcileCurrentPosition(
   }
 
   // Phase name prose.
-  if (fm.current_phase_name !== undefined && fm.current_phase_name !== null) {
-    const canonicalName = String(fm.current_phase_name);
+  const fmPhaseName = fm.current_phase_name;
+  if (typeof fmPhaseName === 'string' || typeof fmPhaseName === 'number') {
+    const canonicalName = String(fmPhaseName);
     const existing = stateExtractField(modified, 'Current Phase Name');
     if (existing !== null && existing !== canonicalName) {
       const replaced = stateReplaceField(modified, 'Current Phase Name', canonicalName);
@@ -1821,7 +1823,6 @@ function stripTemplatePlaceholders(
     const fieldName = m[1];
     const value = m[2];
     if (TEMPLATE_PLACEHOLDER_VALUE.test(value)) {
-      const placeholder = value.trim();
       const cleared = `**${fieldName}:** (pending)`;
       replacements.push({ lineIdx: i, before: line, after: cleared, fieldName });
     }
@@ -1874,8 +1875,6 @@ function deduplicateSessionArchive(
   for (let i = sectionIdx + 1; i < hs.length; i++) {
     if (hs[i].level === 2) { sectionEnd = hs[i].offset; break; }
   }
-  const sectionContent = content.slice(sectionStart, sectionEnd);
-
   // Count `### Session — …` H3 sub-headings inside the section.
   const archiveHeadings = hs.filter(
     (h) => h.level === 3 && h.offset >= sectionStart && h.offset < sectionEnd && SESSION_ARCHIVE_H3.test(h.text),

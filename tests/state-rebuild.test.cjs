@@ -367,8 +367,7 @@ describe('ADR-1817 §2: rebuild reconciles **By Phase:** table via phaseInventor
         { number: '3', name: 'Test Phase', planCount: 5, summaryCount: 4 },
       ],
     };
-    const result = transitionCore(drifted, { kind: 'rebuild' }, baseDeps);
-    // Note: passing baseDeps here (no provider) → reconcile is a no-op.
+    // First call with no phaseInventoryProvider → no-op (covered by its own test below).
     // Re-run with the provider-wired deps:
     const result2 = transitionCore(drifted, { kind: 'rebuild' }, deps);
     // Strip the audit log so we only inspect LIVE table rows (the log's
@@ -421,7 +420,6 @@ describe('ADR-1817 §2: rebuild reconciles **By Phase:** table via phaseInventor
 describe('ADR-1817 §5/§6: rebuild does not affect sync or prune (regression guard, criterion #7)', () => {
   test('sync still patches its three frontmatter fields when rebuild is also available', () => {
     const state = cleanState();
-    const before = state;
     const result = transitionCore(
       state,
       { kind: 'sync', totalPlansInPhase: 7, percent: 50 },
