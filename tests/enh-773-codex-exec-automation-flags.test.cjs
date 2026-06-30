@@ -99,3 +99,42 @@ describe('enh-773: automated codex exec invocations include --ephemeral and --da
     }
   });
 });
+
+describe('#1698 regression: codex review is captured via --output-last-message, not stdout', () => {
+  // WHY: on some platforms (Windows) `codex exec` writes process-teardown output
+  // to stdout *after* the final agent message. A `> FILE` stdout redirect appends
+  // that noise to a non-empty file, so it slips past the `[ ! -s … ]` empty-output
+  // guard and downstream consumers (severity extraction, the
+  // plan-review-convergence "concerns resolved?" gate) parse a polluted review.
+  // `-o/--output-last-message <FILE>` writes only the final message — robust on
+  // every platform — so each codex invocation must capture via -o and discard stdout.
+  const workflow = fs.readFileSync(
+    path.join(process.cwd(), 'gsd-core', 'workflows', 'review.md'),
+    'utf8'
+  );
+  const codexExecLines = workflow
+    .split(/\r?\n/)
+    .filter((line) => line.includes('codex exec') && !line.includes('codex exec --help'));
+
+  test('every codex exec invocation captures the review via -o <FILE>', () => {
+    for (const line of codexExecLines) {
+      assert.ok(
+        /\s-o\s+\/tmp\/gsd-review-codex-\{phase\}\.md\b/.test(line),
+        `codex exec invocation must capture the review via -o /tmp/gsd-review-codex-{phase}.md:\n  ${line.trim()}`
+      );
+    }
+  });
+
+  test('no codex exec invocation redirects stdout into the review file', () => {
+    for (const line of codexExecLines) {
+      assert.ok(
+        !/>\s*\/tmp\/gsd-review-codex-\{phase\}\.md\b/.test(line),
+        `codex exec must not redirect stdout into the review file (teardown noise pollutes it); use -o + >/dev/null:\n  ${line.trim()}`
+      );
+      assert.ok(
+        />\s*\/dev\/null\b/.test(line),
+        `codex exec must discard stdout to /dev/null so teardown output is not captured:\n  ${line.trim()}`
+      );
+    }
+  });
+});

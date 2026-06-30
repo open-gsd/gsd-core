@@ -1307,8 +1307,9 @@ function reconcileCurrentPosition(content, timestamp, log) {
     // by other transitions (beginPhase / completePhase) and reconstructed from
     // total-phase counts; rebuild reconciles only the `**Current Phase:**` body
     // field that frontmatter is the canonical source for.
-    if (fm.current_phase !== undefined && fm.current_phase !== null) {
-        const canonicalPhase = String(fm.current_phase);
+    const fmPhase = fm.current_phase;
+    if (typeof fmPhase === 'string' || typeof fmPhase === 'number') {
+        const canonicalPhase = String(fmPhase);
         const existing = (0, state_document_cjs_1.stateExtractField)(modified, 'Current Phase');
         if (existing !== null && existing !== canonicalPhase) {
             const replaced = (0, state_document_cjs_1.stateReplaceField)(modified, 'Current Phase', canonicalPhase);
@@ -1326,8 +1327,9 @@ function reconcileCurrentPosition(content, timestamp, log) {
         }
     }
     // Phase name prose.
-    if (fm.current_phase_name !== undefined && fm.current_phase_name !== null) {
-        const canonicalName = String(fm.current_phase_name);
+    const fmPhaseName = fm.current_phase_name;
+    if (typeof fmPhaseName === 'string' || typeof fmPhaseName === 'number') {
+        const canonicalName = String(fmPhaseName);
         const existing = (0, state_document_cjs_1.stateExtractField)(modified, 'Current Phase Name');
         if (existing !== null && existing !== canonicalName) {
             const replaced = (0, state_document_cjs_1.stateReplaceField)(modified, 'Current Phase Name', canonicalName);
@@ -1456,7 +1458,6 @@ function stripTemplatePlaceholders(content, timestamp, log) {
         const fieldName = m[1];
         const value = m[2];
         if (TEMPLATE_PLACEHOLDER_VALUE.test(value)) {
-            const placeholder = value.trim();
             const cleared = `**${fieldName}:** (pending)`;
             replacements.push({ lineIdx: i, before: line, after: cleared, fieldName });
         }
@@ -1506,7 +1507,6 @@ function deduplicateSessionArchive(content, timestamp, log) {
             break;
         }
     }
-    const sectionContent = content.slice(sectionStart, sectionEnd);
     // Count `### Session — …` H3 sub-headings inside the section.
     const archiveHeadings = hs.filter((h) => h.level === 3 && h.offset >= sectionStart && h.offset < sectionEnd && SESSION_ARCHIVE_H3.test(h.text));
     if (archiveHeadings.length <= DEFAULT_MAX_SESSION_ARCHIVES)
