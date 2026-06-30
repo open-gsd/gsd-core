@@ -110,10 +110,12 @@
         "bug-3454-state-dollar-backreference-growth.test.cjs",
         "bug-397-state-preserve-executor-authored.test.cjs",
         "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
-        "bug-948-state-noop-write-guard.test.cjs",
-        "state-acquirestatelock-non-eexist.test.cjs",
-        "state-prune.test.cjs",
-        "state.test.cjs"
+    "bug-948-state-noop-write-guard.test.cjs",
+    "state-acquirestatelock-non-eexist.test.cjs",
+    "state-prune.test.cjs",
+    "state-rebuild-cli.test.cjs",
+    "state-rebuild.test.cjs",
+    "state.test.cjs"
       ],
       "issue": "180"
     },

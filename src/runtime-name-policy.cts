@@ -257,3 +257,51 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
   const frag = GLOBAL_CONFIG_HOME_FRAGMENTS[runtime];
   return typeof frag === 'string' && frag.length > 0 ? frag : DEFAULT_CONFIG_HOME_FRAGMENT;
 }
+
+/**
+ * The runtime ids for which `bin/install.js` needs an `is<Runtime>` boolean
+ * predicate (every installed host that takes a non-claude install branch).
+ * Single source of truth — adding a runtime is one entry here, not a per-
+ * function declaration block (the add-a-host tax ADR-1239 Phase B / #1679 AC2
+ * removes).
+ */
+const RUNTIME_FLAG_IDS = Object.freeze([
+  'opencode', 'kilo', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi',
+] as const);
+
+/**
+ * Return a frozen map of `is<Runtime>` boolean predicates for the given runtime
+ * id (e.g. `flags.isOpencode`). Collapses the four duplicated `const isX =
+ * runtime === 'x'` declaration blocks that lived in `bin/install.js`'s
+ * `uninstall`/`writeManifest`/`install`/etc. into one helper (sibling to
+ * `getDirName`/`getRuntimeLabel`). Pure: no I/O.
+ */
+export function runtimeFlags(runtime: string): Readonly<Record<string, boolean>> {
+  const flags: Record<string, boolean> = {};
+  for (const id of RUNTIME_FLAG_IDS) {
+    flags['is' + id.charAt(0).toUpperCase() + id.slice(1)] = runtime === id;
+  }
+  return Object.freeze(flags);
+}
+
+/**
+ * The `/gsd-new-project` invocation syntax per runtime — the post-install
+ * "next step" command string. Most runtimes use the default `/gsd-new-project`;
+ * a few hosts need a different surface syntax. Collapses the 14-line
+ * `if (runtime === 'x') command = ...` chain in bin/install.js's next-step
+ * message (ADR-1239 Phase B / #1679 AC2). Pure: no I/O.
+ */
+const DEFAULT_NEW_PROJECT_COMMAND = '/gsd-new-project';
+const RUNTIME_NEW_PROJECT_COMMANDS: Readonly<Record<string, string>> = {
+  gemini: '/gsd:new-project',
+  codex: '$gsd-new-project',
+  cursor: 'gsd-new-project (mention the skill name)',
+  kimi: '/skill:gsd-new-project',
+};
+
+export function getRuntimeNewProjectCommand(runtime: string): string {
+  if (!runtime) return DEFAULT_NEW_PROJECT_COMMAND;
+  const c = RUNTIME_NEW_PROJECT_COMMANDS[runtime];
+  return typeof c === 'string' && c.length > 0 ? c : DEFAULT_NEW_PROJECT_COMMAND;
+}

@@ -62,6 +62,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [1508-runtime-artifact-conversion-module.md](1508-runtime-artifact-conversion-module.md) | Runtime Artifact Conversion Module owns per-runtime content rewriting | Accepted |
 | [1593-skill-mapping-converter-methodology.md](1593-skill-mapping-converter-methodology.md) | Skill mapping & converter methodology across runtimes | Accepted |
 | [1769-state-md-transition-module.md](1769-state-md-transition-module.md) | STATE.md Transition Module — intent-based transitions over scattered RMW callbacks | Proposed |
+| [1817-state-md-rebuild-derivability-contract.md](1817-state-md-rebuild-derivability-contract.md) | STATE.md rebuild — derivability contract (capstone 11th transition) | Accepted |
 
 ## Seam map
 

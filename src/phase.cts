@@ -1648,7 +1648,16 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (isLastPhase && roadmapContent !== null) {
         try {
           const roadmapForPhases = extractCurrentMilestone(roadmapContent, cwd);
-          const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+          // #1591: match BOTH heading-style phases (`### Phase N:`) AND
+          // checkbox-list items (`- [ ] Phase N:` / `- [x] Phase N:`). When
+          // the active milestone's checklist is `- [ ]` items inside a
+          // <details> block (and the next phase has no directory yet, so the
+          // disk-based resolver finds nothing), this roadmap-enumeration
+          // fallback is the only path that can find the next phase. The prior
+          // heading-only pattern missed checkbox items → is_last_phase=true on
+          // a mid-milestone phase. The marker alternation is the only change;
+          // the number/name captures are unchanged.
+          const phasePattern = /(?:#{2,4}|-\s*\[[ xX]\])\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {
             if (comparePhaseNum(pm[1], phaseNum) > 0) {

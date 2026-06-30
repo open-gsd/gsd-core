@@ -33,7 +33,7 @@ const assert = require('node:assert/strict');
 const runtimeNamePolicy = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
-const { getRuntimeLabel } = runtimeNamePolicy;
+const { getRuntimeLabel, getRuntimeNewProjectCommand } = runtimeNamePolicy;
 
 // Golden oracle: hardcoded expected map of all 16 runtime ids to their short
 // install/uninstall display label. A pinned expected value in a TEST is correct
@@ -100,4 +100,31 @@ test('getRuntimeLabel fallback: alias is NOT auto-expanded (raw id match only)',
   // explicit and prevents a future alias from changing console output by accident.
   assert.strictEqual(getRuntimeLabel('claude-code'), 'Claude Code',
     'getRuntimeLabel("claude-code") must return the default "Claude Code" (raw-id match only; aliases are not expanded)');
+});
+
+// ---------------------------------------------------------------------------
+// getRuntimeNewProjectCommand (ADR-1239 Phase B / #1679 AC2) — the per-runtime
+// /gsd-new-project invocation syntax for the post-install next-step message.
+// ---------------------------------------------------------------------------
+
+const GOLDEN_COMMAND_MAP = {
+  // 4 real overrides (the rest use the default):
+  gemini: '/gsd:new-project',
+  codex: '$gsd-new-project',
+  cursor: 'gsd-new-project (mention the skill name)',
+  kimi: '/skill:gsd-new-project',
+};
+const DEFAULT_CMD = '/gsd-new-project';
+
+test('getRuntimeNewProjectCommand: the 4 overrides + the default for the other 12 runtimes', () => {
+  for (const [id, expected] of Object.entries(GOLDEN_COMMAND_MAP)) {
+    assert.strictEqual(getRuntimeLabel ? getRuntimeNewProjectCommand(id) : null, expected, `override ${id}`);
+  }
+  // sanity: getRuntimeNewProjectCommand is imported alongside getRuntimeLabel above
+});
+
+test('getRuntimeNewProjectCommand: claude/unknown/empty + the 12 non-override runtimes → default', () => {
+  for (const id of ['claude', 'opencode', 'kilo', 'copilot', 'antigravity', 'windsurf', 'augment', 'trae', 'cline', 'qwen', 'hermes', 'codebuddy', 'unknown', '']) {
+    assert.strictEqual(getRuntimeNewProjectCommand(id), DEFAULT_CMD, `runtime '${id}' must return the default command`);
+  }
 });
