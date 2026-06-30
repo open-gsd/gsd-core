@@ -104,7 +104,6 @@
   "commands/gsd-verify-work.md": "1cb62ea69b117acb",
   "commands/gsd-workspace.md": "dd1bc09d2b768e0b",
   "commands/gsd-workstreams.md": "52ab9c585d3a00f3",
-  "gsd-core/CHANGELOG.md": "8bf626da3d88f8af",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/gsd-tools.cjs": "74594e8bf36e5580",

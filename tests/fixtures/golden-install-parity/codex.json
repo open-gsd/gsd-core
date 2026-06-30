@@ -70,7 +70,6 @@
   "agents/gsd-verifier.md": "3471118de7e985c7",
   "agents/gsd-verifier.toml": "68f4dcc6c0311e00",
   "config.toml": "a34316b9ac61a620",
-  "gsd-core/CHANGELOG.md": "8bf626da3d88f8af",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/gsd-tools.cjs": "74594e8bf36e5580",

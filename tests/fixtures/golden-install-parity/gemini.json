@@ -104,7 +104,6 @@
   "commands/gsd/verify-work.toml": "58ec25cb1f5d5434",
   "commands/gsd/workspace.toml": "7f1658bb61c9743d",
   "commands/gsd/workstreams.toml": "95f0c349b808a84c",
-  "gsd-core/CHANGELOG.md": "8bf626da3d88f8af",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/gsd-tools.cjs": "74594e8bf36e5580",
