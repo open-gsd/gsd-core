@@ -1,7 +1,7 @@
 {
   "id": "gemini",
   "role": "runtime",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "title": "Gemini CLI",
   "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
   "tier": "core",
@@ -57,7 +57,14 @@
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-toml",
-      "dispatch": { "namedDispatch": true, "nested": false, "maxDepth": 1, "background": "undocumented", "subagentToolkit": "undocumented", "backgroundDispatch": false },
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": false,
+        "maxDepth": 1,
+        "background": "undocumented",
+        "subagentToolkit": "undocumented",
+        "backgroundDispatch": false
+      },
       "modelMode": "passive",
       "hookBus": "host",
       "stateIO": "filesystem",

@@ -1,7 +1,7 @@
 {
   "id": "opencode",
   "role": "runtime",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "title": "OpenCode",
   "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
   "tier": "core",
@@ -70,7 +70,14 @@
     "hostIntegration": {
       "embeddingMode": "imperative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": true, "nested": "undocumented", "maxDepth": "undocumented", "background": false, "subagentToolkit": "full", "backgroundDispatch": "undocumented" },
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": "undocumented",
+        "maxDepth": "undocumented",
+        "background": false,
+        "subagentToolkit": "full",
+        "backgroundDispatch": "undocumented"
+      },
       "modelMode": "active",
       "hookBus": "host",
       "stateIO": "filesystem",

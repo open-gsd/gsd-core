@@ -1,7 +1,7 @@
 {
   "id": "augment",
   "role": "runtime",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "title": "Augment Code",
   "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
   "tier": "core",
@@ -85,7 +85,14 @@
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-file",
-      "dispatch": { "namedDispatch": true, "nested": "undocumented", "maxDepth": "undocumented", "background": true, "subagentToolkit": "full", "backgroundDispatch": "undocumented" },
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": "undocumented",
+        "maxDepth": "undocumented",
+        "background": true,
+        "subagentToolkit": "full",
+        "backgroundDispatch": "undocumented"
+      },
       "modelMode": "passive",
       "hookBus": "host",
       "stateIO": "filesystem",
