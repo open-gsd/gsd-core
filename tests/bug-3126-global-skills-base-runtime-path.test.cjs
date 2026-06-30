@@ -10,7 +10,7 @@
 //   [agent-skills] WARNING: Global skill not found at "~/.cursor/skills/X/SKILL.md" — skipping
 //
 // Fix introduces gsd-core/bin/lib/runtime-homes.cjs with first-class
-// support for all 16 supported runtimes, including:
+// support for all 17 supported runtimes, including:
 //   - hermes: nested skills/gsd/<skillName>/ layout (#2841)
 //   - cline: rules-based, returns null (no skills directory)
 //   - CLAUDE_CONFIG_DIR env var for Claude (was missing)
