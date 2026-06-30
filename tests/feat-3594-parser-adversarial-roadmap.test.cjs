@@ -90,27 +90,69 @@ describe('feat-3594: roadmap parser and fenced-code-block headings (#2787)', () 
     assert.match(result.parsed.phase_name, /real phase one/);
   });
 
-  test('phase 999 inside a fenced block: CJS parser currently STILL matches it (open: needs fence-stripping)', (t) => {
+  test('phase 999 inside a fenced block is ignored', (t) => {
     const projectDir = projectWithFixture(t, 'phase-heading-inside-fenced-code.md');
     const result = getPhase(projectDir, '999');
     assert.equal(result.hasStackTrace, false, 'no stack trace');
-    // The CJS regex parser does not strip fenced code blocks before
-    // matching. The SDK roadmap parser tracks fenced blocks (per #2787
-    // comment in sdk/src/query/roadmap.ts) — the CJS path has not caught
-    // up. This test pins the current behavior so the day someone wires
-    // CJS fence-stripping, flipping `found: true` to `found: false`
-    // becomes the regression guard.
     assert.ok(result.parsed, `expected JSON payload, got: ${result.raw}`);
-    assert.equal(result.parsed.found, true, 'CJS parser currently matches inside fences (known open bug)');
-    // The matched heading is the one INSIDE the fenced block. Match
-    // its distinctive substring so a future "fix" that strips fences
-    // and instead matches a different (real) phase 999 (which we don't
-    // have in this fixture, so impossible) still fails the right test.
-    assert.match(
-      result.parsed.phase_name,
-      /fenced code block/i,
-      'currently-matched heading must be the one inside the fence',
+    assert.equal(result.parsed.found, false, 'phase headings inside fenced blocks must not be parsed');
+  });
+
+  test('fenced example heading does not shadow the real phase details and backlog phase stays unresolved (#1588)', (t) => {
+    const projectDir = createTempProject('roadmap-1588-');
+    t.after(() => cleanup(projectDir));
+    fs.writeFileSync(
+      path.join(projectDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.1',
+        'status: planning',
+        '---',
+        '',
+      ].join('\n')
     );
+    fs.writeFileSync(
+      path.join(projectDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '<details open>',
+        '<summary>v1.1 Current (Phases 8-9) - PLANNED</summary>',
+        '',
+        '- [ ] **Phase 9: Real Phase**',
+        '',
+        '</details>',
+        '',
+        '## Phase Details',
+        '',
+        '```markdown',
+        '### Phase 9: Fenced Example Phase',
+        '**Goal:** This example must not be treated as roadmap structure.',
+        '```',
+        '',
+        '### Phase 9: Real Phase',
+        '**Goal:** Use the real phase details outside the fenced block.',
+        '**Requirements:** REAL-01',
+        '',
+        '## Backlog',
+        '',
+        '### Phase 999.1: Backlog Thing',
+        '**Goal:** Future backlog item.',
+        '',
+      ].join('\n')
+    );
+
+    const phase9 = getPhase(projectDir, '9');
+    assert.ok(phase9.parsed, `expected JSON payload, got: ${phase9.raw}`);
+    assert.equal(phase9.parsed.found, true, 'phase 9 must be found');
+    assert.equal(phase9.parsed.phase_name, 'Real Phase');
+    assert.equal(phase9.parsed.goal, 'Use the real phase details outside the fenced block.');
+    assert.match(phase9.parsed.section, /REAL-01/, 'real phase section must be returned');
+
+    const backlog = getPhase(projectDir, '999.1');
+    assert.ok(backlog.parsed, `expected JSON payload, got: ${backlog.raw}`);
+    assert.equal(backlog.parsed.found, false, 'backlog sentinel phase must not resolve as an active roadmap phase');
   });
 });
 
@@ -205,15 +247,12 @@ describe('feat-3594: roadmap parser and HTML-commented headings', () => {
     assert.equal(result.parsed.phase_name, 'real phase');
   });
 
-  test('phase 999 inside an HTML comment: CJS parser currently STILL matches it (open: needs comment-stripping)', (t) => {
+  test('phase 999 inside an HTML comment remains ignored because backlog sentinels never resolve', (t) => {
     const projectDir = projectWithFixture(t, 'markdown-headings-inside-html-comment.md');
     const result = getPhase(projectDir, '999');
     assert.equal(result.hasStackTrace, false, 'no stack trace');
-    // Same shape as the fenced-code-block case: the CJS regex parser
-    // doesn't strip HTML comments before matching.
     assert.ok(result.parsed, `expected JSON payload, got: ${result.raw}`);
-    assert.equal(result.parsed.found, true, 'CJS parser currently matches inside HTML comments (known open bug)');
-    assert.match(result.parsed.phase_name, /HTML comment/);
+    assert.equal(result.parsed.found, false, 'backlog sentinel phases must not resolve');
   });
 });
 
