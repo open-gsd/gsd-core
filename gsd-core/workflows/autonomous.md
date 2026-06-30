@@ -125,9 +125,16 @@ Run phase discovery:
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
 if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
+STATE_CONTENT=$(cat .planning/STATE.md 2>/dev/null || true)
 ```
 
 Parse the JSON `phases` array.
+
+Parse the optional `## Deferred Verification` table from `STATE_CONTENT` and build a deferred-phase map keyed by phase number:
+- `verification_deferred_human` -> resume with `/gsd:verify-work <phase>`
+- `verification_deferred_gaps` -> resume with `/gsd:plan-phase <phase> --gaps`
+
+**Skip deferred phases on autonomous re-entry:** after loading `phases`, drop any phase whose number appears in the deferred-phase map. These phases remain unresolved, but autonomous mode must not re-enter them automatically on later reruns. They require the explicit resume command recorded in `STATE.md`.
 
 **Filter to incomplete phases:** Keep `phase_complete !== true`, including implemented phases with `verification_status !== "passed"`.
 
@@ -179,6 +186,19 @@ Exit cleanly.
 | 7 | Auto-Chain Refinements | Not Started |
 | 8 | Lifecycle Orchestration | Not Started |
 ```
+
+**If any deferred phases were skipped:** display a follow-up block immediately after the phase plan:
+
+```markdown
+## Deferred Verification (Skipped on Re-entry)
+
+| Phase | State | Resume |
+|-------|-------|--------|
+| 4 | verification_deferred_human | /gsd:verify-work 4 |
+| 6 | verification_deferred_gaps | /gsd:plan-phase 6 --gaps |
+```
+
+Do not include deferred phases in the execution queue for this autonomous run.
 
 **Fetch details for each phase:**
 
@@ -645,10 +665,12 @@ Proceed to lifecycle step (partial completion skips audit/complete/cleanup). Exi
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
 if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
+STATE_CONTENT=$(cat .planning/STATE.md 2>/dev/null || true)
 ```
 
 Re-filter incomplete phases using the same logic as discover_phases:
 - Keep phases where `phase_complete !== true` or `verification_status !== "passed"`
+- Parse the `## Deferred Verification` table again and drop deferred phases from the autonomous queue
 - Apply `--from N` filter if originally provided
 - Apply `--to N` filter if originally provided
 - Sort by number ascending
@@ -662,6 +684,8 @@ cat .planning/STATE.md
 Check for blockers in the Blockers/Concerns section. If blockers are found, go to handle_blocker with the blocker description.
 
 If incomplete phases remain: proceed to next phase, loop back to execute_phase.
+
+If no runnable phases remain but deferred phases were skipped: display `Autonomous run stopped with deferred verification phases still pending. Resume them with the commands listed in Deferred Verification.` Then proceed to lifecycle only if every non-deferred phase is complete; otherwise go to handle_blocker.
 
 **Interactive mode overlap:** When `INTERACTIVE` is set, the iterate step enables pipeline parallelism **on Codex** (on every other runtime, plan/execute run inline — see 3b/3c — so there is no overlap and phases run sequentially):
 1. After discuss completes for Phase N, dispatch plan+execute as background agents
