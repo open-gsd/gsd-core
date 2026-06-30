@@ -32,7 +32,7 @@ const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateTransitionMod = require('./state-transition.cjs');
-const { transitionCore, applyStatePreservation } = stateTransitionMod;
+const { transitionCore, applyStatePreservation, sliceCurrentPositionSection } = stateTransitionMod;
 type StateTransitionIntent = stateTransitionMod.StateTransitionIntent;
 type StateTransitionDeps = stateTransitionMod.StateTransitionDeps;
 type PhaseInventoryRecord = stateTransitionMod.PhaseInventoryRecord;
@@ -2501,12 +2501,31 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   const keepRecent = parseInt(String(options.keepRecent), 10) || 3;
   const dryRun = !!options.dryRun;
-  // #1760: the canonical STATE.md template emits `Phase: [X] of [Y]`, not
-  // `Current Phase:`. Read both (mirroring buildStateFrontmatter /
-  // resolvePhaseIdForCompletePhase) so prune engages on template-conformant
-  // STATE.md instead of bailing with "Only 0 phases — nothing to prune".
+  // Resolve the current phase via the same canonical chain buildStateFrontmatter
+  // uses (frontmatter `current_phase` → `Current Phase` field → prose `Phase: X
+  // of Y`), so prune engages on template-conformant STATE.md instead of bailing
+  // "Only 0 phases" (#1760).
+  // #1776: scope ONLY the prose `Phase:` term to the canonical `## Current
+  // Position` section. Over the whole body, `stateExtractField`'s pipe-table
+  // fallback matches any `| Phase | N |` row (e.g. a historical verification
+  // table), resolving a stale phase and computing a wrong cutoff. Frontmatter and
+  // the explicit `Current Phase` field are unambiguous, so they stay document-wide;
+  // the shared extractor is not narrowed for any other caller.
   const rawState = fs.readFileSync(statePath, 'utf-8');
-  const currentPhaseRaw = stateExtractField(rawState, 'Current Phase') || stateExtractField(rawState, 'Phase');
+  const fm = extractFrontmatter(rawState) as Record<string, unknown>;
+  const body = stripFrontmatter(rawState);
+  // Mirror buildStateFrontmatter's fmScalar: only string/number/boolean
+  // frontmatter scalars are usable (an object/array `current_phase` is ignored,
+  // which also avoids a base-to-string on a non-primitive).
+  const fmRawPhase = fm.current_phase;
+  const fmCurrentPhase =
+    typeof fmRawPhase === 'string' ? (fmRawPhase.trim() || null)
+      : typeof fmRawPhase === 'number' || typeof fmRawPhase === 'boolean' ? String(fmRawPhase)
+        : null;
+  const positionSection = sliceCurrentPositionSection(body);
+  const prosePhase =
+    positionSection !== null ? parseProsePhaseField(stateExtractField(positionSection, 'Phase')).phase : null;
+  const currentPhaseRaw = fmCurrentPhase ?? stateExtractField(body, 'Current Phase') ?? prosePhase;
   const currentPhase = parseInt(String(currentPhaseRaw), 10) || 0;
   const cutoff = currentPhase - keepRecent;
 

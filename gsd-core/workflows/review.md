@@ -277,10 +277,15 @@ fi
 # $CODEX_BYPASS_FLAG is capability-gated above (#1115). Capture stderr to a .err
 # file (not /dev/null) so a non-zero exit — e.g. a flag the installed codex-cli
 # does not support — is diagnosable instead of a silent empty review.
+# Capture the review via codex's own `-o/--output-last-message <FILE>` (only the
+# final agent message) and discard stdout (#1698): on some platforms (Windows)
+# codex writes process-teardown output to stdout *after* the final message, and a
+# stdout redirect would append that noise to a non-empty file — slipping past the
+# `[ ! -s … ]` empty-output guard as a silently polluted review.
 if [ -n "$CODEX_MODEL" ] && [ "$CODEX_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" --skip-git-repo-check - 2>/tmp/gsd-review-codex-{phase}.err > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" --skip-git-repo-check -o /tmp/gsd-review-codex-{phase}.md - 2>/tmp/gsd-review-codex-{phase}.err >/dev/null
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --skip-git-repo-check - 2>/tmp/gsd-review-codex-{phase}.err > /tmp/gsd-review-codex-{phase}.md
+  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --skip-git-repo-check -o /tmp/gsd-review-codex-{phase}.md - 2>/tmp/gsd-review-codex-{phase}.err >/dev/null
 fi
 if [ ! -s /tmp/gsd-review-codex-{phase}.md ]; then
   echo "Codex review failed or returned empty output. stderr:" > /tmp/gsd-review-codex-{phase}.md
