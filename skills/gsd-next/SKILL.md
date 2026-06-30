@@ -1,6 +1,6 @@
 ---
 name: gsd-next
-description: "GSD smart entry — the state-aware front door. Reads your project state and routes you to the right next action."
+description: "Smart entry — detect project state and route to the right next GSD action."
 effort: low
 allowed-tools:
   - Read
