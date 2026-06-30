@@ -17,6 +17,7 @@
         "CODEBUDDY_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".codebuddy",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [
@@ -35,6 +36,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCodebuddySkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCodebuddyAgent"
         }
       ],
       "local": [
@@ -53,6 +62,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCodebuddySkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCodebuddyAgent"
         }
       ]
     },

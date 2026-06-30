@@ -21,8 +21,9 @@ const {
   install,
   uninstall,
   writeManifest,
-  installRuntimeArtifacts,
 } = require('../bin/install.js');
+
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
 
 const { getGlobalConfigDir } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 

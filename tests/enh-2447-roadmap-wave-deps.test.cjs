@@ -133,6 +133,34 @@ Plans:
     assert.ok(roadmap.includes(sharedTruth), 'shared truth listed');
   });
 
+  test('#1154: surfaces a cross-cutting backstop (object-form) truth by its statement, not dropped', () => {
+    // An object-form backstop truth `{ statement, verification: backstop }` (the #1154 non-inferable
+    // marker on must_haves.truths) shared across 2 plans must be coerced by its `statement` — the
+    // Hyrum backward-compat guard: a truth-reader must tolerate the new object form, never drop it.
+    const backstopTruth = 'statement: Adjacent touching intervals merge\n      verification: backstop';
+    tmpDir = makePlanProject({
+      '.planning/ROADMAP.md': `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Set up project
+**Plans:** 2 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Set up DB
+- [ ] 01-02-PLAN.md — Build API
+`,
+      '.planning/phases/01-foundation/01-01-PLAN.md': PLAN_TEMPLATE(1, [backstopTruth, 'DB schema is correct']),
+      '.planning/phases/01-foundation/01-02-PLAN.md': PLAN_TEMPLATE(2, [backstopTruth, 'API returns 200']),
+    });
+
+    const result = runGsdTools('roadmap annotate-dependencies 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.cross_cutting_constraints, 1, 'the shared backstop truth is surfaced, not dropped');
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('Adjacent touching intervals merge'), 'surfaced by its statement text, not [object Object]');
+  });
+
   test('does not surface constraints that appear in only one plan', () => {
     tmpDir = makePlanProject({
       '.planning/ROADMAP.md': `# Roadmap

@@ -19,6 +19,7 @@
         "XDG_CONFIG_HOME"
       ]
     },
+    "localConfigDir": ".opencode",
     "configFormat": "settings-json",
     "artifactLayout": {
       "global": [

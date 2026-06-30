@@ -1764,6 +1764,7 @@ describe('C3: role:runtime body validation', () => {
     tier: 'standard', requires: [],
     runtime: {
       configHome: { kind: 'dot-home', name: '.cursor', env: ['CURSOR_CONFIG_DIR'] },
+      localConfigDir: '.cursor',
       configFormat: 'settings-json',
       artifactLayout: { global: [], local: [] },
       commandStyle: 'slash-hyphen',
@@ -3217,6 +3218,7 @@ function makeRuntimeCap(overrides) {
     requires: [],
     runtime: {
       configHome: { kind: 'dot-home', name: '.test-rt', env: ['TEST_RT_DIR'] },
+      localConfigDir: '.test-rt',
       configFormat: 'settings-json',
       artifactLayout: { global: [], local: [] },
       commandStyle: 'slash-hyphen',
@@ -4292,6 +4294,7 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
       requires: [],
       runtime: {
         configHome: { kind: 'dot-home', name: '.test-runtime', env: [] },
+        localConfigDir: '.test-runtime',
         configFormat: 'settings-json',
         artifactLayout: { global: [], local: [] },
         commandStyle: 'slash-hyphen',

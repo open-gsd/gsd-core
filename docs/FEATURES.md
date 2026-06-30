@@ -3115,7 +3115,9 @@ When a requirement's prose matches **no** shape cue, the probe does not silently
 
 The resolved edges populate a `## Edge Coverage` section in `SPEC.md`. Unresolved *applicable* edges trigger a soft gate (Resolve / Write-anyway-flagged / Keep-probing) rather than a hard block. Under `--auto`, the probe **never auto-dismisses** — it auto-covers where a defensible criterion exists, otherwise auto-backstops, and logs `[auto] edge coverage: C covered, B backstop, U unresolved`. The one exception is an `unclassified` candidate: `--auto` leaves it **`unresolved`** (surfaced as a flagged assumption), never auto-`backstop` — a missing shape is not evidence an edge exists, so minting a held-out edge obligation would be a false claim.
 
-The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation.
+The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges become `must_haves.truths` the verifier can check, so the section is not merely documentation. A `backstop` edge is lifted as a **structured non-inferable marker** (`{ statement, verification: backstop }`, a flat scalar — not a prose note), which the **honest verifier** then consumes (see below) — closing the loop the edge-probe opened.
+
+**Honest verifier — abstention on non-inferable checks (#1154).** A non-inferable (`backstop`) truth is one whose correct behavior is not derivable from the spec alone, so the verifier cannot self-detect the gap and would confidently false-pass it (~100% of the time). At verify time, a `backstop` truth the verifier cannot confirm with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior) **abstains** → `human_needed` with reason `insufficient_spec` (reported as `unverified — held-out test recommended`), **never a silent `passed`**. This is the verify-time, truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure"), routing-not-diagnosis (the held-out test carries the omitted rule), and capable-tier dependent (reliable on `sonnet`+; the budget `haiku` tier degrades toward current behavior). An inferable truth is never abstained (the over-abstention guard). Reference: [Honest Verifier](../gsd-core/references/honest-verifier.md).
 
 **Requirements:**
 - REQ-EDGE-01: The edge pass MUST run after the ambiguity gate and emit a `## Edge Coverage` SPEC section.
@@ -3125,6 +3127,8 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-EDGE-05: `--auto` MUST never auto-dismiss — auto-cover or auto-backstop only.
 - REQ-EDGE-06: `plan-phase` MUST lift `covered` criteria and `backstop` notes into `must_haves.truths`.
 - REQ-EDGE-07: A requirement whose prose matches no shape cue MUST surface an `unclassified — review manually` candidate (never silently dropped); `--auto` MUST leave it `unresolved`, never auto-`backstop`.
+- REQ-EDGE-08: `plan-phase` MUST lift a `backstop` edge into `must_haves.truths` as a structured flat-scalar marker (`{ statement, verification: backstop }`), never a prose parenthetical.
+- REQ-HONEST-01: At verify time a `backstop` truth that cannot be confirmed with explicit evidence MUST abstain → `human_needed` (reason `insufficient_spec`), never `passed`; an inferable truth MUST never be abstained (over-abstention guard); abstention MUST be exogenous (driven by the `backstop` tag, not self-judgment).
 
 **Reference:** [Edge Probe](../gsd-core/references/edge-probe.md)
 

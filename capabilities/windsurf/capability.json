@@ -18,9 +18,19 @@
         "WINDSURF_CONFIG_DIR"
       ]
     },
+    "localConfigDir": ".windsurf",
     "configFormat": "none",
     "artifactLayout": {
-      "global": [],
+      "global": [
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToWindsurfAgent"
+        }
+      ],
       "local": [
         {
           "kind": "commands",
@@ -29,6 +39,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToWindsurfWorkflow"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToWindsurfAgent"
         }
       ]
     },

@@ -49,10 +49,10 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformReadSync, platformEnsureDir } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
-import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
 import { realClock } from './clock.cjs';
+import { transitionCore } from './state-transition.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -66,7 +66,6 @@ const {
   readModifyWriteStateMd,
   stateExtractField,
   stateReplaceField,
-  stateReplaceFieldWithFallback,
   syncStateFrontmatter,
   withStateLock,
   updatePerformanceMetricsSection,
@@ -1068,12 +1067,12 @@ function renameDecimalPhases(
     const oldPhaseId = `${baseInt}.${item.oldDecimal}`;
     const newPhaseId = `${baseInt}.${newDecimal}`;
     const newDirName = `${item.prefix}.${newDecimal}-${item.slug}`;
-    fs.renameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
     renamedDirs.push({ from: item.dir, to: newDirName });
     for (const f of fs.readdirSync(path.join(phasesDir, newDirName))) {
       if (f.includes(oldPhaseId)) {
         const newFileName = f.replace(oldPhaseId, newPhaseId);
-        fs.renameSync(
+        retryRenameSync(
           path.join(phasesDir, newDirName, f),
           path.join(phasesDir, newDirName, newFileName),
         );
@@ -1120,12 +1119,12 @@ function renameIntegerPhases(
     const oldPrefix = `${oldPadded}${letterSuffix}${decimalSuffix}`;
     const newPrefix = `${newPadded}${letterSuffix}${decimalSuffix}`;
     const newDirName = `${newPrefix}-${item.slug}`;
-    fs.renameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
     renamedDirs.push({ from: item.dir, to: newDirName });
     for (const f of fs.readdirSync(path.join(phasesDir, newDirName))) {
       if (f.startsWith(oldPrefix)) {
         const newFileName = newPrefix + f.slice(oldPrefix.length);
-        fs.renameSync(
+        retryRenameSync(
           path.join(phasesDir, newDirName, f),
           path.join(phasesDir, newDirName, newFileName),
         );
@@ -1649,7 +1648,16 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (isLastPhase && roadmapContent !== null) {
         try {
           const roadmapForPhases = extractCurrentMilestone(roadmapContent, cwd);
-          const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+          // #1591: match BOTH heading-style phases (`### Phase N:`) AND
+          // checkbox-list items (`- [ ] Phase N:` / `- [x] Phase N:`). When
+          // the active milestone's checklist is `- [ ]` items inside a
+          // <details> block (and the next phase has no directory yet, so the
+          // disk-based resolver finds nothing), this roadmap-enumeration
+          // fallback is the only path that can find the next phase. The prior
+          // heading-only pattern missed checkbox items → is_last_phase=true on
+          // a mid-milestone phase. The marker alternation is the only change;
+          // the number/name captures are unchanged.
+          const phasePattern = /(?:#{2,4}|-\s*\[[ xX]\])\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {
             if (comparePhaseNum(pm[1], phaseNum) > 0) {
@@ -1672,93 +1680,38 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const originalStateContent = platformReadSync(statePath) || '';
         let stateContent = originalStateContent;
 
-        const phaseValue = nextPhaseNum || phaseNum;
+        // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
+        // shape/name, Status, Current Plan, Last Activity + Description, and
+        // the Completed/Total Phases + Progress percent block) now dispatches
+        // to the STATE.md Transition Module. The ~90-line inline RMW callback
+        // that lived here is the pure `completePhaseCore` in
+        // src/state-transition.cts, backed by the field-classification table.
+        // `updatePerformanceMetricsSection` + `syncStateFrontmatter` stay in
+        // this adapter: they are section-table / disk-scan concerns, not
+        // classified fields, and `syncStateFrontmatter` is the post-sync this
+        // transaction needs (it does NOT go through readModifyWriteStateMd
+        // because STATE.md is committed atomically with ROADMAP/REQUIREMENTS).
         const nextPhaseDisplayName =
           phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
           phaseDisplayNameFromSlug(nextPhaseName);
-        const existingPhaseField =
-          stateExtractField(stateContent, 'Current Phase') ||
-          stateExtractField(stateContent, 'Phase');
-        let newPhaseValue = String(phaseValue);
-        if (existingPhaseField) {
-          const totalMatch = existingPhaseField.match(/of\s+(\d+)/);
-          const nameMatch = existingPhaseField.match(/\(([^)]+)\)/);
-          if (totalMatch) {
-            const total = totalMatch[1];
-            const nameStr = nextPhaseDisplayName
-              ? ` (${nextPhaseDisplayName})`
-              : nameMatch
-                ? ` (${nameMatch[1]})`
-                : '';
-            newPhaseValue = `${phaseValue} of ${total}${nameStr}`;
-          } else if (nextPhaseDisplayName) {
-            newPhaseValue = `${phaseValue} — ${nextPhaseDisplayName}`;
-          }
-        }
-        stateContent = stateReplaceFieldWithFallback(
+        const completeResult = transitionCore(
           stateContent,
-          'Current Phase',
-          'Phase',
-          newPhaseValue,
+          {
+            kind: 'completePhase',
+            phaseNum,
+            nextPhaseNum,
+            nextPhaseName: nextPhaseDisplayName,
+            isLastPhase,
+            planCount,
+            summaryCount,
+          },
+          {
+            clock: realClock,
+            progressProvider: () => null, // completePhase derives progress from the roadmap, not disk
+            roadmapProvider: () => roadmapContent,
+          },
         );
-
-        if (nextPhaseDisplayName) {
-          stateContent =
-            stateReplaceField(stateContent, 'Current Phase Name', nextPhaseDisplayName) ||
-            stateContent;
-        }
-
-        stateContent = stateReplaceFieldWithFallback(
-          stateContent,
-          'Status',
-          null,
-          isLastPhase ? 'Milestone complete' : 'Ready to plan',
-        );
-
-        stateContent = stateReplaceFieldWithFallback(
-          stateContent,
-          'Current Plan',
-          'Plan',
-          'Not started',
-        );
-
-        const lastActivityDescription = `Phase ${phaseNum} complete${nextPhaseNum ? `, transitioned to Phase ${nextPhaseNum}` : ''}`;
-        if (/^Last activity:/m.test(stateContent)) {
-          stateContent =
-            stateReplaceField(stateContent, 'Last activity', `${today} — ${lastActivityDescription}`) ||
-            stateContent;
-        } else {
-          stateContent =
-            stateReplaceField(stateContent, 'Last Activity', today) ||
-            stateContent;
-        }
-
-        stateContent =
-          stateReplaceField(stateContent, 'Last Activity Description', lastActivityDescription) ||
-          stateContent;
-
-        const completedRaw = stateExtractField(stateContent, 'Completed Phases');
-        if (completedRaw !== null) {
-          let newCompleted = parseInt(completedRaw, 10);
-          let derivedTotalPhases: number | null = null;
-          if (roadmapContent !== null) {
-            const derived = deriveProgressFromRoadmap(roadmapContent);
-            if (derived.completedPhases !== null) newCompleted = derived.completedPhases;
-            if (derived.totalPhases !== null) derivedTotalPhases = derived.totalPhases;
-          }
-          stateContent =
-            stateReplaceField(stateContent, 'Completed Phases', String(newCompleted)) ||
-            stateContent;
-
-          const totalRaw = stateExtractField(stateContent, 'Total Phases');
-          const totalPhases = derivedTotalPhases || (totalRaw ? parseInt(totalRaw, 10) : null);
-          if (totalPhases && totalPhases > 0) {
-            const newPercent = clampPercent(newCompleted, totalPhases);
-            stateContent =
-              stateReplaceField(stateContent, 'Progress', `${newPercent}%`) || stateContent;
-            stateContent = stateContent.replace(/(percent:\s*)\d+/, `$1${newPercent}`);
-          }
-        }
+        stateContent = completeResult.content;
 
         stateContent = updatePerformanceMetricsSection(
           stateContent,

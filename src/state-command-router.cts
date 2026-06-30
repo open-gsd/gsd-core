@@ -50,6 +50,7 @@ interface StateModule {
   cmdStateValidate(cwd: string, raw: boolean): void;
   cmdStateSync(cwd: string, opts: { verify: string | boolean | null | undefined }, raw: boolean): void;
   cmdStatePrune(cwd: string, opts: { keepRecent: string; dryRun: boolean }, raw: boolean): void;
+  cmdStateRebuild(cwd: string, opts: { dryRun: boolean; verbose: boolean }, raw: boolean): void;
   cmdStateCompletePhase(cwd: string, raw: boolean, phase: string | null | undefined): void;
   cmdStateMilestoneSwitch(cwd: string, milestone: string | null | undefined, name: string | null | undefined, raw: boolean): void;
 }
@@ -189,6 +190,10 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       prune: () => {
         const a = parseNamedArgs(args, ['keep-recent'], ['dry-run']);
         state.cmdStatePrune(cwd, { keepRecent: strArg(a, 'keep-recent') || '3', dryRun: a['dry-run'] === true }, raw);
+      },
+      rebuild: () => {
+        const a = parseNamedArgs(args, [], ['dry-run', 'verbose']);
+        state.cmdStateRebuild(cwd, { dryRun: a['dry-run'] === true, verbose: a['verbose'] === true }, raw);
       },
       // complete-phase: CJS-only — no SDK counterpart.
       'complete-phase': () => {

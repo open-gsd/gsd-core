@@ -22,6 +22,8 @@ import noCrlfFragileSplit from './eslint-rules/no-crlf-fragile-split.cjs';
 import noHardcodedTmp from './eslint-rules/no-hardcoded-tmp.cjs';
 import noBareNpmExec from './eslint-rules/no-bare-npm-exec.cjs';
 import requireUserprofileWithHome from './eslint-rules/require-userprofile-with-home.cjs';
+import normalizePathInContent from './eslint-rules/normalize-path-in-content.cjs';
+import requireFsOpFallback from './eslint-rules/require-fs-op-fallback.cjs';
 
 const localPlugin = {
   rules: {
@@ -38,6 +40,8 @@ const localPlugin = {
     'no-hardcoded-tmp': noHardcodedTmp,
     'no-bare-npm-exec': noBareNpmExec,
     'require-userprofile-with-home': requireUserprofileWithHome,
+    'normalize-path-in-content': normalizePathInContent,
+    'require-fs-op-fallback': requireFsOpFallback,
   },
 };
 
@@ -54,6 +58,7 @@ export default tseslint.config(
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
       'gsd-core/bin/lib/semver-compare.cjs',
       'gsd-core/bin/lib/host-integration.cjs',
+      'gsd-core/bin/lib/install-engine.cjs',
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
       'gsd-core/bin/lib/capability-ledger.cjs',
@@ -70,6 +75,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
+      'gsd-core/bin/lib/assumption-delta.cjs',
+      'gsd-core/bin/lib/state-transition.cjs',
       'gsd-core/bin/lib/command-arg-projection.cjs',
       'gsd-core/bin/lib/clock.cjs',
       'gsd-core/bin/lib/ui-safety-gate.cjs',
@@ -187,10 +194,21 @@ export default tseslint.config(
       'gsd-core/bin/lib/git-base-branch.cjs',
       // ADR-1213: tsc-generated runtime artifact — lint the src/capability-writer.cts source.
       'gsd-core/bin/lib/capability-writer.cjs',
+      // issue #1754: tsc-generated runtime artifact — lint the src/cli-skew-check.cts source.
+      'gsd-core/bin/lib/cli-skew-check.cjs',
       // issue #1355: tsc-generated runtime artifact — lint the src/teams-status.cts source.
       'gsd-core/bin/lib/teams-status.cjs',
       // ADR-1372: tsc-generated runtime artifact — lint the src/markdown-sectionizer.cts source.
       'gsd-core/bin/lib/markdown-sectionizer.cjs',
+      // ADR-1239 Phase C-1 (#1680): tsc-generated — lint src/embedding-adapter.cts + src/adapter-declarative.cts.
+      'gsd-core/bin/lib/embedding-adapter.cjs',
+      'gsd-core/bin/lib/adapter-declarative.cjs',
+      'gsd-core/bin/lib/adapter-imperative.cjs',
+      'gsd-core/bin/lib/model-adapter.cjs',
+      'gsd-core/bin/lib/hook-bus.cjs',
+      'gsd-core/bin/lib/state-io.cjs',
+      'gsd-core/bin/lib/external-descriptor-trust.cjs',
+      'gsd-core/bin/lib/mcp-server.cjs',
     ],
   },
 
@@ -215,6 +233,42 @@ export default tseslint.config(
       // ADR-1372 T7: enforce use of the markdown-sectionizer seam; grandfather
       // pre-migration sites with // allow-adhoc-markdown: <reason>
       'local/no-adhoc-markdown-parsing': 'error',
+      // ADR-1703 Phase 5: flag path-returning calls interpolated into content
+      // (markdown @-references, workflow files, generated docs) without POSIX
+      // normalization. Promoted to 'error' after precision review (path.basename
+      // excluded; content heuristic tightened to genuine reference/config-dir
+      // markers). See RULESET.CONTENT-PATH-NORMALIZATION in CONTEXT.md.
+      'local/normalize-path-in-content': 'error',
+      // ADR-1703 Phase 6: flag an unguarded fs.rename/fs.renameSync (the
+      // atomic-publish primitive) that lacks a transient-errno fallback
+      // (EPERM/EBUSY/EACCES retry or a Windows platform guard). See
+      // DEFECT.WINDOWS-FS-OPS in CONTEXT.md.
+      'local/require-fs-op-fallback': 'error',
+    },
+  },
+
+  // ── bin/install.js + scripts/build-hooks.js — ADR-1703 Phase 6 glob expansion ─
+  // The top-level `bin/install.js` (generated installer) and `scripts/build-hooks.js`
+  // (the build-side atomic-replace helper) are the two production surfaces named by
+  // DEFECT.WINDOWS-FS-OPS that were NOT covered by the src/**/*.cts / gsd-core/bin/**/*.cjs
+  // globs (ADR-1703 L124-126). This block brings them under the two production
+  // portability rules. It deliberately does NOT apply the full js.recommended set —
+  // bin/install.js is ~12k lines of generated code; the ADR's mandate is the
+  // portability defect surface, not a broader generated-code style sweep.
+  {
+    files: ['bin/install.js', 'bin/gsd-mcp-server.js', 'scripts/build-hooks.js'],
+    plugins: {
+      local: localPlugin,
+    },
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: {
+        ...globals.node,
+      },
+    },
+    rules: {
+      'local/normalize-path-in-content': 'error',
+      'local/require-fs-op-fallback': 'error',
     },
   },
 

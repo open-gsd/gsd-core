@@ -5,7 +5,8 @@
   "bin": {
     "gsd-core": "bin/install.js",
     "gsd-tools": "gsd-core/bin/gsd-tools.cjs",
-    "gsd_run": "gsd-core/bin/gsd_run"
+    "gsd_run": "gsd-core/bin/gsd_run",
+    "gsd-mcp-server": "bin/gsd-mcp-server.js"
   },
   "files": [
     "bin",

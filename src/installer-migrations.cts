@@ -16,7 +16,7 @@ import {
   type MigrationRecord,
   type MigrationAction,
 } from './installer-migration-authoring.cjs';
-import { platformWriteSync } from './shell-command-projection.cjs';
+import { platformWriteSync, retryRenameSync } from './shell-command-projection.cjs';
 import { realClock, type Clock } from './clock.cjs';
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
@@ -105,7 +105,7 @@ function atomicWriteInstallState(configDir: string, content: string): void {
   const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
   try {
     fs.writeFileSync(tmpPath, content, 'utf8');
-    fs.renameSync(tmpPath, filePath);
+    retryRenameSync(tmpPath, filePath);
   } catch (error) {
     try { fs.rmSync(tmpPath, { force: true }); } catch { /* best-effort */ }
     throw error;

@@ -308,10 +308,12 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
 | `prohibition-probe.md` | Spec-phase prohibition-completeness probe — the two-stage adversarial-recall → precision protocol that surfaces the unwritten *must-NOT* constraints (values/safety/ethics), with status×verification (`test`/`judgment`) tiering and canon-referral breadcrumbs (Step 5.6); second adapter of the `probe-core` resolution model. |
+| `honest-verifier.md` | Verify-time abstention on non-inferable (`backstop`) truths — the truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): a `backstop` truth the verifier can't confirm with explicit evidence abstains → `human_needed` (reason `insufficient_spec`), never a silent pass (#1154). |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
 | `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
 | `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via the discuss-phase/modes progressive-disclosure split, #717). |
 | `revision-loop.md` | Plan revision iteration patterns. |
+| `reviewer-instances.md` | Custom reviewer instances for `/gsd-review` (#1517) — same-adapter multi-model review: config shape, resolution rules, invocation, and the REVIEWS.md contract. Lazily loaded by `review.md` when `review.reviewer_instances` is configured. |
 | `universal-anti-patterns.md` | Universal anti-patterns to detect and avoid. |
 | `worktree-branch-check.md` | Canonical spawn-time worktree HEAD/base guard (worktree_branch_check): verify-only and fail-closed — per-agent-branch assertion, protected-ref refusal (#2924), and an exact-base assertion that halts with `exit 42` on mismatch so the orchestrator (worktree lifecycle owner) performs recovery (#48). Embedded into worktree sub-agent prompts at dispatch. |
 | `worktree-path-safety.md` | Worktree guard suite: HEAD assertion, cwd-drift sentinel (step 0a, #3097), and absolute-path guard (step 0b, #3099) — loaded into executor spawn prompts via `<execution_context>`. |
@@ -442,6 +444,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `host-integration.cjs` | Host-Integration Interface (ADR-1239 Phase A) — negotiated capability contract over the six host-integration points; `negotiateHostCapabilities` fail-closes on undeclared/unknown/`undocumented` values, typed degradation ladder, host-capability profiles; the 8 `runtime.hostIntegration` axes are validated in `capability-validator.cjs` and sourced per-CLI in `docs/reference/host-integration-capability-matrix.md` |
 | `init-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools init` |
 | `init.cjs` | Compound context loading for each workflow type |
+| `install-engine.cjs` | Runtime-artifact install engine — `installRuntimeArtifacts`/`uninstallRuntimeArtifacts`/`installOpencodeFamilySkills` + their helpers, extracted from `bin/install.js` (ADR-1239 Phase B, #1679); install.js imports them back and injects `getCommitAttribution` |
 | `install-profiles.cjs` | Install profile allowlist + skill staging for `--minimal` install (#2762); single source of truth for which `gsd-*` skills/agents land in runtime config dirs |
 | `installer-migration-authoring.cjs` | Installer migration authoring guardrails for record metadata, explicit scopes, ownership evidence, and runtime contract citations |
 | `installer-migration-report.cjs` | Installer migration report projection and blocked-action guard for install/update integration |

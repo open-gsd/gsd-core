@@ -101,6 +101,14 @@ export interface LoadRegistryOptions {
   gsdHome?: string;
   /** Override the running GSD version used for engines.gsd satisfaction. */
   hostVersion?: string;
+  /**
+   * Optional configHome root for load-time write-confinement of installed
+   * third-party descriptors (ADR-1239 Phase C-2 / #1681). When set, each
+   * installed overlay's declared destSubpaths must resolve within this root or
+   * the descriptor is rejected fail-closed (skip + warn). Omit to rely on the
+   * install-time gate only (backward-compatible).
+   */
+  configHome?: string;
 }
 
 export interface OverlaySkip {
@@ -473,6 +481,10 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
   const ledgerMod: LedgerModule = require('./capability-ledger.cjs');
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
   const consentMod: ConsentModule = require('./capability-consent.cjs');
+  // ADR-1239 Phase C-2 (#1681): load-time configHome confinement for installed
+  // third-party descriptors. Accessed via module ref for stub compatibility.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
+  const externalDescriptorTrust: { assertDescriptorConfined(descriptor: unknown, configHome: string): void; isPathConfined(target: string, root: string): boolean } = require('./external-descriptor-trust.cjs');
 
   const cwd = options.cwd || process.cwd();
   const hostVersion = options.hostVersion || readHostVersion();
@@ -746,6 +758,20 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
         acceptedMap.delete(id);
         skip('cross-capability validation failed: ' + crossErrs.slice(0, 3).join('; '));
         continue;
+      }
+
+      // ADR-1239 Phase C-2 (#1681): load-time configHome confinement — reject
+      // (skip + warn) any installed third-party descriptor whose declared
+      // destSubpath escapes the user-approved configHome, BEFORE it is composed.
+      // Defense-in-depth on top of the install-time gate (#1679 AC3).
+      if (typeof options.configHome === 'string' && options.configHome.length > 0) {
+        try {
+          externalDescriptorTrust.assertDescriptorConfined(cap, options.configHome);
+        } catch (confineErr) {
+          acceptedMap.delete(id);
+          skip('configHome confinement rejected: ' + errMessage(confineErr));
+          continue;
+        }
       }
 
       // Accepted.

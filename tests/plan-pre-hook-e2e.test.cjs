@@ -254,6 +254,7 @@ describe('plan:pre all-off — empty resolution', () => {
         pattern_mapper: false,
         schema_push_detection: false,
         plan_drift_precheck: false,
+        assumption_delta: false,
       },
       intel: { enabled: false },
     });
