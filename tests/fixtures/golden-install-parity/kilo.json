@@ -367,7 +367,7 @@
   "gsd-core/workflows/update.md": "5d0a2356dadf2017",
   "gsd-core/workflows/validate-phase.md": "7915e3a261f7c9c9",
   "gsd-core/workflows/verify-phase.md": "15a999f82868ad29",
-  "gsd-core/workflows/verify-work.md": "7cb5144cc74986e7",
+  "gsd-core/workflows/verify-work.md": "5ee188f029ecc97e",
   "hooks/gsd-check-update-worker.js": "c992bbad91d0e994",
   "hooks/gsd-check-update.js": "fdd77abe7ef26a2d",
   "hooks/gsd-config-reload.js": "96546e0e8bb47904",
