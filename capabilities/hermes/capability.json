@@ -1,7 +1,7 @@
 {
   "id": "hermes",
   "role": "runtime",
-  "version": "1.6.0",
+  "version": "1.7.0-rc.1",
   "title": "Hermes Agent",
   "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
   "tier": "core",
@@ -53,7 +53,14 @@
     "hostIntegration": {
       "embeddingMode": "imperative",
       "commandSurface": "slash-programmatic",
-      "dispatch": { "namedDispatch": false, "nested": true, "maxDepth": 1, "background": true, "subagentToolkit": "read-only", "backgroundDispatch": false },
+      "dispatch": {
+        "namedDispatch": false,
+        "nested": true,
+        "maxDepth": 1,
+        "background": true,
+        "subagentToolkit": "read-only",
+        "backgroundDispatch": false
+      },
       "modelMode": "active",
       "hookBus": "host",
       "stateIO": "filesystem",
