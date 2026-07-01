@@ -133,6 +133,47 @@ function extractFrontmatter(content: string): Frontmatter {
   return frontmatter;
 }
 
+/**
+ * Escape a string for emission inside a YAML double-quoted scalar (#1779).
+ * Backslash must be escaped first so the backslashes added for embedded quotes
+ * (and control chars) are not themselves doubled. Without this, a value
+ * carrying an indicator (`:`/`#`) that also contains a literal `"` serializes
+ * to invalid YAML, e.g. `upstream: "https://x (Tom; "Git. Ship. Done")"`. A
+ * literal newline/tab/control char inside the quotes likewise breaks (or
+ * silently alters) the scalar, so those are escaped to their YAML forms too.
+ */
+function escapeDoubleQuoted(s: string): string {
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t')
+    .replace(/\r/g, '\\r')
+    // Remaining C0 controls + DEL → \xHH (a valid YAML double-quoted escape).
+    .replace(/[\u0000-\u001f\u007f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
+/**
+ * A plain (unquoted) scalar that would mis-parse or round-trip lossily when
+ * emitted bare must instead go through the double-quoted + escaped form
+ * (#1779): the empty string (bare `k:` reloads as null), an embedded `"`/`\`
+ * or control char, a leading YAML indicator (quote, `&`/`*`/`!` anchor/alias/
+ * tag, `|`/`>` block scalar, flow `[]{},`, `#`, reserved `%`/`@`/backtick, or
+ * `-`/`?`/`:` before a space), or leading/trailing whitespace. This helper is
+ * the correctness complement of `escapeDoubleQuoted`: it broadens the *trigger*
+ * for quoting without broadening the lossy object-list handling deferred to
+ * #1572/#1660.
+ */
+function scalarNeedsDoubleQuoting(s: string): boolean {
+  if (s === '') return true;
+  if (/["\\\u0000-\u001f\u007f]/.test(s)) return true;
+  // Always-unsafe leading indicators, or leading/trailing whitespace.
+  if (/^[,[\]{}#&*!|>'"%@`]/.test(s) || /^\s|\s$/.test(s)) return true;
+  // `-` `?` `:` only start a plain scalar safely when NOT followed by a space.
+  if (/^[-?:](\s|$)/.test(s)) return true;
+  return false;
+}
+
 function reconstructFrontmatter(obj: Frontmatter): string {
   const lines: string[] = [];
   for (const [key, value] of Object.entries(obj)) {
@@ -145,7 +186,7 @@ function reconstructFrontmatter(obj: Frontmatter): string {
       } else {
         lines.push(`${key}:`);
         for (const item of value) {
-          lines.push(`  - ${typeof item === 'string' && (item.includes(':') || item.includes('#')) ? `"${item}"` : item}`);
+          lines.push(`  - ${typeof item === 'string' && (item.includes(':') || item.includes('#') || scalarNeedsDoubleQuoting(item)) ? `"${escapeDoubleQuoted(item)}"` : item}`);
         }
       }
     } else if (typeof value === 'object') {
@@ -160,7 +201,7 @@ function reconstructFrontmatter(obj: Frontmatter): string {
           } else {
             lines.push(`  ${subkey}:`);
             for (const item of subval) {
-              lines.push(`    - ${typeof item === 'string' && (item.includes(':') || item.includes('#')) ? `"${item}"` : item}`);
+              lines.push(`    - ${typeof item === 'string' && (item.includes(':') || item.includes('#') || scalarNeedsDoubleQuoting(item)) ? `"${escapeDoubleQuoted(item)}"` : item}`);
             }
           }
         } else if (typeof subval === 'object') {
@@ -184,13 +225,13 @@ function reconstructFrontmatter(obj: Frontmatter): string {
         } else {
           // eslint-disable-next-line @typescript-eslint/no-base-to-string
           const sv = String(subval);
-          lines.push(`  ${subkey}: ${sv.includes(':') || sv.includes('#') ? `"${sv}"` : sv}`);
+          lines.push(`  ${subkey}: ${sv.includes(':') || sv.includes('#') || scalarNeedsDoubleQuoting(sv) ? `"${escapeDoubleQuoted(sv)}"` : sv}`);
         }
       }
     } else {
       const sv = String(value);
-      if (sv.includes(':') || sv.includes('#') || sv.startsWith('[') || sv.startsWith('{')) {
-        lines.push(`${key}: "${sv}"`);
+      if (sv.includes(':') || sv.includes('#') || sv.startsWith('[') || sv.startsWith('{') || scalarNeedsDoubleQuoting(sv)) {
+        lines.push(`${key}: "${escapeDoubleQuoted(sv)}"`);
       } else {
         lines.push(`${key}: ${sv}`);
       }
