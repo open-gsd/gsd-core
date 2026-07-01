@@ -1189,6 +1189,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
     let m: RegExpExecArray | null;
     while ((m = phasePattern.exec(currentSection)) !== null) {
+      if (/^999(?:\.|$)/.test(m[1])) continue;
       roadmapPhaseNumbers.push(m[1]);
     }
   } catch {

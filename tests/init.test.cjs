@@ -976,6 +976,7 @@ describe('cmdInitMilestoneOp', () => {
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ project_code: 'PROJ' }, null, 2)
     );
+
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'),
       [
@@ -995,6 +996,47 @@ describe('cmdInitMilestoneOp', () => {
         '',
         '## 🚧 v1.0.0 Test Milestone',
         '### Phase 1: Setup',
+        '',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('init milestone-op', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_count, 1);
+    assert.strictEqual(output.completed_phases, 1);
+    assert.strictEqual(output.all_phases_complete, true);
+  });
+
+  test('backlog 999.x headings do not inflate milestone phase counts (#1838)', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(phase1, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0.0',
+        'milestone_name: Test Milestone',
+        'status: completed',
+        '---',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## 🚧 v1.0.0 Test Milestone',
+        '### Phase 1: Setup',
+        '',
+        '## Backlog',
+        '### Phase 999.1: Deferred Idea',
+        '### Phase 999.2: Another Deferred Idea',
         '',
       ].join('\n')
     );
