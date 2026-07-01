@@ -21,11 +21,12 @@ const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
-// Single source of truth: runtime-integration manifests whose top-level `version`
+// Single source of truth: runtime-integration manifests whose `version`
 // MUST track package.json. Add a new manifest here so `npm version` keeps it in
 // sync — the regression guard test (issue 844) fails if you forget.
 const VERSIONED_MANIFESTS = [
   '.claude-plugin/plugin.json',
+  '.claude-plugin/marketplace.json',
   'gemini-extension.json',
 ];
 
@@ -38,6 +39,28 @@ function getPackageVersion(root) {
   return readJson(path.join(r, 'package.json')).version;
 }
 
+// Read the version field from a manifest, handling both flat (top-level
+// `version`) and marketplace (`plugins[0].version`) layouts.
+function readManifestVersion(manifest) {
+  if (Array.isArray(manifest.plugins) && manifest.plugins[0]) {
+    return manifest.plugins[0].version;
+  }
+  return manifest.version;
+}
+
+// Write the version field into a manifest, handling both flat and marketplace
+// layouts. Returns true if the value changed.
+function writeManifestVersion(manifest, v) {
+  if (Array.isArray(manifest.plugins) && manifest.plugins[0]) {
+    if (manifest.plugins[0].version === v) return false;
+    manifest.plugins[0].version = v;
+    return true;
+  }
+  if (manifest.version === v) return false;
+  manifest.version = v;
+  return true;
+}
+
 // Stamp `version` into each registered manifest, preserving field order and
 // 2-space + trailing-newline formatting. Returns the list of changed rel paths.
 function syncManifestVersions(opts) {
@@ -47,8 +70,7 @@ function syncManifestVersions(opts) {
   for (const rel of VERSIONED_MANIFESTS) {
     const abs = path.join(root, rel);
     const manifest = readJson(abs);
-    if (manifest.version !== v) {
-      manifest.version = v;
+    if (writeManifestVersion(manifest, v)) {
       fs.writeFileSync(abs, JSON.stringify(manifest, null, 2) + '\n');
       changed.push(rel);
     }
@@ -62,7 +84,7 @@ function findDrift(opts) {
   const v = (opts && opts.version) != null ? opts.version : getPackageVersion(root);
   const drift = [];
   for (const rel of VERSIONED_MANIFESTS) {
-    const found = readJson(path.join(root, rel)).version;
+    const found = readManifestVersion(readJson(path.join(root, rel)));
     if (found !== v) drift.push({ manifest: rel, found, expected: v });
   }
   return drift;
@@ -158,6 +180,8 @@ module.exports = {
   findDrift,
   getPackageVersion,
   stageManifests,
+  readManifestVersion,
+  writeManifestVersion,
   // ADR-1244 D6: native capability version sweep
   listCapabilityManifests,
   syncCapabilityVersions,

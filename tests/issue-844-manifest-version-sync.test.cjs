@@ -29,6 +29,8 @@ const {
   stageManifests,
   listCapabilityManifests,
   syncCapabilityVersions,
+  readManifestVersion,
+  writeManifestVersion,
 } = require(path.join(ROOT, 'scripts', 'sync-manifest-versions.cjs'));
 
 // ─── A: RED→GREEN repro via temp fixture ─────────────────────────────────────
@@ -54,7 +56,7 @@ describe('A: syncManifestVersions — temp fixture', () => {
     for (const rel of VERSIONED_MANIFESTS) {
       const realAbs = path.join(ROOT, rel);
       const manifest = JSON.parse(fs.readFileSync(realAbs, 'utf8'));
-      manifest.version = '0.0.0';
+      writeManifestVersion(manifest, '0.0.0');
 
       const destAbs = path.join(tmpRoot, rel);
       const destDir = path.dirname(destAbs);
@@ -93,7 +95,7 @@ describe('A: syncManifestVersions — temp fixture', () => {
       const abs = path.join(tmpRoot, rel);
       const m = JSON.parse(fs.readFileSync(abs, 'utf8'));
       assert.equal(
-        m.version,
+        readManifestVersion(m),
         '9.9.9-test.0',
         `${rel} version should be 9.9.9-test.0 after sync`
       );
@@ -111,7 +113,7 @@ describe('A: syncManifestVersions — temp fixture', () => {
       );
       for (const rel of VERSIONED_MANIFESTS) {
         const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
-        manifest.version = '0.0.0';
+        writeManifestVersion(manifest, '0.0.0');
         const destAbs = path.join(sub, rel);
         const destDir = path.dirname(destAbs);
         if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
@@ -165,9 +167,9 @@ describe('B: real manifests match package.json version', () => {
       assert.ok(fs.existsSync(abs), `${rel} must exist at ${abs}`);
       const m = JSON.parse(fs.readFileSync(abs, 'utf8'));
       assert.equal(
-        m.version,
+        readManifestVersion(m),
         pkgVersion,
-        `${rel} version (${m.version}) must match package.json version (${pkgVersion}). ` +
+        `${rel} version (${readManifestVersion(m)}) must match package.json version (${pkgVersion}). ` +
         'Run `node scripts/sync-manifest-versions.cjs` to fix.'
       );
     });

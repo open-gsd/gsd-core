@@ -1,0 +1,20 @@
+{
+  "name": "gsd-core-dev",
+  "description": "Development marketplace for GSD Core — meta-prompting, context engineering, and spec-driven development system for AI coding agents",
+  "owner": {
+    "name": "open-gsd",
+    "url": "https://github.com/open-gsd"
+  },
+  "plugins": [
+    {
+      "name": "gsd-core",
+      "description": "GSD Core: meta-prompting, context engineering, and spec-driven development system for AI coding agents",
+      "version": "1.7.0-rc.1",
+      "source": "./",
+      "author": {
+        "name": "open-gsd",
+        "url": "https://github.com/open-gsd"
+      }
+    }
+  ]
+}
