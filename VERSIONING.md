@@ -131,13 +131,17 @@ match `package.json`:
 
 - `.claude-plugin/plugin.json` — Claude Code plugin manifest (issue #766)
 - `gemini-extension.json` — Gemini CLI extension manifest (issue #775)
+- `.claude-plugin/marketplace.json` — Claude plugin marketplace manifest; its
+  version lives at `plugins[0].version` and is stamped via a nested versionKey
+  descriptor (issue #1855)
 
 The `version` npm lifecycle script (`scripts/sync-manifest-versions.cjs --stage`)
 stamps these files automatically on every `npm version` call, and stages them so
 they are included in the release commit alongside `package.json`.
 
-To add a new manifest that must track the package version, register its path in
-the `VERSIONED_MANIFESTS` array in `scripts/sync-manifest-versions.cjs`. A
+To add a new manifest that must track the package version, register its path
+(and, if its version field is not top-level, its dotted `versionKey`) in the
+`VERSIONED_MANIFESTS` array in `scripts/sync-manifest-versions.cjs`. A
 regression test (`tests/issue-844-manifest-version-sync.test.cjs`) enforces this:
 it scans all committed JSON files for a matching `version` field and fails if any
 are missing from the registry.
