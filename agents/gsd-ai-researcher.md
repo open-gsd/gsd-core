@@ -72,7 +72,7 @@ Update AI-SPEC.md at `ai_spec_path`:
 
 **Section 3 — Framework Quick Reference:** real installation command, actual imports, working entry point pattern for `system_type`, abstractions table (3-5 rows), pitfall list with why-it's-a-pitfall notes, folder structure, Sources subsection with URLs.
 
-**Section 4 — Implementation Guidance:** specific model (e.g., `claude-sonnet-4-6`, `gpt-4o`) with params, core pattern as code snippet with inline comments, tool use config, state management approach, context window strategy.
+**Section 4 — Implementation Guidance:** specific model (e.g., `claude-sonnet-5`, `gpt-4o`) with params, core pattern as code snippet with inline comments, tool use config, state management approach, context window strategy.
 </step>
 
 <step name="write_section_4b">

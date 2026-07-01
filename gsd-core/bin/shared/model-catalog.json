@@ -9,7 +9,7 @@
   "runtimeTierDefaults": {
     "claude": {
       "opus": { "model": "claude-opus-4-8" },
-      "sonnet": { "model": "claude-sonnet-4-6" },
+      "sonnet": { "model": "claude-sonnet-5" },
       "haiku": { "model": "claude-haiku-4-5" }
     },
     "codex": {
@@ -29,17 +29,17 @@
     },
     "opencode": {
       "opus": { "model": "anthropic/claude-opus-4-8" },
-      "sonnet": { "model": "anthropic/claude-sonnet-4-6" },
+      "sonnet": { "model": "anthropic/claude-sonnet-5" },
       "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "copilot": {
       "opus": { "model": "claude-opus-4-8" },
-      "sonnet": { "model": "claude-sonnet-4-6" },
+      "sonnet": { "model": "claude-sonnet-5" },
       "haiku": { "model": "claude-haiku-4-5" }
     },
     "hermes": {
       "opus": { "model": "anthropic/claude-opus-4-8" },
-      "sonnet": { "model": "anthropic/claude-sonnet-4-6" },
+      "sonnet": { "model": "anthropic/claude-sonnet-5" },
       "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "kilo": {
@@ -91,13 +91,13 @@
   "providerPresets": {
     "anthropic": {
       "opus":   { "low": { "model": "claude-opus-4-5" }, "medium": { "model": "claude-opus-4-8" }, "high": { "model": "claude-opus-4-8" } },
-      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-4-6" }, "high": { "model": "claude-opus-4-8" } },
-      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-4-6" } }
+      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-5" }, "high": { "model": "claude-opus-4-8" } },
+      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-5" } }
     },
     "anthropic-fable": {
       "opus":   { "low": { "model": "claude-opus-4-5" }, "medium": { "model": "claude-opus-4-8" }, "high": { "model": "claude-fable-5" } },
-      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-4-6" }, "high": { "model": "claude-fable-5" } },
-      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-4-6" } }
+      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-5" }, "high": { "model": "claude-fable-5" } },
+      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-5" } }
     },
     "openai": {
       "opus":   { "low": { "model": "gpt-5.4", "reasoning_effort": "medium" }, "medium": { "model": "gpt-5.5", "reasoning_effort": "high" }, "high": { "model": "gpt-5.5", "reasoning_effort": "xhigh" } },

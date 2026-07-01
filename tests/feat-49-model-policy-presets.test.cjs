@@ -142,8 +142,8 @@ describe('#49 resolveModelPolicy Sub-path B: provider presets', () => {
   test('known provider "anthropic-fable" + tier "haiku" + budget "high" keeps low tier on Sonnet', () => {
     const policy = { provider: 'anthropic-fable', budget: 'high' };
     const result = resolveModelPolicy(policy, 'haiku');
-    assert.strictEqual(result, 'claude-sonnet-4-6',
-      `expected anthropic-fable haiku/high to resolve to claude-sonnet-4-6, got: ${result}`);
+    assert.strictEqual(result, 'claude-sonnet-5',
+      `expected anthropic-fable haiku/high to resolve to claude-sonnet-5, got: ${result}`);
   });
 
   test('known provider "openai" + tier "sonnet" + budget "low" returns model with reasoning_effort from preset', () => {

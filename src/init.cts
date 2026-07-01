@@ -64,7 +64,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { normalizePhaseName, phaseTokenMatches } = phaseId;
+const { normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -1189,6 +1189,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
     let m: RegExpExecArray | null;
     while ((m = phasePattern.exec(currentSection)) !== null) {
+      if (/^999(?:\.|$)/.test(m[1])) continue;
       roadmapPhaseNumbers.push(m[1]);
     }
   } catch {
@@ -1204,7 +1205,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      const m = e.name.match(/^(\d+[A-Z]?(?:\.\d+)*)/);
+      const m = stripProjectCodePrefix(e.name).match(/^(\d+[A-Z]?(?:\.\d+)*)/);
       if (!m) continue;
       diskPhaseDirs.set(canonicalizePhase(m[1]), e.name);
     }
