@@ -22,6 +22,7 @@ const {
   isCapabilityActive,
   _isSafePropKey,
   _loadInstalledSkillsManifest,
+  _loadFlatCommandsManifest,
   _resolveManifest,
 } = require('../gsd-core/bin/lib/capability-state.cjs');
 
@@ -1237,6 +1238,272 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
       } finally {
         cleanup(disabledProj);
       }
+    });
+  });
+
+});
+
+// ─── #1858: flat commands/gsd-<stem>.md install layout ───────────────────────
+//
+// A flat install lays skills out as <root>/commands/gsd-<stem>.md — NO
+// commands/gsd/ subdir and NO skills/gsd-*/ dir. Pre-fix, _resolveManifest hit
+// neither of its two branches → empty manifest → resolveSurface materialized the
+// full '*' sentinel to an empty skill Set → every skill-bearing capability
+// reported surfaced=false. These tests exercise the new flat-layout fallback.
+
+describe('regressions: flat-install capability surface (#1858)', () => {
+  // A flat command file: gsd-<stem>.md with a REAL body (agent refs recoverable,
+  // unlike the installed SKILL.md stubs).
+  function makeFlatCmd(stem, requires, body) {
+    return [
+      '---',
+      `name: gsd:${stem}`,
+      `description: ${stem} command`,
+      `requires: [${requires.join(', ')}]`,
+      '---',
+      body || `Execute ${stem}.`,
+    ].join('\n') + '\n';
+  }
+
+  // ── Unit tests for _loadFlatCommandsManifest ─────────────────────────────────
+
+  test('_loadFlatCommandsManifest: returns empty map when commands dir absent', () => {
+    const missing = path.join(os.tmpdir(), 'flat-missing-' + Date.now());
+    const manifest = _loadFlatCommandsManifest(missing);
+    assert.ok(manifest instanceof Map, 'should return a Map');
+    assert.strictEqual(manifest.size, 0, 'should be empty when dir does not exist');
+  });
+
+  test('_loadFlatCommandsManifest: scans gsd-<stem>.md, strips prefix, parses requires + agents', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-scan-'));
+    try {
+      fs.writeFileSync(
+        path.join(dir, 'gsd-validate-phase.md'),
+        makeFlatCmd('validate-phase', ['phase'], 'Delegates to gsd-nyquist-checker for review.'),
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(dir, 'gsd-secure-phase.md'),
+        makeFlatCmd('secure-phase', ['phase']),
+        'utf8',
+      );
+      // A non-gsd- .md file must be ignored.
+      fs.writeFileSync(path.join(dir, 'README.md'), '# not a command\n', 'utf8');
+
+      const manifest = _loadFlatCommandsManifest(dir);
+      assert.deepStrictEqual(manifest.get('validate-phase'), ['phase'], 'stem stripped + requires parsed');
+      assert.deepStrictEqual(manifest.get('secure-phase'), ['phase']);
+      assert.ok(!manifest.has('README'), 'non-gsd- .md must not register');
+      // Agent refs recovered from the real body (parity with loadSkillsManifest).
+      assert.deepStrictEqual(
+        manifest.get('_calls_agents_validate-phase'),
+        ['gsd-nyquist-checker'],
+        'agent refs recovered from flat command body',
+      );
+      assert.deepStrictEqual(manifest.get('_calls_agents_secure-phase'), []);
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('_loadFlatCommandsManifest: directories are skipped by the isFile filter', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-hybrid-'));
+    try {
+      // A gsd/ subdir (nested layout) and a gsd-fake/ dir (prefix but no .md file)
+      // must both be skipped — only real gsd-*.md FILES register.
+      fs.mkdirSync(path.join(dir, 'gsd'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'gsd-fake'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'gsd-plan.md'), makeFlatCmd('plan', []), 'utf8');
+
+      const manifest = _loadFlatCommandsManifest(dir);
+      assert.ok(manifest.has('plan'), 'gsd-plan.md file registers');
+      assert.ok(!manifest.has('fake'), 'directory gsd-fake must be skipped');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('_loadFlatCommandsManifest: degenerate gsd-.md does not register an empty stem', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-empty-stem-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'gsd-.md'), makeFlatCmd('x', []), 'utf8');
+      const manifest = _loadFlatCommandsManifest(dir);
+      assert.ok(!manifest.has(''), 'empty stem must be guarded');
+      assert.ok(!manifest.has('_calls_agents_'), 'companion empty-stem key must be absent');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  // ── _resolveManifest ordering (additive) ─────────────────────────────────────
+
+  test('_resolveManifest: flat fallback fires when commandsGsdDir absent AND no installed skills', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-rm-'));
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-rm-cfg-'));
+    try {
+      const commandsDir = path.join(root, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      fs.writeFileSync(path.join(commandsDir, 'gsd-validate-phase.md'), makeFlatCmd('validate-phase', ['phase']), 'utf8');
+      fs.writeFileSync(path.join(commandsDir, 'gsd-secure-phase.md'), makeFlatCmd('secure-phase', ['phase']), 'utf8');
+      // commandsGsdDir = <root>/commands/gsd (does NOT exist); configDir has no skills/.
+      const manifest = _resolveManifest(path.join(commandsDir, 'gsd'), configDir);
+      assert.ok(manifest.has('validate-phase'), 'flat fallback must surface validate-phase');
+      assert.ok(manifest.has('secure-phase'), 'flat fallback must surface secure-phase');
+    } finally {
+      cleanup(root);
+      cleanup(configDir);
+    }
+  });
+
+  test('_resolveManifest: installed layout still WINS over flat (no regression)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-rm-prio-'));
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-rm-prio-cfg-'));
+    try {
+      const commandsDir = path.join(root, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      // Flat file present but should be shadowed by populated installed skills.
+      fs.writeFileSync(path.join(commandsDir, 'gsd-flatonly.md'), makeFlatCmd('flatonly', []), 'utf8');
+      const skillDir = path.join(configDir, 'skills', 'gsd-installedonly');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: gsd:installedonly\nrequires: [phase]\n---\nbody\n', 'utf8');
+
+      const manifest = _resolveManifest(path.join(commandsDir, 'gsd'), configDir);
+      assert.ok(manifest.has('installedonly'), 'installed manifest wins when populated');
+      assert.ok(!manifest.has('flatonly'), 'flat branch must NOT run when installed is non-empty');
+    } finally {
+      cleanup(root);
+      cleanup(configDir);
+    }
+  });
+
+  // ── resolveSurface(full) materializes every flat stem ────────────────────────
+
+  test('resolveSurface(full): surfaces every flat stem (empty manifest bug fixed)', () => {
+    const { resolveSurface } = require('../gsd-core/bin/lib/surface.cjs');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-surf-'));
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flat-surf-cfg-'));
+    try {
+      const commandsDir = path.join(root, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      const stems = ['validate-phase', 'secure-phase', 'plan', 'ship'];
+      for (const s of stems) {
+        fs.writeFileSync(path.join(commandsDir, `gsd-${s}.md`), makeFlatCmd(s, []), 'utf8');
+      }
+      fs.writeFileSync(path.join(configDir, '.gsd-profile'), 'full\n', 'utf8');
+
+      const manifest = _resolveManifest(path.join(commandsDir, 'gsd'), configDir);
+      const surface = resolveSurface(configDir, manifest, undefined, realRegistry);
+      for (const s of stems) {
+        assert.ok(surface.skills.has(s), `full profile must surface ${s}`);
+      }
+      assert.strictEqual(surface.skills.size, stems.length, 'no phantom or missing stems');
+    } finally {
+      cleanup(root);
+      cleanup(configDir);
+    }
+  });
+
+  // ── TRUE flat-layout install: gsd-tools runs where only commands/gsd-*.md exist ──
+  // Mirrors the #1160 "true installed layout" block, but stages a FLAT command
+  // layout (commands/gsd-<stem>.md) with NO commands/gsd/ subdir and NO
+  // skills/gsd-*/ dir. Pre-fix this collapses to activeHooks: []; post-fix the
+  // flat fallback surfaces security + nyquist. FAILS before the fix, PASSES after.
+  describe('true flat layout (only commands/gsd-*.md exist)', () => {
+    let installRoot;
+    let installedConfigDir;
+    let installedProjectDir;
+    let installedGsdTools;
+
+    function makeFlatSkillMd(stem) {
+      return [
+        '---',
+        `name: gsd:${stem}`,
+        `description: ${stem} skill`,
+        'requires: [phase]',
+        '---',
+        'Execute end-to-end.',
+      ].join('\n') + '\n';
+    }
+
+    before(() => {
+      const repoRoot = path.resolve(__dirname, '..');
+      // 1. Install root: copy the executable runtime, then add a FLAT commands/
+      //    layout (gsd-<stem>.md) — NOT a commands/gsd/ subdir.
+      installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-flatroot-'));
+      fs.mkdirSync(path.join(installRoot, 'gsd-core'), { recursive: true });
+      fs.cpSync(path.join(repoRoot, 'gsd-core', 'bin'), path.join(installRoot, 'gsd-core', 'bin'), { recursive: true });
+      fs.cpSync(path.join(repoRoot, 'scripts'), path.join(installRoot, 'scripts'), { recursive: true });
+      fs.copyFileSync(path.join(repoRoot, 'package.json'), path.join(installRoot, 'package.json'));
+      installedGsdTools = path.join(installRoot, 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+      // Flat command files at <installRoot>/commands/gsd-<stem>.md
+      const commandsDir = path.join(installRoot, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      for (const stem of ['secure-phase', 'validate-phase']) {
+        fs.writeFileSync(path.join(commandsDir, `gsd-${stem}.md`), makeFlatSkillMd(stem), 'utf8');
+      }
+
+      // 2. Config dir: full profile, NO skills/ dir (forces flat fallback).
+      installedConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-flatcfg-'));
+      fs.writeFileSync(path.join(installedConfigDir, '.gsd-profile'), 'full\n', 'utf8');
+
+      // 3. Project enabling both gates.
+      installedProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-state-flatproj-'));
+      fs.mkdirSync(path.join(installedProjectDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(installedProjectDir, '.planning', 'config.json'),
+        JSON.stringify({ workflow: { security_enforcement: true, nyquist_validation: true } }),
+        'utf8',
+      );
+    });
+
+    after(() => {
+      cleanup(installRoot);
+      cleanup(installedConfigDir);
+      cleanup(installedProjectDir);
+    });
+
+    test('sanity: commands/gsd subdir and skills/ dir are both absent', () => {
+      assert.strictEqual(fs.existsSync(path.join(installRoot, 'commands', 'gsd')), false, 'no commands/gsd subdir');
+      assert.strictEqual(fs.existsSync(path.join(installedConfigDir, 'skills')), false, 'no skills/ dir');
+    });
+
+    test('capability state: security & nyquist enabled in true flat runtime', () => {
+      const result = spawnSync(
+        process.execPath,
+        [installedGsdTools, 'capability', 'state', '--config-dir', installedConfigDir, '--cwd', installedProjectDir, '--raw'],
+        { encoding: 'utf8', timeout: 20000 },
+      );
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout);
+      const secCap = envelope.capabilities.find((c) => c.id === 'security');
+      const nyqCap = envelope.capabilities.find((c) => c.id === 'nyquist');
+      assert.ok(secCap && nyqCap, 'security and nyquist capabilities must be present');
+      assert.strictEqual(secCap.surfaced, true, 'security surfaced from flat layout (pre-fix: false)');
+      assert.strictEqual(secCap.enabled, true, 'security enabled in flat runtime (pre-fix: false)');
+      assert.strictEqual(nyqCap.surfaced, true, 'nyquist surfaced from flat layout (pre-fix: false)');
+      assert.strictEqual(nyqCap.enabled, true, 'nyquist enabled in flat runtime (pre-fix: false)');
+    });
+
+    test('loop render-hooks verify:post: includes security & nyquist in true flat runtime', () => {
+      const result = spawnSync(
+        process.execPath,
+        [installedGsdTools, 'loop', 'render-hooks', 'verify:post', '--config-dir', installedConfigDir, '--cwd', installedProjectDir],
+        { encoding: 'utf8', timeout: 20000 },
+      );
+      assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      const envelope = JSON.parse(result.stdout.trim());
+      assert.strictEqual(envelope.point, 'verify:post');
+      const sec = (envelope.activeHooks || []).find((h) => h.capId === 'security' && h.kind === 'step');
+      const nyq = (envelope.activeHooks || []).find((h) => h.capId === 'nyquist' && h.kind === 'step');
+      assert.ok(
+        sec && sec.ref && sec.ref.skill === 'secure-phase',
+        'verify:post must include security -> secure-phase (pre-fix: activeHooks was []). Got: ' + JSON.stringify(envelope.activeHooks),
+      );
+      assert.ok(
+        nyq && nyq.ref && nyq.ref.skill === 'validate-phase',
+        'verify:post must include nyquist -> validate-phase (pre-fix: activeHooks was []). Got: ' + JSON.stringify(envelope.activeHooks),
+      );
     });
   });
 
