@@ -1,7 +1,7 @@
 {
   ".gsd-profile": "0e716a5fef4e6dc1",
   "agents/gsd-advisor-researcher.md": "bfee29d91fae7482",
-  "agents/gsd-ai-researcher.md": "84b8bcfb941a695d",
+  "agents/gsd-ai-researcher.md": "fa68db1fb2c6ee8a",
   "agents/gsd-assumptions-analyzer.md": "6790335368de9256",
   "agents/gsd-code-fixer.md": "0b1249729381feaa",
   "agents/gsd-code-reviewer.md": "dc0f53798e7be5bf",
@@ -226,7 +226,7 @@
   "gsd-core/workflows/docs-update.md": "98c30bec9350542f",
   "gsd-core/workflows/edit-phase.md": "a3ab51739c5c021c",
   "gsd-core/workflows/eval-review.md": "f47fd1a7a1ca3308",
-  "gsd-core/workflows/execute-phase.md": "9c16cc175f60b765",
+  "gsd-core/workflows/execute-phase.md": "fe39dd64ff9db8f6",
   "gsd-core/workflows/execute-phase/steps/codebase-drift-gate.md": "c133828cf177a772",
   "gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md": "7ebb7d1af6082028",
   "gsd-core/workflows/execute-phase/steps/post-merge-gate.md": "abd2aca069c04a80",
