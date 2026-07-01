@@ -2455,6 +2455,76 @@ describe('phase complete command', () => {
     );
   });
 
+  // #1591 (bold-checklist follow-up): the roadmap TEMPLATE emits checklist rows
+  // in the canonical BOLD form `- [ ] **Phase N: Name**`. The initial checkbox
+  // broadening only matched the un-bolded `- [ ] Phase N:` shape, so the exact
+  // <details>-wrapped bold template still fell through to is_last_phase=true.
+  // Guard the canonical bold form explicitly.
+  test('#1591: <details>-wrapped BOLD checkbox checklist — mid-milestone phase is NOT last', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# ROADMAP',
+        '',
+        '## Phases',
+        '',
+        '<details>',
+        '<summary>🚀 v2.0 Second (Phases 36–38) — IN PLANNING</summary>',
+        '',
+        '- [x] **Phase 36: first (completed)** - done',
+        '- [ ] **Phase 37: second** - one-line description',
+        '- [ ] **Phase 38: third** - one-line description',
+        '',
+        '</details>',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v2.0',
+        'milestone_name: Second',
+        'current_phase: "36"',
+        'status: executing',
+        '---',
+        '',
+        '# GSD State',
+        '',
+        '**Current Phase:** 36',
+        '**Status:** Executing Phase 36',
+        '',
+      ].join('\n')
+    );
+    // Only Phase 36 has a directory; 37/38 are bold `- [ ]` checklist rows only.
+    const d36 = path.join(tmpDir, '.planning', 'phases', '36-first');
+    fs.mkdirSync(d36, { recursive: true });
+    fs.writeFileSync(path.join(d36, '36-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(d36, '36-SUMMARY.md'), '# Summary\n');
+
+    const result = runVerifiedPhaseComplete('phase complete 36', tmpDir);
+    assert.ok(result.success, `phase complete failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+
+    assert.strictEqual(
+      output.is_last_phase,
+      false,
+      'Phase 36 of 36–38 must NOT be last with the canonical BOLD checklist (#1591)',
+    );
+    assert.strictEqual(
+      output.next_phase,
+      '37',
+      'next_phase must resolve to 37 from the BOLD `- [ ] **Phase N: ...**` checklist (#1591)',
+    );
+
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      !/Milestone complete/i.test(state),
+      'a mid-milestone phase must not flip STATE.md to "Milestone complete" — bold checklist (#1591)',
+    );
+  });
+
   // #1752: the #1591 follow-up — when phase.complete wrongly returned
   // is_last_phase=true on a <details>-wrapped mid-milestone checklist, the
   // milestone-complete cascade also DECREMENTED progress.total_phases (e.g.
