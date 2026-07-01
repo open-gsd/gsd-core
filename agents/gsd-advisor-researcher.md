@@ -19,6 +19,8 @@ Spawned by `discuss-phase` via `Task()`. You do NOT present output directly to t
 
 @~/.claude/gsd-core/references/untrusted-input-boundary.md
 
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
+
 <documentation_lookup>
 @~/.claude/gsd-core/references/research-documentation-lookup.md
 </documentation_lookup>
