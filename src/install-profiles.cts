@@ -875,6 +875,7 @@ export = {
   writeActiveProfile,
   // Shared internals
   parseRequires,
+  parseCallsAgents,
   cleanupStagedSkills,
   // Back-compat / deprecated
   MINIMAL_SKILL_ALLOWLIST,
