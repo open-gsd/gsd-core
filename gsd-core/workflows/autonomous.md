@@ -61,7 +61,7 @@ fi
 
 When `--only` is set, also set `FROM_PHASE` to the same value so existing filter logic applies.
 
-When `--interactive` is set, discuss runs inline with questions. When `dispatch-should-flatten` returns `false` (e.g. codex, cursor — runtimes where a backgrounded agent can still spawn subagents), plan and execute are dispatched as background agents — keeping the main context lean (only discuss conversations accumulate) and enabling overlap. When `dispatch-should-flatten` returns `true` (e.g. claude and other runtimes where backgrounded agents cannot reliably nest subagents), plan and execute run inline to preserve worktree isolation and independent verification, and phases run sequentially with their work accumulating in the main context. Either way, user input is preserved on all design decisions.
+When `--interactive` is set, discuss stays inline. If `dispatch-should-flatten` returns `false`, dispatch plan and execute as background agents; if it returns `true`, run them inline and keep phases sequential. Preserve user input on all design decisions.
 
 When `PLAN_STRATEGY=converge`, the planning step MUST invoke the plan-review convergence workflow instead of `gsd-plan-phase`. `--cross-ai` is an alias for `--converge`. Forward `CONVERGENCE_ARGS` exactly as parsed so reviewer flags and `--max-cycles N` retain the same meaning as they have on `/gsd:plan-review-convergence`.
 
@@ -125,9 +125,16 @@ Run phase discovery:
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
 if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
+STATE_CONTENT=$(cat .planning/STATE.md 2>/dev/null || true)
 ```
 
 Parse the JSON `phases` array.
+
+Parse the optional `## Deferred Verification` table from `STATE_CONTENT` into a phase-number map:
+- `verification_deferred_human` -> `/gsd:verify-work <phase>`
+- `verification_deferred_gaps` -> `/gsd:plan-phase <phase> --gaps`
+
+**Skip deferred phases on autonomous re-entry:** drop any phase whose number appears in the deferred-phase map from this run's queue; resume it only through the recorded command.
 
 **Filter to incomplete phases:** Keep `phase_complete !== true`, including implemented phases with `verification_status !== "passed"`.
 
@@ -180,6 +187,8 @@ Exit cleanly.
 | 8 | Lifecycle Orchestration | Not Started |
 ```
 
+**If any deferred phases were skipped:** display `## Deferred Verification (Skipped on Re-entry)` with the skipped rows and resume commands, then omit them from this run's queue.
+
 **Fetch details for each phase:**
 
 ```bash
@@ -202,9 +211,7 @@ For the current phase, display the progress banner:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Where N = current phase number (from the ROADMAP, e.g., 63), T = total milestone phases (from `phase_count` parsed in initialize step, e.g., 67). **Important:** T must be `phase_count` (the total number of phases in this milestone), NOT the count of remaining/incomplete phases. When phases are numbered 61-67, T=7 and the banner should read `Phase 63/7` (phase 63, 7 total in milestone), not `Phase 63/3` (which would confuse 3 remaining with 3 total). P = percentage of all milestone phases completed so far. Calculate P as: (number of phases with `disk_status` "complete" from the latest `roadmap analyze` / T × 100). Use █ for filled and ░ for empty segments in the progress bar (8 characters wide).
-
-**Alternative display when phase numbers exceed total** (e.g., multi-milestone projects where phases are numbered globally): If N > T (phase number exceeds milestone phase count), use the format `Phase {N} ({position}/{T})` where `position` is the 1-based index of this phase among incomplete phases being processed. This prevents confusing displays like "Phase 63/5".
+Where N is the ROADMAP phase number, T is the milestone `phase_count`, and P = completed milestone phases / T × 100. Use `phase_count`, not remaining phases: phase 63 in a 7-phase milestone is `Phase 63/7`, not `Phase 63/3`. If N > T, render `Phase {N} ({position}/{T})`. Use an 8-character bar with █ and ░.
 
 **3a. Smart Discuss**
 
@@ -496,13 +503,7 @@ Display `Phase ${PHASE_NUM} ✅ ${PHASE_NAME} — Verification passed`, run `@~/
 
 **If `human_needed`:**
 
-Read `human_verification` items. In text mode (`--text` or init `text_mode=true`), replace AskUserQuestion with a numbered list and typed choice. Otherwise display items and ask:
-- **question:** "Phase ${PHASE_NUM} has items needing manual verification. Validate now or continue to next phase?"
-- **options:** "Validate now" / "Continue without validation"
-
-On **"Validate now"**: Present items, then ask:
-- **question:** "Validation result?"
-- **options:** "All good — continue" / "Found issues"
+Read `human_verification` items. In text mode (`--text` or init `text_mode=true`), replace AskUserQuestion with a plain-text numbered list. Otherwise ask whether to validate now or continue without validation. If validating now, present items, then ask `Validation result?` with `All good — continue` / `Found issues`.
 
 On "All good — continue": set VERIFICATION frontmatter `status: passed`, display `Phase ${PHASE_NUM} ✅ Human validation passed`, run `@~/.claude/gsd-core/workflows/transition.md`, then iterate.
 
@@ -528,9 +529,7 @@ Read gap score/items from VERIFICATION.md. Display:
 Score: {N}/{M} must-haves verified
 ```
 
-Ask user via AskUserQuestion:
-- **question:** "Gaps found in phase ${PHASE_NUM}. How to proceed?"
-- **options:** "Run gap closure" / "Continue without fixing" / "Stop autonomous mode"
+Ask how to proceed: `Run gap closure` / `Continue without fixing` / `Stop autonomous mode`.
 
 On **"Run gap closure"**: one gap-closure attempt:
 
@@ -554,9 +553,7 @@ If `passed` or `human_needed`: route normally.
 
 If `stale`: handle_blocker: "Stale verification for phase ${PHASE_NUM}."
 
-If still `gaps_found` after this retry: Display "Gaps persist after closure attempt." and ask via AskUserQuestion:
-- **question:** "Gap closure did not fully resolve issues. How to proceed?"
-- **options:** "Continue anyway" / "Stop autonomous mode"
+If still `gaps_found` after this retry, display `Gaps persist after closure attempt.` and ask `Continue anyway` / `Stop autonomous mode`.
 
 On "Continue anyway": record `verification_deferred_gaps` using the table below, display `Phase ${PHASE_NUM} ⏭ verification_deferred_gaps — resume with /gsd:plan-phase ${PHASE_NUM} --gaps`, then handle_blocker: "Verification gaps deferred for phase ${PHASE_NUM}."
 On "Stop autonomous mode": Go to handle_blocker.
@@ -645,13 +642,10 @@ Proceed to lifecycle step (partial completion skips audit/complete/cleanup). Exi
 ```bash
 INIT_MANAGER=$(gsd_run query init.manager)
 if [[ "$INIT_MANAGER" == @file:* ]]; then INIT_MANAGER=$(cat "${INIT_MANAGER#@file:}"); fi
+STATE_CONTENT=$(cat .planning/STATE.md 2>/dev/null || true)
 ```
 
-Re-filter incomplete phases using the same logic as discover_phases:
-- Keep phases where `phase_complete !== true` or `verification_status !== "passed"`
-- Apply `--from N` filter if originally provided
-- Apply `--to N` filter if originally provided
-- Sort by number ascending
+Re-filter incomplete phases using discover_phases logic: keep phases where `phase_complete !== true` or `verification_status !== "passed"`, drop deferred phases from the autonomous queue, re-apply `--from` / `--to`, then sort by number ascending.
 
 Read STATE.md fresh:
 
@@ -663,12 +657,14 @@ Check for blockers in the Blockers/Concerns section. If blockers are found, go t
 
 If incomplete phases remain: proceed to next phase, loop back to execute_phase.
 
-**Interactive mode overlap:** When `INTERACTIVE` is set, the iterate step enables pipeline parallelism **on Codex** (on every other runtime, plan/execute run inline — see 3b/3c — so there is no overlap and phases run sequentially):
+If no runnable phases remain but deferred phases were skipped, display `Autonomous run stopped with deferred verification phases still pending. Resume them with the commands listed in Deferred Verification.` Proceed to lifecycle only if every non-deferred phase is complete; otherwise go to handle_blocker.
+
+**Interactive mode overlap:** When `INTERACTIVE` is set, Codex can overlap discuss for Phase N+1 with background plan+execute for Phase N. Other runtimes keep plan/execute inline, so phases stay sequential:
 1. After discuss completes for Phase N, dispatch plan+execute as background agents
 2. Immediately start discuss for Phase N+1 (the next incomplete phase) while Phase N builds
 3. Before starting plan for Phase N+1, wait for Phase N's execute agent to complete and handle its post-execution routing (verification, gap closure, etc.)
 
-This means the user is always answering discuss questions (lightweight, interactive) while the heavy work (planning, code generation) runs in the background. The main context only accumulates discuss conversations — plan and execute contexts are isolated in their agents. (On Claude Code and all other non-Codex runtimes, plan and execute run inline, so they run sequentially and their work accumulates in the main context.)
+The main context only accumulates discuss conversations; background plan/execute work stays isolated in its agents.
 
 If all phases complete, proceed to lifecycle step.
 
