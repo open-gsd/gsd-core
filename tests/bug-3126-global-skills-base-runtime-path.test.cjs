@@ -27,6 +27,7 @@ const {
   getGlobalConfigDir,
   getGlobalSkillsBase,
   getGlobalSkillDir,
+  resolveConfigHomeFromDescriptor,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
 
 // Helper: run fn with an env var temporarily set
@@ -75,7 +76,13 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
       const saved = {};
       for (const k of envKeys) { saved[k] = process.env[k]; delete process.env[k]; }
       try {
-        assert.strictEqual(getGlobalConfigDir(runtime), expected);
+        const actual = runtime === 'antigravity'
+          ? resolveConfigHomeFromDescriptor(
+              _reg3126.antigravity.runtime.configHome,
+              { env: {}, home: os.homedir(), existsSync: () => false },
+            )
+          : getGlobalConfigDir(runtime);
+        assert.strictEqual(actual, expected);
       } finally {
         for (const k of envKeys) {
           if (saved[k] !== undefined) process.env[k] = saved[k];

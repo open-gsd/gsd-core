@@ -259,6 +259,7 @@ const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
 const { routeRoadmapCommand } = require('./lib/roadmap-command-router.cjs');
 const { routeAgentCommand } = require('./lib/agent-command-router.cjs');
+const smartEntryMod = require('./lib/smart-entry.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
 const { parseNamedArgs, parseMultiwordArg } = require('./lib/command-arg-projection.cjs');
@@ -665,7 +666,7 @@ async function main() {
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
-    'profile-sample, progress, project-instruction-file, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, state, ' +
+    'profile-sample, progress, project-instruction-file, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, smart-entry, state, ' +
     'task, template, user-story, validate, verify, verify-path-exists, verify-summary, eval, workstream, worktree\n\n' +
     'Global flags:\n' +
     '  --raw              Emit raw output without post-processing\n' +
@@ -830,6 +831,11 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
   switch (command) {
     case 'agent': {
       routeAgentCommand({ args, raw });
+      break;
+    }
+
+    case 'smart-entry': {
+      smartEntryMod.runSmartEntry(cwd, args, raw);
       break;
     }
 

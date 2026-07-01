@@ -1223,6 +1223,7 @@ When verification returns `human_needed`, items are persisted as a trackable HUM
 
 **User configuration note:**
 - Set `review.default_reviewers` in `.planning/config.json` (or via `gsd config-set`) to control no-flag `/gsd-review` fan-out.
+- `review.default_reviewers` may include configured `review.reviewer_instances` names; each instance runs as an independent reviewer identity backed by its configured adapter/model. Instance names are not CLI flags.
 - Use `--all` for a full pre-merge sweep without changing project defaults.
 - For local model servers with small context windows, set `review.max_prompt_tokens_per_reviewer` to auto-trim prompts per reviewer — see [Prompt budgets for small-context reviewers](../docs/CONFIGURATION.md#prompt-budgets-for-small-context-reviewers) in CONFIGURATION.md.
 
@@ -2638,7 +2639,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 
 ### 122. Skill Surface Consolidation
 
-**Purpose:** Cut the eager skill-listing overhead by folding 31 micro-skills into 4 new grouped parents and 6 existing parents that absorb sub-operations as flags. Zero functional loss — every removed micro-skill's behavior survives via a flag on a consolidated parent. After consolidation, `commands/gsd/*.md` ships 59 sub-skills (plus 6 namespace meta-skills, see #123).
+**Purpose:** Cut the eager skill-listing overhead by folding 31 micro-skills into 4 new grouped parents and 6 existing parents that absorb sub-operations as flags. Zero functional loss — every removed micro-skill's behavior survives via a flag on a consolidated parent. After consolidation, `commands/gsd/*.md` ships 60 sub-skills (plus 6 namespace meta-skills, see #123).
 
 **Requirements:**
 - REQ-CONSOLIDATE-01: Four new grouped skills replace clusters of micro-skills:
@@ -2647,8 +2648,9 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
   - `/gsd-config` — folds settings-advanced (`--advanced`), settings-integrations (`--integrations`), set-profile (`--profile`)
   - `/gsd-workspace` — folds new-workspace (`--new`), list-workspaces (`--list`), remove-workspace (`--remove`)
 - REQ-CONSOLIDATE-02: Six existing parents absorb wrap-up / sub-operations as flags: `/gsd-update --sync`, `/gsd-update --reapply`, `/gsd-sketch --wrap-up`, `/gsd-spike --wrap-up`, `/gsd-map-codebase --fast`, `/gsd-map-codebase --query`, `/gsd-code-review --fix`, `/gsd-progress --do`, `/gsd-progress --next`.
-- REQ-CONSOLIDATE-03: Deleted micro-skill slash forms (the bare `gsd-add-todo`, `gsd-add-backlog`, `gsd-plant-seed`, `gsd-check-todos`, `gsd-add-phase`, `gsd-insert-phase`, `gsd-remove-phase`, `gsd-edit-phase`, `gsd-new-workspace`, `gsd-list-workspaces`, `gsd-remove-workspace`, `gsd-settings-advanced`, `gsd-settings-integrations`, `gsd-set-profile`, `gsd-sketch-wrap-up`, `gsd-spike-wrap-up`, `gsd-reapply-patches`, `gsd-code-review-fix`, …) MUST resolve to "Unknown command" — no shadow stubs.
-- REQ-CONSOLIDATE-04: `autonomous.md` invokes `/gsd-code-review --fix` (was previously calling the deleted `gsd-code-review-fix`).
+- REQ-CONSOLIDATE-03: `/gsd:next` is not the retired workflow-advance command; it is reserved for the state-aware smart-entry launcher. Workflow advancement remains under `/gsd-progress --next`.
+- REQ-CONSOLIDATE-04: Deleted micro-skill slash forms (the bare `gsd-add-todo`, `gsd-add-backlog`, `gsd-plant-seed`, `gsd-check-todos`, `gsd-add-phase`, `gsd-insert-phase`, `gsd-remove-phase`, `gsd-edit-phase`, `gsd-new-workspace`, `gsd-list-workspaces`, `gsd-remove-workspace`, `gsd-settings-advanced`, `gsd-settings-integrations`, `gsd-set-profile`, `gsd-sketch-wrap-up`, `gsd-spike-wrap-up`, `gsd-reapply-patches`, `gsd-code-review-fix`, …) MUST resolve to "Unknown command" — no shadow stubs.
+- REQ-CONSOLIDATE-05: `autonomous.md` invokes `/gsd-code-review --fix` (was previously calling the deleted `gsd-code-review-fix`).
 
 **Reference issue:** [#2790](https://github.com/open-gsd/gsd-core/issues/2790)
 
@@ -2659,7 +2661,7 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 **Purpose:** Replace the flat eager skill listing with a two-stage hierarchical routing layer. The model sees 6 namespace routers instead of 86 entries, selects a namespace, then routes to the sub-skill. Descriptions use pipe-separated keyword tags (≤ 60 chars) for routing density.
 
 **Commands:**
-- `/gsd-workflow` — phase pipeline router (discuss / plan / execute / verify / phase / progress)
+- `/gsd-workflow` — phase pipeline router (discuss / plan / execute / verify / phase / progress / next)
 - `/gsd-project` — project lifecycle (milestones, audits, summary)
 - `/gsd-quality` — quality gates (code review, debug, audit, security, eval, ui)
 - `/gsd-context` — codebase intelligence (map, graphify, docs, learnings)
@@ -2677,10 +2679,12 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-NS-01: Six `commands/gsd/ns-*.md` namespace routers ship with pipe-separated keyword-tag descriptions (≤ 60 chars).
 - REQ-NS-02: Existing sub-skills are unchanged and still invocable directly — namespace skills are additive, not a replacement for direct slash forms.
 - REQ-NS-03: The body of each namespace router contains a routing table that maps user intent to the correct concrete sub-skill on the post-#2790 consolidated surface.
+- REQ-NS-04: Tests validate namespace files exist, include matching command `requires`, and reference only existing sub-skill files.
 
 **Reference issue:** [#2792](https://github.com/open-gsd/gsd-core/issues/2792)
 
 ---
+
 
 ### 124. Context-Window Utilization Guard
 
@@ -3192,6 +3196,7 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 
 **Reference:** [Prohibition Probe](../gsd-core/references/prohibition-probe.md)
 
+
 ### 147. Capability Management Command
 
 **Command:** `gsd capability install | update | remove | list | outdated | disable | enable`
@@ -3209,3 +3214,23 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 **Trust boundary:** install never executes capability code (copy-only staging); executable surfaces require explicit consent; sources are gated by the **project-scoped** `capabilities.strict_known_registries` policy (fail-closed on a malformed/unparseable value); every shared-config write/delete is realpath-confined to the scope root, and a name collision with a user's `mcpServers` entry is never clobbered.
 
 **Reference:** [`gsd capability` command reference](reference/gsd-capability-command.md) · [ADR-1244](adr/1244-capability-ecosystem.md)
+### 148. Smart Entry Launcher
+
+**Command:** `/gsd:next`
+
+**Tool:** `gsd-tools smart-entry [--json]`
+
+**Purpose:** Provide a state-aware front door that reads project/workflow state, classifies the user's situation, presents a short menu, and dispatches exactly one existing GSD command.
+
+**Requirements:**
+- REQ-SMART-ENTRY-01: Detection MUST be read-only and deterministic; classification lives in `gsd-tools smart-entry`.
+- REQ-SMART-ENTRY-02: The launcher MUST never perform project work directly; it only displays a menu and dispatches one command.
+- REQ-SMART-ENTRY-03: The workflow MUST fall back to `/gsd-progress` if detection fails.
+- REQ-SMART-ENTRY-04: Each classified situation MUST provide exactly one recommended action and valid slash commands.
+- REQ-SMART-ENTRY-05: Text-mode runtimes MUST receive a numbered-list fallback instead of being stranded by interactive UI assumptions.
+
+**Situations:** no project, paused, blocked, verify failed, needs first phase, planning, executing, verify pending, idle stranded, complete, unknown.
+
+**Reference:** [Smart Entry Design](superpowers/specs/2026-06-27-gsd-smart-entry-design.md)
+
+---

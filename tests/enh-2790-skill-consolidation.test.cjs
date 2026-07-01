@@ -15,6 +15,9 @@ const { assertWithinAllowlist } = require('../scripts/lib/allowlist-ratchet.cjs'
 // Consolidation target ~58; this set may only SHRINK.
 // Adding a new skill requires adding it here with justification.
 // Removing a consolidated skill requires pruning it here.
+// `next.md` was legitimately reclaimed after #2790: the old workflow-advance
+// command remains absorbed into `progress.md --next`, while the current
+// `/gsd:next` is a different state-aware smart-entry launcher.
 // ---------------------------------------------------------------------------
 const KNOWN_SKILLS = new Set([
   'add-tests.md',
@@ -51,6 +54,7 @@ const KNOWN_SKILLS = new Set([
   'mvp-phase.md',
   'new-milestone.md',
   'new-project.md',
+  'next.md',
   'pause-work.md',
   'phase.md',
   'plan-phase.md',
@@ -166,7 +170,6 @@ describe('absorbed skills are removed', () => {
     ['scan', 'absorbed into map-codebase.md'],
     ['intel', 'absorbed into map-codebase.md'],
     ['code-review-fix', 'absorbed into code-review.md'],
-    ['next', 'absorbed into progress.md'],
     ['do', 'absorbed into progress.md'],
   ];
 

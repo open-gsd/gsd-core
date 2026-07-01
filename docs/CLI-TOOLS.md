@@ -93,6 +93,17 @@ node gsd-tools.cjs state-snapshot
 
 Returns JSON with: current position, phase, plan, status, decisions, blockers, metrics, last activity.
 
+### Smart Entry
+
+Read-only situation classifier used by `/gsd:next`.
+
+```bash
+node gsd-tools.cjs smart-entry          # Human summary + recommended route
+node gsd-tools.cjs smart-entry --json   # Machine-readable result for workflows
+```
+
+The JSON result contains `situation`, `recommended`, `summary`, `signals`, and ordered `actions[]`. Detection reads `.planning/STATE.md`, `ROADMAP.md`, latest verification/summary artifacts, and git status; it does not write files or dispatch commands.
+
 ---
 
 ## Phase Commands

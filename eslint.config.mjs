@@ -87,6 +87,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/installer-migration-report.cjs',
       'gsd-core/bin/lib/prompt-budget.cjs',
       'gsd-core/bin/lib/secrets.cjs',
+      'gsd-core/bin/lib/smart-entry.cjs',
       'gsd-core/bin/lib/phase-lifecycle.cjs',
       'gsd-core/bin/lib/workstream-name-policy.cjs',
       'gsd-core/bin/lib/decisions.cjs',
