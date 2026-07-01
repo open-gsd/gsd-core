@@ -967,6 +967,47 @@ describe('cmdInitMilestoneOp', () => {
     assert.strictEqual(output.all_phases_complete, true);
   });
 
+  test('project_code-prefixed phase directories count as completed milestone phases (#1836)', () => {
+    seedPhase(tmpDir, 'PROJ-01-setup', {
+      'PROJ-01-01-PLAN.md': '# Plan',
+      'PROJ-01-01-SUMMARY.md': '# Summary',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'PROJ' }, null, 2)
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0.0',
+        'milestone_name: Test Milestone',
+        'status: executing',
+        '---',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## 🚧 v1.0.0 Test Milestone',
+        '### Phase 1: Setup',
+        '',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('init milestone-op', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_count, 1);
+    assert.strictEqual(output.completed_phases, 1);
+    assert.strictEqual(output.all_phases_complete, true);
+  });
+
   test('archive directory scanning', () => {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'archive', 'v1.0'), { recursive: true });
     fs.mkdirSync(path.join(tmpDir, '.planning', 'archive', 'v0.9'), { recursive: true });
