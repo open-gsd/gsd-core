@@ -705,9 +705,9 @@ describe('issue #2612: runtime "opencode" — OpenCode tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
   });
 
-  test('sonnet tier -> anthropic/claude-sonnet-4-6', () => {
+  test('sonnet tier -> anthropic/claude-sonnet-5', () => {
     writeConfig(tmpDir, { runtime: 'opencode', model_profile: 'balanced' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'anthropic/claude-sonnet-4-6');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'anthropic/claude-sonnet-5');
   });
 
   test('haiku tier -> anthropic/claude-haiku-4-5', () => {
@@ -733,9 +733,9 @@ describe('issue #2612: runtime "copilot" — Copilot tier resolution', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-opus-4-8');
   });
 
-  test('sonnet tier -> claude-sonnet-4-6', () => {
+  test('sonnet tier -> claude-sonnet-5', () => {
     writeConfig(tmpDir, { runtime: 'copilot', model_profile: 'balanced' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'claude-sonnet-4-6');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'claude-sonnet-5');
   });
 
   test('haiku tier -> claude-haiku-4-5', () => {
@@ -862,6 +862,6 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
     // gsd-codebase-mapper budget -> haiku -> overridden
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'claude-haiku-4-6');
     // gsd-planner budget -> sonnet -> built-in default
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-sonnet-4-6');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-sonnet-5');
   });
 });

@@ -184,6 +184,13 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         })();
         while ((pm = phasePattern.exec(scopedContent)) !== null) {
           const phaseNum = pm[1];
+          // Phase 0 (pre-milestone) and Phase 999 (backlog) are sentinels, not
+          // real phases — they legitimately have no directory and must not block
+          // milestone completion. Mirrors the engine-wide sentinel convention
+          // (phase-id getMilestoneFromPhaseId, roadmap-command-router SENTINELS,
+          // the #1445 /^999/ progress filters). (#1580)
+          const major = parseInt(phaseNum, 10);
+          if (major === 0 || major === 999) continue;
           const normalized = normalizePhaseName(phaseNum);
           // A phase has disk_status: 'no_directory' when no phase directory
           // with a matching token exists on disk. Use the same phaseTokenMatches
