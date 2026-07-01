@@ -200,6 +200,7 @@
     ],
     "references": [
       "agent-contracts.md",
+      "agent-skills-bootstrap.md",
       "ai-evals.md",
       "ai-frameworks.md",
       "artifact-types.md",
@@ -325,9 +326,9 @@
       "docs.cjs",
       "drift.cjs",
       "edge-probe.cjs",
+      "embedding-adapter.cjs",
       "eval-command-router.cjs",
       "eval.cjs",
-      "embedding-adapter.cjs",
       "external-descriptor-trust.cjs",
       "fallow-runner.cjs",
       "federated-config.cjs",
