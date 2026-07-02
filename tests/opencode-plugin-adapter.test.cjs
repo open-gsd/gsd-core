@@ -264,8 +264,19 @@ test('tool.execute.after: Read content rewriting maps ~/.claude/gsd-core paths',
   const managed = path.join(root, 'gsd-core', 'workflows', 'x.md');
   const output = { output: 'see ~/.claude/gsd-core/references/foo.md for details' };
   await handlers['tool.execute.after']({ tool: 'read', args: { filePath: managed } }, output);
-  assert.match(output.output, new RegExp(path.join(root, 'gsd-core') + '/references/foo\\.md'));
-  assert.doesNotMatch(output.output, /~\/\.claude\/gsd-core\//);
+  // The adapter rewrites `~/.claude/gsd-core/` → `${GSD_CORE}/`, where GSD_CORE
+  // is `path.join(root, 'gsd-core')` (OS-native separators). Assert with a plain
+  // string include, NOT a RegExp built from a path — on Windows the backslashes
+  // in the path would be interpreted as regex escapes and never match.
+  const expected = path.join(root, 'gsd-core') + '/references/foo.md';
+  assert.ok(
+    output.output.includes(expected),
+    `expected rewritten path "${expected}" in output: ${output.output}`,
+  );
+  assert.ok(
+    !output.output.includes('~/.claude/gsd-core/'),
+    'canonical ~/.claude/gsd-core/ prefix must be rewritten away',
+  );
 });
 
 test('missing hook script is a silent allow (never breaks the tool call)', async (t) => {
