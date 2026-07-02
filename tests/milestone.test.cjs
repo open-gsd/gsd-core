@@ -759,3 +759,43 @@ describe('#1911 — milestone complete --ws archives to the workstream', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1871: milestone complete archives phase dirs by default
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1871 — milestone complete archives phase dirs by default', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  function seedCompletableMilestone() {
+    writeRoadmap(tmpDir, '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n- [ ] x\n');
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+  }
+
+  test('archives phase dirs by default (no --archive-phases flag needed)', () => {
+    seedCompletableMilestone();
+    const result = runGsdTools('milestone complete v1.0 --name MVP', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(out.archived.phases, 'phases should be archived by default');
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'phase dir should be archived under milestones/v1.0-phases/',
+    );
+  });
+
+  test('--no-archive-phases opts out of default archiving', () => {
+    seedCompletableMilestone();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    const result = runGsdTools('milestone complete v1.0 --name MVP --no-archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(!out.archived.phases, 'phases should NOT be archived with --no-archive-phases');
+    assert.ok(fs.existsSync(phaseDir), 'phase dir should remain in place with --no-archive-phases');
+  });
+});

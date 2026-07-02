@@ -341,7 +341,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
 
   // Archive phase directories if requested
   let phasesArchived = false;
-  if (options.archivePhases) {
+  // #1871: archive phase dirs by default on milestone complete (opt out via --no-archive-phases).
+  if (options.archivePhases !== false) {
     try {
       const phaseArchiveDir = path.join(archiveDir, `${version}-phases`);
       platformEnsureDir(phaseArchiveDir);
@@ -440,32 +441,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     }
 
     try {
-      // #1871: archive phase directories instead of destroying them. Move each
-      // non-999 dir to milestones/<version>-phases/ so browsable phase history
-      // survives the milestone switch (previously rmSync hard-deleted committed
-      // dirs, leaving orphaned uncommitted deletions and no archive).
-      let archiveVersion: string | null = null;
-      try {
-        archiveVersion = getMilestoneInfo(cwd).version ?? null;
-      } catch {
-        /* ROADMAP/STATE unreadable — fall back to a dated label */
-      }
-      if (!archiveVersion) {
-        archiveVersion = `archived-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}`;
-      }
-      const archivePhasesDir = path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`);
-      platformEnsureDir(archivePhasesDir);
-      for (const entry of dirs) {
-        const src = path.join(phasesDir, entry.name);
-        // Collision-safe: if a same-named archive entry exists (re-run), suffix it.
-        let dest = path.join(archivePhasesDir, entry.name);
-        let n = 1;
-        while (fs.existsSync(dest)) {
-          dest = path.join(archivePhasesDir, `${entry.name}.${n++}`);
-        }
-        retryRenameSync(src, dest);
-        cleared++;
-      }
+      // #1871: archive phase directories instead of destroying them (shared helper).
+      cleared = archivePhaseDirectories(cwd, phasesDir, dirs).archived;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       error('Failed to clear phases directory: ' + message);
@@ -473,6 +450,40 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   }
 
   output({ cleared }, raw, `${cleared} phase director${cleared === 1 ? 'y' : 'ies'} cleared`);
+}
+
+/**
+ * #1871: move each non-999 phase directory under `phasesDir` into
+ * `milestones/<version>-phases/` (collision-safe; version from getMilestoneInfo,
+ * timestamp fallback). Shared by `phases clear` (archive-then-remove) and the
+ * internal milestone.complete phase archival so phase history survives a
+ * milestone switch instead of being hard-deleted.
+ */
+function archivePhaseDirectories(cwd: string, phasesDir: string, dirs: ReadonlyArray<{ name: string }>): { archiveDir: string; archived: number } {
+  let archiveVersion: string | null = null;
+  try {
+    archiveVersion = getMilestoneInfo(cwd).version ?? null;
+  } catch {
+    /* ROADMAP/STATE unreadable — fall back to a dated label */
+  }
+  if (!archiveVersion) {
+    archiveVersion = `archived-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}`;
+  }
+  const archivePhasesDir = path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`);
+  platformEnsureDir(archivePhasesDir);
+  let archived = 0;
+  for (const entry of dirs) {
+    const src = path.join(phasesDir, entry.name);
+    // Collision-safe: if a same-named archive entry exists (re-run), suffix it.
+    let dest = path.join(archivePhasesDir, entry.name);
+    let n = 1;
+    while (fs.existsSync(dest)) {
+      dest = path.join(archivePhasesDir, `${entry.name}.${n++}`);
+    }
+    retryRenameSync(src, dest);
+    archived++;
+  }
+  return { archiveDir: archivePhasesDir, archived };
 }
 
 export = {
