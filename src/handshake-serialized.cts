@@ -49,7 +49,7 @@ function buildHandshakeRequest(hostDescriptor: unknown): { protocolVersion: numb
       ? desc.protocolVersion
       : hostIntegration.PROTOCOL_VERSION;
   // Force a wire round-trip so a non-JSON-safe descriptor fails HERE, not later.
-  return JSON.parse(JSON.stringify({ protocolVersion, axes }));
+  return JSON.parse(JSON.stringify({ protocolVersion, axes })) as { protocolVersion: number; axes: Record<string, unknown> };
 }
 
 /**
@@ -72,7 +72,7 @@ function handleHandshakeRequest(
     engine as Parameters<typeof hostIntegration.negotiateHostCapabilities>[1],
   );
   // Force a wire round-trip: the response must be strictly JSON-serializable.
-  return JSON.parse(JSON.stringify(result));
+  return JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
 }
 
 export = {
