@@ -651,6 +651,18 @@ const GsdCorePlugin = async ({ directory } = {}) => {
         handleHookResult(r);
         return;
       }
+
+      // session.idle ↔ Claude Stop lifecycle point (#1682 Slice 1b/c).
+      // OpenCode fires session.idle when the run quiesces. GSD maps it to the
+      // Stop equivalent — the opencode-subset lifecycle peer of compaction
+      // (compaction preserves state across context-window summarization; idle
+      // marks end-of-turn). No-op sentinel today (GSD state is already
+      // persisted to .planning/), but it MUST be recognized so the declared
+      // opencode-subset surface is fully wired and a future Stop-class hook can
+      // attach without a plugin change.
+      if (event.type === "session.idle") {
+        return;
+      }
     },
   };
 };

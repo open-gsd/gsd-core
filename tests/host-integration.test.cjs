@@ -21,7 +21,38 @@ const {
   degradationFor,
   profileOf,
   negotiateHostCapabilities,
+  hookEventSurfaceFor,
+  HOOK_EVENT_SURFACES,
 } = hi;
+
+describe('hookEventSurfaceFor (hookEvents dialect consumer — #1682)', () => {
+  test('returns the full Claude surface for "claude"', () => {
+    const s = hookEventSurfaceFor('claude');
+    assert.ok(s && s.includes('PreToolUse') && s.includes('PostToolUse') && s.includes('Stop'));
+  });
+  test('returns the Gemini BeforeTool/AfterTool surface for "gemini"', () => {
+    const s = hookEventSurfaceFor('gemini');
+    assert.ok(s && s.includes('BeforeTool') && s.includes('AfterTool'));
+  });
+  test('CONSUMES "opencode-subset": OpenCode session/tool/file subset with NO workflow-phase events', () => {
+    const s = hookEventSurfaceFor('opencode-subset');
+    assert.ok(s, 'opencode-subset must resolve (non-null) — it is consumed, not reserved');
+    assert.ok(s.includes('experimental.session.compacting'));
+    assert.ok(s.includes('session.idle'));
+    assert.ok(s.includes('tool.execute.before') && s.includes('tool.execute.after'));
+    assert.ok(!s.some((e) => /plan:|verify:|ship:|execute:/.test(e)),
+      'opencode-subset fires no workflow-phase events (engine owns phase sequencing)');
+  });
+  test('returns null for unknown / missing / non-string dialect (fail-closed)', () => {
+    assert.equal(hookEventSurfaceFor('nope'), null);
+    assert.equal(hookEventSurfaceFor(undefined), null);
+    assert.equal(hookEventSurfaceFor(123), null);
+  });
+  test('HOOK_EVENT_SURFACES is frozen + covers exactly the 3 dialects', () => {
+    assert.equal(Object.isFrozen(HOOK_EVENT_SURFACES), true);
+    assert.deepEqual(Object.keys(HOOK_EVENT_SURFACES).sort(), ['claude', 'gemini', 'opencode-subset']);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // CONTRACT-PIN: constants and vocabulary

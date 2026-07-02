@@ -513,6 +513,40 @@ function shouldFlattenDispatch(dispatch: UnvalidatedDispatch): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Hook-event surface per hookEvents dialect (ADR-1239 Phase D / #1682)
+// ---------------------------------------------------------------------------
+
+// The set of host-fireable hook events for each hookEvents dialect. This is the
+// CONSUMER of the reserved 'opencode-subset' dialect (previously zero consumers):
+// it lets the engine ask which events a host's bus actually exposes, so it knows
+// workflow-phase hooks (plan:pre / verify:post / …) are NOT available on an
+// opencode-subset host and the engine must own phase sequencing internally
+// (ADR-1239 §OpenCode binding). 'claude' = full Claude surface; 'gemini' =
+// Gemini's BeforeTool/AfterTool family; 'opencode-subset' = OpenCode's
+// session/tool/file subset (no workflow-phase events).
+const HOOK_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  claude: Object.freeze(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'PreCompact']),
+  gemini: Object.freeze(['SessionStart', 'BeforeTool', 'AfterTool', 'SessionEnd']),
+  'opencode-subset': Object.freeze([
+    'session.created', 'session.idle', 'experimental.session.compacting',
+    'tool.execute.before', 'tool.execute.after', 'file.edited',
+  ]),
+});
+
+/**
+ * Resolve the host-fireable hook-event surface for a hookEvents dialect.
+ * Returns null for unknown/missing dialects (fail-closed). Pure, never throws.
+ *
+ * A non-null result for 'opencode-subset' is what makes that dialect a CONSUMED
+ * value rather than reserved vocab: callers can ask `hookEventSurfaceFor('opencode-subset')`
+ * and learn the host fires no workflow-phase events.
+ */
+function hookEventSurfaceFor(hookEvents: unknown): readonly string[] | null {
+  if (typeof hookEvents !== 'string') return null;
+  return HOOK_EVENT_SURFACES[hookEvents] || null;
+}
+
+// ---------------------------------------------------------------------------
 // Module export (CommonJS — matches existing src/*.cts pattern)
 // ---------------------------------------------------------------------------
 
@@ -523,8 +557,10 @@ export = {
   INTERFACE_POINTS,
   PROFILE_BASELINES,
   DEFAULT_ENGINE,
+  HOOK_EVENT_SURFACES,
   degradationFor,
   profileOf,
   negotiateHostCapabilities,
   shouldFlattenDispatch,
+  hookEventSurfaceFor,
 };
