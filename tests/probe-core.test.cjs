@@ -332,6 +332,31 @@ describe('probe-core: runProbeCli (generic I/O scaffold, injected io)', () => {
     });
     assert.deepEqual(JSON.parse(out), report);
   });
+  test('per-item garbage inside a well-shaped envelope (items:[{}]) → exits 2, writes nothing (#1907 — matches the "fails closed on adapter garbage" docstring)', () => {
+    // The container is well-shaped (items is an array, coverage has the right scalars) but an item
+    // is an empty object. Before #1907 this sailed through and stringified as green output, despite
+    // the docstring promising it fails closed. A future adapter (#644-class) returning per-item
+    // garbage inside a good envelope must fail closed, not emit garbage as valid coverage.
+    let code; let out = '';
+    pc.runProbeCli(() => ({ items: [{}], coverage: { applicable: 0, resolved: 0, unresolved: 0, byVerification: {} } }), {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, writeErr: () => {}, exit: (c) => { code = c; },
+    });
+    assert.equal(code, 2);
+    assert.equal(out, '');
+  });
+  test('a report with a fully-formed item still writes (per-item validation does not over-reject legitimate coverage)', () => {
+    let out = '';
+    const good = {
+      items: [{ requirement_id: 'R1', category: 'empty', status: 'unresolved', verification: null, resolution: null, reason: null, probe: 'edge' }],
+      coverage: { applicable: 1, resolved: 0, unresolved: 1, byVerification: {} },
+    };
+    pc.runProbeCli(() => good, {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, exit: () => {},
+    });
+    assert.deepEqual(JSON.parse(out), good);
+  });
 });
 
 // ─── CHK-07 (#1278): descriptor-less backward-compat byte-stability ──────────────────────────────
