@@ -71,6 +71,7 @@ const {
   planningPaths,
   planningDir,
   planningRoot,
+  getActiveWorkstream,
   findContextMdIn,
 } = planningWorkspace;
 
@@ -1682,6 +1683,31 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
   const milestone = getMilestoneInfo(cwd) as unknown as Record<string, unknown>;
   const _slashRuntime = resolveRuntime(cwd);
+
+  // #1912: fail safe in workstream mode with no active workstream. With no active
+  // workstream and no --ws, planningDir(cwd) resolves to root .planning — silently
+  // reporting a stale root milestone. Require an explicit workstream instead.
+  // Mirror planningDir's resolution (GSD_WORKSTREAM env > stored active pointer) so
+  // an explicit --ws (which sets GSD_WORKSTREAM) satisfies the check.
+  const _wsRoot = path.join(planningRoot(cwd), 'workstreams');
+  let _availableWorkstreams: string[] = [];
+  try {
+    _availableWorkstreams = fs
+      .readdirSync(_wsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    /* no workstreams dir → flat mode */
+  }
+  const _resolvedWorkstream = process.env['GSD_WORKSTREAM'] || getActiveWorkstream(cwd);
+  if (_availableWorkstreams.length > 0 && !_resolvedWorkstream) {
+    error(
+      `init.progress requires a workstream in workstream mode — no active workstream is set, so root STATE.md (likely stale) would be reported. ` +
+        `Pass --ws <name> or run ${formatGsdSlash('workstream set', _slashRuntime) as string} first. ` +
+        `Available workstreams: ${_availableWorkstreams.join(', ')}`,
+    );
+  }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const phases: Record<string, unknown>[] = [];
