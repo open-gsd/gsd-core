@@ -2,6 +2,7 @@
   "name": "@opengsd/gsd-core",
   "version": "1.7.0-rc.1",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
+  "main": ".opencode/plugins/gsd-core.js",
   "bin": {
     "gsd-core": "bin/install.js",
     "gsd-tools": "gsd-core/bin/gsd-tools.cjs",
@@ -16,6 +17,7 @@
     "assets",
     "agents",
     ".claude-plugin",
+    ".opencode",
     "gemini-extension.json",
     "GEMINI.md",
     "hooks",

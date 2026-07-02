@@ -7316,6 +7316,22 @@ function uninstall(isGlobal, runtime = 'claude') {
     }
   }
 
+  // 4z. Remove the OpenCode native plugin adapter (#1914). Only GSD's own
+  // plugin file is removed; the plugins/ dir is pruned only if it becomes
+  // empty, preserving any user-authored OpenCode plugins.
+  if (isOpencode) {
+    const pluginsDir = path.join(targetDir, 'plugins');
+    const pluginPath = path.join(pluginsDir, 'gsd-core.js');
+    if (fs.existsSync(pluginPath)) {
+      try {
+        fs.unlinkSync(pluginPath);
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed OpenCode plugin`);
+      } catch (_) { /* best-effort */ }
+      try { fs.rmdirSync(pluginsDir); } catch (_) { /* not empty — user plugins present */ }
+    }
+  }
+
   // 4a. Remove scripts/changeset/ and scripts/lib/ (#935)
   // GSD-managed files only: enumerate the exact set the installer writes.
   // Any file NOT in this set is user-owned and must survive uninstall.
@@ -8062,6 +8078,15 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
   if (fs.existsSync(fixSlashInstallPath)) {
     manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
+  }
+
+  // Track the OpenCode native plugin adapter (#1914) so update/drift detection
+  // and uninstall can account for it.
+  if (isOpencode) {
+    const pluginInstallPath = path.join(configDir, 'plugins', 'gsd-core.js');
+    if (fs.existsSync(pluginInstallPath)) {
+      manifest.files['plugins/gsd-core.js'] = fileHash(pluginInstallPath);
+    }
   }
 
   fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -8998,6 +9023,39 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.log(`  ${green}✓${reset} Installed ${_skillCount} skills to skills/`);
     } else {
       failures.push('skills/gsd-*');
+    }
+
+    // OpenCode-only: install the native plugin adapter (#1914). OpenCode
+    // declares hooksSurface: 'none', so GSD's lifecycle hooks are never
+    // registered as settings.json hooks the way Claude Code does — the hook
+    // *scripts* ship to <configDir>/hooks/ but nothing invokes them. This
+    // plugin bridges OpenCode's event bus onto those existing hook scripts
+    // (prompt guard, read guard, injection scanner, context monitor, ...),
+    // spawning them as subprocesses. OpenCode auto-discovers plugin files under
+    // <configDir>/plugins/ at startup — no opencode.json registration needed
+    // (its `plugin` array is for npm packages, not local file paths).
+    //
+    // The file MUST land as `.js`: OpenCode's loader globs
+    // `{plugin,plugins}/*.{ts,js}` (verified against its source) — a `.cjs`
+    // extension would never be discovered. The config dir carries a
+    // `{"type":"commonjs"}` package.json (written above), so the `.js` file is
+    // interpreted as CommonJS, matching the adapter's module.exports/require.
+    // Kilo has no plugin surface, so this is gated to OpenCode only.
+    if (isOpencode) {
+      const pluginSrc = path.join(src, '.opencode', 'plugins', 'gsd-core.js');
+      const pluginDestDir = path.join(targetDir, 'plugins');
+      const pluginDest = path.join(pluginDestDir, 'gsd-core.js');
+      if (fs.existsSync(pluginSrc)) {
+        fs.mkdirSync(pluginDestDir, { recursive: true });
+        fs.copyFileSync(pluginSrc, pluginDest);
+        if (fs.existsSync(pluginDest)) {
+          console.log(`  ${green}✓${reset} Installed OpenCode plugin (bridges GSD hooks)`);
+        } else {
+          failures.push('plugins/gsd-core.js');
+        }
+      } else {
+        failures.push('plugins/gsd-core.js');
+      }
     }
   } else if (isCline) {
     // Cline local install: rules-based only — commands are embedded in .clinerules (generated below).

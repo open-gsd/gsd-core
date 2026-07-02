@@ -392,6 +392,7 @@
   "hooks/managed-hooks-registry.cjs": "763730ef31e5fd1c",
   "opencode.json": "13151e97ff23c1aa",
   "package.json": "dbf8353f77358bc1",
+  "plugins/gsd-core.js": "580cc6fcf2a9ee24",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
   "scripts/changeset/github-release-notes.cjs": "795677f0c009b132",
