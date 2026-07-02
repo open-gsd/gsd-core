@@ -415,7 +415,7 @@ describe('auto-update', () => {
   describe('hook — dispatch path (all gates pass)',
     { skip: isWindows ? 'POSIX-only: harness spawns bash + kill -0 + sleep; the hook itself is a bash script under test' : false },
     () => {
-    test('writes status file with status=running synchronously before returning', (t) => {
+    test('writes status file with status=running synchronously before returning', async (t) => {
       const tmpDir = createTempGitRepo({
         config: { graphify: { enabled: true, auto_update: true } },
       });
@@ -435,6 +435,12 @@ describe('auto-update', () => {
       const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
       assert.strictEqual(status.status, 'running', 'initial status must be "running"');
       assert.ok(/^[0-9a-f]{7,40}$/.test(status.head_at_build), 'head_at_build must be a commit sha');
+      // Await the detached rebuild's terminal status so the subprocess has exited
+      // before the test returns. A dangling detached rebuild can outlive the chunk
+      // under `node --test --test-force-exit` and surface as a non-zero chunk exit.
+      const done = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.ok(done && (done.status === 'ok' || done.status === 'failed'),
+        'detached rebuild must reach a terminal status before the test returns');
     });
 
     test('completes to status=ok after detached graphify run succeeds', async (t) => {
@@ -509,7 +515,7 @@ describe('auto-update', () => {
       );
     });
 
-    test('stale lock file (dead PID) is treated as absent', (t) => {
+    test('stale lock file (dead PID) is treated as absent', async (t) => {
       const tmpDir = createTempGitRepo({
         config: { graphify: { enabled: true, auto_update: true } },
       });
@@ -528,9 +534,13 @@ describe('auto-update', () => {
       assert.strictEqual(r.status, 0);
       const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
       assert.ok(fs.existsSync(statusPath), 'stale lock must not block dispatch');
+      // Await terminal status so the detached rebuild is gone before returning (see above).
+      const done = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.ok(done && (done.status === 'ok' || done.status === 'failed'),
+        'detached rebuild must reach a terminal status before the test returns');
     });
 
-    test('respects git.base_branch config override (default branch != main)', (t) => {
+    test('respects git.base_branch config override (default branch != main)', async (t) => {
       const tmpDir = createTempGitRepo({
         defaultBranch: 'trunk',
         config: {
@@ -546,10 +556,15 @@ describe('auto-update', () => {
         { pathPrepend: mockBin },
       );
       assert.strictEqual(r.status, 0);
+      const statusPath = path.join(tmpDir, '.planning/graphs/.last-build-status.json');
       assert.ok(
-        fs.existsSync(path.join(tmpDir, '.planning/graphs/.last-build-status.json')),
+        fs.existsSync(statusPath),
         'hook must honor git.base_branch when default branch is not main',
       );
+      // Await terminal status so the detached rebuild is gone before returning (see above).
+      const done = await waitForBuildStatus(statusPath, new Set(['ok', 'failed']));
+      assert.ok(done && (done.status === 'ok' || done.status === 'failed'),
+        'detached rebuild must reach a terminal status before the test returns');
     });
   });
 
