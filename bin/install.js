@@ -7718,12 +7718,31 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
     modified = true;
   }
 
-  // Configure external_directory permission (the safety guard for paths outside project)
+  // Configure external_directory permission (the safety guard for paths outside)
   if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
     config.permission.external_directory = {};
   }
   if (config.permission.external_directory[gsdPath] !== 'allow') {
     config.permission.external_directory[gsdPath] = 'allow';
+    modified = true;
+  }
+
+  // ADR-1239 Phase D / #1682 — register the companion MCP server (Phase 4) so
+  // OpenCode connects to GSD's command (point 1) + state-IO (point 5) surface
+  // with NO bespoke plugin. Idempotent + non-clobbering: only added when
+  // `mcp.gsd` is absent (a user-defined `mcp.gsd` is respected — Hyrum's Law).
+  // Local-stdio schema per OpenCode config (packages/core/src/config/mcp.ts).
+  // `-p @opengsd/gsd-core` resolves the `gsd-mcp-server` bin from this package
+  // (bin name != package name) regardless of global-install state.
+  if (!config.mcp || typeof config.mcp !== 'object') {
+    config.mcp = {};
+  }
+  if (config.mcp.gsd === undefined) {
+    config.mcp.gsd = {
+      type: 'local',
+      command: ['npx', '-y', '-p', '@opengsd/gsd-core', 'gsd-mcp-server'],
+      enabled: true,
+    };
     modified = true;
   }
 
