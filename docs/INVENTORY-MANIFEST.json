@@ -400,6 +400,7 @@
       "security.cjs",
       "semver-compare.cjs",
       "shell-command-projection.cjs",
+      "smart-entry.cjs",
       "stale-bake-guard.cjs",
       "state-command-router.cjs",
       "state-document.cjs",
