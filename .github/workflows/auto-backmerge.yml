@@ -115,7 +115,7 @@ jobs:
           # filter those out. A substantive change still parks: it leaves
           # non-"version" lines (deps in package.json; resolved/integrity in the
           # lockfile when a dependency actually changes).
-          VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json gemini-extension.json'
+          VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json .claude-plugin/marketplace.json gemini-extension.json'
           DROPPED=$(printf '%s\n' "$DROPPED" | while IFS= read -r f; do
             [ -n "$f" ] || continue
             case " $VERSION_STAMP_MANIFESTS " in
