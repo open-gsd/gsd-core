@@ -2221,5 +2221,53 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #1912: init.progress fails safe in workstream mode with no active workstream
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1912 — init.progress fails safe in workstream mode with no active workstream', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function seedWs(name, milestoneVersion) {
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', name);
+    fs.mkdirSync(path.join(wsDir, 'phases'), { recursive: true });
+    fs.writeFileSync(
+      path.join(wsDir, 'STATE.md'),
+      `# State\n\n**Status:** executing\n**Milestone:** ${milestoneVersion}\n`,
+    );
+    fs.writeFileSync(
+      path.join(wsDir, 'ROADMAP.md'),
+      `# Roadmap\n\n## Milestones\n- ${milestoneVersion} Test (Phase 1)\n\n## Phases\n### Phase 1: X\n**Goal:** do x\n`,
+    );
+    return wsDir;
+  }
+
+  test('errors (does NOT report stale root) when workstreams exist but none active', () => {
+    seedWs('alpha', 'v9.0');
+    seedWs('beta', 'v9.0');
+    // Stale root STATE — the misleading value that must never be silently reported.
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'milestone: v7.1\nstatus: executing\n');
+    // No active-workstream pointer, no --ws.
+    const result = runGsdTools('init progress', tmpDir);
+    assert.equal(result.success, false, 'should fail safe rather than report the stale root milestone');
+    assert.match(result.error || '', /workstream|--ws/i, 'error should name the workstream requirement');
+  });
+
+  test('succeeds with --ws (reads the named workstream, not root)', () => {
+    seedWs('alpha', 'v9.0');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'milestone: v7.1\nstatus: executing\n');
+    const result = runGsdTools('init progress --ws alpha', tmpDir);
+    assert.ok(result.success, `should succeed with --ws: ${result.error}`);
+  });
+
+  test('flat mode (no workstreams dir) is unchanged', () => {
+    const result = runGsdTools('init progress', tmpDir);
+    assert.ok(result.success, `flat mode should still work: ${result.error}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // roadmap analyze command
 // ─────────────────────────────────────────────────────────────────────────────

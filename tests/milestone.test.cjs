@@ -716,3 +716,86 @@ describe('milestone complete explicit version scope (#3043)', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1911: milestone complete --ws must archive to the workstream, not root
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1911 — milestone complete --ws archives to the workstream', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  test('--ws archives roadmap/requirements into the workstream milestones dir, not root', () => {
+    const wsBase = path.join(tmpDir, '.planning', 'workstreams', 'ws1');
+    fs.mkdirSync(path.join(wsBase, 'phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(path.join(wsBase, 'STATE.md'), 'milestone: v2.0\nstatus: executing\n');
+    fs.writeFileSync(
+      path.join(wsBase, 'ROADMAP.md'),
+      '# Roadmap\n## Milestones\n- v2.0 Test (Phases 1) — IN PROGRESS\n## Phases\n### Phase 1: Foo\n**Goal:** foo\n',
+    );
+    fs.writeFileSync(path.join(wsBase, 'REQUIREMENTS.md'), '# Requirements\n- [ ] REQ-01\n');
+    fs.writeFileSync(path.join(wsBase, 'phases', '01-foo', '01-SUMMARY.md'), '---\none-liner: foo done\n---\n# Summary\n');
+    // Root milestones dir pre-exists; it must NOT receive the workstream archive.
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'milestones'), { recursive: true });
+
+    const result = runGsdTools('milestone complete v2.0 --ws ws1 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    // Archive lands inside the workstream.
+    assert.ok(
+      fs.existsSync(path.join(wsBase, 'milestones', 'v2.0-ROADMAP.md')),
+      'v2.0-ROADMAP.md should be archived into the workstream milestones dir',
+    );
+    assert.ok(
+      fs.existsSync(path.join(wsBase, 'milestones', 'v2.0-REQUIREMENTS.md')),
+      'v2.0-REQUIREMENTS.md should be archived into the workstream milestones dir',
+    );
+    // And NOT in root.
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v2.0-ROADMAP.md')),
+      'must not archive to root .planning/milestones/ in workstream mode',
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1871: milestone complete archives phase dirs by default
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1871 — milestone complete archives phase dirs by default', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  function seedCompletableMilestone() {
+    writeRoadmap(tmpDir, '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n- [ ] x\n');
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+  }
+
+  test('archives phase dirs by default (no --archive-phases flag needed)', () => {
+    seedCompletableMilestone();
+    const result = runGsdTools('milestone complete v1.0 --name MVP', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(out.archived.phases, 'phases should be archived by default');
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'phase dir should be archived under milestones/v1.0-phases/',
+    );
+  });
+
+  test('--no-archive-phases opts out of default archiving', () => {
+    seedCompletableMilestone();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    const result = runGsdTools('milestone complete v1.0 --name MVP --no-archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(!out.archived.phases, 'phases should NOT be archived with --no-archive-phases');
+    assert.ok(fs.existsSync(phaseDir), 'phase dir should remain in place with --no-archive-phases');
+  });
+});

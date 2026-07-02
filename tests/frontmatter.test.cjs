@@ -366,6 +366,22 @@ Body content.`;
     assert.strictEqual(result[1], 'Coverage exceeds 80%');
   });
 
+  test('trims a continuation-KV value so a quoted trailing space does not survive (#1905, root cause of the #1154 false-pass)', () => {
+    // A quoted value like `"backstop "` captures the inner trailing space in group 2; left untrimmed,
+    // a hand-authored non-inferable `backstop` marker (#1820 spec-optional rail) degrades to `'backstop '`,
+    // which `truthVerification` no longer recognizes → the truth silently grades green instead of abstaining.
+    // Whitespace is never semantic in a scalar KV value, so the parser must trim it.
+    const content = `---
+must_haves:
+  truths:
+    - statement: user data is never logged
+      verification: "backstop "
+---
+Body.`;
+    const result = parseMustHavesBlock(content, 'truths');
+    assert.strictEqual(result[0].verification, 'backstop', 'the captured value is trimmed, not left as "backstop "');
+  });
+
   test('extracts artifacts as object array', () => {
     const content = `---
 phase: 01

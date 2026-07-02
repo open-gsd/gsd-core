@@ -322,7 +322,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # 마일스톤 아카이브
-node gsd-tools.cjs milestone complete <version> [--name <name>] [--archive-phases]
+node gsd-tools.cjs milestone complete <version> [--name <name>] [--no-archive-phases]
 
 # 요구사항을 완료로 표시
 node gsd-tools.cjs requirements mark-complete <ids>

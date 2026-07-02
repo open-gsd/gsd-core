@@ -101,7 +101,7 @@ describe('phases clear command', () => {
     );
   });
 
-  test('clears nested phase content (recursive delete)', () => {
+  test('archives nested phase content (moved, not deleted) (#1871)', () => {
     const phasesDir = path.join(tmpDir, '.planning', 'phases');
     const phase1 = path.join(phasesDir, '01-foundation');
     const nested = path.join(phase1, 'subdir');
@@ -111,9 +111,32 @@ describe('phases clear command', () => {
     const result = runGsdTools('phases clear --confirm', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
-    assert.ok(!fs.existsSync(phase1), 'phase directory including nested content should be removed');
+    // Source is cleared (moved away)...
+    assert.ok(!fs.existsSync(phase1), 'phase directory should be moved out of .planning/phases/');
+    // ...but the nested content SURVIVES in the archive (not destroyed).
+    const archive = findPhasesArchive(tmpDir);
+    assert.ok(archive, 'an archive dir milestones/*-phases/ should exist');
+    assert.ok(
+      fs.existsSync(path.join(archive, '01-foundation', 'subdir', 'deep-file.md')),
+      'nested phase content must be preserved in the archive, not deleted',
+    );
   });
 });
+
+// Locate the `milestones/<version>-phases/` archive directory created by phases clear.
+function findPhasesArchive(tmpDir) {
+  const milestonesDir = path.join(tmpDir, '.planning', 'milestones');
+  try {
+    for (const entry of fs.readdirSync(milestonesDir, { withFileTypes: true })) {
+      if (entry.isDirectory() && /-phases$/.test(entry.name)) {
+        return path.join(milestonesDir, entry.name);
+      }
+    }
+  } catch {
+    /* no milestones dir */
+  }
+  return null;
+}
 
 // ─── #1447: uncommitted-changes guard ───────────────────────────────────────
 
@@ -190,7 +213,14 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
     assert.ok(result.success, `should succeed when phase files are committed: ${result.error}`);
     const output = JSON.parse(result.output);
     assert.strictEqual(output.cleared, 1, 'should clear 1 phase directory');
-    assert.ok(!fs.existsSync(phase1), 'committed phase directory should be removed');
+    // #1871: a committed phase dir is ARCHIVED (moved to milestones/*-phases/), not destroyed.
+    assert.ok(!fs.existsSync(phase1), 'committed phase directory should be moved out of .planning/phases/');
+    const archive = findPhasesArchive(tmpDir);
+    assert.ok(archive, 'a milestones/*-phases/ archive should be created for committed phase dirs');
+    assert.ok(
+      fs.existsSync(path.join(archive, '01-foundation', 'PLAN.md')),
+      'committed phase content must be preserved in the archive, not hard-deleted',
+    );
   });
 
   test('guard skips gracefully when not in a git repo (no guard, proceeds normally)', () => {
