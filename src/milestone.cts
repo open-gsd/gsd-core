@@ -130,8 +130,13 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   const roadmapPath = planningPaths(cwd).roadmap;
   const reqPath = planningPaths(cwd).requirements;
   const statePath = planningPaths(cwd).state;
-  const milestonesPath = path.join(cwd, '.planning', 'MILESTONES.md');
-  const archiveDir = path.join(cwd, '.planning', 'milestones');
+  // #1911: derive the archive base from the workstream-aware planning root so
+  // `milestone complete --ws` archives into the workstream, not root. planningPaths(cwd).planning
+  // resolves to the workstream base when GSD_WORKSTREAM is set and to root .planning otherwise
+  // (flat mode is a no-op).
+  const planningBase = planningPaths(cwd).planning;
+  const milestonesPath = path.join(planningBase, 'MILESTONES.md');
+  const archiveDir = path.join(planningBase, 'milestones');
   const phasesDir = planningPaths(cwd).phases;
   const today = new Date().toISOString().split('T')[0];
   const milestoneName = options.name || version;
@@ -283,7 +288,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   }
 
   // Archive audit file if exists
-  const auditFile = path.join(cwd, '.planning', `${version}-MILESTONE-AUDIT.md`);
+  const auditFile = path.join(planningBase, `${version}-MILESTONE-AUDIT.md`);
   if (fs.existsSync(auditFile)) {
     retryRenameSync(auditFile, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`));
   }
