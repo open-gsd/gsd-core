@@ -84,6 +84,30 @@ function readStateProjection(statePath: string): StateProjection {
   }
 }
 
+/**
+ * #1913: detect an authoritative shipped signal for a workstream so the
+ * inventory status is never trusted from the mutable STATE.md `Status` field
+ * alone. Returns true when EITHER an archived milestone snapshot is present
+ * under `<planningBase>/milestones/` OR the workstream ROADMAP carries a
+ * SHIPPED marker — both are hard to desync, unlike the hand-maintained field.
+ */
+function workstreamMilestoneShipped(roadmapPath: string, planningBase: string): boolean {
+  try {
+    const milestonesDir = path.join(planningBase, 'milestones');
+    for (const entry of fs.readdirSync(milestonesDir, { withFileTypes: true })) {
+      if (entry.isFile() && /-ROADMAP\.md$/i.test(entry.name)) return true;
+    }
+  } catch {
+    /* no milestones archive dir */
+  }
+  try {
+    if (/SHIPPED/i.test(fs.readFileSync(roadmapPath, 'utf-8'))) return true;
+  } catch {
+    /* no roadmap */
+  }
+  return false;
+}
+
 function sortWorkstreamInventories(inventories: WorkstreamInventory[], activeWorkstreamName: string | null): WorkstreamInventory[] {
   return [...inventories].sort((a, b) => {
     const aActive = a.name === activeWorkstreamName ? 1 : 0;
@@ -123,6 +147,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
       state: fs.existsSync(p.state),
       requirements: fs.existsSync(p.requirements),
     },
+    milestoneShipped: workstreamMilestoneShipped(p.roadmap, p.planning),
   });
 }
 

@@ -23,6 +23,24 @@ const PROJECT_CODE_PREFIX_STRIP_RE_I = /^[A-Z][A-Z0-9_]*-(?=\d)/i;
 const PROJECT_CODE_PREFIX_CAPTURE_RE_I = /^([A-Z][A-Z0-9_]*)-(\d.*)/i;
 const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
 
+// #1729: phase headers may carry a parenthetical tag between the number and the
+// colon, e.g. `### Phase 26 (Cluster B): Title`. This optional, non-capturing
+// fragment is injected at every phase-header regex call site (immediately after
+// the phase-number token, before the colon/space delimiter) so the resolver
+// tolerates the tag — mirroring how `[...]` is already tolerated before `Phase`.
+// `[^)\n]*` keeps the match single-line (headers are one line) to avoid
+// over-consuming across a malformed multi-line document. Injected at the call
+// site (not baked into phaseMarkdownRegexSource) so it applies uniformly to
+// both the numeric and project-code-exact escaped sources, and so the decimal
+// sub-phase patterns can place it after the `.N` segment.
+//
+// Enumeration/parse call sites that read phase headers from a regex *literal*
+// (rather than a `new RegExp` built from an interpolated phase number) cannot
+// reference this constant; they inline its literal-regex mirror instead —
+// `(?:\s*\([^)\n]*\))?` — kept character-for-character equivalent to this
+// source. Both forms must change together; see the #1729 regression test.
+const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]*\\))?';
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -220,6 +238,7 @@ function phaseTokenMatches(dirName: string, normalized: string): boolean {
 export = {
   escapeRegex,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  OPTIONAL_PHASE_TAG_SOURCE,
   stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,

@@ -33,6 +33,11 @@ const { cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const INSTALL_PATH = path.join(REPO_ROOT, 'bin', 'install.js');
+// hooks/dist/ is a gitignored build artifact; the test must ensure it exists before
+// invoking the installer (mirrors golden-install-parity's BUILD_SCRIPT pattern). Without
+// this, the unit lane — whose ensureBuiltArtifacts() builds only bin/lib, not hooks —
+// leaves hooks/dist empty and install.js hard-fails "directory is empty" (#1926).
+const BUILD_HOOKS = path.join(REPO_ROOT, 'scripts', 'build-hooks.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +66,13 @@ describe('bug #1367 — Claude local install uses flat gsd-<cmd>.md command layo
   let tmpDir;
 
   before(() => {
+    // #1926: build hooks/dist/ so the installer's verifyInstalled(hooks) doesn't hit an
+    // empty directory. Self-contained — no dependency on the lane having pre-built hooks.
+    execFileSync(process.execPath, [BUILD_HOOKS], {
+      cwd: REPO_ROOT,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1367-'));
     runClaudeLocalInstall(tmpDir);
   });

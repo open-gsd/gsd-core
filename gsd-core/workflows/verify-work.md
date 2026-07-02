@@ -417,6 +417,7 @@ If no more tests → Go to `complete_session`
 Read the full UAT file.
 
 Find first test with `result: [pending]`.
+If no `[pending]` test found → go to `complete_session`.
 
 Announce:
 ```
