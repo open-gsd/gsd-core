@@ -1,6 +1,6 @@
 # ADR-1239: GSD as an Embeddable Orchestration Engine
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-06-14
 - **Issue:** [#1239](https://github.com/open-gsd/gsd-core/issues/1239)
 - **Epic:** [#857](https://github.com/open-gsd/gsd-core/issues/857) (Capability system)
@@ -87,7 +87,7 @@ Each phase is its own `approved-*` issue + PR with equivalence/parity proof.
 
 ### Amendment — Phase A implemented (#1684, v1.7.0)
 
-Phase A is **implemented** (the ADR itself remains `Proposed` overall until Phases B–E land). The negotiated capability schema is materialized as a pure, additive, no-I/O module — the **Host-Integration Interface** (`src/host-integration.cts` → `gsd-core/bin/lib/host-integration.cjs`):
+Phase A is **implemented** and Phases B–E have landed, so this ADR is **Accepted** (Status flipped from `Proposed` once Phase E shipped the published SDK + serialized handshake + versioning policy + Diátaxis docs). The negotiated capability schema is materialized as a pure, additive, no-I/O module — the **Host-Integration Interface** (`src/host-integration.cts` → `gsd-core/bin/lib/host-integration.cjs`):
 
 - **The eight negotiated axes** are carried under `capability.json` `runtime.hostIntegration` (extending, not replacing, the ADR-1016 axes), validated by `validateRuntimeBody` (`capability-validator.cjs`) across all 16 runtime descriptors, with the closed vocabulary kept in lock-step by a parity guard.
 - **`PROTOCOL_VERSION`** is an integer starting at `1`, **distinct** from the package `version` / `engines.gsd` semver (the `version`/`protocolVersion` overlap, resolved).
