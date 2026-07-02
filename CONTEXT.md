@@ -487,7 +487,6 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 `WORKTREE.SEAM.test-policy=cover all decision branches in policy module before changing prune behavior`
 `WORKTREE.SEAM.test-anchors=[resolveWorktreeContext:has_local_planning|linked_worktree|not_git_repo|main_worktree, planWorktreePrune:git_list_failed|worktrees_present|no_worktrees|parser_throw_fallback, executeWorktreePrunePlan:missing_plan|skip_passthrough|unsupported_action|metadata_prune_only]`
 `WORKTREE.SEAM.invariant=parser failure must degrade to metadata_prune_only and never escalate to destructive removal`
-`WORKTREE.SEAM.execution-rule=prefer node --test tests/worktree-safety-policy.test.cjs for fast seam validation; avoid full npm test loop for seam-only changes`
 `WORKTREE.SEAM.inventory-interface=[listLinkedWorktreePaths, inspectWorktreeHealth]`
 `WORKTREE.SEAM.caller-rule=verify.cjs must consume inspectWorktreeHealth for W017 classification; no ad-hoc porcelain parsing in callers`
 `WORKTREE.SEAM.test-anchor-w017=tests/orphan-worktree-detection.test.cjs + tests/worktree-safety-policy.test.cjs`
@@ -908,7 +907,7 @@ Migration plan: Phase 1 (#3465) seam additions complete; Phase 2 (#3466) targets
 `DEFECT.AGENT-RETIRED-SLASH-SYNTAX-DRIFT.detect=tests/bug-2543-gsd-slash-namespace.test.cjs prints "Found N retired /gsd-<cmd> reference(s) — use /gsd:<cmd> instead" with line-number-precise violations`
 `DEFECT.AGENT-RETIRED-SLASH-SYNTAX-DRIFT.fix-forward=replace /gsd-<cmd> with /gsd:<cmd> at the cited file:line; healthy emergent property — project-wide invariant test catches drift agents would never self-correct`
 `DEFECT.AGENT-RETIRED-SLASH-SYNTAX-DRIFT.lesson=agent-trust-but-verify is load-bearing — sub-agent reporting "done" is not a substitute for running the full suite; the invariant test surfaces drift even in doc-only changes`
-`PROC.PARALLEL-FIX-DISPATCH.pattern=bot triage brief → worktree per branch → parallel sub-agents do rubber-duck/RCA/TDD implementation only → top-level orchestrator owns commit + gsd-test-summary --both + push + PR + changeset-pr-backfill`
+`PROC.PARALLEL-FIX-DISPATCH.pattern=bot triage brief → worktree per branch → parallel sub-agents do rubber-duck/RCA/TDD implementation only → top-level orchestrator owns commit + gsd-test + push + PR + changeset-pr-backfill`
 `PROC.PARALLEL-FIX-DISPATCH.rationale=long-running test runs need cross-turn notifications (orchestrator-only); CONTRIBUTING.md gh-templates-first hook requires session-scoped Read calls sub-agents wouldn't otherwise make; sequencing test runs avoids GSD-TEST-CONCURRENT-OUTPUT-COLLISION`
 `PROC.PARALLEL-FIX-DISPATCH.observed=#3541 + #3542 dispatched simultaneously this session; PRs #3546 #3547 opened green; one syntax slip caught by AGENT-RETIRED-SLASH-SYNTAX-DRIFT and fixed before second PR opened`
 
