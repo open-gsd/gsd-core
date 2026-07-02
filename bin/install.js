@@ -374,6 +374,7 @@ const {
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs'));
 const {
   updateCacheFileName,
+  PACKAGE_NAME,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
 
 // ADR-1239 Phase B: runtime-artifact install cluster extracted to install-engine.cjs.
@@ -7740,7 +7741,7 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
   if (config.mcp.gsd === undefined) {
     config.mcp.gsd = {
       type: 'local',
-      command: ['npx', '-y', '-p', '@opengsd/gsd-core', 'gsd-mcp-server'],
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
       enabled: true,
     };
     modified = true;

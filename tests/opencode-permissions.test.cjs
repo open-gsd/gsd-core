@@ -21,6 +21,7 @@ const path = require('node:path');
 
 const { createTempDir, cleanup } = require('./helpers.cjs');
 const { configureOpencodePermissions } = require('../bin/install.js');
+const { PACKAGE_NAME } = require('../gsd-core/bin/lib/package-identity.cjs');
 
 const installSrc = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
 
@@ -88,7 +89,7 @@ describe('configureOpencodePermissions', () => {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.deepEqual(config.mcp.gsd, {
       type: 'local',
-      command: ['npx', '-y', '-p', '@opengsd/gsd-core', 'gsd-mcp-server'],
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
       enabled: true,
     });
   });

@@ -390,7 +390,7 @@
   "hooks/lib/git-cmd.js": "268ba15992ca0b23",
   "hooks/lib/gsd-graphify-rebuild.sh": "66af89601074d2a9",
   "hooks/managed-hooks-registry.cjs": "763730ef31e5fd1c",
-  "opencode.json": "13151e97ff23c1aa",
+  "opencode.json": "2c12c446a88f2f36",
   "package.json": "dbf8353f77358bc1",
   "plugins/gsd-core.js": "8ae69107bf3036a0",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
