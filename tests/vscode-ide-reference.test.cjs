@@ -68,7 +68,12 @@ test('bindGsdToVscode composes the full IDE profile (active model + engine bus +
 });
 
 test('bindGsdToVscode is fail-closed without vscode.lm or hostStorage', () => {
-  assert.throws(() => bindGsdToVscode({}, { read() {}, write() {} }), /vscode\.lm/);
-  assert.throws(() => bindGsdToVscode({ lm: {} }, null), /hostStorage/);
-  assert.throws(() => bindGsdToVscode({ lm: { sendRequest() {} } }, { read() {} }), /hostStorage/);
+  const okStorage = { read() {}, write() {} };
+  const okVscode = { lm: { sendRequest() {} } };
+  // vscode.lm missing or incomplete → vscode.lm error
+  assert.throws(() => bindGsdToVscode({}, okStorage), /vscode\.lm/);
+  assert.throws(() => bindGsdToVscode({ lm: {} }, okStorage), /vscode\.lm/);
+  // valid vscode.lm but missing/incomplete hostStorage → hostStorage error
+  assert.throws(() => bindGsdToVscode(okVscode, null), /hostStorage/);
+  assert.throws(() => bindGsdToVscode(okVscode, { read() {} }), /hostStorage/);
 });
