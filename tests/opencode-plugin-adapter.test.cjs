@@ -35,23 +35,46 @@ const ADAPTER_SRC = path.join(__dirname, '..', '.opencode', 'plugins', 'gsd-core
 // note) so they never appear as top-level exports the OpenCode loader iterates.
 const _internals = require(ADAPTER_SRC).server._internals;
 
-test('export shape matches OpenCode\'s getServerPlugin contract', () => {
+// Faithful emulation of OpenCode's loader: `getServerPlugin` accepts a bare
+// function OR an object with a `.server` function, else the loader THROWS.
+function getServerPlugin(entry) {
+  if (typeof entry === 'function') return entry;
+  if (entry && typeof entry === 'object' && typeof entry.server === 'function') return entry.server;
+  return null;
+}
+// Emulate the loader loop: `for (const entry of Object.values(mod)) { … throw if null }`.
+function loaderExtract(mod) {
+  const servers = [];
+  for (const entry of Object.values(mod)) {
+    const s = getServerPlugin(entry);
+    if (!s) throw new TypeError('Plugin export is not a function');
+    servers.push(s);
+  }
+  return servers;
+}
+
+test('export survives the loader loop as raw CommonJS (require)', () => {
   const mod = require(ADAPTER_SRC);
-  // OpenCode's loader extracts a plugin via getServerPlugin(entry): it accepts a
-  // bare function OR an object exposing a `.server` function. Our export is the
-  // latter, with an `id` identity — the shape validated on real OpenCode.
-  const getServerPlugin = (entry) =>
-    typeof entry === 'function'
-      ? entry
-      : entry && typeof entry === 'object' && typeof entry.server === 'function'
-        ? entry.server
-        : null;
+  // `id` must be readable for identity/dedup...
   assert.equal(mod.id, 'gsd-core');
-  assert.equal(typeof getServerPlugin(mod), 'function', 'module.exports must yield a server function');
-  // Test-only internals must hang off the server function, NOT leak as a sibling
-  // top-level export (which would make a stricter loader iteration reject them).
+  // ...but NON-ENUMERABLE so it never lands in Object.values (would throw).
+  assert.ok(!Object.keys(mod).includes('id'), 'id must be non-enumerable');
+  const servers = loaderExtract(mod); // must not throw
+  assert.equal(servers.length, 1);
+  assert.equal(typeof servers[0], 'function');
+  // Internals hang off the server fn, never as a sibling top-level export.
   assert.equal(mod._internals, undefined);
   assert.equal(typeof mod.server._internals, 'object');
+});
+
+test('export survives the loader loop as an ESM/Bun namespace (default + synthesized)', () => {
+  const raw = require(ADAPTER_SRC);
+  // Worst-case ESM interop: default plus any lexer-synthesized named exports.
+  // Because module.exports is assigned from a variable, only `default` is
+  // realistically synthesized — but assert robustness even if `server` leaks.
+  for (const ns of [{ default: raw }, { default: raw, server: raw.server }]) {
+    assert.doesNotThrow(() => loaderExtract(ns), `loader threw on namespace ${Object.keys(ns)}`);
+  }
 });
 
 test('mapToolName maps OpenCode tool names to Claude names', () => {
@@ -123,7 +146,26 @@ test('handleHookResult: advisory sets metadata + does not throw', () => {
       output,
     ),
   );
-  assert.equal(output.metadata._gsdAdvisory, 'heads up');
+  assert.deepEqual(output.metadata._gsdAdvisory, ['heads up']);
+});
+
+test('handleHookResult: multiple advisories accumulate (no clobber)', () => {
+  // A single tool call runs several advisory hooks in sequence; each must be
+  // preserved, not overwritten by the next.
+  const output = {};
+  const advise = (ctx) =>
+    _internals.handleHookResult(
+      { stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: ctx } }), exitCode: 0 },
+      output,
+    );
+  advise('prompt-guard note');
+  advise('read-guard note');
+  advise('workflow-guard note');
+  assert.deepEqual(output.metadata._gsdAdvisory, [
+    'prompt-guard note',
+    'read-guard note',
+    'workflow-guard note',
+  ]);
 });
 
 test('handleHookResult: silent allow is a no-op', () => {
@@ -245,4 +287,45 @@ test('config hook is a no-op in installed (non-package) layout', async (t) => {
   await handlers.config(config);
   // No commands/agents/skills registered — native file copy owns that surface.
   assert.deepEqual(config, {});
+});
+
+// ---------------------------------------------------------------------------
+// Installer integration: copy → manifest → uninstall (real bin/install.js)
+// ---------------------------------------------------------------------------
+
+test('installer copies plugin as .js, records it in the manifest, and removes it on uninstall', (t) => {
+  const { spawnSync } = require('node:child_process');
+  const installer = path.join(__dirname, '..', 'bin', 'install.js');
+  const cfg = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-oc-install-')));
+  t.after(() => cleanup(cfg));
+
+  const run = (args) =>
+    spawnSync(process.execPath, [installer, '--opencode', '--global', '--config-dir', cfg, ...args], {
+      encoding: 'utf8',
+    });
+
+  // Install
+  const install = run([]);
+  assert.equal(install.status, 0, `install failed: ${install.stderr}`);
+
+  const pluginPath = path.join(cfg, 'plugins', 'gsd-core.js');
+  assert.ok(fs.existsSync(pluginPath), 'plugin must land at plugins/gsd-core.js (matches OpenCode {plugin,plugins}/*.{ts,js} glob)');
+  assert.ok(!fs.existsSync(path.join(cfg, 'plugins', 'gsd-core.cjs')), 'must NOT ship a .cjs (never auto-discovered)');
+
+  // Manifest records the plugin for drift/uninstall accounting.
+  const manifest = JSON.parse(fs.readFileSync(path.join(cfg, 'gsd-file-manifest.json'), 'utf8'));
+  assert.ok(manifest.files['plugins/gsd-core.js'], 'manifest must track plugins/gsd-core.js');
+
+  // The installed plugin loads and resolves REPO_ROOT to the config dir.
+  delete require.cache[require.resolve(pluginPath)];
+  const installed = require(pluginPath);
+  assert.equal(installed.id, 'gsd-core');
+  assert.equal(installed.server._internals.REPO_ROOT, cfg);
+  assert.equal(installed.server._internals.IS_PACKAGE_TREE, false);
+
+  // Uninstall removes the plugin and prunes the (now empty) plugins/ dir.
+  const uninstall = run(['--uninstall']);
+  assert.equal(uninstall.status, 0, `uninstall failed: ${uninstall.stderr}`);
+  assert.ok(!fs.existsSync(pluginPath), 'plugin must be removed on uninstall');
+  assert.ok(!fs.existsSync(path.join(cfg, 'plugins')), 'empty plugins/ dir must be pruned');
 });

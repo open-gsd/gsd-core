@@ -74,7 +74,11 @@ function resolveRepoRoot(startDir) {
     if (parent === dir) break; // filesystem root
     dir = parent;
   }
-  return path.resolve(startDir, "..");
+  // No ancestor carried both markers (broken/partial layout — the plugin can't
+  // function regardless). Fall back to the package-tree assumption ("../.."),
+  // matching the historical fixed-depth behavior and the .opencode/plugins/
+  // source layout.
+  return path.resolve(startDir, "../..");
 }
 
 // CJS: __dirname is a global, no need to derive from import.meta.url
@@ -229,7 +233,7 @@ function runHook(hookFile, payload, opts = {}) {
  * Parse a hook's stdout and apply its effect to the OpenCode output object.
  *
  * - Block   → throw Error(parsed.reason) so OpenCode aborts the tool call
- * - Advisory→ set output.metadata._gsdAdvisory and log to stderr
+ * - Advisory→ append to output.metadata._gsdAdvisory[] and log to stderr
  * - Silent  → no-op
  *
  * @param {{ stdout: string, exitCode: number }} hookResult
@@ -264,7 +268,14 @@ function handleHookResult(hookResult, output) {
   if (advisory) {
     if (output) {
       output.metadata = output.metadata || {};
-      output.metadata._gsdAdvisory = advisory;
+      // Accumulate: a single tool call can run several advisory hooks in
+      // sequence (prompt guard, read guard, worktree guard, workflow guard).
+      // Storing a scalar would let a later advisory clobber an earlier one, so
+      // collect them all.
+      if (!Array.isArray(output.metadata._gsdAdvisory)) {
+        output.metadata._gsdAdvisory = [];
+      }
+      output.metadata._gsdAdvisory.push(advisory);
     }
     // Best-effort visibility when metadata isn't surfaced to the model
     console.error(advisory);
@@ -644,20 +655,28 @@ const GsdCorePlugin = async ({ directory } = {}) => {
   };
 };
 
-// Export shape: `{ id, server }` — verified against OpenCode's plugin loader
-// source (packages/opencode/src/plugin). The loader imports this module and
-// runs `for (const entry of Object.values(mod)) { getServerPlugin(entry) }`,
-// where `getServerPlugin` accepts either a bare function OR an object exposing a
-// `.server` function, and THROWS `TypeError("Plugin export is not a function")`
-// for anything else. A bare `module.exports = fn` is unsafe under Bun's CJS→ESM
-// interop (it can surface the function's own `length`/`name` as non-function
-// named exports, tripping that throw); a plain `{ id, server }` object is read
-// via `.server` and is robust. `id` gives the plugin a stable identity.
+// Export shape — verified against OpenCode's plugin loader source
+// (packages/opencode/src/plugin). The loader imports this module and runs
+// `for (const entry of Object.values(mod)) { getServerPlugin(entry) }`, where
+// `getServerPlugin` accepts a bare function OR an object exposing a `.server`
+// function, and THROWS `TypeError("Plugin export is not a function")` for
+// anything else. So EVERY enumerable value the loader iterates must be a
+// function or an object with `.server`.
 //
-// CRITICAL: every top-level own-enumerable value in module.exports must be a
-// function or an object with `.server`, or the loader throws. Test-only helpers
-// are therefore hung off the `server` FUNCTION (`server._internals`) — never as
-// a sibling top-level export — so `Object.values(module.exports)` stays clean.
+// The subtlety: depending on how OpenCode's runtime (Node or Bun) imports a
+// CommonJS file, `mod` may be the raw `module.exports` OR an ESM namespace of
+// the form `{ default: module.exports, ...syntheticNamedExports }`. A plain
+// `module.exports = { id: "gsd-core", server }` literal risks a string `id`
+// appearing in `Object.values(mod)` (as a raw property, or as a lexer-
+// synthesized named export) — which would trip the throw. Two defenses:
+//   1. `id` is defined NON-ENUMERABLE, so it never appears in Object.values yet
+//      stays readable (via property access) for the loader's identity/dedup.
+//   2. `module.exports` is assigned from a VARIABLE (not an object literal), so
+//      cjs-module-lexer cannot statically synthesize named exports from it —
+//      only `default` is exposed under ESM/Bun interop.
+// Result: raw-CJS `Object.values` = `[server]`; ESM `Object.values` =
+// `[{server, <id non-enum>}]` — both fully extractable. Test-only helpers hang
+// off the `server` FUNCTION (`server._internals`), never as a sibling export.
 GsdCorePlugin._internals = {
   REPO_ROOT,
   IS_PACKAGE_TREE,
@@ -670,7 +689,11 @@ GsdCorePlugin._internals = {
   GsdCorePlugin,
 };
 
-module.exports = {
-  id: "gsd-core",
-  server: GsdCorePlugin,
-};
+const gsdCorePluginExport = { server: GsdCorePlugin };
+Object.defineProperty(gsdCorePluginExport, "id", {
+  value: "gsd-core",
+  enumerable: false,
+  writable: false,
+  configurable: false,
+});
+module.exports = gsdCorePluginExport;
