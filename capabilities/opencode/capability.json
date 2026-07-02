@@ -61,7 +61,6 @@
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "none",
-    "hookEvents": "opencode-subset",
     "sandboxTier": "none",
     "supportTier": 2,
     "installSurface": "settings-json",
