@@ -341,6 +341,7 @@
       "handshake-serialized.cjs",
       "hook-bus.cjs",
       "host-integration.cjs",
+      "host-integration-sdk.cjs",
       "init-command-router.cjs",
       "init.cjs",
       "install-engine.cjs",
