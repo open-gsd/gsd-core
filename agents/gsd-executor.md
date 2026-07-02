@@ -691,7 +691,7 @@ Do NOT skip. Do NOT proceed to state updates if self-check fails.
 </self_check>
 
 <state_updates>
-After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (positional args; see `sdk/src/query/QUERY-HANDLERS.md`):
+After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (named flags; see `sdk/src/query/QUERY-HANDLERS.md`):
 
 ```bash
 # Advance plan counter (handles edge cases automatically)
@@ -702,16 +702,17 @@ gsd_run query state.update-progress
 
 # Record execution metrics (phase, plan, duration, tasks, files)
 gsd_run query state.record-metric \
-  "${PHASE}" "${PLAN}" "${DURATION}" "${TASK_COUNT}" "${FILE_COUNT}"
+  --phase "${PHASE}" --plan "${PLAN}" --duration "${DURATION}" \
+  --tasks "${TASK_COUNT}" --files "${FILE_COUNT}"
 
 # Add decisions (extract from SUMMARY.md key-decisions)
 for decision in "${DECISIONS[@]}"; do
-  gsd_run query state.add-decision "${decision}"
+  gsd_run query state.add-decision --summary "${decision}"
 done
 
-# Update session info (timestamp, stopped-at, resume-file)
+# Update session info (stopped-at, resume-file; timestamp set automatically)
 gsd_run query state.record-session \
-  "" "Completed ${PHASE}-${PLAN}-PLAN.md" "None"
+  --stopped-at "Completed ${PHASE}-${PLAN}-PLAN.md" --resume-file "None"
 ```
 
 ```bash
@@ -738,7 +739,7 @@ gsd_run query requirements.mark-complete ${REQ_IDS}
 
 **For blockers found during execution:**
 ```bash
-gsd_run query state.add-blocker "Blocker description"
+gsd_run query state.add-blocker --text "Blocker description"
 ```
 </state_updates>
 
