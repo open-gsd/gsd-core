@@ -554,6 +554,19 @@ describe('probe-core: truthStatement / truthVerification normalizers (#1154, Hyr
     assert.equal(pc.truthVerification('Overlapping intervals are merged'), null);
     assert.equal(pc.truthVerification({ statement: 'x', verification: 'explicit' }), 'explicit');
   });
+
+  test('normalizes a hand-authored marker with stray whitespace/surrounding quotes (#1905, the #1154 false-pass)', () => {
+    // A `must_haves` marker can be authored BY HAND (#1820 spec-optional predicate rail), and the
+    // frontmatter continuation-KV parser preserves stray surrounding whitespace/quotes. Failing to
+    // normalize means `'backstop '` → null → the non-inferable truth silently grades green (Postel:
+    // be liberal in what you accept).
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'backstop ' }), 'backstop', 'trailing space');
+    assert.equal(pc.truthVerification({ statement: 'x', verification: ' backstop' }), 'backstop', 'leading space');
+    assert.equal(pc.truthVerification({ statement: 'x', verification: '"backstop"' }), 'backstop', 'surrounding quotes');
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'explicit ' }), 'explicit', 'trailing space, explicit tier');
+    // An unrecoverably-corrupted marker stays unrecognized → null → graded normally (AC#3 over-abstention guard).
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'back"stop' }), null, 'an embedded quote is unrecoverable — no spurious tier');
+  });
 });
 
 describe('probe-core: dispositionForUnverifiableTruth (#1154, ADR-550 D4 truth-axis mirror)', () => {
@@ -586,6 +599,35 @@ describe('probe-core: dispositionForUnverifiableTruth (#1154, ADR-550 D4 truth-a
     const d = pc.dispositionForUnverifiableTruth('Overlapping intervals are merged', { evidence: [] });
     assert.equal(d.status, 'green', 'a plain inferable truth is graded normally, never abstained');
     assert.equal(d.flagged, false);
+  });
+
+  test('a whitespace-mangled backstop truth still ABSTAINS, never silently greens (#1905 — the #1154 false-pass)', () => {
+    const d = pc.dispositionForUnverifiableTruth(
+      { statement: 'user data is never logged', verification: 'backstop ' }, // stray trailing space
+      { evidence: [] },
+    );
+    assert.equal(d.status, 'unverified', 'a mangled backstop marker must not degrade to a silent green');
+    assert.equal(d.flagged, true);
+    assert.equal(d.tier, 'backstop');
+    assert.equal(d.reason, 'insufficient_spec');
+  });
+
+  test('END-TO-END (#1905, #1820 hand-authoring path): a HAND-AUTHORED must_haves.truths trailing-space backstop marker parses to the tier and abstains, never greens', () => {
+    // A human authors the marker directly (the #1820 spec-optional predicate rail), NOT projectTruths.
+    // The frontmatter continuation-KV parser used to preserve the stray trailing space inside the quotes,
+    // so truthVerification saw 'backstop ' → null → the non-inferable truth graded green. It must parse
+    // clean and abstain — the exact honesty regression #1154 exists to eliminate (ADR-550 D4 truth axis).
+    const doc = [
+      '---', 'must_haves:', '  truths:',
+      '    - statement: user data is never logged',
+      '      verification: "backstop "',
+      '---', 'body',
+    ].join('\n');
+    const parsed = fm.parseMustHavesBlock(doc, 'truths');
+    assert.equal(pc.truthVerification(parsed[0]), 'backstop', 'the mangled marker normalizes to the tier');
+    const d = pc.dispositionForUnverifiableTruth(parsed[0], { evidence: [] });
+    assert.equal(d.status, 'unverified', 'never a silent green (ADR-550 D4 truth-axis, #1154)');
+    assert.equal(d.reason, 'insufficient_spec');
   });
 
   test('over-abstention guard (AC#3): an explicit-tier truth NEVER abstains even with no evidence (only backstop triggers it)', () => {
