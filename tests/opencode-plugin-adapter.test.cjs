@@ -301,6 +301,54 @@ test('config hook is a no-op in installed (non-package) layout', async (t) => {
 });
 
 // ---------------------------------------------------------------------------
+// Session lifecycle + opencode-subset surface parity (#1682 Slice 1b/c)
+// ---------------------------------------------------------------------------
+
+test('session.idle event is handled (no-op sentinel) without throwing', async (t) => {
+  const { mod } = buildInstalledLayout(t, {});
+  const handlers = await mod.server({ directory: process.cwd() });
+  // session.idle ↔ Claude Stop lifecycle point; recognized no-op today.
+  await assert.doesNotReject(() => handlers.event({ event: { type: 'session.idle' } }));
+});
+
+test('experimental.session.compacting injects the GSD state breadcrumb', async (t) => {
+  const { mod } = buildInstalledLayout(t, { 'gsd-context-monitor.js': stubHook('') });
+  const handlers = await mod.server({ directory: process.cwd() });
+  // Compaction fires only with an active session; session.created sets it.
+  await handlers.event({
+    event: { type: 'session.created', properties: { info: { id: 's1', directory: process.cwd() } } },
+  });
+  const output = {};
+  await handlers['experimental.session.compacting']({}, output);
+  assert.ok(Array.isArray(output.context) && output.context.length > 0, 'compaction injects a GSD breadcrumb');
+  assert.ok(output.context.some((c) => /GSD/.test(c)), 'breadcrumb is GSD-tagged');
+});
+
+test('plugin implements the full declared opencode-subset hook surface (Claude parity)', async (t) => {
+  const { hookEventSurfaceFor } = require('../gsd-core/bin/lib/host-integration.cjs');
+  const surface = hookEventSurfaceFor('opencode-subset');
+  assert.ok(surface, 'opencode-subset is a consumed dialect (non-null surface)');
+  // The engine — not the host bus — owns workflow-phase sequencing on this host.
+  assert.ok(!surface.some((e) => /plan:|verify:|ship:|execute:/.test(e)),
+    'opencode-subset fires no workflow-phase events');
+
+  const { mod } = buildInstalledLayout(t, {});
+  const handlers = await mod.server({ directory: process.cwd() });
+  // Tool + compaction events are top-level handler keys.
+  for (const ev of ['tool.execute.before', 'tool.execute.after', 'experimental.session.compacting']) {
+    assert.equal(typeof handlers[ev], 'function', `plugin exposes a handler for ${ev}`);
+  }
+  // Session/file events dispatch through the `event` handler.
+  assert.equal(typeof handlers.event, 'function', 'plugin exposes an event dispatcher');
+  // Every declared surface event resolves to a plugin handler.
+  for (const ev of surface) {
+    const covered = typeof handlers[ev] === 'function'
+      || ev === 'session.created' || ev === 'session.idle' || ev === 'file.edited';
+    assert.ok(covered, `plugin covers opencode-subset event: ${ev}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Installer integration: copy → manifest → uninstall (real bin/install.js)
 // ---------------------------------------------------------------------------
 
