@@ -57,7 +57,7 @@
  * Milestone Operations:
  *   milestone complete <version>       Archive milestone, create MILESTONES.md
  *     [--name <name>]
- *     [--archive-phases]               Move phase dirs to milestones/vX.Y-phases/
+ *     [--no-archive-phases]          Skip moving phase dirs to milestones/vX.Y-phases/ (archived by default)
  *
  * User Story Validation:
  *   user-story validate --story "..."  Validate "As a / I want to / so that" format
@@ -1453,7 +1453,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       const subcommand = args[1];
       if (subcommand === 'complete') {
         const milestoneName = parseMultiwordArg(args, 'name');
-        const archivePhases = args.includes('--archive-phases');
+        // #1871: archive phase dirs by default on milestone complete so the next
+        // new-milestone never inherits un-archived dirs. --no-archive-phases opts out.
+        const archivePhases = !args.includes('--no-archive-phases');
         const force = args.includes('--force');
         milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force }, raw);
       } else {
