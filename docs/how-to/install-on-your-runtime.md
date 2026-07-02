@@ -102,6 +102,15 @@ The `gsd-tools` binary (installed as part of the `@opengsd/gsd-core` npm package
 
 Node.js (`node`) must also be available on your `PATH`. The plugin's always-on guard hooks (wired in `hooks/hooks.json`) are invoked as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<script>"`. Some Claude Code distributions ship as a standalone binary and do not expose a `node` executable on `PATH`; in those environments the plugin's hooks will not run. Verify with `node --version` before relying on the plugin hooks.
 
+#### Claude plugin marketplace discovery (ZCODE and compatible runtimes)
+
+GSD Core also ships a `.claude-plugin/marketplace.json` marketplace manifest (sibling to `plugin.json`). Runtimes that implement the Claude plugin marketplace contract — such as ZCODE — can discover and install GSD Core from a custom marketplace source without a manual clone:
+
+1. In your runtime's plugin UI, add a custom marketplace source pointing at `open-gsd/gsd-core` (GitHub `owner/repo` form).
+2. GSD Core appears in the catalog and can be installed directly from the UI.
+
+This path is **additive** and changes nothing about the Claude Code plugin install above (`.claude-plugin/plugin.json` is unchanged). The marketplace entry's `source` is `./`, so it reuses `plugin.json`'s `commands` / `skills` / `hooks` mapping. The catalog version tracks `package.json` (it lives at `plugins[0].version` and is stamped by the release version-sync), so the version you see in the marketplace matches the npm release.
+
 ---
 
 ### Gemini CLI

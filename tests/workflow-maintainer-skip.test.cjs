@@ -107,14 +107,15 @@ describe('Require Issue Link back-merge automation carve-out', () => {
 describe('Auto-backmerge needs_review version-manifest carve-out (#1404)', () => {
   const workflow = readWorkflow('.github/workflows/auto-backmerge.yml');
 
-  test('all four version manifests are filtered via version-only detection', () => {
-    // package.json / package-lock.json / plugin.json / gemini-extension.json
-    // diverge every release; a drop that is ONLY "version" lines must not park
-    // (parking is what lets the back-merge go stale). A substantive change still
-    // parks. (#1404)
+  test('all version-bearing manifests are filtered via version-only detection', () => {
+    // package.json / package-lock.json / plugin.json / marketplace.json /
+    // gemini-extension.json diverge every release; a drop that is ONLY
+    // "version" lines must not park (parking is what lets the back-merge go
+    // stale). A substantive change still parks. The grep matches the indented
+    // "version": line for marketplace.json's plugins[0].version too. (#1404 / #1855)
     assert.ok(
-      workflow.includes("VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json gemini-extension.json'"),
-      'auto-backmerge.yml must version-only-filter all four version manifests'
+      workflow.includes("VERSION_STAMP_MANIFESTS='package.json package-lock.json .claude-plugin/plugin.json .claude-plugin/marketplace.json gemini-extension.json'"),
+      'auto-backmerge.yml must version-only-filter all version-bearing manifests (incl. marketplace.json #1855)'
     );
     assert.ok(
       workflow.includes(`grep -vE '^[+-][[:space:]]*"version":'`),
