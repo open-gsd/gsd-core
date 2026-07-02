@@ -441,7 +441,11 @@ function parseMustHavesBlock(content: string, blockName: string): unknown[] {
       } else {
         const kvMatch = trimmed.match(/^(\w+):\s*"?([^"]*)"?\s*$/);
         if (kvMatch) {
-          const val = kvMatch[2];
+          // Trim: a quoted value like `"backstop "` captures the inner trailing space in group 2.
+          // Left untrimmed, a hand-authored `must_haves` marker degrades (a `backstop` truth silently
+          // grades green instead of abstaining — #1905, the #1154 false-pass; also the sibling
+          // check_target/violationFixture path). Whitespace is never semantic in a scalar KV value.
+          const val = kvMatch[2].trim();
           // Try to parse as number
           (current)[kvMatch[1]] = /^\d+$/.test(val) ? parseInt(val, 10) : val;
         }

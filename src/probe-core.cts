@@ -527,12 +527,21 @@ export function truthStatement(truth: unknown): string {
 /**
  * Extract a truth's verification tier, or `null` when it carries none (a plain string, or an object
  * with no/garbled marker). Failing toward `null` is the Postel-safe direction: an unrecognized marker
- * grades NORMALLY (never a spurious abstention — the over-abstention guard, AC#3), and the marker is
- * machine-emitted from validated edge data so garbling is not a live input path.
+ * grades NORMALLY (never a spurious abstention — the over-abstention guard, AC#3).
+ *
+ * The marker is NOT only machine-emitted: `must_haves` markers can be authored BY HAND (#1820's
+ * spec-optional predicate rail), and the frontmatter continuation-KV parser preserves stray
+ * surrounding whitespace/quotes on a hand-authored value. So we normalize before comparison
+ * (Postel: be liberal in what you accept) — `'backstop '`, `' backstop'`, `'"backstop"'` all
+ * recognize as the tier. Without this, a hand-authored non-inferable `backstop` truth with a stray
+ * trailing space silently grades green instead of abstaining — the exact #1154 false-pass (#1905).
+ * An unrecoverably-corrupted marker (e.g. an embedded quote) stays unrecognized → null → graded
+ * normally (AC#3): we cannot know its intent, and abstaining on it would be a spurious abstention.
  */
 export function truthVerification(truth: unknown): TruthVerification | null {
   if (truth == null || typeof truth !== 'object') return null;
-  const v = (truth as { verification?: unknown }).verification;
+  const raw = (truth as { verification?: unknown }).verification;
+  const v = typeof raw === 'string' ? raw.trim().replace(/^["']|["']$/g, '').trim() : raw;
   return v === 'explicit' || v === 'backstop' ? v : null;
 }
 
