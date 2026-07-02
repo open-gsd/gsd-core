@@ -8,7 +8,10 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const fc = require('./helpers/fast-check-setup.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { sliceCurrentPositionSection } = require('../gsd-core/bin/lib/state-transition.cjs');
+const { stateExtractField } = require('../gsd-core/bin/lib/state-document.cjs');
 
 function writeStateMd(tmpDir, content) {
   fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), content);
@@ -273,5 +276,103 @@ describe('state prune (#1970)', () => {
       assert.match(newState, /\| 4 \|/);
       assert.match(newState, /\| 5 \|/);
     });
+  });
+});
+
+// #1776 — `cmdStatePrune` resolved the current phase by extracting the `Phase`
+// field over the WHOLE STATE.md; `stateExtractField`'s pipe-table fallback then
+// matched any `| Phase | N |` row anywhere (e.g. a historical verification
+// table), so a stale table cell drove the cutoff. The fix scopes the prose
+// `Phase:` lookup to the canonical `## Current Position` section.
+describe('#1776: prune reads the current phase only from ## Current Position', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  // hiSandog's fixture shape: an unrelated `| Phase | 2 |` verification table,
+  // with the real position only in frontmatter (`current_phase: 12`) and NO
+  // `Current Phase` body field / prose `Phase:` line. Pre-fix, prune ignored
+  // frontmatter and `stateExtractField(body, 'Phase')` fell to the table cell →
+  // currentPhase=2 → cutoff -1 → "Only 2 phases" bail. Post-fix it reads the
+  // frontmatter phase and the table cell is never consulted.
+  test('a stray | Phase | N | table does not override the canonical (frontmatter) phase', () => {
+    writeStateMd(tmpDir, [
+      '---',
+      'gsd_state_version: 1.0',
+      'current_phase: 12',
+      'status: executing',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '## Verification History',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| Phase | 2 |',
+      '| Result | passed |',
+      '',
+      '## Decisions',
+      '',
+      '- [Phase 1]: Old decision',
+      '- [Phase 4]: Mid decision',
+      '- [Phase 11]: Recent decision',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('state prune --keep-recent 3', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+
+    // Phase 12, keep-recent 3 → cutoff 9. If the table cell (2) had leaked, the
+    // cutoff would be -1 and prune would bail "Only 2 phases — nothing to prune".
+    assert.strictEqual(out.pruned, true, `expected prune to engage, got: ${JSON.stringify(out)}`);
+    assert.strictEqual(out.cutoff_phase, 9);
+  });
+
+  // AC2 — template-conformant STATE.md (prose Phase under Current Position, no
+  // stray table) is unchanged: prune still engages off the real phase.
+  test('template-conformant Current Position (no stray table) still prunes', () => {
+    writeStateMd(tmpDir, [
+      '# GSD State',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 10 of 15',
+      '',
+      '## Decisions',
+      '',
+      '- [Phase 1]: Old',
+      '- [Phase 9]: Recent',
+      '',
+    ].join('\n'));
+
+    const result = runGsdTools('state prune --keep-recent 3', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.cutoff_phase, 7);
+  });
+
+  // Boundary-containment property — the core scoping invariant: a `| Phase | N |`
+  // row OUTSIDE the `## Current Position` section is never visible to extraction
+  // scoped to that section. The section here carries NO `Phase:` line, so a
+  // correct slice yields `null`; a whole-document leak would instead surface the
+  // stray table cell (`stateExtractField`'s pipe-table fallback). The table is
+  // placed both before and after the section to exercise both span boundaries.
+  test('property: a | Phase | N | table outside Current Position is excluded from the scoped slice', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 998 }), // stray table phase
+        fc.boolean(),                     // stray table before (true) or after (false) the section
+        (stray, before) => {
+          const table = ['## History', '', '| Field | Value |', '| --- | --- |', `| Phase | ${stray} |`, ''];
+          const position = ['## Current Position', '', '**Status:** Executing', '']; // deliberately no `Phase:` line
+          const body = ['# GSD State', '', ...(before ? [...table, ...position] : [...position, ...table])].join('\n');
+          const section = sliceCurrentPositionSection(body);
+          // Slice must exist and must NOT see the out-of-section table cell.
+          return section !== null && stateExtractField(section, 'Phase') === null;
+        }
+      )
+    );
   });
 });

@@ -24,6 +24,9 @@ const ROOT = path.resolve(__dirname, '..');
 const helpers = require(path.join(__dirname, 'helpers.cjs'));
 const {
   VERSIONED_MANIFESTS,
+  VERSIONED_MANIFEST_PATHS,
+  getByPath,
+  setByPath,
   syncManifestVersions,
   getPackageVersion,
   stageManifests,
@@ -51,12 +54,12 @@ describe('A: syncManifestVersions — temp fixture', () => {
 
     // Copy real manifests into tmp, stamped at OLD version so tests can
     // verify the pre-sync (stale) state and post-sync (updated) state.
-    for (const rel of VERSIONED_MANIFESTS) {
-      const realAbs = path.join(ROOT, rel);
+    for (const entry of VERSIONED_MANIFESTS) {
+      const realAbs = path.join(ROOT, entry.path);
       const manifest = JSON.parse(fs.readFileSync(realAbs, 'utf8'));
-      manifest.version = '0.0.0';
+      setByPath(manifest, entry.versionKey, '0.0.0');
 
-      const destAbs = path.join(tmpRoot, rel);
+      const destAbs = path.join(tmpRoot, entry.path);
       const destDir = path.dirname(destAbs);
       if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
       fs.writeFileSync(destAbs, JSON.stringify(manifest, null, 2) + '\n');
@@ -89,13 +92,13 @@ describe('A: syncManifestVersions — temp fixture', () => {
     const pkgVersion = getPackageVersion(tmpRoot);
     assert.equal(pkgVersion, '9.9.9-test.0');
 
-    for (const rel of VERSIONED_MANIFESTS) {
-      const abs = path.join(tmpRoot, rel);
+    for (const entry of VERSIONED_MANIFESTS) {
+      const abs = path.join(tmpRoot, entry.path);
       const m = JSON.parse(fs.readFileSync(abs, 'utf8'));
       assert.equal(
-        m.version,
+        getByPath(m, entry.versionKey),
         '9.9.9-test.0',
-        `${rel} version should be 9.9.9-test.0 after sync`
+        `${entry.path} version (${entry.versionKey}) should be 9.9.9-test.0 after sync`
       );
     }
   });
@@ -109,10 +112,10 @@ describe('A: syncManifestVersions — temp fixture', () => {
         path.join(sub, 'package.json'),
         JSON.stringify({ name: 'x', version: '9.9.9-test.0' }, null, 2) + '\n'
       );
-      for (const rel of VERSIONED_MANIFESTS) {
-        const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
-        manifest.version = '0.0.0';
-        const destAbs = path.join(sub, rel);
+      for (const entry of VERSIONED_MANIFESTS) {
+        const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, entry.path), 'utf8'));
+        setByPath(manifest, entry.versionKey, '0.0.0');
+        const destAbs = path.join(sub, entry.path);
         const destDir = path.dirname(destAbs);
         if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
         fs.writeFileSync(destAbs, JSON.stringify(manifest, null, 2) + '\n');
@@ -125,12 +128,15 @@ describe('A: syncManifestVersions — temp fixture', () => {
   });
 
   test('non-version fields are preserved after sync', () => {
-    for (const rel of VERSIONED_MANIFESTS) {
+    for (const entry of VERSIONED_MANIFESTS) {
+      const rel = entry.path;
       const real = JSON.parse(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
       const tmp = JSON.parse(fs.readFileSync(path.join(tmpRoot, rel), 'utf8'));
-      // Check that every non-version key from the real manifest exists in tmp
+      // Check that every non-version key from the real manifest exists in tmp.
+      // For nested versionKey manifests (e.g. marketplace plugins[0].version),
+      // the comparison is structural at the top level only — the version slot
+      // itself is the one field sync is allowed to change.
       for (const key of Object.keys(real)) {
-        if (key === 'version') continue;
         assert.ok(
           Object.prototype.hasOwnProperty.call(tmp, key),
           `${rel}: field "${key}" should be preserved after sync`
@@ -140,7 +146,8 @@ describe('A: syncManifestVersions — temp fixture', () => {
   });
 
   test('each synced file ends with a single trailing newline', () => {
-    for (const rel of VERSIONED_MANIFESTS) {
+    for (const entry of VERSIONED_MANIFESTS) {
+      const rel = entry.path;
       const raw = fs.readFileSync(path.join(tmpRoot, rel), 'utf8');
       assert.ok(raw.endsWith('\n'), `${rel} must end with a trailing newline`);
       assert.ok(!raw.endsWith('\n\n'), `${rel} must not end with a double newline`);
@@ -159,15 +166,16 @@ describe('B: real manifests match package.json version', () => {
 
   const pkgVersion = getPackageVersion(ROOT);
 
-  for (const rel of VERSIONED_MANIFESTS) {
-    test(`${rel} version === ${pkgVersion}`, () => {
+  for (const entry of VERSIONED_MANIFESTS) {
+    const rel = entry.path;
+    test(`${rel} version (${entry.versionKey}) === ${pkgVersion}`, () => {
       const abs = path.join(ROOT, rel);
       assert.ok(fs.existsSync(abs), `${rel} must exist at ${abs}`);
       const m = JSON.parse(fs.readFileSync(abs, 'utf8'));
       assert.equal(
-        m.version,
+        getByPath(m, entry.versionKey),
         pkgVersion,
-        `${rel} version (${m.version}) must match package.json version (${pkgVersion}). ` +
+        `${rel} version (${entry.versionKey} = ${getByPath(m, entry.versionKey)}) must match package.json version (${pkgVersion}). ` +
         'Run `node scripts/sync-manifest-versions.cjs` to fix.'
       );
     });
@@ -254,7 +262,7 @@ describe('C: regression guard — version-bearing JSON files must be registered'
   // version-swept by syncCapabilityVersions (ADR-1244 D6) — discovered by glob,
   // so every one is "registered" without an explicit entry here.
   const ALLOWED = new Set([
-    ...VERSIONED_MANIFESTS,
+    ...VERSIONED_MANIFEST_PATHS,
     ...listCapabilityManifests({ root: ROOT }),
     'package.json',
     'package-lock.json',

@@ -19,6 +19,7 @@ exports.STATE_MD_SECTIONS = exports.FIELD_CLASSIFICATION = void 0;
 exports.getFieldClassification = getFieldClassification;
 exports.applyStatePreservation = applyStatePreservation;
 exports.transitionCore = transitionCore;
+exports.sliceCurrentPositionSection = sliceCurrentPositionSection;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const frontmatter = require("./frontmatter.cjs");
 const state_document_cjs_1 = require("./state-document.cjs");
@@ -318,6 +319,20 @@ function locateCurrentPosition(body) {
         }
     }
     return { start, end };
+}
+/**
+ * Return the body text of the `## Current Position` section, or `null` when it
+ * is absent. Reuses the fence-aware `locateCurrentPosition` locator (ADR-1372).
+ *
+ * Exposed so callers that must read a position field (e.g. `cmdStatePrune`,
+ * #1776) can scope extraction to the canonical section instead of the whole
+ * document — where `stateExtractField`'s pipe-table fallback could otherwise
+ * latch onto an unrelated `| Phase | N |` row elsewhere in STATE.md. This
+ * scopes the *caller*; the shared extractor is left broad for every other use.
+ */
+function sliceCurrentPositionSection(body) {
+    const span = locateCurrentPosition(body);
+    return span === null ? null : body.slice(span.start, span.end);
 }
 /**
  * First-time ## Current Position mutation: update Phase / Plan / Status /

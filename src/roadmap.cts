@@ -14,13 +14,14 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseTokenMatches } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseTokenMatches, stripProjectCodePrefix } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone } = roadmapParserModule;
+import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -117,12 +118,13 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
  * checklist-only match), or null if the phase is not present at all.
  */
 function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: string): PhaseSearchResult | null {
-  // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
-  const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
+  const headingPattern = new RegExp(
+    `^(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*(.+)$`,
     'i'
   );
-  const headerMatch = content.match(phasePattern);
+  const headings = tokenizeHeadings(content);
+  const headingIndex = headings.findIndex((heading) => headingPattern.test(heading.text));
+  const headerMatch = headingIndex === -1 ? null : headings[headingIndex].text.match(headingPattern);
 
   if (!headerMatch) {
     // Fallback: check if phase exists in summary list but missing detail section
@@ -146,15 +148,13 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
   }
 
   const phaseName = headerMatch[1].trim();
-  const headerIndex = headerMatch.index!;
+  const headerIndex = headings[headingIndex].offset;
 
-  // Find the end of this section (next ## or ### phase header, or end of file).
-  // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01:.
-  const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w][\w.-]*/i);
-  const sectionEnd = nextHeaderMatch
-    ? headerIndex + nextHeaderMatch.index!
-    : content.length;
+  const currentHeading = headings[headingIndex];
+  const nextHeading = headings
+    .slice(headingIndex + 1)
+    .find((candidate) => candidate.level <= currentHeading.level);
+  const sectionEnd = nextHeading ? nextHeading.offset : content.length;
 
   const section = content.slice(headerIndex, sectionEnd).trim();
 
@@ -200,6 +200,7 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
  * phase resolution as `roadmap.get-phase` — not a milestone-only subset.
  */
 function getRoadmapPhaseWithFallback(cwd: string, phaseNum: string): string | null {
+  if (/^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum))) return null;
   const roadmapPath = planningPaths(cwd).roadmap;
   if (!fs.existsSync(roadmapPath)) return null;
 
@@ -228,6 +229,10 @@ function getRoadmapPhaseWithFallback(cwd: string, phaseNum: string): string | nu
 // ─── cmdRoadmapGetPhase ───────────────────────────────────────────────────────
 
 function cmdRoadmapGetPhase(cwd: string, phaseNum: string, raw: boolean): void {
+  if (/^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum))) {
+    output({ found: false, phase_number: phaseNum }, raw, '');
+    return;
+  }
   const roadmapPath = planningPaths(cwd).roadmap;
 
   if (!fs.existsSync(roadmapPath)) {

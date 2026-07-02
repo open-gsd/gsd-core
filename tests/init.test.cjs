@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { runGsdTools, cleanup } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
+const { createTempProject } = require('./helpers.cjs');
 
 describe('init commands', () => {
   let tmpDir;
@@ -424,6 +425,66 @@ describe('init commands', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.phase_found, true);
     assert.strictEqual(output.phase_req_ids, 'REQ-02, REQ-03');
+  });
+
+  test('init plan-phase prefers real phase details outside fenced examples and ignores backlog sentinels (#1588)', () => {
+    const projectDir = createTempProject('init-1588-');
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'STATE.md'),
+        [
+          '---',
+          'gsd_state_version: 1.0',
+          'milestone: v1.1',
+          'status: planning',
+          '---',
+          '',
+        ].join('\n')
+      );
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '<details open>',
+          '<summary>v1.1 Current (Phases 8-9) - PLANNED</summary>',
+          '',
+          '- [ ] **Phase 9: Real Phase**',
+          '',
+          '</details>',
+          '',
+          '## Phase Details',
+          '',
+          '```markdown',
+          '### Phase 9: Fenced Example Phase',
+          '**Goal:** This example must not be treated as roadmap structure.',
+          '```',
+          '',
+          '### Phase 9: Real Phase',
+          '**Goal:** Use the real phase details outside the fenced block.',
+          '**Requirements:** REAL-01',
+          '',
+          '## Backlog',
+          '',
+          '### Phase 999.1: Backlog Thing',
+          '**Goal:** Future backlog item.',
+          '',
+        ].join('\n')
+      );
+
+      const phase9 = runGsdTools('init plan-phase 9', projectDir);
+      assert.ok(phase9.success, `init plan-phase 9 failed: ${phase9.error}`);
+      const phase9Output = JSON.parse(phase9.output);
+      assert.equal(phase9Output.phase_name, 'Real Phase');
+      assert.equal(phase9Output.phase_req_ids, 'REAL-01');
+
+      const backlog = runGsdTools('init plan-phase 999.1', projectDir);
+      assert.ok(backlog.success, `init plan-phase 999.1 failed: ${backlog.error}`);
+      const backlogOutput = JSON.parse(backlog.output);
+      assert.equal(backlogOutput.phase_found, false);
+    } finally {
+      cleanup(projectDir);
+    }
   });
 
   test('init phase-op resolves a details-summary milestone phase from later flat Phase Details', () => {
@@ -896,6 +957,89 @@ describe('cmdInitMilestoneOp', () => {
     fs.mkdirSync(phase1, { recursive: true });
     fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(phase1, '01-01-SUMMARY.md'), '# Summary');
+
+    const result = runGsdTools('init milestone-op', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_count, 1);
+    assert.strictEqual(output.completed_phases, 1);
+    assert.strictEqual(output.all_phases_complete, true);
+  });
+
+  test('project_code-prefixed phase directories count as completed milestone phases (#1836)', () => {
+    seedPhase(tmpDir, 'PROJ-01-setup', {
+      'PROJ-01-01-PLAN.md': '# Plan',
+      'PROJ-01-01-SUMMARY.md': '# Summary',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'PROJ' }, null, 2)
+    );
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0.0',
+        'milestone_name: Test Milestone',
+        'status: executing',
+        '---',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## 🚧 v1.0.0 Test Milestone',
+        '### Phase 1: Setup',
+        '',
+      ].join('\n')
+    );
+
+    const result = runGsdTools('init milestone-op', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_count, 1);
+    assert.strictEqual(output.completed_phases, 1);
+    assert.strictEqual(output.all_phases_complete, true);
+  });
+
+  test('backlog 999.x headings do not inflate milestone phase counts (#1838)', () => {
+    const phase1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(phase1, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0.0',
+        'milestone_name: Test Milestone',
+        'status: completed',
+        '---',
+        '',
+      ].join('\n')
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## 🚧 v1.0.0 Test Milestone',
+        '### Phase 1: Setup',
+        '',
+        '## Backlog',
+        '### Phase 999.1: Deferred Idea',
+        '### Phase 999.2: Another Deferred Idea',
+        '',
+      ].join('\n')
+    );
 
     const result = runGsdTools('init milestone-op', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
