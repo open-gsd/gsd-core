@@ -26,7 +26,7 @@ import phaseIdMod = require('./phase-id.cjs');
 const { escapeRegex, normalizePhaseName, phaseTokenMatches } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
+const { getMilestonePhaseFilter, extractCurrentMilestone, getMilestoneInfo } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
 const { extractOneLinerFromBody } = coreUtilsMod;
@@ -440,8 +440,30 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     }
 
     try {
+      // #1871: archive phase directories instead of destroying them. Move each
+      // non-999 dir to milestones/<version>-phases/ so browsable phase history
+      // survives the milestone switch (previously rmSync hard-deleted committed
+      // dirs, leaving orphaned uncommitted deletions and no archive).
+      let archiveVersion: string | null = null;
+      try {
+        archiveVersion = getMilestoneInfo(cwd).version ?? null;
+      } catch {
+        /* ROADMAP/STATE unreadable — fall back to a dated label */
+      }
+      if (!archiveVersion) {
+        archiveVersion = `archived-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}`;
+      }
+      const archivePhasesDir = path.join(planningPaths(cwd).planning, 'milestones', `${archiveVersion}-phases`);
+      platformEnsureDir(archivePhasesDir);
       for (const entry of dirs) {
-        fs.rmSync(path.join(phasesDir, entry.name), { recursive: true, force: true });
+        const src = path.join(phasesDir, entry.name);
+        // Collision-safe: if a same-named archive entry exists (re-run), suffix it.
+        let dest = path.join(archivePhasesDir, entry.name);
+        let n = 1;
+        while (fs.existsSync(dest)) {
+          dest = path.join(archivePhasesDir, `${entry.name}.${n++}`);
+        }
+        retryRenameSync(src, dest);
         cleared++;
       }
     } catch (e) {
