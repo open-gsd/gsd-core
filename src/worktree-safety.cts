@@ -428,7 +428,11 @@ function normalizeCleanupManifestEntry(entry: unknown): CleanupManifestEntry | n
   const branch = typeof e.branch === 'string' ? e.branch : '';
   const expectedBase = typeof e.expected_base === 'string' ? e.expected_base : '';
   if (!worktreePath || !branch || !expectedBase) return null;
-  if (!/^worktree-agent-[A-Za-z0-9._/-]+$/.test(branch)) return null;
+  // Accept both the current Claude Code isolation namespace (`agent-<id>`) and
+  // the legacy `worktree-agent-<id>` namespace (#1995). Claude Code renamed its
+  // `isolation="worktree"` branches from `worktree-agent-<id>` to `agent-<id>`;
+  // the old anchored regex silently dropped every current entry.
+  if (!/^(worktree-)?agent-[A-Za-z0-9._/-]+$/.test(branch)) return null;
   const rawAllowedBases = Array.isArray(e.allowed_bases) ? e.allowed_bases : [];
   const allowedBases = Array.from(new Set(
     [expectedBase, ...rawAllowedBases.filter((base): base is string => typeof base === 'string' && base.length > 0)]
@@ -939,7 +943,7 @@ function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields)
     return {
       ok: false,
       reason: 'invalid_entry',
-      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^worktree-agent-[A-Za-z0-9._/-]+$ (got branch="${branch}"). Fix the field and re-run.`,
+      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^(worktree-)?agent-[A-Za-z0-9._/-]+$ (got branch="${branch}"). Fix the field and re-run.`,
       entry: null,
       manifest: null,
     };

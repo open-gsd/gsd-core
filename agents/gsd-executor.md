@@ -495,11 +495,12 @@ if [ -f .git ]; then  # worktree
     echo "DO NOT use 'git update-ref' to rewind the protected branch — surface as blocker (#2924)." >&2
     exit 1
   fi
-  # Positive allow-list: HEAD must be on the canonical Claude Code worktree-agent
-  # branch namespace (`worktree-agent-<id>`). This catches feature/* and any other
-  # arbitrary branch that the deny-list would silently allow (#2924).
-  if ! echo "$ACTUAL_BRANCH" | grep -Eq '^worktree-agent-[A-Za-z0-9._/-]+$'; then
-    echo "FATAL: refusing to commit — worktree HEAD '$ACTUAL_BRANCH' is not in the worktree-agent-* namespace." >&2
+  # Positive allow-list: HEAD must be on the canonical Claude Code per-agent
+  # branch namespace — `agent-<id>` (current) or `worktree-agent-<id>` (legacy),
+  # both accepted (#1995). This catches feature/* and any other arbitrary branch
+  # that the deny-list would silently allow (#2924).
+  if ! echo "$ACTUAL_BRANCH" | grep -Eq '^(worktree-)?agent-[A-Za-z0-9._/-]+$'; then
+    echo "FATAL: refusing to commit — worktree HEAD '$ACTUAL_BRANCH' is not in the (worktree-)agent-* namespace." >&2
     echo "Agent commits must live on per-agent branches; surface as blocker (#2924)." >&2
     exit 1
   fi

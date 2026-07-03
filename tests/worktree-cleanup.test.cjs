@@ -182,15 +182,16 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       }
     });
 
-    test('block enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
+    test('block enforces positive (worktree-)agent-* allow-list (#2924 hardening, #1995)', () => {
       const codeBlocks = extractFencedCodeBlocks(block);
       const scripts = codeBlocks.map(({ body }) => body).join('\n');
-      // Allow-list must reference the canonical Claude Code worktree-agent-<id>
-      // namespace via a regex assertion (grep -Eq '^worktree-agent-...').
-      const allowListRe = /grep\s+-Eq?\s+'\^worktree-agent-/;
+      // Allow-list must reference the canonical Claude Code per-agent namespace —
+      // `agent-<id>` (current) or `worktree-agent-<id>` (legacy) — via a regex
+      // assertion (grep -Eq '^(worktree-)?agent-...') (#1995).
+      const allowListRe = /grep\s+-Eq?\s+'\^\(worktree-\)\?agent-/;
       assert.ok(
         allowListRe.test(scripts),
-        'worktree_branch_check must enforce a positive allow-list matching ^worktree-agent-* (#2924 hardening)'
+        'worktree_branch_check must enforce a positive allow-list matching ^(worktree-)?agent-* (#2924 hardening, #1995)'
       );
     });
 
@@ -321,11 +322,11 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       );
     });
 
-    test('block enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
-      const allowListRe = /grep\s+-Eq?\s+'\^worktree-agent-/;
+    test('block enforces positive (worktree-)agent-* allow-list (#2924 hardening, #1995)', () => {
+      const allowListRe = /grep\s+-Eq?\s+'\^\(worktree-\)\?agent-/;
       assert.ok(
         allowListRe.test(block),
-        'quick.md worktree_branch_check must enforce a positive allow-list matching ^worktree-agent-* (#2924 hardening)'
+        'quick.md worktree_branch_check must enforce a positive allow-list matching ^(worktree-)?agent-* (#2924 hardening, #1995)'
       );
     });
   });
@@ -393,7 +394,7 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     });
   });
 
-  describe('gsd-executor.md task_commit_protocol enforces worktree-agent-* allow-list', () => {
+  describe('gsd-executor.md task_commit_protocol enforces (worktree-)agent-* allow-list', () => {
     const content = fs.readFileSync(EXECUTOR_AGENT_PATH, 'utf-8');
     const block = extractNamedBlock(content, 'task_commit_protocol');
 
@@ -401,13 +402,13 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       assert.ok(block, 'gsd-executor.md must contain a <task_commit_protocol> block');
     });
 
-    test('step 0 enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
+    test('step 0 enforces positive (worktree-)agent-* allow-list (#2924 hardening, #1995)', () => {
       const codeBlocks = extractFencedCodeBlocks(block);
       const scripts = codeBlocks.map(({ body }) => body).join('\n');
-      const allowListRe = /grep\s+-Eq?\s+'\^worktree-agent-/;
+      const allowListRe = /grep\s+-Eq?\s+'\^\(worktree-\)\?agent-/;
       assert.ok(
         allowListRe.test(scripts),
-        'task_commit_protocol step 0 must enforce a positive allow-list matching ^worktree-agent-* in addition to the protected-ref deny-list (#2924 hardening)'
+        'task_commit_protocol step 0 must enforce a positive allow-list matching ^(worktree-)?agent-* in addition to the protected-ref deny-list (#2924 hardening, #1995)'
       );
     });
   });
@@ -778,7 +779,7 @@ describe('bug #48: orchestrator cwd-drift guard at execute_waves entry', () => {
     const g = stepBody.indexOf('cwd-drift guard');
     assert.notStrictEqual(g, -1);
     const region = stepBody.slice(g, g + 1600);
-    assert.ok(/worktree-agent-/.test(region), 'guard must use the worktree-agent-* branch namespace as the drift discriminator (#48)');
+    assert.ok(/\(worktree-\)\?agent-/.test(region), 'guard must use the (worktree-)agent-* branch namespace as the drift discriminator (#48, #1995)');
     assert.ok(/exit 1/.test(region), 'cwd-drift guard must fail closed with exit 1 on drift (#48)');
   });
 
@@ -1531,8 +1532,8 @@ function extractCwdGuardBash() {
   if (!guardBash.includes('git rev-parse --show-toplevel')) {
     throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "git rev-parse --show-toplevel"');
   }
-  if (!guardBash.includes('worktree-agent-')) {
-    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "worktree-agent-"');
+  if (!guardBash.includes('(worktree-)?agent-')) {
+    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "(worktree-)?agent-"');
   }
 
   return guardBash;
@@ -1558,11 +1559,12 @@ function runGuard(guardBash, cwd) {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-let upstreamDir;      // bare upstream git repo (the main worktree)
-let featureDir;       // normal feature worktree on branch workspace/feature-x
-let agentWtDir;       // agent worktree on branch worktree-agent-deadbeef
-let agentSubdir;      // subdirectory inside agentWtDir
-let legitUnderClaude; // non-agent worktree whose PATH is under .claude/worktrees/
+let upstreamDir;         // bare upstream git repo (the main worktree)
+let featureDir;          // normal feature worktree on branch workspace/feature-x
+let agentWtDir;          // agent worktree on branch worktree-agent-deadbeef (legacy namespace)
+let agentWtDirCurrent;   // agent worktree on branch agent-deadbeef (current namespace, #1995)
+let agentSubdir;         // subdirectory inside agentWtDir
+let legitUnderClaude;    // non-agent worktree whose PATH is under .claude/worktrees/
 const dirsToCleanup = [];
 
 function git(cwd, args) {
@@ -1599,6 +1601,10 @@ before(() => {
   fs.mkdirSync(agentWtParent, { recursive: true });
   agentWtDir = path.join(agentWtParent, 'agent-deadbeef');
   git(upstreamDir, ['worktree', 'add', '-b', 'worktree-agent-deadbeef', agentWtDir]);
+
+  // --- agent worktree on the CURRENT `agent-<id>` namespace (#1995) ---
+  agentWtDirCurrent = path.join(agentWtParent, 'agent-deadbeef2');
+  git(upstreamDir, ['worktree', 'add', '-b', 'agent-deadbeef2', agentWtDirCurrent]);
 
   // --- subdir inside agent worktree ---
   agentSubdir = path.join(agentWtDir, 'src', 'deep');
@@ -1659,6 +1665,17 @@ describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
     assert.equal(
       status, 1,
       `Expected exit 1 from agent worktree subdir, got ${status}. stderr: ${stderr}`,
+    );
+  });
+
+  test('guard fails closed (exit 1) from an agent worktree on the CURRENT `agent-<id>` namespace (#1995)', () => {
+    // Before the fix the guard only matched `worktree-agent-*`, so an orchestrator
+    // that drifted into a current-namespace `agent-<id>` worktree was NOT caught —
+    // re-opening the exact wrong-base-merge vector this guard exists to close (#48).
+    const { status, stderr } = runGuard(guardBash, agentWtDirCurrent);
+    assert.equal(
+      status, 1,
+      `Expected exit 1 from a current-namespace agent-<id> worktree, got ${status}. stderr: ${stderr}`,
     );
   });
 

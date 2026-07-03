@@ -652,7 +652,7 @@ describe('planWorktreeRecordAgent', () => {
     const plan = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, branch: 'feature/user-work' });
     assert.equal(plan.ok, false);
     assert.equal(plan.reason, 'invalid_entry');
-    assert.match(plan.hint, /worktree-agent-/);
+    assert.match(plan.hint, /\(worktree-\)\?agent-/);
     assert.equal(plan.manifest, null);
     // Confirm the rejected entry is genuinely one the reader drops.
     const readBack = planWorktreeWaveCleanup('/repo/main', {
@@ -775,8 +775,9 @@ describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () =
       fc.record({
         agentId: nonEmpty,
         worktreePath: nonEmpty,
-        // Any branch that does NOT match the disposable namespace.
-        branch: fc.string({ minLength: 1 }).filter((b) => !/^worktree-agent-[A-Za-z0-9._/-]+$/.test(b.trim())),
+        // Any branch that does NOT match the disposable namespace (#1995: the
+        // namespace now accepts both `agent-*` and `worktree-agent-*`).
+        branch: fc.string({ minLength: 1 }).filter((b) => !/^(worktree-)?agent-[A-Za-z0-9._/-]+$/.test(b.trim())),
         base: nonEmpty,
       }),
       (fields) => {
@@ -785,6 +786,77 @@ describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () =
         assert.equal(plan.manifest, null);
       },
     ));
+  });
+});
+
+// ─── regressions: #1995 agent-<id> namespace acceptance ──────────────────────
+// Claude Code renamed its `isolation="worktree"` branches from
+// `worktree-agent-<id>` to `agent-<id>`. The write-side (planWorktreeRecordAgent)
+// and read-side (normalizeCleanupManifestEntry via planWorktreeWaveCleanup) guards
+// hard-coded the legacy `^worktree-agent-...$` regex, so the current namespace was
+// rejected at write and silently dropped at read (empty_manifest → no merge-back).
+// Boundary matrix: accepted `agent-`, accepted legacy `worktree-agent-`, rejected
+// non-agent — on both sides, so write/read parity is preserved across the widening.
+
+describe('regressions: #1995 agent-<id> namespace acceptance', () => {
+  const READER_ROOT = '/repo/main';
+  const readerEntry = (branch) => ({
+    agent_id: 'a1',
+    worktree_path: '/repo/.claude/worktrees/agent-a1',
+    branch,
+    expected_base: 'abc123',
+  });
+  const writerFields = (branch) => ({
+    agentId: 'a1',
+    worktreePath: '/repo/.claude/worktrees/agent-a1',
+    branch,
+    base: 'abc123',
+  });
+
+  // Read side — normalizeCleanupManifestEntry (the cleanup-wave manifest reader).
+  test('cleanup-wave RETAINS a current `agent-<id>` entry (was dropped → empty_manifest)', () => {
+    const plan = planWorktreeWaveCleanup(READER_ROOT, { worktrees: [readerEntry('agent-a1')] });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.entries.length, 1);
+    assert.equal(plan.entries[0].branch, 'agent-a1');
+  });
+
+  test('cleanup-wave still RETAINS a legacy `worktree-agent-<id>` entry (no regression)', () => {
+    const plan = planWorktreeWaveCleanup(READER_ROOT, { worktrees: [readerEntry('worktree-agent-a1')] });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.entries.length, 1);
+    assert.equal(plan.entries[0].branch, 'worktree-agent-a1');
+  });
+
+  test('cleanup-wave still REJECTS a non-agent branch (e.g. feature-x)', () => {
+    const plan = planWorktreeWaveCleanup(READER_ROOT, { worktrees: [readerEntry('feature-x')] });
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'empty_manifest');
+    assert.deepEqual(plan.entries, []);
+  });
+
+  // Write side — planWorktreeRecordAgent (must stay in lockstep with the reader).
+  test('record-agent ACCEPTS a current `agent-<id>` branch and it round-trips through the reader', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', writerFields('agent-a1'));
+    assert.equal(plan.ok, true);
+    assert.equal(plan.entry.branch, 'agent-a1');
+    const readBack = planWorktreeWaveCleanup(READER_ROOT, JSON.parse(plan.manifest));
+    assert.equal(readBack.ok, true);
+    assert.equal(readBack.entries.length, 1);
+  });
+
+  test('record-agent still ACCEPTS a legacy `worktree-agent-<id>` branch', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', writerFields('worktree-agent-a1'));
+    assert.equal(plan.ok, true);
+    assert.equal(plan.entry.branch, 'worktree-agent-a1');
+  });
+
+  test('record-agent still REJECTS a non-agent branch, and the hint names the widened pattern', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', writerFields('feature-x'));
+    assert.equal(plan.ok, false);
+    assert.equal(plan.reason, 'invalid_entry');
+    assert.equal(plan.manifest, null);
+    assert.match(plan.hint, /\^\(worktree-\)\?agent-/);
   });
 });
 
@@ -868,7 +940,7 @@ describe('cmdWorktreeRecordAgent', () => {
       assert.equal(result.reason, 'invalid_entry');
       assert.equal(wrote, false); // must NOT append an under-populated entry
       assert.equal(process.exitCode, 1);
-      assert.match(errs.join(''), /worktree-agent-/);
+      assert.match(errs.join(''), /\(worktree-\)\?agent-/);
     });
   });
 });
@@ -2610,8 +2682,8 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
     // diagnose-issues.md now references the canonical fragment rather than
     // inlining the block. Verify (a) it references the fragment and (b) the
     // fragment itself has the correct ordering: symbolic-ref/HEAD assertion and
-    // ^worktree-agent- allow-list appear before any work, and (c) the fragment
-    // is verify-only — no destructive self-recovery.
+    // the ^(worktree-)?agent- allow-list appear before any work, and (c) the
+    // fragment is verify-only — no destructive self-recovery.
     const diagnoseSource = read('gsd-core/workflows/diagnose-issues.md');
     assert.ok(
       diagnoseSource.includes('worktree-branch-check.md'),
@@ -2620,10 +2692,10 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
 
     const fragmentSource = fs.readFileSync(WORKTREE_BRANCH_CHECK_FRAGMENT, 'utf8');
     const branchCheck = fragmentSource.indexOf('HEAD_REF=$(git symbolic-ref --quiet HEAD || echo');
-    const namespaceCheck = fragmentSource.indexOf('^worktree-agent-');
+    const namespaceCheck = fragmentSource.indexOf('^(worktree-)?agent-');
 
     assert.ok(branchCheck > 0, 'canonical fragment must assert HEAD before any work');
-    assert.ok(namespaceCheck > branchCheck, 'canonical fragment must require disposable worktree-agent branch');
+    assert.ok(namespaceCheck > branchCheck, 'canonical fragment must require the disposable (worktree-)agent branch namespace');
     // #48: verify-only — the destructive self-recovery is gone; the fragment fails closed instead.
     assert.ok(!fragmentSource.includes('git reset --hard {EXPECTED_BASE}'), 'canonical fragment must not self-recover via reset --hard — orchestrator owns recovery (#48)');
     assert.ok(fragmentSource.includes('exit 42'), 'canonical fragment must fail closed with exit 42 on base mismatch (#48)');
@@ -3133,21 +3205,25 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
 describe('#1342 — GSD-activity gate + fail-open for no-repo targets', () => {
   // Fixtures: one non-agent linked worktree (plain user branch) + one agent worktree
   let mainRepo1342;
-  let nonAgentWorktree;   // on branch 'feature-x' — non-GSD
-  let agentWorktree;       // on branch 'worktree-agent-foo' — GSD-managed
+  let nonAgentWorktree;        // on branch 'feature-x' — non-GSD
+  let agentWorktree;           // on branch 'worktree-agent-foo' — GSD-managed (legacy namespace)
+  let agentWorktreeCurrent;    // on branch 'agent-foo' — GSD-managed (current Claude Code namespace, #1995)
 
   before(() => {
     mainRepo1342 = realp(makeMainRepo());
     nonAgentWorktree = realp(makeWorktree(mainRepo1342, 'feature-x'));
     agentWorktree    = realp(makeWorktree(mainRepo1342, 'worktree-agent-foo'));
+    agentWorktreeCurrent = realp(makeWorktree(mainRepo1342, 'agent-foo'));
   });
 
   after(() => {
     try { git(mainRepo1342, ['worktree', 'remove', '--force', nonAgentWorktree]); } catch { /* ignore */ }
     try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktree]); } catch { /* ignore */ }
+    try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktreeCurrent]); } catch { /* ignore */ }
     cleanup(mainRepo1342);
     cleanup(nonAgentWorktree);
     cleanup(agentWorktree);
+    cleanup(agentWorktreeCurrent);
   });
 
   // Test 1 — reporter repro: non-agent worktree writing outside all git repos → exit 0
@@ -3274,6 +3350,27 @@ describe('#1342 — GSD-activity gate + fail-open for no-repo targets', () => {
       `Block reason should mention .git internals. Got: ${parsed.reason}`
     );
   });
+
+  // Test 7 — #1995 regression: a GSD-managed worktree on the CURRENT `agent-<id>`
+  // namespace must enforce the #260 block, not silently no-op. Before the fix the
+  // hook's allow-list only matched `worktree-agent-*`, so an `agent-<id>` worktree
+  // fell through to exit 0 and the cross-worktree path-traversal guard was disabled
+  // on exactly the branches Claude Code now creates.
+  test('(7) GSD-managed worktree on `agent-<id>` (current namespace): Edit targeting main repo root exits 2 (#1995)', () => {
+    const payload = {
+      cwd: agentWorktreeCurrent,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(mainRepo1342, 'src', 'index.ts') },
+    };
+    const result = runHook(agentWorktreeCurrent, payload);
+    assert.strictEqual(result.status, 2,
+      `Current-namespace agent-<id> worktree must be guarded (exit 2), not no-op'd. ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+    assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3394,6 +3491,23 @@ function runBashHook(cwd, command) {
 describe('bug #261: workflow guard blocks forced git add on worktree-agent branches', () => {
   test('blocks git add -f on worktree-agent branch when workflow guard is enabled', () => {
     const dir = makeRepo('worktree-agent-a1');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, 'git add -f .planning/phases/01/01-01-SUMMARY.md');
+      assert.strictEqual(result.status, 2);
+      const envelope = JSON.parse(result.stdout);
+      assert.strictEqual(envelope.decision, 'block');
+      assert.strictEqual(envelope.code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('blocks git add -f on the CURRENT `agent-<id>` namespace branch (#1995)', () => {
+    // Before the fix the guard only matched `worktree-agent-*`, so a current
+    // Claude Code `agent-<id>` worktree could force-add gitignored files,
+    // defeating the skipped_gitignored contract.
+    const dir = makeRepo('agent-a1');
     try {
       setWorkflowGuard(dir, true);
       const result = runBashHook(dir, 'git add -f .planning/phases/01/01-01-SUMMARY.md');

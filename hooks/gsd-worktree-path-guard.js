@@ -72,13 +72,14 @@ process.stdin.on('end', () => {
     }
 
     // #1342: Only enforce inside a GSD-managed isolated executor worktree. Those
-    // are always on a `worktree-agent-*` branch (the positive allow-list enforced
-    // by worktree-branch-check.md, #2924). A manually-created linked worktree (plain
-    // non-GSD work, e.g. Claude Code plan-mode) is on the user's own branch, so the
-    // guard must be a no-op there. Detached HEAD / error → not GSD-managed → no-op.
+    // are always on a per-agent branch — `agent-<id>` (current Claude Code) or
+    // `worktree-agent-<id>` (legacy), both accepted per the positive allow-list in
+    // worktree-branch-check.md (#2924, #1995). A manually-created linked worktree
+    // (plain non-GSD work, e.g. Claude Code plan-mode) is on the user's own branch,
+    // so the guard must be a no-op there. Detached HEAD / error → not GSD-managed → no-op.
     const branchResult = git(['symbolic-ref', '--short', 'HEAD'], cwd);
     const branch = branchResult.status === 0 && branchResult.stdout ? branchResult.stdout.trim() : '';
-    if (!/^worktree-agent-[A-Za-z0-9._/-]+$/.test(branch)) {
+    if (!/^(worktree-)?agent-[A-Za-z0-9._/-]+$/.test(branch)) {
       process.exit(0); // not a GSD-managed executor worktree — no-op
     }
 
