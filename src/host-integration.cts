@@ -513,37 +513,64 @@ function shouldFlattenDispatch(dispatch: UnvalidatedDispatch): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Hook-event surface per hookEvents dialect (ADR-1239 Phase D / #1682)
+// Managed-hook event surface per hookEvents dialect (ADR-1239 / ADR-1016)
 // ---------------------------------------------------------------------------
 
-// The set of host-fireable hook events for each hookEvents dialect. This is the
-// CONSUMER of the reserved 'opencode-subset' dialect (previously zero consumers):
-// it lets the engine ask which events a host's bus actually exposes, so it knows
-// workflow-phase hooks (plan:pre / verify:post / …) are NOT available on an
-// opencode-subset host and the engine must own phase sequencing internally
-// (ADR-1239 §OpenCode binding). 'claude' = full Claude surface; 'gemini' =
-// Gemini's BeforeTool/AfterTool family; 'opencode-subset' = OpenCode's
-// session/tool/file subset (no workflow-phase events).
+// Host-fireable MANAGED-hook events per `hookEvents` dialect. `hookEvents` is the
+// managed-hook dialect — the event names GSD writes into a DECLARATIVE host's
+// settings.json (claude = SessionStart/PreToolUse/…; gemini = BeforeTool/AfterTool).
+// This is DISTINCT from the extension-system event surface (below): a host's
+// plugin/extension API fires a different, plugin-owned event set. The two must
+// not be conflated (ADR-1239 amendment / #1943 — the former 'opencode-subset'
+// `hookEvents` value was this conflation; it is now `extensionEvents: opencode`).
 const HOOK_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   claude: Object.freeze(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'PreCompact']),
   gemini: Object.freeze(['SessionStart', 'BeforeTool', 'AfterTool', 'SessionEnd']),
-  'opencode-subset': Object.freeze([
-    'session.created', 'session.idle', 'experimental.session.compacting',
-    'tool.execute.before', 'tool.execute.after', 'file.edited',
-  ]),
 });
 
 /**
- * Resolve the host-fireable hook-event surface for a hookEvents dialect.
+ * Resolve the managed-hook event surface for a `hookEvents` dialect.
  * Returns null for unknown/missing dialects (fail-closed). Pure, never throws.
- *
- * A non-null result for 'opencode-subset' is what makes that dialect a CONSUMED
- * value rather than reserved vocab: callers can ask `hookEventSurfaceFor('opencode-subset')`
- * and learn the host fires no workflow-phase events.
  */
 function hookEventSurfaceFor(hookEvents: unknown): readonly string[] | null {
   if (typeof hookEvents !== 'string') return null;
   return HOOK_EVENT_SURFACES[hookEvents] || null;
+}
+
+// ---------------------------------------------------------------------------
+// Extension-system event surface (ADR-1239 amendment / #1943)
+// ---------------------------------------------------------------------------
+
+// The events a host's PLUGIN/EXTENSION API exposes — for imperative-embedding
+// hosts that load GSD as a plugin. This is a SEPARATE vocabulary + descriptor
+// field (`extensionEvents`) from `hookEvents`: hookEvents = the managed-hook
+// dialect (declarative hosts' settings.json); extensionEvents = the plugin-owned
+// event subset (imperative hosts' extension API). They are not the same thing.
+//
+// Values are documentation-sourced (ADR-1239 §research): OpenCode ~25 plugin
+// events (session/tool/file/permission); pi ~30 fine-grained extension events;
+// 'none' = the host exposes no extension surface and the engine owns the bus
+// (VS Code). Declarative hosts (no plugin API) do not set `extensionEvents`.
+const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  opencode: Object.freeze([
+    'session.created', 'session.idle', 'experimental.session.compacting',
+    'tool.execute.before', 'tool.execute.after', 'file.edited',
+  ]),
+  pi: Object.freeze(['tool_call']),
+  none: Object.freeze([]),
+});
+
+/**
+ * Resolve the extension-system event surface for an `extensionEvents` dialect.
+ * Returns null for unknown/missing dialects (fail-closed). Pure, never throws.
+ *
+ * A non-null result is what makes an `extensionEvents` value a CONSUMED value
+ * rather than reserved vocab. For 'opencode' it carries NO workflow-phase events
+ * — the engine owns phase sequencing internally on such hosts (ADR-1239 §OpenCode).
+ */
+function extensionEventSurfaceFor(extensionEvents: unknown): readonly string[] | null {
+  if (typeof extensionEvents !== 'string') return null;
+  return EXTENSION_EVENT_SURFACES[extensionEvents] || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -558,9 +585,11 @@ export = {
   PROFILE_BASELINES,
   DEFAULT_ENGINE,
   HOOK_EVENT_SURFACES,
+  EXTENSION_EVENT_SURFACES,
   degradationFor,
   profileOf,
   negotiateHostCapabilities,
   shouldFlattenDispatch,
   hookEventSurfaceFor,
+  extensionEventSurfaceFor,
 };

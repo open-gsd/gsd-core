@@ -18,6 +18,16 @@
  *     throws a labeled resource-starvation error, while a clean non-zero exit
  *     still returns { success: false, exitCode: N }.
  *
+ *  C. SIGNATURE C: "Failed to install hooks: directory is empty" in scoped CI
+ *     hooks/dist is gitignored and NOT built by `prepare` (build:lib only), so
+ *     the scoped test lane starts with it absent. The first install test's
+ *     before() hook triggers build-hooks.js, which creates DIST_DIR empty then
+ *     fills it file-by-file — a window where a concurrently-spawned install
+ *     reader sees zero hooks and hard-fails. ensureBuiltHooks() builds hooks/dist
+ *     ONCE upfront (same chokepoint as ensureBuiltArtifacts) so the empty window
+ *     never exists during concurrent test execution. These tests prove it
+ *     rebuilds when dist is absent/empty/incomplete and no-ops when complete.
+ *
  * RULESET.TESTS.regression-must-fail-first: each test section documents what
  * the old behavior would have been (fail-before) and asserts the new behavior
  * (pass-after), using only behavioral invocations — no source-grep.
@@ -30,7 +40,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 
-const { ensureBuiltArtifacts } = require('../scripts/run-tests.cjs');
+const { ensureBuiltArtifacts, ensureBuiltHooks } = require('../scripts/run-tests.cjs');
 const { cleanup } = require('./helpers.cjs');
 
 // ---------------------------------------------------------------------------
@@ -345,5 +355,142 @@ describe('bug #969 B — runGsdTools kill-signal discrimination', () => {
     } finally {
       cleanup(tmpDir);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part C — ensureBuiltHooks: build hooks/dist once, closing the scoped-CI
+// first-build empty-dir race.
+// ---------------------------------------------------------------------------
+
+describe('bug #969 C — ensureBuiltHooks populates hooks/dist before concurrent tests', () => {
+  /**
+   * Helper: a hermetic temp dist dir + a runBuild spy. The spy records how many
+   * times a build was requested and, when invoked, writes the given hook files
+   * (simulating build-hooks.js populating DIST_DIR) so idempotency is testable.
+   *
+   * HERMETIC: never touches the real hooks/dist. Uses dependency-injected
+   * overrides (distDir, hookNames, runBuild) — no fs monkeypatching, so the test
+   * is deterministic and root/OS-independent.
+   */
+  function makeHooksFixture(hookNames) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-969-hooks-'));
+    const distDir = path.join(tmp, 'hooks', 'dist');
+    let buildCalls = 0;
+    const runBuild = () => {
+      buildCalls += 1;
+      fs.mkdirSync(distDir, { recursive: true });
+      for (const h of hookNames) {
+        fs.writeFileSync(path.join(distDir, h), `// ${h}\nmodule.exports = {};\n`);
+      }
+    };
+    const overrides = () => ({ distDir, hookNames, runBuild });
+    return { tmp, distDir, hookNames, overrides, calls: () => buildCalls };
+  }
+
+  const HOOKS = ['a-hook.js', 'b-hook.js', 'c-hook.sh'];
+
+  /**
+   * FAIL-BEFORE (origin/next): ensureBuiltHooks did not exist, so the export was
+   * undefined and there was no upfront hooks build — the first concurrent
+   * install test raced build-hooks.js's empty-then-fill window. The import at the
+   * top of this file (ensureBuiltHooks) is itself the fail-first anchor: on
+   * origin/next it is undefined and every test below throws "not a function".
+   *
+   * PASS-AFTER: ensureBuiltHooks() builds when hooks/dist is entirely absent.
+   */
+  test('builds when hooks/dist is absent (fresh checkout / scoped CI)', () => {
+    const fx = makeHooksFixture(HOOKS);
+    try {
+      assert.equal(typeof ensureBuiltHooks, 'function',
+        'ensureBuiltHooks must be exported (absent on origin/next — the fail-first anchor)');
+      assert.ok(!fs.existsSync(fx.distDir), 'pre-condition: hooks/dist must be absent');
+      ensureBuiltHooks(fx.overrides());
+      assert.equal(fx.calls(), 1, 'a build must be triggered when dist is absent');
+      for (const h of HOOKS) {
+        assert.ok(fs.existsSync(path.join(fx.distDir, h)), `${h} must exist after build`);
+      }
+    } finally {
+      cleanup(fx.tmp);
+    }
+  });
+
+  /**
+   * BOUNDARY: dist exists but is empty (0 of N hooks) — the exact transient state
+   * build-hooks.js exposes between mkdir(DIST_DIR) and the first file rename.
+   */
+  test('builds when hooks/dist exists but is empty (0 of N)', () => {
+    const fx = makeHooksFixture(HOOKS);
+    try {
+      fs.mkdirSync(fx.distDir, { recursive: true }); // empty dir — the race window
+      ensureBuiltHooks(fx.overrides());
+      assert.equal(fx.calls(), 1, 'an empty dist must trigger a build');
+    } finally {
+      cleanup(fx.tmp);
+    }
+  });
+
+  /**
+   * BOUNDARY: dist has all-but-one hook (N-1 of N) — a partially-filled dir mid
+   * first-build. Must still be treated as incomplete and rebuilt.
+   */
+  test('builds when hooks/dist is partial (N-1 of N)', () => {
+    const fx = makeHooksFixture(HOOKS);
+    try {
+      fs.mkdirSync(fx.distDir, { recursive: true });
+      for (const h of HOOKS.slice(0, HOOKS.length - 1)) {
+        fs.writeFileSync(path.join(fx.distDir, h), 'x');
+      }
+      ensureBuiltHooks(fx.overrides());
+      assert.equal(fx.calls(), 1, 'a partial dist (missing one hook) must trigger a build');
+    } finally {
+      cleanup(fx.tmp);
+    }
+  });
+
+  /**
+   * BOUNDARY: a zero-byte hook (N of N present, but one is 0 bytes) — a truncated
+   * mid-write file. statSync().size === 0 must count as incomplete → rebuild.
+   */
+  test('builds when a hook file is present but zero-byte', () => {
+    const fx = makeHooksFixture(HOOKS);
+    try {
+      fs.mkdirSync(fx.distDir, { recursive: true });
+      HOOKS.forEach((h, i) => {
+        fs.writeFileSync(path.join(fx.distDir, h), i === 0 ? '' : 'ok'); // first is 0 bytes
+      });
+      ensureBuiltHooks(fx.overrides());
+      assert.equal(fx.calls(), 1, 'a zero-byte hook must be treated as incomplete → rebuild');
+    } finally {
+      cleanup(fx.tmp);
+    }
+  });
+
+  /**
+   * BOUNDARY + idempotency: dist is complete (all N present, non-empty). No build
+   * must fire — this keeps nested run-tests spawns and repeat invocations cheap
+   * and avoids a redundant concurrent build against an already-populated dist.
+   */
+  test('no-op when hooks/dist is complete (N of N non-empty)', () => {
+    const fx = makeHooksFixture(HOOKS);
+    try {
+      fs.mkdirSync(fx.distDir, { recursive: true });
+      for (const h of HOOKS) fs.writeFileSync(path.join(fx.distDir, h), 'ok');
+      ensureBuiltHooks(fx.overrides());
+      assert.equal(fx.calls(), 0, 'a complete dist must NOT trigger a build (idempotent no-op)');
+    } finally {
+      cleanup(fx.tmp);
+    }
+  });
+
+  /**
+   * Integration guard: the REAL default hook set (from build-hooks.js) is what
+   * ensureBuiltHooks checks when no override is given. Prove the real export is a
+   * non-empty list so the completeness predicate can never vacuously pass.
+   */
+  test('default hook set (build-hooks.js HOOKS_TO_COPY) is a non-empty list', () => {
+    const { HOOKS_TO_COPY } = require('../scripts/build-hooks.js');
+    assert.ok(Array.isArray(HOOKS_TO_COPY) && HOOKS_TO_COPY.length > 0,
+      'HOOKS_TO_COPY must be a non-empty array or the completeness check is vacuous');
   });
 });

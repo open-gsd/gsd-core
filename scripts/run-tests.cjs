@@ -119,6 +119,51 @@ function ensureBuiltArtifacts(overrides = {}) {
     }
   }
 }
+
+// hooks/dist/ is gitignored (.gitignore) and NOT built by `prepare`
+// (npm run build:lib only) — only the full `build`/`prepublishOnly` scripts run
+// build:hooks. So on a clean checkout + `npm ci` (fresh CI, incl. the scoped
+// test lane) hooks/dist starts absent. Install tests (e.g.
+// bug-3683-workflow-colon-namespace-leak) spawn `install.js --<runtime> --local`
+// which copies hooks from hooks/dist/ and then verifyInstalled() hard-fails if
+// the target hooks dir is empty. build-hooks.js `build()` creates DIST_DIR
+// empty and fills it file-by-file, so the FIRST on-demand build (triggered by
+// whichever concurrent install test's before() hook runs first) exposes a
+// window where hooks/dist exists but is empty/partial. A concurrently-spawned
+// install reader observes zero hooks -> "Failed to install hooks: directory is
+// empty" -> intermittent scoped-lane failure (full lanes dodge it only by luck
+// of a hooks-builder finishing early). Building hooks/dist ONCE here — the same
+// upfront chokepoint as ensureBuiltArtifacts, single-process with no concurrent
+// readers — fully populates dist before any test runs, closing the first-build
+// empty window everywhere (CI scoped/unit shards + local). Subsequent on-demand
+// rebuilds only atomically replace individual files (per-file rename in
+// build-hooks.js) and never re-empty the dir, so they stay safe.
+function ensureBuiltHooks(overrides = {}) {
+  const { existsSync, statSync } = require('fs');
+  const root = overrides.root || join(__dirname, '..');
+  const distDir = overrides.distDir || join(root, 'hooks', 'dist');
+  const hookNames = overrides.hookNames || require('./build-hooks.js').HOOKS_TO_COPY;
+  const runBuild = overrides.runBuild || (() => {
+    execFileSync(process.execPath, [join(root, 'scripts', 'build-hooks.js')], {
+      cwd: root,
+      stdio: 'inherit',
+    });
+  });
+
+  // dist is "complete" only if every expected hook exists as a non-empty file.
+  // Absent dir, empty dir, or a missing/zero-byte hook all trigger a rebuild.
+  const complete = existsSync(distDir) && hookNames.every((hook) => {
+    const p = join(distDir, hook);
+    try {
+      return existsSync(p) && statSync(p).size > 0;
+    } catch {
+      return false;
+    }
+  });
+  if (!complete) {
+    runBuild();
+  }
+}
 const MARKED_SUITES = ['integration', 'install', 'security', 'slow'];
 
 // Recursively collect *.test.cjs files under dir, returning paths relative to dir.
@@ -454,6 +499,11 @@ function main() {
   // Build the gitignored bin/lib artifact if absent, before any test requires it.
   ensureBuiltArtifacts();
 
+  // Build the gitignored hooks/dist artifact once, before any concurrent install
+  // test spawns install.js and reads it — closes the first-build empty-dir race
+  // that intermittently failed the scoped CI lane (see ensureBuiltHooks above).
+  ensureBuiltHooks();
+
   // Hermeticity: in-process tests resolve `.planning` via planningDir(cwd), which
   // honours GSD_PROJECT/GSD_WORKSTREAM. A developer shell inside a GSD workstream
   // exports GSD_WORKSTREAM, which would redirect fixture STATE.md reads away from
@@ -600,4 +650,4 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { suiteOf, ensureBuiltArtifacts, parseShardArg, selectShard };
+module.exports = { suiteOf, ensureBuiltArtifacts, ensureBuiltHooks, parseShardArg, selectShard };

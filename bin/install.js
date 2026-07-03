@@ -7377,6 +7377,11 @@ function uninstall(isGlobal, runtime = 'claude') {
   const fixSlashUninstallPath = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
   try { fs.unlinkSync(fixSlashUninstallPath); } catch (_) { /* best-effort */ }
 
+  // Remove the capability registry generator scripts (#1920) — before the scripts/ rmdir
+  for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+    try { fs.unlinkSync(path.join(targetDir, 'scripts', gen)); } catch (_) { /* best-effort */ }
+  }
+
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
   if (fs.existsSync(scriptsUninstallDir)) {
@@ -8098,6 +8103,15 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
   if (fs.existsSync(fixSlashInstallPath)) {
     manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
+  }
+
+  // Track the capability registry generator scripts (#1920) — top-level scripts/ files
+  // not covered by the changeset/lib loops.
+  for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+    const genInstallPath = path.join(configDir, 'scripts', gen);
+    if (fs.existsSync(genInstallPath)) {
+      manifest.files['scripts/' + gen] = fileHash(genInstallPath);
+    }
   }
 
   // Track the OpenCode native plugin adapter (#1914) so update/drift detection
@@ -9625,6 +9639,31 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       fs.copyFileSync(fixSlashSrc, fixSlashDest);
       if (!verifyFileInstalled(fixSlashDest, 'scripts/fix-slash-commands.cjs')) {
         failures.push('scripts/fix-slash-commands.cjs');
+      }
+    }
+  }
+
+  // Copy scripts/gen-capability-registry.cjs + scripts/gen-loop-host-contract.cjs —
+  // required by gsd-core/bin/lib/capability-loader.cjs at overlay-composition time via
+  // require('../../../scripts/gen-capability-registry.cjs') (which itself requires
+  // gen-loop-host-contract.cjs). Without these, the loader's never-crash invariant
+  // discards EVERY third-party capability overlay and silently falls back to the frozen
+  // first-party registry, so installed capabilities are inert (#1920). Same class of
+  // gap as #1223 (fix-slash-commands.cjs) and copied unconditionally for the same reason:
+  // any runtime that installs gsd-core/ needs the capability system to compose.
+  {
+    const capGenDestDir = path.join(targetDir, 'scripts');
+    fs.mkdirSync(capGenDestDir, { recursive: true });
+    for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+      const genSrc = path.join(src, 'scripts', gen);
+      const genDest = path.join(capGenDestDir, gen);
+      if (!fs.existsSync(genSrc)) {
+        failures.push(`scripts/${gen} (source missing from package — reinstall from npm)`);
+      } else {
+        fs.copyFileSync(genSrc, genDest);
+        if (!verifyFileInstalled(genDest, `scripts/${gen}`)) {
+          failures.push(`scripts/${gen}`);
+        }
       }
     }
   }

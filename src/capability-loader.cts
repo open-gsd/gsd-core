@@ -198,16 +198,29 @@ function _setGeneratorForTest(g: GeneratorModule | null): void {
   _generatorOverride = g;
 }
 
-/** Resolve the running GSD version; fail-closed to '0.0.0' if it cannot be read. */
-function readHostVersion(): string {
+/**
+ * Resolve the running GSD version; fail-closed to '0.0.0' if it cannot be read.
+ *
+ * Prefer the authoritative `gsd-core/VERSION` the installer writes for EVERY runtime
+ * (libDir = gsd-core/bin/lib/, so `../../VERSION` = gsd-core/VERSION). This is reliable
+ * across all installed layouts — including runtimes that get no marker package.json, and
+ * local installs where the walked-up `../../../package.json` would resolve to the USER's
+ * own project and report a wrong version (#1920). Fall back to the runtime-root
+ * package.json for the dev/source tree, then fail-closed. Mirrors resolveVersionFrom()
+ * (#1383). `libDir` is injectable for tests; it defaults to this module's directory.
+ */
+export function readHostVersion(libDir: string = __dirname): string {
+  const SEMVER_PREFIX = /^\d+\.\d+\.\d+/;
   try {
-    // gsd-core/bin/lib/ -> repo/package root is three levels up.
+    const v = fs.readFileSync(path.join(libDir, '..', '..', 'VERSION'), 'utf8').trim();
+    if (SEMVER_PREFIX.test(v)) return v;
+  } catch { /* not an installed tree (no gsd-core/VERSION) */ }
+  try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-unsafe-assignment
-    const pkg: { version?: string } = require('../../../package.json');
-    return typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+    const pkg: { version?: string } = require(path.join(libDir, '..', '..', '..', 'package.json'));
+    if (pkg && typeof pkg.version === 'string' && SEMVER_PREFIX.test(pkg.version)) return pkg.version;
+  } catch { /* runtime root has no package.json */ }
+  return '0.0.0';
 }
 
 /**
@@ -848,4 +861,5 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
   }
 }
 
-module.exports = { loadRegistry, _setValidatorForTest, _setGeneratorForTest };
+// readHostVersion is exported for the #1920 regression (VERSION-first host-version resolution).
+module.exports = { loadRegistry, readHostVersion, _setValidatorForTest, _setGeneratorForTest };
