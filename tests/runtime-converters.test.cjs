@@ -1,5 +1,5 @@
 /**
- * Runtime Converter Tests — OpenCode + Kilo + Gemini
+ * Runtime Converter Tests — OpenCode + Kilo
  *
  * Tests for small runtime-specific conversion functions from install.js.
  * Larger runtime test suites (Copilot, Codex, Antigravity) have their own files.
@@ -7,7 +7,6 @@
  * OpenCode/Kilo: flat-runtime frontmatter converters (agent + command modes)
  *   model: inherit is NOT added (runtime uses its configured default model)
  *   but mode: subagent IS added (required by both runtimes' agents).
- * Gemini: convertClaudeToGeminiAgent (frontmatter + tool mapping + body escaping)
  */
 
 const { test, describe } = require('node:test');
@@ -17,7 +16,6 @@ process.env.GSD_TEST_MODE = '1';
 const {
   convertClaudeToOpencodeFrontmatter,
   convertClaudeToKiloFrontmatter,
-  convertClaudeToGeminiAgent,
   convertClaudeAgentToAntigravityAgent,
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,
@@ -232,113 +230,29 @@ Fallback skills live in .agents/skills/.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gemini CLI agent conversion (merged from gemini-config.test.cjs)
+// Antigravity agent conversion — shared Gemini-backend tool mapping (#1394 / #1928)
 // ─────────────────────────────────────────────────────────────────────────────
+//
+// The gemini-RUNTIME's own top-level converter (convertClaudeToGeminiAgent) and
+// its dedicated test coverage were removed with the gemini runtime (#1928,
+// Google sunset Gemini CLI 2026-06-18). convertGeminiToolName and
+// claudeToGeminiTools STAY — they are shared infra reused by Antigravity (which
+// runs on the same backend tool-name vocabulary), so the Antigravity-facing
+// regression coverage below is retained unchanged.
 
-describe('convertClaudeToGeminiAgent', () => {
-  test('drops unsupported skills frontmatter while keeping converted tools', () => {
+describe('#1394 regression: excludes Skill/SlashCommand from Antigravity frontmatter', () => {
+  // Skill/SlashCommand are Claude-only tools with no Gemini-backend built-in
+  // equivalent. Without explicit exclusion they hit the lowercase fallback and
+  // emit an invalid 'skill'/'slashcommand' tool name, which fails frontmatter
+  // validation (tools.N: Invalid tool name) and aborts the entire agent load.
+
+  // Antigravity reuses convertGeminiToolName (it runs on the Gemini backend),
+  // so the exclusion intentionally applies there too. Antigravity surfaces GSD
+  // skills through the skill surface (SKILL.md), not the agent tools: allowlist,
+  // so dropping the invalid 'skill' tool name does not remove skill access —
+  // this locks that cross-runtime behavior (criterion 4).
+  test('Antigravity conversion also excludes Skill/SlashCommand (shared Gemini backend)', () => {
     const input = `---
-name: gsd-codebase-mapper
-description: Explores codebase and writes structured analysis documents.
-tools: Read, Bash, Grep, Glob, Write
-color: cyan
-skills:
-  - gsd-mapper-workflow
----
-
-<role>
-Use \${PHASE} in shell examples.
-</role>`;
-
-    const result = convertClaudeToGeminiAgent(input);
-    const frontmatter = result.split('---')[1] || '';
-
-    assert.ok(frontmatter.includes('name: gsd-codebase-mapper'), 'keeps name');
-    assert.ok(frontmatter.includes('description: Explores codebase and writes structured analysis documents.'), 'keeps description');
-    assert.ok(frontmatter.includes('tools:'), 'adds Gemini tools array');
-    assert.ok(frontmatter.includes('  - read_file'), 'maps Read -> read_file');
-    assert.ok(frontmatter.includes('  - run_shell_command'), 'maps Bash -> run_shell_command');
-    assert.ok(frontmatter.includes('  - search_file_content'), 'maps Grep -> search_file_content');
-    assert.ok(frontmatter.includes('  - glob'), 'maps Glob -> glob');
-    assert.ok(frontmatter.includes('  - write_file'), 'maps Write -> write_file');
-    assert.ok(!frontmatter.includes('color:'), 'drops unsupported color field');
-    assert.ok(!frontmatter.includes('skills:'), 'drops unsupported skills field');
-    assert.ok(!frontmatter.includes('gsd-mapper-workflow'), 'drops skills list items');
-    assert.ok(result.includes('$PHASE'), 'escapes ${PHASE} shell variable for Gemini');
-    assert.ok(!result.includes('${PHASE}'), 'removes Gemini template-string pattern');
-  });
-
-  test('excludes Claude-only agent interaction tools from Gemini frontmatter', () => {
-    const input = `---
-name: gsd-debug-session-manager
-description: Manages debug sessions.
-tools: Read, Task, Agent, AskUserQuestion
----
-
-<role>
-Coordinate debugger agents.
-Offer choices via AskUserQuestion when user input is needed.
-</role>`;
-
-    const result = convertClaudeToGeminiAgent(input);
-    const frontmatter = result.split('---')[1] || '';
-
-    assert.ok(frontmatter.includes('  - read_file'), 'maps Read -> read_file');
-    assert.ok(!frontmatter.includes('  - ask_user'), 'does not emit invalid Gemini ask_user tool');
-    assert.ok(!frontmatter.includes('  - task'), 'does not emit invalid Gemini task tool');
-    assert.ok(!frontmatter.includes('  - agent'), 'does not emit invalid Gemini agent tool');
-    assert.ok(!frontmatter.includes('Task'), 'does not preserve Claude-only Task tool');
-    assert.ok(!frontmatter.includes('Agent'), 'does not preserve Claude-only Agent tool');
-    assert.ok(!frontmatter.includes('AskUserQuestion'), 'does not preserve Claude-only AskUserQuestion tool');
-    assert.ok(!result.includes('AskUserQuestion'), 'does not leave Claude-only tool references in the body');
-    assert.ok(result.includes('conversational prompting'), 'uses runtime-neutral body wording for user prompts');
-  });
-
-  describe('#1394 regression: excludes Skill/SlashCommand from Gemini frontmatter', () => {
-    // Skill/SlashCommand are Claude-only tools with no Gemini built-in equivalent.
-    // Without explicit exclusion they hit the lowercase fallback and emit an
-    // invalid 'skill'/'slashcommand' tool name, which fails Gemini frontmatter
-    // validation (tools.N: Invalid tool name) and aborts the entire agent load —
-    // previously killing 22 of 34 GSD agents on Gemini.
-
-    // Agent-level assertion against the live install path (criterion 2/3).
-    // Asserts the emitted frontmatter rather than the internal converter so the
-    // test exercises the public, install-path-exported API (convertGeminiToolName
-    // is an internal helper, deliberately not exported per #1559). The Skill,
-    // SlashCommand, and AskUserQuestion inputs all exercise the exclusion if-block;
-    // Read/WebFetch exercise the mapped-tool path that must survive.
-    test('Skill/SlashCommand/AskUserQuestion are dropped from emitted Gemini frontmatter', () => {
-      const input = `---
-name: gsd-planner
-description: Creates executable phase plans.
-tools: Read, Write, Bash, Glob, Grep, Skill, WebFetch, SlashCommand, AskUserQuestion
----
-
-<role>
-Plan the phase.
-</role>`;
-
-      const result = convertClaudeToGeminiAgent(input);
-      const frontmatter = result.split('---')[1] || '';
-
-      // Mapped tools still convert (the exclusion must not break the happy path).
-      assert.ok(frontmatter.includes('  - read_file'), 'maps Read -> read_file');
-      assert.ok(frontmatter.includes('  - web_fetch'), 'maps WebFetch -> web_fetch');
-      // Claude-only tools with no Gemini equivalent are excluded, not lowercased
-      // into invalid names that would fail frontmatter validation (#1394 / #3362).
-      assert.ok(!frontmatter.includes('  - skill'), 'does not emit invalid Gemini skill tool');
-      assert.ok(!frontmatter.includes('  - slashcommand'), 'does not emit invalid Gemini slashcommand tool');
-      assert.ok(!frontmatter.includes('  - ask_user'), 'AskUserQuestion remains excluded');
-      assert.ok(!frontmatter.includes('  - askuserquestion'), 'AskUserQuestion is not lowercased into an invalid tool');
-    });
-
-    // Antigravity reuses convertGeminiToolName (it runs on the Gemini backend),
-    // so the exclusion intentionally applies there too. Antigravity surfaces GSD
-    // skills through the skill surface (SKILL.md), not the agent tools: allowlist,
-    // so dropping the invalid 'skill' tool name does not remove skill access —
-    // this locks that cross-runtime behavior (criterion 4).
-    test('Antigravity conversion also excludes Skill/SlashCommand (shared Gemini backend)', () => {
-      const input = `---
 name: gsd-planner
 description: Creates executable phase plans.
 tools: Read, Write, Bash, Skill, WebFetch, SlashCommand
@@ -346,14 +260,13 @@ tools: Read, Write, Bash, Skill, WebFetch, SlashCommand
 
 <role>Plan the phase.</role>`;
 
-      const result = convertClaudeAgentToAntigravityAgent(input);
-      const toolsLine = result.split('\n').find(l => l.startsWith('tools:')) || '';
+    const result = convertClaudeAgentToAntigravityAgent(input);
+    const toolsLine = result.split('\n').find(l => l.startsWith('tools:')) || '';
 
-      assert.ok(toolsLine.includes('read_file'), 'maps Read -> read_file');
-      assert.ok(toolsLine.includes('web_fetch'), 'maps WebFetch -> web_fetch');
-      assert.ok(!/\bskill\b/.test(toolsLine), 'no invalid skill tool in Antigravity frontmatter');
-      assert.ok(!/\bslashcommand\b/.test(toolsLine), 'no invalid slashcommand tool in Antigravity frontmatter');
-    });
+    assert.ok(toolsLine.includes('read_file'), 'maps Read -> read_file');
+    assert.ok(toolsLine.includes('web_fetch'), 'maps WebFetch -> web_fetch');
+    assert.ok(!/\bskill\b/.test(toolsLine), 'no invalid skill tool in Antigravity frontmatter');
+    assert.ok(!/\bslashcommand\b/.test(toolsLine), 'no invalid slashcommand tool in Antigravity frontmatter');
   });
 });
 

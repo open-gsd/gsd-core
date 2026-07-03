@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * ADR-1239 Phase A: Descriptor tests — validate that all 16 role:runtime
+ * ADR-1239 Phase A: Descriptor tests — validate that all 15 role:runtime
  * capability descriptors have correct hostIntegration axes, pass the validator,
  * and negotiate correctly via the host-integration module.
  *
@@ -31,16 +31,16 @@ const SCALAR_AXES = ['embeddingMode', 'commandSurface', 'modelMode', 'hookBus', 
 // All 6 dispatch sub-keys (includes backgroundDispatch added in feat/1679-dispatch-flatten)
 const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'subagentToolkit', 'backgroundDispatch'];
 
-// All 16 runtime IDs (ordered alphabetically)
+// All 15 runtime IDs (ordered alphabetically)
 const RUNTIME_IDS = [
   'antigravity', 'augment', 'claude', 'cline', 'codebuddy',
-  'codex', 'copilot', 'cursor', 'gemini', 'hermes',
+  'codex', 'copilot', 'cursor', 'hermes',
   'kilo', 'kimi', 'opencode', 'qwen', 'trae', 'windsurf',
 ];
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
 // programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, qwen, trae (9)
-// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, gemini, windsurf (7)
+// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf (6)
 // ide: 0
 const EXPECTED_PROFILES = {
   claude:      'programmatic-cli',
@@ -57,14 +57,13 @@ const EXPECTED_PROFILES = {
   codebuddy:   'declarative-cli',
   codex:       'declarative-cli',
   copilot:     'declarative-cli',
-  gemini:      'declarative-cli',
   windsurf:    'declarative-cli',
 };
 
 describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
   // ─── Registry shape ──────────────────────────────────────────────────────────
 
-  test('registry.runtimes contains all 16 expected runtime ids', () => {
+  test('registry.runtimes contains all 15 expected runtime ids', () => {
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -73,8 +72,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     }
     assert.strictEqual(
       Object.keys(registry.runtimes).length,
-      16,
-      'registry.runtimes must have exactly 16 entries',
+      15,
+      'registry.runtimes must have exactly 15 entries',
     );
   });
 
@@ -209,7 +208,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── Contract-pin profile split ───────────────────────────────────────────────
 
-  test('contract-pin: exactly 9 programmatic-cli, 7 declarative-cli, 0 ide', () => {
+  test('contract-pin: exactly 9 programmatic-cli, 6 declarative-cli, 0 ide', () => {
     const counts = { 'programmatic-cli': 0, 'declarative-cli': 0, 'ide': 0 };
     for (const id of RUNTIME_IDS) {
       const cap = registry.runtimes[id];
@@ -222,7 +221,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
       }
     }
     assert.strictEqual(counts['programmatic-cli'], 9, 'Must have exactly 9 programmatic-cli runtimes');
-    assert.strictEqual(counts['declarative-cli'], 7, 'Must have exactly 7 declarative-cli runtimes');
+    assert.strictEqual(counts['declarative-cli'], 6, 'Must have exactly 6 declarative-cli runtimes');
     assert.strictEqual(counts['ide'], 0, 'Must have exactly 0 ide runtimes');
   });
 
@@ -260,7 +259,6 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     codex:       false,
     copilot:     true,
     cursor:      false,
-    gemini:      true,
     hermes:      true,
     kilo:        true,
     kimi:        true,
@@ -297,12 +295,12 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     );
   });
 
-  test('contract-pin: spot-check claude→programmatic-cli, codex→declarative-cli, opencode→programmatic-cli, gemini→declarative-cli', () => {
+  test('contract-pin: spot-check claude→programmatic-cli, codex→declarative-cli, opencode→programmatic-cli, windsurf→declarative-cli', () => {
     const checks = [
       ['claude', 'programmatic-cli'],
       ['codex', 'declarative-cli'],
       ['opencode', 'programmatic-cli'],
-      ['gemini', 'declarative-cli'],
+      ['windsurf', 'declarative-cli'],
     ];
     for (const [id, expectedProfile] of checks) {
       const cap = registry.runtimes[id];

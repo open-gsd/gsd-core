@@ -32,7 +32,7 @@ const { getDirName } = runtimeNamePolicy;
 // OR the registry changed — both require a deliberate golden-list update here.
 const EXPECTED = [
   'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot',
-  'cursor', 'gemini', 'hermes', 'kilo', 'kimi', 'opencode', 'qwen',
+  'cursor', 'hermes', 'kilo', 'kimi', 'opencode', 'qwen',
   'trae', 'windsurf',
 ];
 

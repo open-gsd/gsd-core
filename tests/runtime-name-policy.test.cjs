@@ -98,8 +98,8 @@ describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
     assert.strictEqual(getProjectInstructionFile('copilot'), '.github/copilot-instructions.md');
   });
 
-  test('gemini maps to GEMINI.md', () => {
-    assert.strictEqual(getProjectInstructionFile('gemini'), 'GEMINI.md');
+  test('gemini is no longer a known runtime — falls back to AGENTS.md (#1928: Gemini CLI runtime removed)', () => {
+    assert.strictEqual(getProjectInstructionFile('gemini'), 'AGENTS.md');
   });
 
   test('antigravity maps to GEMINI.md', () => {
@@ -118,8 +118,9 @@ describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
     assert.strictEqual(getProjectInstructionFile('codex-cli'), 'AGENTS.md');
     // opencode-cli is an alias for opencode.
     assert.strictEqual(getProjectInstructionFile('opencode-cli'), 'AGENTS.md');
-    // gemini-cli is an alias for gemini.
-    assert.strictEqual(getProjectInstructionFile('gemini-cli'), 'GEMINI.md');
+    // gemini-cli was an alias for gemini; the gemini runtime was removed
+    // (#1928) so it is now an unrecognized runtime -> safe AGENTS.md default.
+    assert.strictEqual(getProjectInstructionFile('gemini-cli'), 'AGENTS.md');
     // github-copilot is an alias for copilot.
     assert.strictEqual(getProjectInstructionFile('github-copilot'), '.github/copilot-instructions.md');
   });

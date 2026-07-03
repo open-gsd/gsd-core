@@ -24,15 +24,16 @@ const ROOT = path.resolve(__dirname, '..');
 // Single source of truth: runtime-integration manifests whose `version` field
 // MUST track package.json. Each entry names the manifest path plus the dotted
 // path to the version field inside that JSON document. Top-level `version` is
-// the default (plugin.json, gemini-extension.json); the Claude plugin
+// the default (plugin.json); the Claude plugin
 // marketplace manifest carries its canonical version at plugins[0].version
 // (the schema-canonical location runtimes read — issue #1855).
 //
 // Add a new manifest here so `npm version` keeps it in sync — the regression
 // guard test (issue 844) fails if you forget.
+// #1928: gemini-extension.json was removed with the gemini runtime (Google
+// sunset Gemini CLI 2026-06-18); it is no longer a registered manifest.
 const VERSIONED_MANIFESTS = [
   { path: '.claude-plugin/plugin.json', versionKey: 'version' },
-  { path: 'gemini-extension.json', versionKey: 'version' },
   { path: '.claude-plugin/marketplace.json', versionKey: 'plugins.0.version' },
   { path: 'vscode/package.json', versionKey: 'version' },
 ];

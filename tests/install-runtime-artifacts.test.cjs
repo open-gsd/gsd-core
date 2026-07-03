@@ -104,14 +104,18 @@ describe('installRuntimeArtifacts — consumes Runtime Artifact Install Plan Mod
     });
     t.after(restore);
 
-    installer.installRuntimeArtifacts('gemini', configDir, 'global', RESOLVED_CORE);
+    // #1928: gemini (the only runtime whose 'commands' kind used a
+    // namespaced-by-dir 'commands/gsd' layout) was removed; cursor is the
+    // stand-in — it has a 'commands' kind but prefixes files 'gsd-'
+    // (destSubpath basename !== prefix stem), so proof.md → gsd-proof.md.
+    installer.installRuntimeArtifacts('cursor', configDir, 'global', RESOLVED_CORE);
 
-    assert.strictEqual(planArgs.layout.runtime, 'gemini');
+    assert.strictEqual(planArgs.layout.runtime, 'cursor');
     assert.strictEqual(planArgs.layout.configDir, configDir);
     assert.strictEqual(planArgs.layout.scope, 'global');
     assert.strictEqual(planArgs.resolvedProfile, RESOLVED_CORE);
-    assert.strictEqual(planArgs.resolveAttribution('gemini'), undefined);
-    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd', 'proof.md')));
+    assert.strictEqual(planArgs.resolveAttribution('claude'), undefined);
+    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd', 'gsd-proof.md')));
     assert.ok(!fs.existsSync(cleanupDir), 'returned cleanup dir must be removed after copy');
   });
 
@@ -134,7 +138,7 @@ describe('installRuntimeArtifacts — consumes Runtime Artifact Install Plan Mod
     t.after(restore);
 
     assert.throws(
-      () => installer.installRuntimeArtifacts('gemini', configDir, 'global', RESOLVED_CORE),
+      () => installer.installRuntimeArtifacts('claude', configDir, 'global', RESOLVED_CORE),
       /planned failure/,
     );
     assert.ok(!fs.existsSync(cleanupDir), 'failure cleanup dir must be removed');
@@ -147,7 +151,7 @@ const SKILLS_RUNTIMES_LAYOUT = [
 ];
 
 const ALL_RUNTIMES_LAYOUT = [
-  'claude', 'cursor', 'gemini', 'codex', 'copilot', 'antigravity',
+  'claude', 'cursor', 'codex', 'copilot', 'antigravity',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy',
   'cline', 'kimi', 'opencode', 'kilo',
 ];
@@ -260,19 +264,6 @@ describe('installRuntimeArtifacts — hermes nested layout', () => {
       'skills/gsd/gsd-help/SKILL.md must exist (canonical gsd- prefix, #947)');
     assert.ok(!fs.existsSync(path.join(nestedDir, 'help')),
       'bare-stem skills/gsd/help/ must NOT exist (#947 fix)');
-  });
-});
-
-describe('installRuntimeArtifacts — gemini commands layout', () => {
-  test('gemini: commands/gsd/ created, no skills/', (t) => {
-    const configDir = createTempDir('gsd-ial-gemini-');
-    t.after(() => cleanup(configDir));
-
-    installRuntimeArtifacts('gemini', configDir, 'global', RESOLVED_CORE);
-
-    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd')));
-    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd', 'help.md')));
-    assert.ok(!fs.existsSync(path.join(configDir, 'skills')));
   });
 });
 
@@ -475,9 +466,9 @@ describe('uninstallRuntimeArtifacts — consumes Runtime Artifact Uninstall Plan
     });
     t.after(restore);
 
-    installer.uninstallRuntimeArtifacts('gemini', configDir, 'global');
+    installer.uninstallRuntimeArtifacts('cursor', configDir, 'global');
 
-    assert.strictEqual(planLayout.runtime, 'gemini');
+    assert.strictEqual(planLayout.runtime, 'cursor');
     assert.strictEqual(planLayout.configDir, configDir);
     assert.strictEqual(planLayout.scope, 'global');
     assert.ok(!fs.existsSync(path.join(commandsDir, 'gsd-help.md')));
@@ -1981,207 +1972,6 @@ describe('resolveRuntimeArtifactLayout — cline scope-aware (Fix 2)', () => {
 }
 
 
-// ────────────────────────────────────────────────────────────────────────
-// Folded from tests/bug-3037-gemini-duplicate-commands.test.cjs — consolidation epic #1969 (B1 #1970)
-// ────────────────────────────────────────────────────────────────────────
-{
-  const { describe: __foldDescribe } = require('node:test');
-  __foldDescribe("folded:bug-3037-gemini-duplicate-commands (consolidation epic #1969 B1 #1970)", () => {
-/**
- * Bug #3037: Gemini global+local install creates duplicate /gsd:* commands
- * across user (HOME/.gemini/) and workspace (PROJECT/.gemini/) scopes.
- *
- * Reproduction (from issue body):
- *   1. install --gemini --global with HOME=tmpHome
- *   2. cd tmpProject; install --gemini --local
- *   → both ~/.gemini/commands/gsd/ and PROJECT/.gemini/commands/gsd/ contain
- *     65 overlapping command filenames.
- *   → Gemini conflict detection renames every overlapping command to
- *     /workspace.gsd:* and /user.gsd:*, breaking the documented /gsd:*
- *     namespace.
- *
- * Fix: when the local Gemini install detects the user-scope GSD command
- * directory already exists with managed-shape content, skip the local copy
- * and emit a clear warning explaining the conflict avoidance.
- *
- * Tests assert on the post-install filesystem shape and capture the skip
- * warning so the full test log remains warning-clean.
- */
-
-'use strict';
-
-process.env.GSD_TEST_MODE = '1';
-
-const { test, describe, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { createTempDir, cleanup, captureConsole } = require('./helpers.cjs');
-
-const { install } = require('../bin/install.js');
-
-describe('bug #3037: Gemini global+local install must not create duplicate command scopes', () => {
-  let tmpHome;
-  let tmpProject;
-  let originalHome;
-  let originalUserprofile;
-  let originalCwd;
-
-  beforeEach(() => {
-    tmpHome = createTempDir('gsd-3037-home-');
-    tmpProject = createTempDir('gsd-3037-work-');
-    originalHome = process.env.HOME;
-    originalUserprofile = process.env.USERPROFILE;
-    originalCwd = process.cwd();
-    // Point HOME at the temp dir so install(true, 'gemini') writes to
-    // tmpHome/.gemini, not the developer's real home.
-    process.env.HOME = tmpHome;
-    process.env.USERPROFILE = tmpHome;
-  });
-
-  afterEach(() => {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    // CR #3041: also restore USERPROFILE so the temp HOME doesn't leak
-    // into later tests and create order-dependent failures on Windows
-    // or any code path that reads USERPROFILE.
-    if (originalUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserprofile;
-    process.chdir(originalCwd);
-    cleanup(tmpHome);
-    cleanup(tmpProject);
-  });
-
-  function listCommandFiles(geminiCommandsRoot) {
-    if (!fs.existsSync(geminiCommandsRoot)) return [];
-    const out = [];
-    function walk(dir) {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) out.push(path.relative(geminiCommandsRoot, full));
-      }
-    }
-    walk(geminiCommandsRoot);
-    return out.sort();
-  }
-
-  function runInstall(...args) {
-    return captureConsole(() => install(...args));
-  }
-
-  test('global install populates HOME/.gemini/commands/gsd', () => {
-    runInstall(true, 'gemini');
-    const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    const files = listCommandFiles(globalCmds);
-    assert.ok(
-      files.length > 0,
-      'global install must populate HOME/.gemini/commands/gsd'
-    );
-  });
-
-  test('local install after global does NOT populate PROJECT/.gemini/commands/gsd (avoids /gsd:* namespace conflict)', () => {
-    // Step 1: global install
-    runInstall(true, 'gemini');
-    const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    const globalFiles = listCommandFiles(globalCmds);
-    assert.ok(globalFiles.length > 0, 'precondition: global install must succeed');
-
-    // Step 2: local install in a temp project
-    process.chdir(tmpProject);
-    const { stdout } = runInstall(false, 'gemini');
-    assert.match(
-      stdout,
-      /Skipping commands\/gsd\/ for local install/,
-      'local install must explain why it skips duplicate Gemini commands'
-    );
-
-    // Assertion: the local commands/gsd/ directory must NOT exist (or must
-    // be empty) so Gemini's conflict detection has nothing to rename. The
-    // fix may either skip the directory entirely (preferred — no leftover
-    // file system noise) or create an empty directory (acceptable but odd).
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.equal(
-      localFiles.length,
-      0,
-      `local install must skip commands/gsd/ when global already exists; ` +
-        `found ${localFiles.length} duplicate command file(s) at ${localCmds}`
-    );
-  });
-
-  test('local install with NO existing global GSD does still populate PROJECT/.gemini/commands/gsd', () => {
-    // No global install first — local should proceed normally so users who
-    // only ever run --local still get GSD commands in their project.
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local-only install must populate PROJECT/.gemini/commands/gsd; ` +
-        `found ${localFiles.length} files at ${localCmds}`
-    );
-  });
-
-  test('local install when HOME has hand-dropped overrides UNDER commands/gsd/ (but no full GSD) still populates locally', () => {
-    // CR #3041 regression: the previous detection was
-    // `fs.readdirSync(homeGeminiGsd).length > 0` which would skip the
-    // local install for a user who manually dropped a single override
-    // command at ~/.gemini/commands/gsd/<thing>.toml without ever
-    // running --gemini --global. The fix narrows detection to require
-    // at least 3 canonical GSD command files (help.toml, progress.toml,
-    // new-project.toml) — a marker that's structurally impossible to
-    // produce by accident.
-    const homeGsdDir = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    fs.mkdirSync(homeGsdDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(homeGsdDir, 'my-override.toml'),
-      'description = "user override"\nprompt = "..."\n'
-    );
-
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local install must proceed when HOME/.gemini/commands/gsd contains ` +
-        `only user overrides (not the full GSD canary set); ` +
-        `found ${localFiles.length} files at ${localCmds}`
-    );
-  });
-
-  test('local install when HOME/.gemini exists but commands/gsd is absent (non-GSD Gemini user) still populates locally', () => {
-    // Simulate a user who has Gemini configured but never installed GSD
-    // globally. ~/.gemini/ exists with unrelated content; ~/.gemini/commands/
-    // may or may not exist with non-gsd subdirectories. Local install must
-    // still proceed because no GSD-managed user-scope directory is present.
-    fs.mkdirSync(path.join(tmpHome, '.gemini', 'commands', 'someone-else'), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(tmpHome, '.gemini', 'commands', 'someone-else', 'foo.toml'),
-      'description = "user command"\nprompt = "..."\n'
-    );
-
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local install must proceed when no GSD-managed user-scope directory ` +
-        `exists, even if other Gemini commands are present at the user scope`
-    );
-  });
-});
-  });
-}
-
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-789-codebuddy-commands.test.cjs — consolidation epic #1969 (B1 #1970)
@@ -2939,12 +2729,8 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
 /**
  * GSD Tools Tests — #778 cross-runtime command enrichment.
  *
- * Two independently-verified, additive sub-features:
- *   (b) Qwen Code skills: numeric `priority` field (higher sorts earlier in the
- *       /skills TUI listing per the Qwen skills spec). Scoped to runtime='qwen'.
- *   (c) Gemini custom-command TOML: $ARGUMENTS → {{args}} interpolation, and a
- *       fixed `!{cat .planning/STATE.md}` live-state injection on the
- *       situational `progress` command (injection-safe — no interpolated input).
+ * Qwen Code skills: numeric `priority` field (higher sorts earlier in the
+ * /skills TUI listing per the Qwen skills spec). Scoped to runtime='qwen'.
  *
  * The OpenCode sub-feature (per-command model/agent/subtask/variant) is
  * intentionally NOT implemented — see PR description: `model` reintroduces the
@@ -2952,21 +2738,21 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
  * `subtask`/`agent` change execution semantics for GSD's interactive commands,
  * and `variant` is not in the OpenCode command schema.
  *
+ * #1928: the Gemini custom-command TOML sub-feature ($ARGUMENTS → {{args}}
+ * interpolation, !{cat .planning/STATE.md} live-state injection) was removed
+ * along with the gemini runtime (Google sunset Gemini CLI 2026-06-18).
+ * convertClaudeToGeminiMarkdown no longer exists in bin/install.js.
+ *
  * Uses node:test and node:assert (NOT Jest).
  */
 
 process.env.GSD_TEST_MODE = '1';
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   convertClaudeCommandToClaudeSkill,
-  convertClaudeToGeminiMarkdown,
-  install,
 } = require('../bin/install.js');
 
 // ─── (b) Qwen Code: priority ordering ───────────────────────────────────────
@@ -3018,147 +2804,6 @@ describe('#778 (b) Qwen skills priority', () => {
   });
 });
 
-// ─── (c) Gemini: {{args}} interpolation ─────────────────────────────────────
-
-describe('#778 (c) Gemini {{args}} interpolation', () => {
-  const cmd = (body) =>
-    ['---', 'name: gsd:demo', 'description: Demo', '---', '', body].join('\n');
-
-  test('maps $ARGUMENTS to {{args}} in the TOML prompt', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('Operate on $ARGUMENTS now.'),
-      { isCommand: true, commandName: 'demo' }
-    );
-    assert.ok(out.includes('{{args}}'), '{{args}} present');
-    assert.ok(!out.includes('$ARGUMENTS'), 'literal $ARGUMENTS removed');
-    assert.ok(out.startsWith('description =') || out.includes('prompt ='), 'TOML shape');
-  });
-
-  test('command without $ARGUMENTS gets no injected {{args}}', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('No arguments referenced here.'),
-      { isCommand: true, commandName: 'demo' }
-    );
-    assert.ok(!out.includes('{{args}}'), 'no spurious {{args}}');
-  });
-
-  test('non-command Gemini content is not TOML-converted and keeps $ARGUMENTS', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('Reference $ARGUMENTS.'),
-      { isCommand: false }
-    );
-    // isCommand:false keeps markdown — no TOML wrap and no {{args}} mapping
-    // (the $ARGUMENTS→{{args}} translation is scoped to the TOML command path).
-    assert.ok(!out.startsWith('prompt ='), 'not wrapped as TOML prompt');
-    assert.ok(out.includes('$ARGUMENTS'), '$ARGUMENTS left intact for non-command content');
-    assert.ok(!out.includes('{{args}}'), 'no {{args}} injected outside the command path');
-  });
-});
-
-// ─── (c) Gemini: end-to-end install wiring ──────────────────────────────────
-// Proves the install path derives the per-command name from the file stem so a
-// regression in the call-site wiring (not just the converter) is caught.
-
-describe('#778 (c) Gemini install wiring (end-to-end)', () => {
-  let tmpDir;
-  let tmpHome;
-  let prevCwd;
-  let prevHome;
-  let prevUserprofile;
-
-  beforeEach(() => {
-    tmpDir = createTempDir('gsd-enh778-gem-');
-    tmpHome = createTempDir('gsd-enh778-home-');
-    prevCwd = process.cwd();
-    prevHome = process.env.HOME;
-    prevUserprofile = process.env.USERPROFILE;
-    process.chdir(tmpDir);
-    // Isolate HOME so a real ~/.gemini/commands/gsd/ doesn't trigger the #3037
-    // local-install conflict-skip path.
-    process.env.HOME = tmpHome;
-    process.env.USERPROFILE = tmpHome;
-  });
-
-  afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
-    cleanup(tmpDir);
-    cleanup(tmpHome);
-  });
-
-  test('installed progress.toml carries the !{} block; arg-bearing commands get {{args}}', () => {
-    const oldLog = console.log;
-    console.log = () => {};
-    try {
-      install(false, 'gemini');
-    } finally {
-      console.log = oldLog;
-    }
-
-    const commandsDir = path.join(tmpDir, '.gemini', 'commands', 'gsd');
-    const progressToml = path.join(commandsDir, 'progress.toml');
-    assert.ok(fs.existsSync(progressToml), 'progress.toml installed');
-    const progress = fs.readFileSync(progressToml, 'utf8');
-    // Proves commandName was derived as 'progress' from the file stem.
-    assert.ok(
-      progress.includes('!{cat .planning/STATE.md 2>/dev/null}'),
-      'progress.toml has the live-state shell block'
-    );
-
-    // A non-situational command must NOT receive the shell block.
-    const helpToml = path.join(commandsDir, 'help.toml');
-    if (fs.existsSync(helpToml)) {
-      assert.ok(!fs.readFileSync(helpToml, 'utf8').includes('!{'), 'help.toml has no shell block');
-    }
-
-    // At least one installed command must use {{args}} and none may retain a
-    // literal $ARGUMENTS (every command body's $ARGUMENTS is translated).
-    const tomls = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.toml'));
-    const withArgs = tomls.filter((f) =>
-      fs.readFileSync(path.join(commandsDir, f), 'utf8').includes('{{args}}'));
-    const withLiteral = tomls.filter((f) =>
-      fs.readFileSync(path.join(commandsDir, f), 'utf8').includes('$ARGUMENTS'));
-    assert.ok(withArgs.length > 0, 'at least one installed command interpolates {{args}}');
-    assert.equal(withLiteral.length, 0, 'no installed command retains literal $ARGUMENTS');
-  });
-});
-
-// ─── (c) Gemini: !{...} live-state injection (progress) ─────────────────────
-
-describe('#778 (c) Gemini !{} live-state injection', () => {
-  const cmd = (name) =>
-    ['---', `name: gsd:${name}`, `description: ${name}`, '---', '', 'Workflow body.'].join('\n');
-
-  test('progress command injects a fixed !{cat .planning/STATE.md} block', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('progress'),
-      { isCommand: true, commandName: 'progress' }
-    );
-    assert.ok(out.includes('!{cat .planning/STATE.md'), 'STATE.md injection present');
-  });
-
-  test('non-progress commands get no !{} shell block', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('help'),
-      { isCommand: true, commandName: 'help' }
-    );
-    assert.ok(!out.includes('!{'), 'no shell block for non-situational command');
-  });
-
-  test('SECURITY: the !{} block interpolates NO user input ({{args}})', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      ['---', 'name: gsd:progress', 'description: progress', '---', '',
-        'Body uses $ARGUMENTS too.'].join('\n'),
-      { isCommand: true, commandName: 'progress' }
-    );
-    const blocks = out.match(/!\{([^}]*)\}/g) || [];
-    assert.equal(blocks.length, 1, 'exactly one shell block');
-    assert.ok(!/\{\{args\}\}/.test(blocks[0]), 'no {{args}} inside the shell block');
-    assert.ok(/^!\{cat \.planning\/STATE\.md/.test(blocks[0]), 'fixed cat command only');
-  });
-});
   });
 }
 
@@ -3540,13 +3185,15 @@ describe('#769/#921/#1319 Claude global install: spawning-orchestrator SKILL.md 
  *
  * Verifies:
  *   1. Claude global install injects `effort:` into agent .md frontmatter.
- *   2. Gemini global install does NOT inject `effort:` (Gemini-safe .md).
- *   3. Codex inherited-model installs omit `model_reasoning_effort` so model
+ *   2. Codex inherited-model installs omit `model_reasoning_effort` so model
  *      and effort are not partially pinned (#838).
- *   4. Config-driven proof: effort.agent_overrides wins over tier defaults
+ *   3. Config-driven proof: effort.agent_overrides wins over tier defaults
  *      for Claude .md and for Codex .toml when runtime:"codex" pins a model.
- *   5. Source agents/gsd-planner.md has NO effort: key (injection is
- *      install-only, source stays Gemini-safe).
+ *   4. Source agents/gsd-planner.md has NO effort: key (injection is
+ *      install-only, source markdown carries no effort: key).
+ *
+ * #1928: the gemini runtime (and its "Gemini install does NOT inject effort:"
+ * coverage) was removed — Google sunset Gemini CLI 2026-06-18.
  */
 
 'use strict';
@@ -3585,7 +3232,6 @@ function readFrontmatter(mdPath) {
  *
  * Env-var redirection:
  *   claude   → CLAUDE_CONFIG_DIR
- *   gemini   → GEMINI_CONFIG_DIR
  *   codex    → CODEX_HOME
  *
  * HOME is also redirected to an isolated temp dir for the duration of the
@@ -3608,7 +3254,6 @@ function readFrontmatter(mdPath) {
 function runGlobalInstall(runtime, tmpHome) {
   const envVarMap = {
     claude: 'CLAUDE_CONFIG_DIR',
-    gemini: 'GEMINI_CONFIG_DIR',
     codex: 'CODEX_HOME',
   };
   const envVar = envVarMap[runtime];
@@ -3691,37 +3336,6 @@ describe('#443 Claude install: effort: injected into frontmatter', () => {
     const fm = readFrontmatter(path.join(claudeHome, 'agents', 'gsd-executor.md'));
     assert.match(fm, /^effort:\s*high$/m,
       `gsd-executor frontmatter should have effort: high\nActual:\n${fm}`);
-  });
-});
-
-// ─── describe 2: Gemini install does NOT inject effort: ──────────────────────
-
-describe('#443 Gemini install: effort: absent (Gemini-safe)', () => {
-  let tmpDir;
-  let geminiHome;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('gsd-443-gemini-');
-    geminiHome = path.join(tmpDir, 'gemini-home');
-    fs.mkdirSync(geminiHome, { recursive: true });
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('gsd-planner.md does NOT contain effort: (Gemini install)', () => {
-    runGlobalInstall('gemini', geminiHome);
-    const fm = readFrontmatter(path.join(geminiHome, 'agents', 'gsd-planner.md'));
-    assert.doesNotMatch(fm, /^effort:/m,
-      `gsd-planner (Gemini) frontmatter must NOT have effort:\nActual:\n${fm}`);
-  });
-
-  test('gsd-executor.md does NOT contain effort: (Gemini install)', () => {
-    runGlobalInstall('gemini', geminiHome);
-    const fm = readFrontmatter(path.join(geminiHome, 'agents', 'gsd-executor.md'));
-    assert.doesNotMatch(fm, /^effort:/m,
-      `gsd-executor (Gemini) frontmatter must NOT have effort:\nActual:\n${fm}`);
   });
 });
 
@@ -3991,7 +3605,6 @@ describe('getDirName (relocated to runtime-name-policy)', () => {
     claude: '.claude',
     copilot: '.github',
     opencode: '.opencode',
-    gemini: '.gemini',
     kilo: '.kilo',
     codex: '.codex',
     antigravity: '.agents',
@@ -5789,207 +5402,6 @@ describe('resolveRuntimeArtifactLayout — cline scope-aware (Fix 2)', () => {
 }
 
 
-// ────────────────────────────────────────────────────────────────────────
-// Folded from tests/bug-3037-gemini-duplicate-commands.test.cjs — consolidation epic #1969 (B1 #1970)
-// ────────────────────────────────────────────────────────────────────────
-{
-  const { describe: __foldDescribe } = require('node:test');
-  __foldDescribe("folded:bug-3037-gemini-duplicate-commands (consolidation epic #1969 B1 #1970)", () => {
-/**
- * Bug #3037: Gemini global+local install creates duplicate /gsd:* commands
- * across user (HOME/.gemini/) and workspace (PROJECT/.gemini/) scopes.
- *
- * Reproduction (from issue body):
- *   1. install --gemini --global with HOME=tmpHome
- *   2. cd tmpProject; install --gemini --local
- *   → both ~/.gemini/commands/gsd/ and PROJECT/.gemini/commands/gsd/ contain
- *     65 overlapping command filenames.
- *   → Gemini conflict detection renames every overlapping command to
- *     /workspace.gsd:* and /user.gsd:*, breaking the documented /gsd:*
- *     namespace.
- *
- * Fix: when the local Gemini install detects the user-scope GSD command
- * directory already exists with managed-shape content, skip the local copy
- * and emit a clear warning explaining the conflict avoidance.
- *
- * Tests assert on the post-install filesystem shape and capture the skip
- * warning so the full test log remains warning-clean.
- */
-
-'use strict';
-
-process.env.GSD_TEST_MODE = '1';
-
-const { test, describe, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { createTempDir, cleanup, captureConsole } = require('./helpers.cjs');
-
-const { install } = require('../bin/install.js');
-
-describe('bug #3037: Gemini global+local install must not create duplicate command scopes', () => {
-  let tmpHome;
-  let tmpProject;
-  let originalHome;
-  let originalUserprofile;
-  let originalCwd;
-
-  beforeEach(() => {
-    tmpHome = createTempDir('gsd-3037-home-');
-    tmpProject = createTempDir('gsd-3037-work-');
-    originalHome = process.env.HOME;
-    originalUserprofile = process.env.USERPROFILE;
-    originalCwd = process.cwd();
-    // Point HOME at the temp dir so install(true, 'gemini') writes to
-    // tmpHome/.gemini, not the developer's real home.
-    process.env.HOME = tmpHome;
-    process.env.USERPROFILE = tmpHome;
-  });
-
-  afterEach(() => {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    // CR #3041: also restore USERPROFILE so the temp HOME doesn't leak
-    // into later tests and create order-dependent failures on Windows
-    // or any code path that reads USERPROFILE.
-    if (originalUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserprofile;
-    process.chdir(originalCwd);
-    cleanup(tmpHome);
-    cleanup(tmpProject);
-  });
-
-  function listCommandFiles(geminiCommandsRoot) {
-    if (!fs.existsSync(geminiCommandsRoot)) return [];
-    const out = [];
-    function walk(dir) {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) out.push(path.relative(geminiCommandsRoot, full));
-      }
-    }
-    walk(geminiCommandsRoot);
-    return out.sort();
-  }
-
-  function runInstall(...args) {
-    return captureConsole(() => install(...args));
-  }
-
-  test('global install populates HOME/.gemini/commands/gsd', () => {
-    runInstall(true, 'gemini');
-    const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    const files = listCommandFiles(globalCmds);
-    assert.ok(
-      files.length > 0,
-      'global install must populate HOME/.gemini/commands/gsd'
-    );
-  });
-
-  test('local install after global does NOT populate PROJECT/.gemini/commands/gsd (avoids /gsd:* namespace conflict)', () => {
-    // Step 1: global install
-    runInstall(true, 'gemini');
-    const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    const globalFiles = listCommandFiles(globalCmds);
-    assert.ok(globalFiles.length > 0, 'precondition: global install must succeed');
-
-    // Step 2: local install in a temp project
-    process.chdir(tmpProject);
-    const { stdout } = runInstall(false, 'gemini');
-    assert.match(
-      stdout,
-      /Skipping commands\/gsd\/ for local install/,
-      'local install must explain why it skips duplicate Gemini commands'
-    );
-
-    // Assertion: the local commands/gsd/ directory must NOT exist (or must
-    // be empty) so Gemini's conflict detection has nothing to rename. The
-    // fix may either skip the directory entirely (preferred — no leftover
-    // file system noise) or create an empty directory (acceptable but odd).
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.equal(
-      localFiles.length,
-      0,
-      `local install must skip commands/gsd/ when global already exists; ` +
-        `found ${localFiles.length} duplicate command file(s) at ${localCmds}`
-    );
-  });
-
-  test('local install with NO existing global GSD does still populate PROJECT/.gemini/commands/gsd', () => {
-    // No global install first — local should proceed normally so users who
-    // only ever run --local still get GSD commands in their project.
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local-only install must populate PROJECT/.gemini/commands/gsd; ` +
-        `found ${localFiles.length} files at ${localCmds}`
-    );
-  });
-
-  test('local install when HOME has hand-dropped overrides UNDER commands/gsd/ (but no full GSD) still populates locally', () => {
-    // CR #3041 regression: the previous detection was
-    // `fs.readdirSync(homeGeminiGsd).length > 0` which would skip the
-    // local install for a user who manually dropped a single override
-    // command at ~/.gemini/commands/gsd/<thing>.toml without ever
-    // running --gemini --global. The fix narrows detection to require
-    // at least 3 canonical GSD command files (help.toml, progress.toml,
-    // new-project.toml) — a marker that's structurally impossible to
-    // produce by accident.
-    const homeGsdDir = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    fs.mkdirSync(homeGsdDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(homeGsdDir, 'my-override.toml'),
-      'description = "user override"\nprompt = "..."\n'
-    );
-
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local install must proceed when HOME/.gemini/commands/gsd contains ` +
-        `only user overrides (not the full GSD canary set); ` +
-        `found ${localFiles.length} files at ${localCmds}`
-    );
-  });
-
-  test('local install when HOME/.gemini exists but commands/gsd is absent (non-GSD Gemini user) still populates locally', () => {
-    // Simulate a user who has Gemini configured but never installed GSD
-    // globally. ~/.gemini/ exists with unrelated content; ~/.gemini/commands/
-    // may or may not exist with non-gsd subdirectories. Local install must
-    // still proceed because no GSD-managed user-scope directory is present.
-    fs.mkdirSync(path.join(tmpHome, '.gemini', 'commands', 'someone-else'), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(tmpHome, '.gemini', 'commands', 'someone-else', 'foo.toml'),
-      'description = "user command"\nprompt = "..."\n'
-    );
-
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local install must proceed when no GSD-managed user-scope directory ` +
-        `exists, even if other Gemini commands are present at the user scope`
-    );
-  });
-});
-  });
-}
-
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-789-codebuddy-commands.test.cjs — consolidation epic #1969 (B1 #1970)
@@ -6747,12 +6159,8 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
 /**
  * GSD Tools Tests — #778 cross-runtime command enrichment.
  *
- * Two independently-verified, additive sub-features:
- *   (b) Qwen Code skills: numeric `priority` field (higher sorts earlier in the
- *       /skills TUI listing per the Qwen skills spec). Scoped to runtime='qwen'.
- *   (c) Gemini custom-command TOML: $ARGUMENTS → {{args}} interpolation, and a
- *       fixed `!{cat .planning/STATE.md}` live-state injection on the
- *       situational `progress` command (injection-safe — no interpolated input).
+ * Qwen Code skills: numeric `priority` field (higher sorts earlier in the
+ * /skills TUI listing per the Qwen skills spec). Scoped to runtime='qwen'.
  *
  * The OpenCode sub-feature (per-command model/agent/subtask/variant) is
  * intentionally NOT implemented — see PR description: `model` reintroduces the
@@ -6760,21 +6168,21 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
  * `subtask`/`agent` change execution semantics for GSD's interactive commands,
  * and `variant` is not in the OpenCode command schema.
  *
+ * #1928: the Gemini custom-command TOML sub-feature ($ARGUMENTS → {{args}}
+ * interpolation, !{cat .planning/STATE.md} live-state injection) was removed
+ * along with the gemini runtime (Google sunset Gemini CLI 2026-06-18).
+ * convertClaudeToGeminiMarkdown no longer exists in bin/install.js.
+ *
  * Uses node:test and node:assert (NOT Jest).
  */
 
 process.env.GSD_TEST_MODE = '1';
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   convertClaudeCommandToClaudeSkill,
-  convertClaudeToGeminiMarkdown,
-  install,
 } = require('../bin/install.js');
 
 // ─── (b) Qwen Code: priority ordering ───────────────────────────────────────
@@ -6826,147 +6234,6 @@ describe('#778 (b) Qwen skills priority', () => {
   });
 });
 
-// ─── (c) Gemini: {{args}} interpolation ─────────────────────────────────────
-
-describe('#778 (c) Gemini {{args}} interpolation', () => {
-  const cmd = (body) =>
-    ['---', 'name: gsd:demo', 'description: Demo', '---', '', body].join('\n');
-
-  test('maps $ARGUMENTS to {{args}} in the TOML prompt', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('Operate on $ARGUMENTS now.'),
-      { isCommand: true, commandName: 'demo' }
-    );
-    assert.ok(out.includes('{{args}}'), '{{args}} present');
-    assert.ok(!out.includes('$ARGUMENTS'), 'literal $ARGUMENTS removed');
-    assert.ok(out.startsWith('description =') || out.includes('prompt ='), 'TOML shape');
-  });
-
-  test('command without $ARGUMENTS gets no injected {{args}}', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('No arguments referenced here.'),
-      { isCommand: true, commandName: 'demo' }
-    );
-    assert.ok(!out.includes('{{args}}'), 'no spurious {{args}}');
-  });
-
-  test('non-command Gemini content is not TOML-converted and keeps $ARGUMENTS', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('Reference $ARGUMENTS.'),
-      { isCommand: false }
-    );
-    // isCommand:false keeps markdown — no TOML wrap and no {{args}} mapping
-    // (the $ARGUMENTS→{{args}} translation is scoped to the TOML command path).
-    assert.ok(!out.startsWith('prompt ='), 'not wrapped as TOML prompt');
-    assert.ok(out.includes('$ARGUMENTS'), '$ARGUMENTS left intact for non-command content');
-    assert.ok(!out.includes('{{args}}'), 'no {{args}} injected outside the command path');
-  });
-});
-
-// ─── (c) Gemini: end-to-end install wiring ──────────────────────────────────
-// Proves the install path derives the per-command name from the file stem so a
-// regression in the call-site wiring (not just the converter) is caught.
-
-describe('#778 (c) Gemini install wiring (end-to-end)', () => {
-  let tmpDir;
-  let tmpHome;
-  let prevCwd;
-  let prevHome;
-  let prevUserprofile;
-
-  beforeEach(() => {
-    tmpDir = createTempDir('gsd-enh778-gem-');
-    tmpHome = createTempDir('gsd-enh778-home-');
-    prevCwd = process.cwd();
-    prevHome = process.env.HOME;
-    prevUserprofile = process.env.USERPROFILE;
-    process.chdir(tmpDir);
-    // Isolate HOME so a real ~/.gemini/commands/gsd/ doesn't trigger the #3037
-    // local-install conflict-skip path.
-    process.env.HOME = tmpHome;
-    process.env.USERPROFILE = tmpHome;
-  });
-
-  afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
-    cleanup(tmpDir);
-    cleanup(tmpHome);
-  });
-
-  test('installed progress.toml carries the !{} block; arg-bearing commands get {{args}}', () => {
-    const oldLog = console.log;
-    console.log = () => {};
-    try {
-      install(false, 'gemini');
-    } finally {
-      console.log = oldLog;
-    }
-
-    const commandsDir = path.join(tmpDir, '.gemini', 'commands', 'gsd');
-    const progressToml = path.join(commandsDir, 'progress.toml');
-    assert.ok(fs.existsSync(progressToml), 'progress.toml installed');
-    const progress = fs.readFileSync(progressToml, 'utf8');
-    // Proves commandName was derived as 'progress' from the file stem.
-    assert.ok(
-      progress.includes('!{cat .planning/STATE.md 2>/dev/null}'),
-      'progress.toml has the live-state shell block'
-    );
-
-    // A non-situational command must NOT receive the shell block.
-    const helpToml = path.join(commandsDir, 'help.toml');
-    if (fs.existsSync(helpToml)) {
-      assert.ok(!fs.readFileSync(helpToml, 'utf8').includes('!{'), 'help.toml has no shell block');
-    }
-
-    // At least one installed command must use {{args}} and none may retain a
-    // literal $ARGUMENTS (every command body's $ARGUMENTS is translated).
-    const tomls = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.toml'));
-    const withArgs = tomls.filter((f) =>
-      fs.readFileSync(path.join(commandsDir, f), 'utf8').includes('{{args}}'));
-    const withLiteral = tomls.filter((f) =>
-      fs.readFileSync(path.join(commandsDir, f), 'utf8').includes('$ARGUMENTS'));
-    assert.ok(withArgs.length > 0, 'at least one installed command interpolates {{args}}');
-    assert.equal(withLiteral.length, 0, 'no installed command retains literal $ARGUMENTS');
-  });
-});
-
-// ─── (c) Gemini: !{...} live-state injection (progress) ─────────────────────
-
-describe('#778 (c) Gemini !{} live-state injection', () => {
-  const cmd = (name) =>
-    ['---', `name: gsd:${name}`, `description: ${name}`, '---', '', 'Workflow body.'].join('\n');
-
-  test('progress command injects a fixed !{cat .planning/STATE.md} block', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('progress'),
-      { isCommand: true, commandName: 'progress' }
-    );
-    assert.ok(out.includes('!{cat .planning/STATE.md'), 'STATE.md injection present');
-  });
-
-  test('non-progress commands get no !{} shell block', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('help'),
-      { isCommand: true, commandName: 'help' }
-    );
-    assert.ok(!out.includes('!{'), 'no shell block for non-situational command');
-  });
-
-  test('SECURITY: the !{} block interpolates NO user input ({{args}})', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      ['---', 'name: gsd:progress', 'description: progress', '---', '',
-        'Body uses $ARGUMENTS too.'].join('\n'),
-      { isCommand: true, commandName: 'progress' }
-    );
-    const blocks = out.match(/!\{([^}]*)\}/g) || [];
-    assert.equal(blocks.length, 1, 'exactly one shell block');
-    assert.ok(!/\{\{args\}\}/.test(blocks[0]), 'no {{args}} inside the shell block');
-    assert.ok(/^!\{cat \.planning\/STATE\.md/.test(blocks[0]), 'fixed cat command only');
-  });
-});
   });
 }
 
@@ -7348,13 +6615,15 @@ describe('#769/#921/#1319 Claude global install: spawning-orchestrator SKILL.md 
  *
  * Verifies:
  *   1. Claude global install injects `effort:` into agent .md frontmatter.
- *   2. Gemini global install does NOT inject `effort:` (Gemini-safe .md).
- *   3. Codex inherited-model installs omit `model_reasoning_effort` so model
+ *   2. Codex inherited-model installs omit `model_reasoning_effort` so model
  *      and effort are not partially pinned (#838).
- *   4. Config-driven proof: effort.agent_overrides wins over tier defaults
+ *   3. Config-driven proof: effort.agent_overrides wins over tier defaults
  *      for Claude .md and for Codex .toml when runtime:"codex" pins a model.
- *   5. Source agents/gsd-planner.md has NO effort: key (injection is
- *      install-only, source stays Gemini-safe).
+ *   4. Source agents/gsd-planner.md has NO effort: key (injection is
+ *      install-only, source markdown carries no effort: key).
+ *
+ * #1928: the gemini runtime (and its "Gemini install does NOT inject effort:"
+ * coverage) was removed — Google sunset Gemini CLI 2026-06-18.
  */
 
 'use strict';
@@ -7393,7 +6662,6 @@ function readFrontmatter(mdPath) {
  *
  * Env-var redirection:
  *   claude   → CLAUDE_CONFIG_DIR
- *   gemini   → GEMINI_CONFIG_DIR
  *   codex    → CODEX_HOME
  *
  * HOME is also redirected to an isolated temp dir for the duration of the
@@ -7416,7 +6684,6 @@ function readFrontmatter(mdPath) {
 function runGlobalInstall(runtime, tmpHome) {
   const envVarMap = {
     claude: 'CLAUDE_CONFIG_DIR',
-    gemini: 'GEMINI_CONFIG_DIR',
     codex: 'CODEX_HOME',
   };
   const envVar = envVarMap[runtime];
@@ -7499,37 +6766,6 @@ describe('#443 Claude install: effort: injected into frontmatter', () => {
     const fm = readFrontmatter(path.join(claudeHome, 'agents', 'gsd-executor.md'));
     assert.match(fm, /^effort:\s*high$/m,
       `gsd-executor frontmatter should have effort: high\nActual:\n${fm}`);
-  });
-});
-
-// ─── describe 2: Gemini install does NOT inject effort: ──────────────────────
-
-describe('#443 Gemini install: effort: absent (Gemini-safe)', () => {
-  let tmpDir;
-  let geminiHome;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('gsd-443-gemini-');
-    geminiHome = path.join(tmpDir, 'gemini-home');
-    fs.mkdirSync(geminiHome, { recursive: true });
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('gsd-planner.md does NOT contain effort: (Gemini install)', () => {
-    runGlobalInstall('gemini', geminiHome);
-    const fm = readFrontmatter(path.join(geminiHome, 'agents', 'gsd-planner.md'));
-    assert.doesNotMatch(fm, /^effort:/m,
-      `gsd-planner (Gemini) frontmatter must NOT have effort:\nActual:\n${fm}`);
-  });
-
-  test('gsd-executor.md does NOT contain effort: (Gemini install)', () => {
-    runGlobalInstall('gemini', geminiHome);
-    const fm = readFrontmatter(path.join(geminiHome, 'agents', 'gsd-executor.md'));
-    assert.doesNotMatch(fm, /^effort:/m,
-      `gsd-executor (Gemini) frontmatter must NOT have effort:\nActual:\n${fm}`);
   });
 });
 
@@ -7799,7 +7035,6 @@ describe('getDirName (relocated to runtime-name-policy)', () => {
     claude: '.claude',
     copilot: '.github',
     opencode: '.opencode',
-    gemini: '.gemini',
     kilo: '.kilo',
     codex: '.codex',
     antigravity: '.agents',
@@ -10486,207 +9721,6 @@ describe('resolveRuntimeArtifactLayout — cline scope-aware (Fix 2)', () => {
 }
 
 
-// ────────────────────────────────────────────────────────────────────────
-// Folded from tests/bug-3037-gemini-duplicate-commands.test.cjs — consolidation epic #1969 (B1 #1970)
-// ────────────────────────────────────────────────────────────────────────
-{
-  const { describe: __foldDescribe } = require('node:test');
-  __foldDescribe("folded:bug-3037-gemini-duplicate-commands (consolidation epic #1969 B1 #1970)", () => {
-/**
- * Bug #3037: Gemini global+local install creates duplicate /gsd:* commands
- * across user (HOME/.gemini/) and workspace (PROJECT/.gemini/) scopes.
- *
- * Reproduction (from issue body):
- *   1. install --gemini --global with HOME=tmpHome
- *   2. cd tmpProject; install --gemini --local
- *   → both ~/.gemini/commands/gsd/ and PROJECT/.gemini/commands/gsd/ contain
- *     65 overlapping command filenames.
- *   → Gemini conflict detection renames every overlapping command to
- *     /workspace.gsd:* and /user.gsd:*, breaking the documented /gsd:*
- *     namespace.
- *
- * Fix: when the local Gemini install detects the user-scope GSD command
- * directory already exists with managed-shape content, skip the local copy
- * and emit a clear warning explaining the conflict avoidance.
- *
- * Tests assert on the post-install filesystem shape and capture the skip
- * warning so the full test log remains warning-clean.
- */
-
-'use strict';
-
-process.env.GSD_TEST_MODE = '1';
-
-const { test, describe, beforeEach, afterEach } = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { createTempDir, cleanup, captureConsole } = require('./helpers.cjs');
-
-const { install } = require('../bin/install.js');
-
-describe('bug #3037: Gemini global+local install must not create duplicate command scopes', () => {
-  let tmpHome;
-  let tmpProject;
-  let originalHome;
-  let originalUserprofile;
-  let originalCwd;
-
-  beforeEach(() => {
-    tmpHome = createTempDir('gsd-3037-home-');
-    tmpProject = createTempDir('gsd-3037-work-');
-    originalHome = process.env.HOME;
-    originalUserprofile = process.env.USERPROFILE;
-    originalCwd = process.cwd();
-    // Point HOME at the temp dir so install(true, 'gemini') writes to
-    // tmpHome/.gemini, not the developer's real home.
-    process.env.HOME = tmpHome;
-    process.env.USERPROFILE = tmpHome;
-  });
-
-  afterEach(() => {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    // CR #3041: also restore USERPROFILE so the temp HOME doesn't leak
-    // into later tests and create order-dependent failures on Windows
-    // or any code path that reads USERPROFILE.
-    if (originalUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = originalUserprofile;
-    process.chdir(originalCwd);
-    cleanup(tmpHome);
-    cleanup(tmpProject);
-  });
-
-  function listCommandFiles(geminiCommandsRoot) {
-    if (!fs.existsSync(geminiCommandsRoot)) return [];
-    const out = [];
-    function walk(dir) {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) out.push(path.relative(geminiCommandsRoot, full));
-      }
-    }
-    walk(geminiCommandsRoot);
-    return out.sort();
-  }
-
-  function runInstall(...args) {
-    return captureConsole(() => install(...args));
-  }
-
-  test('global install populates HOME/.gemini/commands/gsd', () => {
-    runInstall(true, 'gemini');
-    const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    const files = listCommandFiles(globalCmds);
-    assert.ok(
-      files.length > 0,
-      'global install must populate HOME/.gemini/commands/gsd'
-    );
-  });
-
-  test('local install after global does NOT populate PROJECT/.gemini/commands/gsd (avoids /gsd:* namespace conflict)', () => {
-    // Step 1: global install
-    runInstall(true, 'gemini');
-    const globalCmds = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    const globalFiles = listCommandFiles(globalCmds);
-    assert.ok(globalFiles.length > 0, 'precondition: global install must succeed');
-
-    // Step 2: local install in a temp project
-    process.chdir(tmpProject);
-    const { stdout } = runInstall(false, 'gemini');
-    assert.match(
-      stdout,
-      /Skipping commands\/gsd\/ for local install/,
-      'local install must explain why it skips duplicate Gemini commands'
-    );
-
-    // Assertion: the local commands/gsd/ directory must NOT exist (or must
-    // be empty) so Gemini's conflict detection has nothing to rename. The
-    // fix may either skip the directory entirely (preferred — no leftover
-    // file system noise) or create an empty directory (acceptable but odd).
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.equal(
-      localFiles.length,
-      0,
-      `local install must skip commands/gsd/ when global already exists; ` +
-        `found ${localFiles.length} duplicate command file(s) at ${localCmds}`
-    );
-  });
-
-  test('local install with NO existing global GSD does still populate PROJECT/.gemini/commands/gsd', () => {
-    // No global install first — local should proceed normally so users who
-    // only ever run --local still get GSD commands in their project.
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local-only install must populate PROJECT/.gemini/commands/gsd; ` +
-        `found ${localFiles.length} files at ${localCmds}`
-    );
-  });
-
-  test('local install when HOME has hand-dropped overrides UNDER commands/gsd/ (but no full GSD) still populates locally', () => {
-    // CR #3041 regression: the previous detection was
-    // `fs.readdirSync(homeGeminiGsd).length > 0` which would skip the
-    // local install for a user who manually dropped a single override
-    // command at ~/.gemini/commands/gsd/<thing>.toml without ever
-    // running --gemini --global. The fix narrows detection to require
-    // at least 3 canonical GSD command files (help.toml, progress.toml,
-    // new-project.toml) — a marker that's structurally impossible to
-    // produce by accident.
-    const homeGsdDir = path.join(tmpHome, '.gemini', 'commands', 'gsd');
-    fs.mkdirSync(homeGsdDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(homeGsdDir, 'my-override.toml'),
-      'description = "user override"\nprompt = "..."\n'
-    );
-
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local install must proceed when HOME/.gemini/commands/gsd contains ` +
-        `only user overrides (not the full GSD canary set); ` +
-        `found ${localFiles.length} files at ${localCmds}`
-    );
-  });
-
-  test('local install when HOME/.gemini exists but commands/gsd is absent (non-GSD Gemini user) still populates locally', () => {
-    // Simulate a user who has Gemini configured but never installed GSD
-    // globally. ~/.gemini/ exists with unrelated content; ~/.gemini/commands/
-    // may or may not exist with non-gsd subdirectories. Local install must
-    // still proceed because no GSD-managed user-scope directory is present.
-    fs.mkdirSync(path.join(tmpHome, '.gemini', 'commands', 'someone-else'), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(tmpHome, '.gemini', 'commands', 'someone-else', 'foo.toml'),
-      'description = "user command"\nprompt = "..."\n'
-    );
-
-    process.chdir(tmpProject);
-    runInstall(false, 'gemini');
-
-    const localCmds = path.join(tmpProject, '.gemini', 'commands', 'gsd');
-    const localFiles = listCommandFiles(localCmds);
-    assert.ok(
-      localFiles.length > 0,
-      `local install must proceed when no GSD-managed user-scope directory ` +
-        `exists, even if other Gemini commands are present at the user scope`
-    );
-  });
-});
-  });
-}
-
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-789-codebuddy-commands.test.cjs — consolidation epic #1969 (B1 #1970)
@@ -11444,12 +10478,8 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
 /**
  * GSD Tools Tests — #778 cross-runtime command enrichment.
  *
- * Two independently-verified, additive sub-features:
- *   (b) Qwen Code skills: numeric `priority` field (higher sorts earlier in the
- *       /skills TUI listing per the Qwen skills spec). Scoped to runtime='qwen'.
- *   (c) Gemini custom-command TOML: $ARGUMENTS → {{args}} interpolation, and a
- *       fixed `!{cat .planning/STATE.md}` live-state injection on the
- *       situational `progress` command (injection-safe — no interpolated input).
+ * Qwen Code skills: numeric `priority` field (higher sorts earlier in the
+ * /skills TUI listing per the Qwen skills spec). Scoped to runtime='qwen'.
  *
  * The OpenCode sub-feature (per-command model/agent/subtask/variant) is
  * intentionally NOT implemented — see PR description: `model` reintroduces the
@@ -11457,21 +10487,21 @@ describe('skill frontmatter name parity (#2643 / #2808)', () => {
  * `subtask`/`agent` change execution semantics for GSD's interactive commands,
  * and `variant` is not in the OpenCode command schema.
  *
+ * #1928: the Gemini custom-command TOML sub-feature ($ARGUMENTS → {{args}}
+ * interpolation, !{cat .planning/STATE.md} live-state injection) was removed
+ * along with the gemini runtime (Google sunset Gemini CLI 2026-06-18).
+ * convertClaudeToGeminiMarkdown no longer exists in bin/install.js.
+ *
  * Uses node:test and node:assert (NOT Jest).
  */
 
 process.env.GSD_TEST_MODE = '1';
 
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
-const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const {
   convertClaudeCommandToClaudeSkill,
-  convertClaudeToGeminiMarkdown,
-  install,
 } = require('../bin/install.js');
 
 // ─── (b) Qwen Code: priority ordering ───────────────────────────────────────
@@ -11523,147 +10553,6 @@ describe('#778 (b) Qwen skills priority', () => {
   });
 });
 
-// ─── (c) Gemini: {{args}} interpolation ─────────────────────────────────────
-
-describe('#778 (c) Gemini {{args}} interpolation', () => {
-  const cmd = (body) =>
-    ['---', 'name: gsd:demo', 'description: Demo', '---', '', body].join('\n');
-
-  test('maps $ARGUMENTS to {{args}} in the TOML prompt', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('Operate on $ARGUMENTS now.'),
-      { isCommand: true, commandName: 'demo' }
-    );
-    assert.ok(out.includes('{{args}}'), '{{args}} present');
-    assert.ok(!out.includes('$ARGUMENTS'), 'literal $ARGUMENTS removed');
-    assert.ok(out.startsWith('description =') || out.includes('prompt ='), 'TOML shape');
-  });
-
-  test('command without $ARGUMENTS gets no injected {{args}}', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('No arguments referenced here.'),
-      { isCommand: true, commandName: 'demo' }
-    );
-    assert.ok(!out.includes('{{args}}'), 'no spurious {{args}}');
-  });
-
-  test('non-command Gemini content is not TOML-converted and keeps $ARGUMENTS', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('Reference $ARGUMENTS.'),
-      { isCommand: false }
-    );
-    // isCommand:false keeps markdown — no TOML wrap and no {{args}} mapping
-    // (the $ARGUMENTS→{{args}} translation is scoped to the TOML command path).
-    assert.ok(!out.startsWith('prompt ='), 'not wrapped as TOML prompt');
-    assert.ok(out.includes('$ARGUMENTS'), '$ARGUMENTS left intact for non-command content');
-    assert.ok(!out.includes('{{args}}'), 'no {{args}} injected outside the command path');
-  });
-});
-
-// ─── (c) Gemini: end-to-end install wiring ──────────────────────────────────
-// Proves the install path derives the per-command name from the file stem so a
-// regression in the call-site wiring (not just the converter) is caught.
-
-describe('#778 (c) Gemini install wiring (end-to-end)', () => {
-  let tmpDir;
-  let tmpHome;
-  let prevCwd;
-  let prevHome;
-  let prevUserprofile;
-
-  beforeEach(() => {
-    tmpDir = createTempDir('gsd-enh778-gem-');
-    tmpHome = createTempDir('gsd-enh778-home-');
-    prevCwd = process.cwd();
-    prevHome = process.env.HOME;
-    prevUserprofile = process.env.USERPROFILE;
-    process.chdir(tmpDir);
-    // Isolate HOME so a real ~/.gemini/commands/gsd/ doesn't trigger the #3037
-    // local-install conflict-skip path.
-    process.env.HOME = tmpHome;
-    process.env.USERPROFILE = tmpHome;
-  });
-
-  afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
-    if (prevUserprofile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = prevUserprofile;
-    cleanup(tmpDir);
-    cleanup(tmpHome);
-  });
-
-  test('installed progress.toml carries the !{} block; arg-bearing commands get {{args}}', () => {
-    const oldLog = console.log;
-    console.log = () => {};
-    try {
-      install(false, 'gemini');
-    } finally {
-      console.log = oldLog;
-    }
-
-    const commandsDir = path.join(tmpDir, '.gemini', 'commands', 'gsd');
-    const progressToml = path.join(commandsDir, 'progress.toml');
-    assert.ok(fs.existsSync(progressToml), 'progress.toml installed');
-    const progress = fs.readFileSync(progressToml, 'utf8');
-    // Proves commandName was derived as 'progress' from the file stem.
-    assert.ok(
-      progress.includes('!{cat .planning/STATE.md 2>/dev/null}'),
-      'progress.toml has the live-state shell block'
-    );
-
-    // A non-situational command must NOT receive the shell block.
-    const helpToml = path.join(commandsDir, 'help.toml');
-    if (fs.existsSync(helpToml)) {
-      assert.ok(!fs.readFileSync(helpToml, 'utf8').includes('!{'), 'help.toml has no shell block');
-    }
-
-    // At least one installed command must use {{args}} and none may retain a
-    // literal $ARGUMENTS (every command body's $ARGUMENTS is translated).
-    const tomls = fs.readdirSync(commandsDir).filter((f) => f.endsWith('.toml'));
-    const withArgs = tomls.filter((f) =>
-      fs.readFileSync(path.join(commandsDir, f), 'utf8').includes('{{args}}'));
-    const withLiteral = tomls.filter((f) =>
-      fs.readFileSync(path.join(commandsDir, f), 'utf8').includes('$ARGUMENTS'));
-    assert.ok(withArgs.length > 0, 'at least one installed command interpolates {{args}}');
-    assert.equal(withLiteral.length, 0, 'no installed command retains literal $ARGUMENTS');
-  });
-});
-
-// ─── (c) Gemini: !{...} live-state injection (progress) ─────────────────────
-
-describe('#778 (c) Gemini !{} live-state injection', () => {
-  const cmd = (name) =>
-    ['---', `name: gsd:${name}`, `description: ${name}`, '---', '', 'Workflow body.'].join('\n');
-
-  test('progress command injects a fixed !{cat .planning/STATE.md} block', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('progress'),
-      { isCommand: true, commandName: 'progress' }
-    );
-    assert.ok(out.includes('!{cat .planning/STATE.md'), 'STATE.md injection present');
-  });
-
-  test('non-progress commands get no !{} shell block', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      cmd('help'),
-      { isCommand: true, commandName: 'help' }
-    );
-    assert.ok(!out.includes('!{'), 'no shell block for non-situational command');
-  });
-
-  test('SECURITY: the !{} block interpolates NO user input ({{args}})', () => {
-    const out = convertClaudeToGeminiMarkdown(
-      ['---', 'name: gsd:progress', 'description: progress', '---', '',
-        'Body uses $ARGUMENTS too.'].join('\n'),
-      { isCommand: true, commandName: 'progress' }
-    );
-    const blocks = out.match(/!\{([^}]*)\}/g) || [];
-    assert.equal(blocks.length, 1, 'exactly one shell block');
-    assert.ok(!/\{\{args\}\}/.test(blocks[0]), 'no {{args}} inside the shell block');
-    assert.ok(/^!\{cat \.planning\/STATE\.md/.test(blocks[0]), 'fixed cat command only');
-  });
-});
   });
 }
 
@@ -12045,13 +10934,15 @@ describe('#769/#921/#1319 Claude global install: spawning-orchestrator SKILL.md 
  *
  * Verifies:
  *   1. Claude global install injects `effort:` into agent .md frontmatter.
- *   2. Gemini global install does NOT inject `effort:` (Gemini-safe .md).
- *   3. Codex inherited-model installs omit `model_reasoning_effort` so model
+ *   2. Codex inherited-model installs omit `model_reasoning_effort` so model
  *      and effort are not partially pinned (#838).
- *   4. Config-driven proof: effort.agent_overrides wins over tier defaults
+ *   3. Config-driven proof: effort.agent_overrides wins over tier defaults
  *      for Claude .md and for Codex .toml when runtime:"codex" pins a model.
- *   5. Source agents/gsd-planner.md has NO effort: key (injection is
- *      install-only, source stays Gemini-safe).
+ *   4. Source agents/gsd-planner.md has NO effort: key (injection is
+ *      install-only, source markdown carries no effort: key).
+ *
+ * #1928: the gemini runtime (and its "Gemini install does NOT inject effort:"
+ * coverage) was removed — Google sunset Gemini CLI 2026-06-18.
  */
 
 'use strict';
@@ -12090,7 +10981,6 @@ function readFrontmatter(mdPath) {
  *
  * Env-var redirection:
  *   claude   → CLAUDE_CONFIG_DIR
- *   gemini   → GEMINI_CONFIG_DIR
  *   codex    → CODEX_HOME
  *
  * HOME is also redirected to an isolated temp dir for the duration of the
@@ -12113,7 +11003,6 @@ function readFrontmatter(mdPath) {
 function runGlobalInstall(runtime, tmpHome) {
   const envVarMap = {
     claude: 'CLAUDE_CONFIG_DIR',
-    gemini: 'GEMINI_CONFIG_DIR',
     codex: 'CODEX_HOME',
   };
   const envVar = envVarMap[runtime];
@@ -12196,37 +11085,6 @@ describe('#443 Claude install: effort: injected into frontmatter', () => {
     const fm = readFrontmatter(path.join(claudeHome, 'agents', 'gsd-executor.md'));
     assert.match(fm, /^effort:\s*high$/m,
       `gsd-executor frontmatter should have effort: high\nActual:\n${fm}`);
-  });
-});
-
-// ─── describe 2: Gemini install does NOT inject effort: ──────────────────────
-
-describe('#443 Gemini install: effort: absent (Gemini-safe)', () => {
-  let tmpDir;
-  let geminiHome;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir('gsd-443-gemini-');
-    geminiHome = path.join(tmpDir, 'gemini-home');
-    fs.mkdirSync(geminiHome, { recursive: true });
-  });
-
-  afterEach(() => {
-    cleanup(tmpDir);
-  });
-
-  test('gsd-planner.md does NOT contain effort: (Gemini install)', () => {
-    runGlobalInstall('gemini', geminiHome);
-    const fm = readFrontmatter(path.join(geminiHome, 'agents', 'gsd-planner.md'));
-    assert.doesNotMatch(fm, /^effort:/m,
-      `gsd-planner (Gemini) frontmatter must NOT have effort:\nActual:\n${fm}`);
-  });
-
-  test('gsd-executor.md does NOT contain effort: (Gemini install)', () => {
-    runGlobalInstall('gemini', geminiHome);
-    const fm = readFrontmatter(path.join(geminiHome, 'agents', 'gsd-executor.md'));
-    assert.doesNotMatch(fm, /^effort:/m,
-      `gsd-executor (Gemini) frontmatter must NOT have effort:\nActual:\n${fm}`);
   });
 });
 
@@ -12496,7 +11354,6 @@ describe('getDirName (relocated to runtime-name-policy)', () => {
     claude: '.claude',
     copilot: '.github',
     opencode: '.opencode',
-    gemini: '.gemini',
     kilo: '.kilo',
     codex: '.codex',
     antigravity: '.agents',

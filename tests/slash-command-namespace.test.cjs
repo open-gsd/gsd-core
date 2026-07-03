@@ -274,7 +274,6 @@ const { transformContentToHyphen } = require(path.join(REPO_ROOT, 'scripts', 'fi
 // runtime-artifact-layout.cjs MUST appear in exactly one bucket.
 const HYPHEN_NAME_AGENT_RUNTIMES = ['claude', 'qwen', 'hermes'];
 const SELF_CONVERTING_OR_COLON_RUNTIMES = [
-  'gemini',     // intentionally colon-namespaced
   'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment',
   'trae', 'codebuddy', 'cline',
   'opencode', 'kilo',
@@ -365,12 +364,6 @@ describe('bug #3677 — agent body colon-namespace leak (Claude / Qwen / Hermes)
       const out = normalizeAgentBodyForRuntime(inputBody, 'hermes', cmdNames);
       assert.ok(out.includes('/gsd-execute-phase'));
       assert.ok(!out.includes('/gsd:execute-phase'));
-    });
-
-    test('C4: gemini — colon refs preserved (intentional namespace)', () => {
-      const out = normalizeAgentBodyForRuntime(inputBody, 'gemini', cmdNames);
-      assert.ok(out.includes('/gsd:execute-phase'), 'Gemini intentionally uses colon namespace; do not rewrite');
-      assert.ok(!out.includes('/gsd-execute-phase'), 'Gemini agents must NOT have hyphen form');
     });
 
     test('C5: self-converting runtime (copilot) — body returned unchanged at this layer', () => {
@@ -786,21 +779,6 @@ function runClaudeLocalInstall(cwd) {
 }
 
 /**
- * Run `node install.js --gemini --local --no-sdk` in tmpDir.
- * GSD_TEST_MODE must be cleared so the install() main block executes.
- */
-function runGeminiLocalInstall(cwd) {
-  const env = { ...process.env };
-  delete env.GSD_TEST_MODE;
-  execFileSync(process.execPath, [INSTALL_PATH, '--gemini', '--local', '--no-sdk'], {
-    cwd,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env,
-  });
-}
-
-/**
  * Build the roster regex that matches `gsd:<known-cmd>` references.
  * Mirrors the pattern used by the Cycle 1 command test.
  */
@@ -835,7 +813,7 @@ function collectOffenders(dir, regex) {
 
 // ---------------------------------------------------------------------------
 // Suite — integration: staged gsd-core/workflows/ and references/ must
-// have no colon-namespace refs for claude, and must preserve them for gemini.
+// have no colon-namespace refs for claude.
 // ---------------------------------------------------------------------------
 describe('bug #3683 — workflow/reference colon-namespace leak (Claude local install)', () => {
 
@@ -849,8 +827,7 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
   const rosterRegex = buildRosterRegex(cmdNames);
 
   // Shared claude local install — used by W (workflow/reference clean-slate) and
-  // R (routing-block positive assertion) sub-suites. G suite runs its own separate
-  // gemini install and does not depend on claudeTmpDir.
+  // R (routing-block positive assertion) sub-suites.
   before(() => {
     claudeTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3683-claude-'));
     runClaudeLocalInstall(claudeTmpDir);
@@ -1115,64 +1092,6 @@ describe('bug #3683 — workflow/reference colon-namespace leak (Claude local in
     });
   });
 
-  // -------------------------------------------------------------------------
-  // G — negative: gemini install must PRESERVE colon form (no-op normalizer)
-  // -------------------------------------------------------------------------
-  describe('G — negative: staged gemini workflows preserve colon-namespace refs', () => {
-    let tmpDir;
-    const cmdNames = readCmdNames();
-
-    before(() => {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3683-gem-'));
-      runGeminiLocalInstall(tmpDir);
-    });
-
-    after(() => {
-      cleanup(tmpDir);
-    });
-
-    test('G0: staged gemini gsd-core/workflows/ directory exists after install', () => {
-      const workflowsDir = path.join(tmpDir, '.gemini', 'gsd-core', 'workflows');
-      assert.ok(
-        fs.existsSync(workflowsDir),
-        `gemini gsd-core/workflows/ must be created at ${workflowsDir}`,
-      );
-    });
-
-    test('G1: gemini discuss-phase.md preserves colon form (normalizer is a no-op for gemini)', () => {
-      // Gemini registers /gsd:<cmd> as its canonical form — normalization
-      // must NOT fire for this runtime. Verify colon refs survive unchanged.
-      const stagedFile = path.join(
-        tmpDir, '.gemini', 'gsd-core', 'workflows', 'discuss-phase.md',
-      );
-      assert.ok(
-        fs.existsSync(stagedFile),
-        `gemini discuss-phase.md must exist in staged gsd-core/workflows/`,
-      );
-      const content = fs.readFileSync(stagedFile, 'utf-8');
-      // The source has 7 colon refs; at least one must be present in gemini output.
-      const colonMatches = content.match(/gsd:[a-z][a-z0-9-]*/g) || [];
-      const knownColonRefs = colonMatches.filter(m => cmdNames.includes(m.slice(4)));
-      assert.ok(
-        knownColonRefs.length > 0,
-        `gemini staged discuss-phase.md must preserve /gsd:<cmd> colon refs — ` +
-        `they are Gemini's canonical command namespace and must not be rewritten to hyphen form`,
-      );
-    });
-
-    test('G2: gemini workflows are not over-normalized (no /gsd-- double-hyphen artifacts)', () => {
-      const workflowsDir = path.join(tmpDir, '.gemini', 'gsd-core', 'workflows');
-      if (!fs.existsSync(workflowsDir)) return; // guard — G0 already asserts existence
-      const doubleHyphenRegex = /\/gsd--[a-z]/;
-      const garbled = collectOffenders(workflowsDir, doubleHyphenRegex);
-      const relGarbled = garbled.map(f => path.relative(tmpDir, f));
-      assert.deepEqual(
-        relGarbled,
-        [],
-        `Gemini staged workflows contain /gsd-- double-hyphen artifacts — normalizer ran when it should not have. Garbled: ${relGarbled.join(', ')}`,
-      );
-    });
-  });
 });
   });
 }

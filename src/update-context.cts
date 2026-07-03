@@ -28,7 +28,6 @@ export const RUNTIME_DIRS: RuntimeDirEntry[] = [
   ['antigravity', '.agent'], // local Antigravity install dir legacy (#503; backward-compat with pre-#791 installs)
   ['windsurf', '.windsurf'], // local Windsurf workflow dir canonical (#1615; bin/install.js getDirName('windsurf'))
   ['windsurf', '.devin'],    // local Devin Desktop install dir legacy (#1085; backward-compat)
-  ['gemini', '.gemini'],
   ['kilo', '.config/kilo'],
   ['kilo', '.kilo'],
   ['codex', '.codex'],
@@ -86,7 +85,6 @@ export function inferPreferredRuntime({ fs, env, preferredConfigDir }: InferPref
   }
   if (env['CODEX_HOME']) return 'codex';
   if (env['ANTIGRAVITY_CONFIG_DIR']) return 'antigravity';
-  if (env['GEMINI_CONFIG_DIR']) return 'gemini';
   if (env['KILO_CONFIG_DIR'] || env['KILO_CONFIG']) return 'kilo';
   if (env['OPENCODE_CONFIG_DIR'] || env['OPENCODE_CONFIG']) return 'opencode';
   if (env['CLAUDE_CONFIG_DIR']) return 'claude';
@@ -104,7 +102,6 @@ export function envRuntimeDirs({ env, home }: EnvRuntimeDirsOpts): RuntimeDirEnt
   const ex = (v: string | undefined) => expandHome(v, home);
   if (env['CLAUDE_CONFIG_DIR']) out.push(['claude', ex(env['CLAUDE_CONFIG_DIR'])]);
   if (env['ANTIGRAVITY_CONFIG_DIR']) out.push(['antigravity', ex(env['ANTIGRAVITY_CONFIG_DIR'])]);
-  if (env['GEMINI_CONFIG_DIR']) out.push(['gemini', ex(env['GEMINI_CONFIG_DIR'])]);
   if (env['KILO_CONFIG_DIR']) out.push(['kilo', ex(env['KILO_CONFIG_DIR'])]);
   else if (env['KILO_CONFIG']) out.push(['kilo', path.dirname(ex(env['KILO_CONFIG']))]);
   else if (env['XDG_CONFIG_HOME']) out.push(['kilo', path.join(ex(env['XDG_CONFIG_HOME']), 'kilo')]);

@@ -12,7 +12,7 @@ const { runtimeFlags } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const EXPECTED_FLAGS = [
-  'isOpencode', 'isKilo', 'isGemini', 'isCodex', 'isCopilot', 'isAntigravity',
+  'isOpencode', 'isKilo', 'isCodex', 'isCopilot', 'isAntigravity',
   'isCursor', 'isWindsurf', 'isAugment', 'isTrae', 'isQwen', 'isHermes',
   'isCodebuddy', 'isCline', 'isKimi',
 ];
@@ -35,12 +35,12 @@ test('runtimeFlags: claude / unknown / empty → all flags false (fail-closed)',
   }
 });
 
-test('runtimeFlags: all 15 flags present + boolean + the object is frozen', () => {
+test('runtimeFlags: all 14 flags present + boolean + the object is frozen', () => {
   const flags = runtimeFlags('opencode');
   for (const f of EXPECTED_FLAGS) {
     assert.strictEqual(typeof flags[f], 'boolean', `${f} must be boolean`);
   }
-  assert.deepStrictEqual(Object.keys(flags).sort(), [...EXPECTED_FLAGS].sort(), 'exactly the 15 flags');
+  assert.deepStrictEqual(Object.keys(flags).sort(), [...EXPECTED_FLAGS].sort(), 'exactly the 14 flags');
   assert.ok(Object.isFrozen(flags), 'flags object must be frozen');
 });
 

@@ -7,7 +7,6 @@
 ## Command Syntax
 
 - **Claude Code / Copilot / OpenCode / Kilo:** `/gsd-command-name [args]` (hyphen form)
-- **Gemini CLI:** `/gsd:command-name [args]` (colon form — Gemini namespaces commands under `gsd:`)
 - **Codex:** `$gsd-command-name [args]`
 
 The hyphen and colon forms are *runtime-specific spellings of the same command*. Whichever runtime you're on, the installer writes the correct form into your runtime's command directory.
@@ -18,7 +17,7 @@ Heavy workflow skills (`/gsd-plan-phase`, `/gsd-execute-phase`, `/gsd-autonomous
 
 Quick-status skills (`/gsd-progress`, `/gsd-stats`) declare `effort: low`, directing the runtime to use a minimal token budget for fast reads.
 
-These fields are Claude Code–specific frontmatter. On runtimes that do not recognise them (Gemini, Codex, Cursor, etc.) the fields are silently ignored — existing behaviour is unchanged.
+These fields are Claude Code–specific frontmatter. On runtimes that do not recognise them (Antigravity, Codex, Cursor, etc.) the fields are silently ignored — existing behaviour is unchanged.
 
 ---
 

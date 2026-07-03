@@ -71,7 +71,7 @@ points.
 | `tdd` | feature | full | `>=1.6.0` | `plan:pre`, `execute:post` | contribution, gate | first-party |
 | `ui` | feature | full | `>=1.6.0` | `plan:pre`, `execute:wave:post`, `verify:post` | step, gate | first-party |
 
-### Runtime capabilities (role: runtime) — 16
+### Runtime capabilities (role: runtime) — 15
 
 Runtime capabilities adapt GSD to a specific AI runtime or IDE — emitting
 skills, agents, hooks configuration, and surface files for that host. They
@@ -88,7 +88,6 @@ emission), so their extension-point and hook-kind cells are `—`.
 | `codex` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `copilot` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `cursor` | runtime | core | `>=1.6.0` | — | — | first-party |
-| `gemini` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `hermes` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `kilo` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `kimi` | runtime | core | `>=1.6.0` | — | — | first-party |

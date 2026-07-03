@@ -752,14 +752,14 @@ describe('Kilo integration — install/uninstall behaviour', () => {
     assert.deepStrictEqual(selectRuntimesFromArgs(['--kilo']), ['kilo']);
   });
 
-  test('runtimeMap has Kilo as option 12 after Kimi', () => {
-    assert.strictEqual(runtimeMap['12'], 'kilo');
+  test('runtimeMap has Kilo as option 11 after Kimi', () => {
+    assert.strictEqual(runtimeMap['11'], 'kilo');
   });
 
   test('prompt text shows Kilo above OpenCode without marketing copy', () => {
     const plain = stripAnsi(buildRuntimePromptText());
-    assert.ok(/\b12\)\s*Kilo\b/.test(plain));
-    assert.ok(plain.indexOf('12) Kilo') < plain.indexOf('OpenCode'));
+    assert.ok(/\b11\)\s*Kilo\b/.test(plain));
+    assert.ok(plain.indexOf('11) Kilo') < plain.indexOf('OpenCode'));
     assert.ok(!plain.includes('the #1 AI coding platform on OpenRouter'));
   });
 
@@ -1549,7 +1549,7 @@ describe('cleanupWindsurfLegacyDevinSkills — removes pre-#1615 skill artifacts
 //   1. Claude install: Group A agents have disallowedTools == {Write, Edit, MultiEdit} exactly.
 //   2. Claude install: Group B agents have disallowedTools == {Edit, MultiEdit} exactly.
 //   3. Negative: gsd-nyquist-auditor has NO disallowedTools key (legitimately writes+edits).
-//   4. Cross-runtime no-leak: Gemini-installed read-only agents do NOT contain disallowedTools.
+//   4. Cross-runtime no-leak: Qwen-installed read-only agents do NOT contain disallowedTools.
 //   5. Source purity: source agents/*.md must not contain disallowedTools (inject-only).
 //   6. Parity: docs/AGENTS.md "Disallowed Tools" rows match READONLY_AGENT_DISALLOWED_TOOLS.
 //      (DEFECT.GENERATIVE-FIX guard)
@@ -1595,7 +1595,6 @@ function parseDisallowedToolsSet(fm) {
 function runGlobalInstall767(runtime, tmpHome) {
   const envVarMap = {
     claude: 'CLAUDE_CONFIG_DIR',
-    gemini: 'GEMINI_CONFIG_DIR',
     qwen: 'QWEN_CONFIG_DIR',
   };
   const envVar = envVarMap[runtime];
@@ -1714,15 +1713,15 @@ describe('#767 Claude install: gsd-nyquist-auditor has no disallowedTools (legit
   });
 });
 
-describe('#767 Gemini install: read-only agents do NOT contain disallowedTools (cross-runtime leak guard)', () => {
+describe('#767 Qwen install: read-only agents do NOT contain disallowedTools (cross-runtime leak guard)', () => {
   let tmpDir;
-  let geminiHome;
+  let qwenHome;
 
   beforeEach(() => {
-    tmpDir = createTempDir('gsd-767-gemini-');
-    geminiHome = path.join(tmpDir, 'gemini-home');
-    fs.mkdirSync(geminiHome, { recursive: true });
-    runGlobalInstall767('gemini', geminiHome);
+    tmpDir = createTempDir('gsd-767-qwen-');
+    qwenHome = path.join(tmpDir, 'qwen-home');
+    fs.mkdirSync(qwenHome, { recursive: true });
+    runGlobalInstall767('qwen', qwenHome);
   });
 
   afterEach(() => {
@@ -1730,11 +1729,11 @@ describe('#767 Gemini install: read-only agents do NOT contain disallowedTools (
   });
 
   for (const agent of [...GROUP_A_767, ...GROUP_B_767]) {
-    test(`Gemini ${agent}.md has no disallowedTools`, () => {
-      const agentPath = path.join(geminiHome, 'agents', `${agent}.md`);
+    test(`Qwen ${agent}.md has no disallowedTools`, () => {
+      const agentPath = path.join(qwenHome, 'agents', `${agent}.md`);
       const content = fs.readFileSync(agentPath, 'utf8');
       assert.ok(!content.includes('disallowedTools'),
-        `${agent} (Gemini) must NOT contain disallowedTools\nContent excerpt:\n${content.slice(0, 400)}`);
+        `${agent} (Qwen) must NOT contain disallowedTools\nContent excerpt:\n${content.slice(0, 400)}`);
     });
   }
 });
@@ -2589,24 +2588,27 @@ describe('Bug #2979: buildHookCommand for .js hooks emits absolute node runner',
 });
 
 describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
-  test('Gemini global install: .js hook command starts with & so quoted runners execute in PowerShell', () => {
-    const cmd = buildHookCommand('C:/Program Files/Gemini/.gemini', 'gsd-check-update.js', {
+  // #1928: gemini runtime removed — the PowerShell call-operator seam is now
+  // inert for every runtime. Antigravity (the Gemini-backend successor) never
+  // needed the call operator either; lock the inert contract explicitly.
+  test('Antigravity global install: .js hook command stays shell-neutral on Windows (seam inert after gemini removal)', () => {
+    const cmd = buildHookCommand('C:/Users/me/.gemini/antigravity', 'gsd-check-update.js', {
       platform: 'win32',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.ok(cmd.startsWith('& '), `Gemini PowerShell commands need call operator, got: ${cmd}`);
-    assert.ok(cmd.includes('"C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"'));
+    assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
+    assert.ok(cmd.includes('"C:/Users/me/.gemini/antigravity/hooks/gsd-check-update.js"'));
   });
 
-  test('Gemini portable install: .js hook command also uses & on Windows PowerShell', () => {
+  test('Antigravity portable install: .js hook command also stays shell-neutral on Windows (seam inert after gemini removal)', () => {
     const home = require('node:os').homedir().replace(/\\/g, '/');
-    const cmd = buildHookCommand(`${home}/.gemini`, 'gsd-check-update.js', {
+    const cmd = buildHookCommand(`${home}/.gemini/antigravity`, 'gsd-check-update.js', {
       portableHooks: true,
       platform: 'win32',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.ok(cmd.startsWith('& '), `Gemini PowerShell commands need call operator, got: ${cmd}`);
-    assert.equal(parseHookCommand(cmd.slice(2)).hookPath, '$HOME/.gemini/hooks/gsd-check-update.js');
+    assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
+    assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
 
   test('Claude global install: .js hook command stays shell-neutral on Windows Git Bash', () => {
@@ -2626,12 +2628,12 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
     assert.equal(parseHookCommand(cmd).hookPath, 'C:/Users/me/.claude/hooks/gsd-check-update.js');
   });
 
-  test('Gemini runtime on non-Windows platform does not get PowerShell syntax', () => {
+  test('Antigravity runtime on non-Windows platform does not get PowerShell syntax', () => {
     const cmd = buildHookCommand('/home/me/.claude', 'gsd-check-update.js', {
       platform: 'linux',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.ok(!cmd.startsWith('& '), `Non-Windows Gemini hook must stay shell-neutral: ${cmd}`);
+    assert.ok(!cmd.startsWith('& '), `Non-Windows Antigravity hook must stay shell-neutral: ${cmd}`);
     assert.equal(parseHookCommand(cmd).hookPath, '/home/me/.claude/hooks/gsd-check-update.js');
   });
 });
@@ -2722,52 +2724,55 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     assert.equal(settings.hooks.SessionStart[0].hooks[0].command, before);
   });
 
-  test('Gemini on Windows adds PowerShell call operator to existing quoted managed hooks', () => {
+  // #1928: gemini runtime removed — the PowerShell call-operator seam is now
+  // inert for every runtime (including antigravity, the Gemini-backend
+  // successor). An already-correct absolute-runner command needs no rewrite.
+  test('Antigravity on Windows leaves an already-correct quoted managed hook untouched (seam inert after gemini removal)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
-          hooks: [{ type: 'command', command: '"/usr/local/bin/node" "C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"' }],
-        }],
-      },
-    };
-    const runner = '"/usr/local/bin/node"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
-    assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '& "/usr/local/bin/node" "C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"',
-    );
-  });
-
-  test('Gemini on Windows does NOT double-prefix managed hooks that already use the PowerShell call operator', () => {
-    const settings = {
-      hooks: {
-        SessionStart: [{
-          hooks: [{ type: 'command', command: '& "/usr/local/bin/node" "C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"' }],
+          hooks: [{ type: 'command', command: '"/usr/local/bin/node" "C:/Program Files/Antigravity/.gemini/antigravity/hooks/gsd-check-update.js"' }],
         }],
       },
     };
     const runner = '"/usr/local/bin/node"';
     const before = settings.hooks.SessionStart[0].hooks[0].command;
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
     assert.equal(changed, false);
     assert.equal(settings.hooks.SessionStart[0].hooks[0].command, before);
   });
 
-  test('Gemini on Windows rewrites PowerShell bare-node managed hooks to absolute runner without dropping &', () => {
+  test('Antigravity on Windows strips a stale PowerShell call operator from managed hooks on reinstall (seam inert after gemini removal)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
-          hooks: [{ type: 'command', command: '& node "C:/Users/me/.gemini/hooks/gsd-check-update.js"' }],
+          hooks: [{ type: 'command', command: '& "/usr/local/bin/node" "C:/Program Files/Antigravity/.gemini/antigravity/hooks/gsd-check-update.js"' }],
         }],
       },
     };
     const runner = '"/usr/local/bin/node"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
     assert.equal(changed, true);
     assert.equal(
       settings.hooks.SessionStart[0].hooks[0].command,
-      '& "/usr/local/bin/node" "C:/Users/me/.gemini/hooks/gsd-check-update.js"',
+      '"/usr/local/bin/node" "C:/Program Files/Antigravity/.gemini/antigravity/hooks/gsd-check-update.js"',
+    );
+  });
+
+  test('Antigravity on Windows rewrites PowerShell bare-node managed hooks to absolute runner and drops the stale & (seam inert after gemini removal)', () => {
+    const settings = {
+      hooks: {
+        SessionStart: [{
+          hooks: [{ type: 'command', command: '& node "C:/Users/me/.gemini/antigravity/hooks/gsd-check-update.js"' }],
+        }],
+      },
+    };
+    const runner = '"/usr/local/bin/node"';
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
+    assert.equal(changed, true);
+    assert.equal(
+      settings.hooks.SessionStart[0].hooks[0].command,
+      '"/usr/local/bin/node" "C:/Users/me/.gemini/antigravity/hooks/gsd-check-update.js"',
     );
   });
 
@@ -2901,7 +2906,7 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     assert.equal(changed, true);
   });
 
-  test('Gemini on Windows normalizes single-quoted managed hook paths to double-quoted forward-slash paths (#3392)', () => {
+  test('Antigravity on Windows normalizes single-quoted managed hook paths to double-quoted forward-slash paths without adding & (#3392; seam inert after gemini removal)', () => {
     const settings = {
       hooks: {
         PreToolUse: [{
@@ -2913,11 +2918,11 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
       },
     };
     const runner = '"C:/nvm4w/nodejs/node.exe"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
     assert.equal(changed, true);
     assert.equal(
       settings.hooks.PreToolUse[0].hooks[0].command,
-      '& "C:/nvm4w/nodejs/node.exe" "C:/Users/me/.gemini/hooks/gsd-prompt-guard.js"',
+      '"C:/nvm4w/nodejs/node.exe" "C:/Users/me/.gemini/hooks/gsd-prompt-guard.js"',
     );
   });
 });
@@ -4260,20 +4265,20 @@ describe('Bug #410: finishInstall non-Claude runtime + GSD_TEST_MODE side-effect
     );
   });
 
-  test('defaults.json is NOT written for gemini runtime under GSD_TEST_MODE', () => {
+  test('defaults.json is NOT written for antigravity runtime under GSD_TEST_MODE', () => {
     // Reset in case previous test left artifacts (it shouldn't).
     assert.equal(
       fs.existsSync(DEFAULTS_PATH),
       false,
-      'defaults.json should not exist before gemini test',
+      'defaults.json should not exist before antigravity test',
     );
 
-    callFinishInstallForRuntime('gemini');
+    callFinishInstallForRuntime('antigravity');
 
     assert.equal(
       fs.existsSync(DEFAULTS_PATH),
       false,
-      `defaults.json must NOT be created under GSD_TEST_MODE for gemini; found at ${DEFAULTS_PATH}`,
+      `defaults.json must NOT be created under GSD_TEST_MODE for antigravity; found at ${DEFAULTS_PATH}`,
     );
   });
 
@@ -4337,7 +4342,7 @@ describe('Bug #1569: non-Claude finishInstall preserves explicit resolve_model_i
 
   // The clobber guard is runtime-agnostic (`runtime !== 'claude'`); parameterize
   // across a representative slice of non-Claude runtimes.
-  for (const runtime of ['codex', 'opencode', 'gemini']) {
+  for (const runtime of ['codex', 'opencode', 'antigravity']) {
     test(`explicit resolve_model_ids:true survives a ${runtime} global install`, () => {
       withUserPath(() => {
         seedDefaults({ runtime, resolve_model_ids: true });
@@ -6574,24 +6579,27 @@ describe('Bug #2979: buildHookCommand for .js hooks emits absolute node runner',
 });
 
 describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
-  test('Gemini global install: .js hook command starts with & so quoted runners execute in PowerShell', () => {
-    const cmd = buildHookCommand('C:/Program Files/Gemini/.gemini', 'gsd-check-update.js', {
+  // #1928: gemini runtime removed — the PowerShell call-operator seam is now
+  // inert for every runtime. Antigravity (the Gemini-backend successor) never
+  // needed the call operator either; lock the inert contract explicitly.
+  test('Antigravity global install: .js hook command stays shell-neutral on Windows (seam inert after gemini removal)', () => {
+    const cmd = buildHookCommand('C:/Users/me/.gemini/antigravity', 'gsd-check-update.js', {
       platform: 'win32',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.ok(cmd.startsWith('& '), `Gemini PowerShell commands need call operator, got: ${cmd}`);
-    assert.ok(cmd.includes('"C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"'));
+    assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
+    assert.ok(cmd.includes('"C:/Users/me/.gemini/antigravity/hooks/gsd-check-update.js"'));
   });
 
-  test('Gemini portable install: .js hook command also uses & on Windows PowerShell', () => {
+  test('Antigravity portable install: .js hook command also stays shell-neutral on Windows (seam inert after gemini removal)', () => {
     const home = require('node:os').homedir().replace(/\\/g, '/');
-    const cmd = buildHookCommand(`${home}/.gemini`, 'gsd-check-update.js', {
+    const cmd = buildHookCommand(`${home}/.gemini/antigravity`, 'gsd-check-update.js', {
       portableHooks: true,
       platform: 'win32',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.ok(cmd.startsWith('& '), `Gemini PowerShell commands need call operator, got: ${cmd}`);
-    assert.equal(parseHookCommand(cmd.slice(2)).hookPath, '$HOME/.gemini/hooks/gsd-check-update.js');
+    assert.ok(!cmd.startsWith('& '), `Antigravity hook command must not use PowerShell call operator: ${cmd}`);
+    assert.equal(parseHookCommand(cmd).hookPath, '$HOME/.gemini/antigravity/hooks/gsd-check-update.js');
   });
 
   test('Claude global install: .js hook command stays shell-neutral on Windows Git Bash', () => {
@@ -6611,12 +6619,12 @@ describe('Bug #3362 / #3413: Windows hook commands are runtime-aware', () => {
     assert.equal(parseHookCommand(cmd).hookPath, 'C:/Users/me/.claude/hooks/gsd-check-update.js');
   });
 
-  test('Gemini runtime on non-Windows platform does not get PowerShell syntax', () => {
+  test('Antigravity runtime on non-Windows platform does not get PowerShell syntax', () => {
     const cmd = buildHookCommand('/home/me/.claude', 'gsd-check-update.js', {
       platform: 'linux',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.ok(!cmd.startsWith('& '), `Non-Windows Gemini hook must stay shell-neutral: ${cmd}`);
+    assert.ok(!cmd.startsWith('& '), `Non-Windows Antigravity hook must stay shell-neutral: ${cmd}`);
     assert.equal(parseHookCommand(cmd).hookPath, '/home/me/.claude/hooks/gsd-check-update.js');
   });
 });
@@ -6707,52 +6715,55 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     assert.equal(settings.hooks.SessionStart[0].hooks[0].command, before);
   });
 
-  test('Gemini on Windows adds PowerShell call operator to existing quoted managed hooks', () => {
+  // #1928: gemini runtime removed — the PowerShell call-operator seam is now
+  // inert for every runtime (including antigravity, the Gemini-backend
+  // successor). An already-correct absolute-runner command needs no rewrite.
+  test('Antigravity on Windows leaves an already-correct quoted managed hook untouched (seam inert after gemini removal)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
-          hooks: [{ type: 'command', command: '"/usr/local/bin/node" "C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"' }],
-        }],
-      },
-    };
-    const runner = '"/usr/local/bin/node"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
-    assert.equal(changed, true);
-    assert.equal(
-      settings.hooks.SessionStart[0].hooks[0].command,
-      '& "/usr/local/bin/node" "C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"',
-    );
-  });
-
-  test('Gemini on Windows does NOT double-prefix managed hooks that already use the PowerShell call operator', () => {
-    const settings = {
-      hooks: {
-        SessionStart: [{
-          hooks: [{ type: 'command', command: '& "/usr/local/bin/node" "C:/Program Files/Gemini/.gemini/hooks/gsd-check-update.js"' }],
+          hooks: [{ type: 'command', command: '"/usr/local/bin/node" "C:/Program Files/Antigravity/.gemini/antigravity/hooks/gsd-check-update.js"' }],
         }],
       },
     };
     const runner = '"/usr/local/bin/node"';
     const before = settings.hooks.SessionStart[0].hooks[0].command;
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
     assert.equal(changed, false);
     assert.equal(settings.hooks.SessionStart[0].hooks[0].command, before);
   });
 
-  test('Gemini on Windows rewrites PowerShell bare-node managed hooks to absolute runner without dropping &', () => {
+  test('Antigravity on Windows strips a stale PowerShell call operator from managed hooks on reinstall (seam inert after gemini removal)', () => {
     const settings = {
       hooks: {
         SessionStart: [{
-          hooks: [{ type: 'command', command: '& node "C:/Users/me/.gemini/hooks/gsd-check-update.js"' }],
+          hooks: [{ type: 'command', command: '& "/usr/local/bin/node" "C:/Program Files/Antigravity/.gemini/antigravity/hooks/gsd-check-update.js"' }],
         }],
       },
     };
     const runner = '"/usr/local/bin/node"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
     assert.equal(changed, true);
     assert.equal(
       settings.hooks.SessionStart[0].hooks[0].command,
-      '& "/usr/local/bin/node" "C:/Users/me/.gemini/hooks/gsd-check-update.js"',
+      '"/usr/local/bin/node" "C:/Program Files/Antigravity/.gemini/antigravity/hooks/gsd-check-update.js"',
+    );
+  });
+
+  test('Antigravity on Windows rewrites PowerShell bare-node managed hooks to absolute runner and drops the stale & (seam inert after gemini removal)', () => {
+    const settings = {
+      hooks: {
+        SessionStart: [{
+          hooks: [{ type: 'command', command: '& node "C:/Users/me/.gemini/antigravity/hooks/gsd-check-update.js"' }],
+        }],
+      },
+    };
+    const runner = '"/usr/local/bin/node"';
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
+    assert.equal(changed, true);
+    assert.equal(
+      settings.hooks.SessionStart[0].hooks[0].command,
+      '"/usr/local/bin/node" "C:/Users/me/.gemini/antigravity/hooks/gsd-check-update.js"',
     );
   });
 
@@ -6886,7 +6897,7 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
     assert.equal(changed, true);
   });
 
-  test('Gemini on Windows normalizes single-quoted managed hook paths to double-quoted forward-slash paths (#3392)', () => {
+  test('Antigravity on Windows normalizes single-quoted managed hook paths to double-quoted forward-slash paths without adding & (#3392; seam inert after gemini removal)', () => {
     const settings = {
       hooks: {
         PreToolUse: [{
@@ -6898,11 +6909,11 @@ describe('Bug #2979 (#3002 CR): rewriteLegacyManagedNodeHookCommands rewrites ba
       },
     };
     const runner = '"C:/nvm4w/nodejs/node.exe"';
-    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'gemini' });
+    const changed = rewriteLegacyManagedNodeHookCommands(settings, runner, { platform: 'win32', runtime: 'antigravity' });
     assert.equal(changed, true);
     assert.equal(
       settings.hooks.PreToolUse[0].hooks[0].command,
-      '& "C:/nvm4w/nodejs/node.exe" "C:/Users/me/.gemini/hooks/gsd-prompt-guard.js"',
+      '"C:/nvm4w/nodejs/node.exe" "C:/Users/me/.gemini/hooks/gsd-prompt-guard.js"',
     );
   });
 });
@@ -8245,20 +8256,20 @@ describe('Bug #410: finishInstall non-Claude runtime + GSD_TEST_MODE side-effect
     );
   });
 
-  test('defaults.json is NOT written for gemini runtime under GSD_TEST_MODE', () => {
+  test('defaults.json is NOT written for antigravity runtime under GSD_TEST_MODE', () => {
     // Reset in case previous test left artifacts (it shouldn't).
     assert.equal(
       fs.existsSync(DEFAULTS_PATH),
       false,
-      'defaults.json should not exist before gemini test',
+      'defaults.json should not exist before antigravity test',
     );
 
-    callFinishInstallForRuntime('gemini');
+    callFinishInstallForRuntime('antigravity');
 
     assert.equal(
       fs.existsSync(DEFAULTS_PATH),
       false,
-      `defaults.json must NOT be created under GSD_TEST_MODE for gemini; found at ${DEFAULTS_PATH}`,
+      `defaults.json must NOT be created under GSD_TEST_MODE for antigravity; found at ${DEFAULTS_PATH}`,
     );
   });
 
@@ -8322,7 +8333,7 @@ describe('Bug #1569: non-Claude finishInstall preserves explicit resolve_model_i
 
   // The clobber guard is runtime-agnostic (`runtime !== 'claude'`); parameterize
   // across a representative slice of non-Claude runtimes.
-  for (const runtime of ['codex', 'opencode', 'gemini']) {
+  for (const runtime of ['codex', 'opencode', 'antigravity']) {
     test(`explicit resolve_model_ids:true survives a ${runtime} global install`, () => {
       withUserPath(() => {
         seedDefaults({ runtime, resolve_model_ids: true });
@@ -9949,7 +9960,7 @@ describe('install.js --skills-root', () => {
     { runtime: 'codex', expected: path.join(os.homedir(), '.codex', 'skills') },
     { runtime: 'copilot', expected: path.join(os.homedir(), '.copilot', 'skills') },
     { runtime: 'cursor', expected: path.join(os.homedir(), '.cursor', 'skills') },
-    { runtime: 'gemini', expected: path.join(os.homedir(), '.gemini', 'skills') },
+    { runtime: 'trae', expected: path.join(os.homedir(), '.trae', 'skills') },
   ];
 
   for (const { runtime, expected } of CASES) {

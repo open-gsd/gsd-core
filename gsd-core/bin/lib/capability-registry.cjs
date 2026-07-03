@@ -1080,81 +1080,6 @@ const capabilities = {
       }
     ]
   },
-  "gemini": {
-    "id": "gemini",
-    "role": "runtime",
-    "version": "1.7.0-rc.2",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
-    "tier": "core",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.6.0"
-    },
-    "runtime": {
-      "configHome": {
-        "kind": "dot-home",
-        "name": ".gemini",
-        "env": [
-          "GEMINI_CONFIG_DIR"
-        ]
-      },
-      "localConfigDir": ".gemini",
-      "configFormat": "settings-json",
-      "artifactLayout": {
-        "global": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ],
-        "local": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ]
-      },
-      "commandStyle": "slash-hyphen",
-      "hooksSurface": "settings-json",
-      "hookEvents": "gemini",
-      "sandboxTier": "none",
-      "supportTier": 2,
-      "installSurface": "settings-json",
-      "writesSharedSettings": true,
-      "permissionWriter": null,
-      "extendedHookEvents": [
-        "BeforeAgent",
-        "AfterAgent",
-        "BeforeModel"
-      ],
-      "hostIntegration": {
-        "embeddingMode": "declarative",
-        "commandSurface": "slash-toml",
-        "dispatch": {
-          "namedDispatch": true,
-          "nested": false,
-          "maxDepth": 1,
-          "background": "undocumented",
-          "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
-        },
-        "modelMode": "passive",
-        "hookBus": "host",
-        "stateIO": "filesystem",
-        "transport": "mcp",
-        "runtime": "node"
-      }
-    }
-  },
   "graphify": {
     "id": "graphify",
     "role": "feature",
@@ -4004,81 +3929,6 @@ const runtimes = {
       }
     }
   },
-  "gemini": {
-    "id": "gemini",
-    "role": "runtime",
-    "version": "1.7.0-rc.2",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
-    "tier": "core",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.6.0"
-    },
-    "runtime": {
-      "configHome": {
-        "kind": "dot-home",
-        "name": ".gemini",
-        "env": [
-          "GEMINI_CONFIG_DIR"
-        ]
-      },
-      "localConfigDir": ".gemini",
-      "configFormat": "settings-json",
-      "artifactLayout": {
-        "global": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ],
-        "local": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ]
-      },
-      "commandStyle": "slash-hyphen",
-      "hooksSurface": "settings-json",
-      "hookEvents": "gemini",
-      "sandboxTier": "none",
-      "supportTier": 2,
-      "installSurface": "settings-json",
-      "writesSharedSettings": true,
-      "permissionWriter": null,
-      "extendedHookEvents": [
-        "BeforeAgent",
-        "AfterAgent",
-        "BeforeModel"
-      ],
-      "hostIntegration": {
-        "embeddingMode": "declarative",
-        "commandSurface": "slash-toml",
-        "dispatch": {
-          "namedDispatch": true,
-          "nested": false,
-          "maxDepth": 1,
-          "background": "undocumented",
-          "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
-        },
-        "modelMode": "passive",
-        "hookBus": "host",
-        "stateIO": "filesystem",
-        "transport": "mcp",
-        "runtime": "node"
-      }
-    }
-  },
   "hermes": {
     "id": "hermes",
     "role": "runtime",
@@ -4807,7 +4657,6 @@ const _requiresGraph = {
   "drift": [],
   "external-job": [],
   "gap-analysis": [],
-  "gemini": [],
   "graphify": [],
   "hermes": [],
   "intel": [],

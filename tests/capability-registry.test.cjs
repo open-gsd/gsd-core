@@ -3189,7 +3189,7 @@ const {
 const VALID_EXTENSION_EVENTS = capValidatorModule.VALID_EXTENSION_EVENTS;
 
 const RUNTIME_IDS = [
-  'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
+  'claude', 'codex', 'antigravity', 'cursor', 'opencode',
   'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
   'codebuddy', 'cline', 'kimi', 'windsurf',
 ];
@@ -3234,18 +3234,18 @@ function makeRuntimeCap(overrides) {
   };
 }
 
-// ── 24a. All 16 runtime ids appear in the runtimes index ─────────────────────
+// ── 24a. All 15 runtime ids appear in the runtimes index ─────────────────────
 
-describe('ADR-1016 phase 5a: all 16 runtimes in registry index', () => {
+describe('ADR-1016 phase 5a: all 15 runtimes in registry index', () => {
   let registry;
 
-  test('loadAndValidate + buildRegistry produces runtimes index with 16 entries', () => {
+  test('loadAndValidate + buildRegistry produces runtimes index with 15 entries', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
     registry = buildRegistry(capMap);
     const runtimeKeys = Object.keys(registry.runtimes).sort();
-    assert.strictEqual(runtimeKeys.length, 16, 'Expected 16 runtime entries, got: ' + runtimeKeys.join(', '));
+    assert.strictEqual(runtimeKeys.length, 15, 'Expected 15 runtime entries, got: ' + runtimeKeys.join(', '));
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -3451,10 +3451,10 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     }
   });
 
-  test('tier-2 runtimes: gemini through windsurf have supportTier === 2', () => {
+  test('tier-2 runtimes: cursor through windsurf have supportTier === 2', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
-    const tier2 = ['gemini', 'cursor', 'opencode', 'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'windsurf'];
+    const tier2 = ['cursor', 'opencode', 'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'windsurf'];
     for (const id of tier2) {
       assert.strictEqual(
         registry.runtimes[id].runtime.supportTier, 2,
@@ -4074,14 +4074,14 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
     assert.deepEqual(converterErrors, [], 'converter: null must always be accepted, got: ' + JSON.stringify(converterErrors));
   });
 
-  // Parity: all 16 runtime descriptors must have converters in the valid set (or null)
-  test('all 16 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
+  // Parity: all 15 runtime descriptors must have converters in the valid set (or null)
+  test('all 15 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors from real capabilities, got: ' + JSON.stringify(hardErrors));
 
     const runtimeIds = [
-      'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
+      'claude', 'codex', 'antigravity', 'cursor', 'opencode',
       'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
       'codebuddy', 'cline', 'kimi', 'windsurf',
     ];
@@ -6283,7 +6283,7 @@ describe('fix-1628 capability validation: mempalace.wing (string)', () => {
  * hand-kept REGISTRY const.
  *
  * This golden-master test pins the observable contract: the return shape and
- * values must be identical to the pre-change behavior for all 16 runtimes.
+ * values must be identical to the pre-change behavior for all 15 runtimes.
  * Purely behavioral — no source-grep.
  */
 
@@ -6303,7 +6303,6 @@ const {
 
 const EXPECTED = [
   { runtime: 'claude',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'gemini',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
   { runtime: 'antigravity',  installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
   { runtime: 'augment',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
   { runtime: 'qwen',         installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
@@ -6321,7 +6320,7 @@ const EXPECTED = [
 ];
 
 // ---------------------------------------------------------------------------
-// Test 1: Golden master — all 16 runtimes resolve to expected values
+// Test 1: Golden master — all 15 runtimes resolve to expected values
 // ---------------------------------------------------------------------------
 
 describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent golden master', () => {
@@ -6361,21 +6360,21 @@ describe('enh-1055 descriptor-drive: unknown runtime throws TypeError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4: ALLOWED_CONFIG_RUNTIMES contains all 16 expected runtimes
+// Test 4: ALLOWED_CONFIG_RUNTIMES contains all 15 expected runtimes
 // ---------------------------------------------------------------------------
 
 describe('enh-1055 descriptor-drive: ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_16 = new Set([
-    'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
+  const EXPECTED_15 = new Set([
+    'claude', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
     'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae', 'kimi',
   ]);
 
-  test('contains exactly the 16 expected runtimes', () => {
-    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), EXPECTED_16);
+  test('contains exactly the 15 expected runtimes', () => {
+    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), EXPECTED_15);
   });
 
-  test('has exactly 16 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 16);
+  test('has exactly 15 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 15);
   });
 });
 

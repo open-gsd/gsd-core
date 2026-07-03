@@ -32,7 +32,6 @@ Replace `--claude` with the flag for your runtime:
 | Runtime | Flag |
 |---|---|
 | Claude Code | `--claude` |
-| Gemini CLI | `--gemini` |
 | OpenCode | `--opencode` |
 | Kilo | `--kilo` |
 | Codex | `--codex` |
