@@ -1204,7 +1204,14 @@ describe('bug #214: phase researcher must survive OpenCode write-tool truncation
 // fields from a known-shape product file, then assertions go against
 // those typed fields, not against the raw markdown text.
 
-process.env.GSD_TEST_MODE = '1';
+// Consolidation #1969: scope GSD_TEST_MODE to this folded block so it does not
+// leak into sibling folded suites in the shared file (was process-isolated when
+// standalone). This unit suite only parses agent markdown, but keep the flag set
+// for its own duration to preserve the origin behaviour, and restore it after.
+const { before: __gtmBefore, after: __gtmAfter } = require('node:test');
+const __savedGsdTestMode = process.env.GSD_TEST_MODE;
+__gtmBefore(() => { process.env.GSD_TEST_MODE = '1'; });
+__gtmAfter(() => { if (__savedGsdTestMode === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = __savedGsdTestMode; });
 
 /**
  * Bug #2990: gsd-code-fixer worktree setup fails when current branch
