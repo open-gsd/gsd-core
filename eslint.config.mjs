@@ -71,6 +71,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/resolution.cjs',
       'gsd-core/bin/lib/plan-drift-guard.cjs',
       'gsd-core/bin/lib/cli-exit.cjs',
+      'gsd-core/bin/lib/external-job.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
       'gsd-core/bin/lib/prohibition-enforcement.cjs',

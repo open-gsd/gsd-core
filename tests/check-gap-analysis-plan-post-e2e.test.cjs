@@ -493,7 +493,7 @@ describe('resolveLoopHooks plan:post — pure function against real registry', (
     assert.strictEqual(result.activeHooks[0].capId, 'gap-analysis');
   });
 
-  test('[happy] real registry byLoopPoint plan:post has 1 step (mempalace), 0 contributions, and 1 gate (gap-analysis)', () => {
+  test('[happy] real registry byLoopPoint plan:post has 1 step (mempalace), 1 contribution (external-job planner fragment), and 1 gate (gap-analysis)', () => {
     const entry = realRegistry.byLoopPoint['plan:post'];
     assert.ok(entry, 'plan:post must exist in byLoopPoint');
     assert.ok(Array.isArray(entry.steps), 'steps must be an array');
@@ -501,7 +501,8 @@ describe('resolveLoopHooks plan:post — pure function against real registry', (
     assert.ok(Array.isArray(entry.gates), 'gates must be an array');
     assert.strictEqual(entry.steps.length, 1, 'plan:post must have 1 step (mempalace capture)');
     assert.strictEqual(entry.steps[0].capId, 'mempalace', 'plan:post step must be from mempalace');
-    assert.strictEqual(entry.contributions.length, 0, 'plan:post must have zero contributions');
+    assert.strictEqual(entry.contributions.length, 1, 'plan:post must have 1 contribution (external-job planner runtime-budget fragment)');
+    assert.strictEqual(entry.contributions[0].capId, 'external-job', 'plan:post contribution must be from external-job');
     assert.strictEqual(entry.gates.length, 1, 'plan:post must have exactly one gate');
     assert.strictEqual(entry.gates[0].capId, 'gap-analysis');
   });

@@ -332,6 +332,7 @@
       "eval-command-router.cjs",
       "eval.cjs",
       "external-descriptor-trust.cjs",
+      "external-job.cjs",
       "fallow-runner.cjs",
       "federated-config.cjs",
       "frontmatter.cjs",
