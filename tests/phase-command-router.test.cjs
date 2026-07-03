@@ -481,8 +481,14 @@ function touch(dir, ...files) {
 
 let tmpDir;
 let phaseDir;
+// Consolidation #1969: the host suite forces GSD_WORKSTREAM=test-unit, which
+// runGsdTools propagates into child processes and redirects the project lookup.
+// Clear it for these tests (unset when this file ran standalone); restore after.
+let __savedWorkstream;
 
 beforeEach(() => {
+  __savedWorkstream = process.env.GSD_WORKSTREAM;
+  delete process.env.GSD_WORKSTREAM;
   const proj = setupProject('01-feature');
   tmpDir = proj.tmpDir;
   phaseDir = proj.phaseDir;
@@ -490,6 +496,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup(tmpDir);
+  if (__savedWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
+  else process.env.GSD_WORKSTREAM = __savedWorkstream;
 });
 
 describe('bug-1437 — phase.list-plans is wired in gsd-tools', () => {

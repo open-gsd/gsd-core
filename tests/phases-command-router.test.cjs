@@ -114,13 +114,21 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 describe('bug #1826: phases clear --confirm guard', () => {
   let tmpDir;
+  // Consolidation #1969: the host suite forces GSD_WORKSTREAM=test-unit, which
+  // runGsdTools propagates into child processes and redirects the project lookup.
+  // Clear it for these tests (unset when this file ran standalone); restore after.
+  let __savedWorkstream;
 
   beforeEach(() => {
+    __savedWorkstream = process.env.GSD_WORKSTREAM;
+    delete process.env.GSD_WORKSTREAM;
     tmpDir = createTempProject();
   });
 
   afterEach(() => {
     cleanup(tmpDir);
+    if (__savedWorkstream === undefined) delete process.env.GSD_WORKSTREAM;
+    else process.env.GSD_WORKSTREAM = __savedWorkstream;
   });
 
   test('phases clear without --confirm is rejected when phase dirs exist', () => {

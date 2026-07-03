@@ -722,8 +722,6 @@ describe('Drift item 3 — W006 false positive when disk has zero-padded letter 
  * Answer space: <dir> | null.
  */
 
-process.env.GSD_TEST_MODE = '1';
-
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -731,6 +729,15 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { runGsdTools, cleanup } = require('./helpers.cjs');
+
+// Consolidation #1969: scope GSD_TEST_MODE to this folded block so it does not
+// leak (via the runGsdTools env copy) into host tests registered before the fold.
+const __savedTestMode = process.env.GSD_TEST_MODE;
+before(() => { process.env.GSD_TEST_MODE = '1'; });
+after(() => {
+  if (__savedTestMode === undefined) delete process.env.GSD_TEST_MODE;
+  else process.env.GSD_TEST_MODE = __savedTestMode;
+});
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
