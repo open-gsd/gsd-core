@@ -362,6 +362,22 @@ describe('/gsd:onboard command contract', () => {
 
     assert.ok(content.includes('AskUserQuestion'), 'workflow must still support interactive choices');
     assert.ok(content.includes('--text'), 'workflow must document text-mode fallback');
+    assert.ok(
+      content.includes('Exit. If the user skips mapping, print:'),
+      'skip mapping must hand off explicitly instead of falling through to summary creation',
+    );
+    assert.ok(
+      content.includes('Skipping codebase mapping may give /gsd:new-project weaker context.'),
+      'skip mapping must warn about weaker context',
+    );
+    assert.ok(
+      content.includes('Exit. If the user skips docs ingest, print:'),
+      'skip docs ingest must hand off explicitly instead of falling through to summary creation',
+    );
+    assert.ok(
+      content.includes('Skipping docs ingest may omit existing ADR/PRD/SPEC/RFC context from /gsd:new-project.'),
+      'skip docs ingest must warn about omitted docs context',
+    );
     assert.match(content, /do not overwrite/i, 'workflow must protect existing summary/planning');
     assert.match(content, /query commit "docs: create onboarding summary" --files \.planning\/onboarding\/SUMMARY\.md/);
     assert.ok(!content.includes('execute-phase'), 'onboarding must not execute implementation phases');

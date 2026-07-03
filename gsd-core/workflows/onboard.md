@@ -72,7 +72,17 @@ Run from worktree root {ONBOARDING_ROOT}:
 Then rerun /gsd:onboard from the same worktree root.
 ```
 
-Exit. If the user skips mapping, continue with a warning.
+Exit. If the user skips mapping, print:
+
+```text
+Skipping codebase mapping may give /gsd:new-project weaker context.
+
+Run from worktree root {ONBOARDING_ROOT}:
+
+/gsd:new-project
+```
+
+Exit.
 
 ### `ingest-docs`
 
@@ -107,7 +117,17 @@ Run from worktree root {ONBOARDING_ROOT}:
 Then rerun /gsd:onboard from the same worktree root.
 ```
 
-Exit. If the user skips docs ingest, continue to the new-project handoff below.
+Exit. If the user skips docs ingest, print:
+
+```text
+Skipping docs ingest may omit existing ADR/PRD/SPEC/RFC context from /gsd:new-project.
+
+Run from worktree root {ONBOARDING_ROOT}:
+
+/gsd:new-project
+```
+
+Exit.
 
 ### `complete-map-before-new-project`
 
