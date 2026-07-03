@@ -161,7 +161,13 @@ describe('ci-test-scope.cjs', () => {
       `expected product_changed=true for bin/gsd, got: ${JSON.stringify(result)}`);
     assert.strictEqual(result.full_matrix, true);
     assert.ok(result.targeted_tests.includes('tests/install.test.cjs'));
-    assert.ok(result.targeted_tests.includes('tests/release-tarball-smoke.install.test.cjs'));
+    // release-tarball-smoke.install.test.cjs is intentionally EXCLUDED from the
+    // scoped/targeted lane (SCOPED_LANE_EXCLUDE in ci-test-scope.cjs): it is a
+    // 3–6 min npm-pack + global-install integration test that runs via its own
+    // install-smoke.yml workflow, not here — running it in the scoped lane too is
+    // redundant and overran the per-chunk Windows timeout (epic #1969).
+    assert.ok(!result.targeted_tests.includes('tests/release-tarball-smoke.install.test.cjs'),
+      `release-tarball-smoke.install.test.cjs must not be in the scoped targeted lane; got: ${JSON.stringify(result.targeted_tests)}`);
   });
 
   test('missing required CLI values fail with usage', () => {
