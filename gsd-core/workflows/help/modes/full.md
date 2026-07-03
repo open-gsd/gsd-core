@@ -687,7 +687,7 @@ These six skills exist primarily for the model to perform two-stage hierarchical
 ├── milestones/
 │   ├── v1.0-ROADMAP.md       # Archived roadmap snapshot
 │   ├── v1.0-REQUIREMENTS.md  # Archived requirements
-│   └── v1.0-phases/          # Archived phase dirs (via /gsd:cleanup or --archive-phases)
+│   └── v1.0-phases/          # Archived phase dirs (via /gsd:cleanup or milestone complete, which archives by default)
 │       ├── 01-foundation/
 │       └── 02-core-features/
 ├── codebase/             # Codebase map (brownfield projects)

@@ -176,3 +176,36 @@ describe('migrate-config — idempotent (running twice produces no-op)', () => {
     assert.deepEqual(secondParsed.normalizations, [], 'Second run normalizations must be empty');
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-321-config-defaults-clone-strategy.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-321-config-defaults-clone-strategy (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const configuration = require('../gsd-core/bin/lib/configuration.cjs');
+
+test('mergeDefaults clones defaults without JSON serialization fragility (#321)', () => {
+  const sentinelKey = '__bug321_bigint_sentinel__';
+  const sentinelValue = BigInt('9007199254740993001');
+
+  configuration.CONFIG_DEFAULTS[sentinelKey] = sentinelValue;
+  try {
+    const merged = configuration.mergeDefaults({});
+    assert.equal(
+      merged[sentinelKey],
+      sentinelValue,
+      'mergeDefaults must preserve non-JSON scalar defaults when cloning'
+    );
+  }
+  finally {
+    delete configuration.CONFIG_DEFAULTS[sentinelKey];
+  }
+});
+  });
+}

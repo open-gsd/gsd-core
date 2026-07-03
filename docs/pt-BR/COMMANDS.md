@@ -1514,7 +1514,7 @@ Um portão de lint impõe o orçamento:
 npm run lint:descriptions
 ```
 
-A verificação também é executada como parte de `npm test` via `tests/enh-2789-description-budget.test.cjs`.
+A verificação também é executada como parte de `npm test` via `tests/skill-frontmatter-contract.test.cjs`.
 
 ---
 

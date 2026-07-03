@@ -212,6 +212,12 @@ Clear leftover phase directories from the previous milestone:
 gsd_run query phases.clear --confirm
 ```
 
+Stage the phase archive move + source removal so they land in the same commit as the milestone start (atomic — no orphaned uncommitted deletions, no un-archived dirs carried forward). `phases.clear` archives each non-999 dir to `milestones/<version>-phases/`; staging both dirs captures the new archive and the removals together (#1871).
+
+```bash
+git add .planning/milestones/ .planning/phases/ 2>/dev/null || true
+```
+
 ```bash
 gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md
 ```

@@ -417,6 +417,7 @@ If no more tests → Go to `complete_session`
 Read the full UAT file.
 
 Find first test with `result: [pending]`.
+If no `[pending]` test found → go to `complete_session`.
 
 Announce:
 ```
@@ -514,8 +515,6 @@ Resolve the security review failure before advancing to the next phase.
 All tests passed, but phase advancement is blocked until security review produces SECURITY.md.
 
 - `/gsd:secure-phase {phase}` — security review (required before advancing)
-- `/gsd:plan-phase {next}` — Plan next phase
-- `/gsd:execute-phase {next}` — Execute next phase
 - `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 

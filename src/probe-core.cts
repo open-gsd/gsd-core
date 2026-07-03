@@ -97,15 +97,41 @@ function errMessage(e: unknown): string {
 }
 
 /**
+ * Structural guard for ONE item of the report `items[]` — enforces the `Item` contract (#1907).
+ * `analyzeCoverage` always emits fully-populated, category/status-validated Items, so this never
+ * rejects legitimate output; it catches an adapter that bypasses the merge and hands back per-item
+ * garbage (e.g. `items:[{}]`) inside a well-shaped envelope — which the container-only guard let
+ * sail through as green output despite the fail-closed docstring below.
+ */
+function isValidItem(item: unknown): item is Item {
+  if (item == null || typeof item !== 'object') return false;
+  const i = item as {
+    requirement_id?: unknown; category?: unknown; status?: unknown;
+    verification?: unknown; resolution?: unknown; reason?: unknown; probe?: unknown;
+  };
+  if (typeof i.requirement_id !== 'string' || !i.requirement_id.trim()) return false;
+  if (typeof i.category !== 'string' || !i.category.trim()) return false;
+  if (!VALID_STATUS.includes(i.status as Status)) return false;
+  if (typeof i.probe !== 'string') return false;
+  // The three nullable fields must be a string or null — never some other type.
+  if (i.verification !== null && typeof i.verification !== 'string') return false;
+  if (i.resolution !== null && typeof i.resolution !== 'string') return false;
+  if (i.reason !== null && typeof i.reason !== 'string') return false;
+  return true;
+}
+
+/**
  * Structural guard for the report an adapter's `analyze` returns. The scaffold types `analyze`
  * loosely (it runs over JSON-parsed input the adapter `as`-casts), so a future adapter (#644)
  * that forgets to validate inside its closure could hand back a malformed object. Rather than
- * stringify garbage as green output, `runProbeCli` checks the report shape and fails closed.
+ * stringify garbage as green output, `runProbeCli` checks the report shape — container AND every
+ * item — and fails closed.
  */
 function isValidReport(report: unknown): report is CoverageReport {
   if (report == null || typeof report !== 'object') return false;
   const r = report as { items?: unknown; coverage?: unknown };
   if (!Array.isArray(r.items)) return false;
+  if (!r.items.every(isValidItem)) return false;
   const c = r.coverage as
     | { applicable?: unknown; resolved?: unknown; unresolved?: unknown; byVerification?: unknown }
     | undefined;
@@ -527,12 +553,21 @@ export function truthStatement(truth: unknown): string {
 /**
  * Extract a truth's verification tier, or `null` when it carries none (a plain string, or an object
  * with no/garbled marker). Failing toward `null` is the Postel-safe direction: an unrecognized marker
- * grades NORMALLY (never a spurious abstention — the over-abstention guard, AC#3), and the marker is
- * machine-emitted from validated edge data so garbling is not a live input path.
+ * grades NORMALLY (never a spurious abstention — the over-abstention guard, AC#3).
+ *
+ * The marker is NOT only machine-emitted: `must_haves` markers can be authored BY HAND (#1820's
+ * spec-optional predicate rail), and the frontmatter continuation-KV parser preserves stray
+ * surrounding whitespace/quotes on a hand-authored value. So we normalize before comparison
+ * (Postel: be liberal in what you accept) — `'backstop '`, `' backstop'`, `'"backstop"'` all
+ * recognize as the tier. Without this, a hand-authored non-inferable `backstop` truth with a stray
+ * trailing space silently grades green instead of abstaining — the exact #1154 false-pass (#1905).
+ * An unrecoverably-corrupted marker (e.g. an embedded quote) stays unrecognized → null → graded
+ * normally (AC#3): we cannot know its intent, and abstaining on it would be a spurious abstention.
  */
 export function truthVerification(truth: unknown): TruthVerification | null {
   if (truth == null || typeof truth !== 'object') return null;
-  const v = (truth as { verification?: unknown }).verification;
+  const raw = (truth as { verification?: unknown }).verification;
+  const v = typeof raw === 'string' ? raw.trim().replace(/^["']|["']$/g, '').trim() : raw;
   return v === 'explicit' || v === 'backstop' ? v : null;
 }
 

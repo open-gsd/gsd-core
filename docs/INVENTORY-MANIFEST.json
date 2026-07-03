@@ -202,6 +202,7 @@
     ],
     "references": [
       "agent-contracts.md",
+      "agent-skills-bootstrap.md",
       "ai-evals.md",
       "ai-frameworks.md",
       "artifact-types.md",
@@ -339,7 +340,9 @@
       "graphify-command-router.cjs",
       "graphify.cjs",
       "gsd2-import.cjs",
+      "handshake-serialized.cjs",
       "hook-bus.cjs",
+      "host-integration-sdk.cjs",
       "host-integration.cjs",
       "init-command-router.cjs",
       "init.cjs",

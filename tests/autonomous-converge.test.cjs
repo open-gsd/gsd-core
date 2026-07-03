@@ -139,6 +139,16 @@ describe('autonomous verification deferral contract', () => {
       /Gaps deferred` and proceed to iterate step/,
       'gap deferral must not silently proceed to the next phase',
     );
+    assert.match(
+      workflow,
+      /Skip deferred phases on autonomous re-entry/,
+      'reruns must explicitly skip deferred verification phases',
+    );
+    assert.match(
+      workflow,
+      /Deferred Verification \(Skipped on Re-entry\)/,
+      'workflow should surface skipped deferred phases and their resume commands',
+    );
   });
 
   test('workflow runs normal transition post-processing after passed verification (#1526)', () => {
@@ -197,6 +207,8 @@ describe('autonomous verification deferral contract', () => {
     );
     assert.match(discoverStep, /phase_complete !== true/);
     assert.match(discoverStep, /verification_status !== "passed"/);
+    assert.match(discoverStep, /STATE_CONTENT=\$\(cat \.planning\/STATE\.md 2>\/dev\/null \|\| true\)/);
+    assert.match(discoverStep, /drop any phase whose number appears in the deferred-phase map/);
     assert.doesNotMatch(discoverStep, /ROADMAP=\$\(gsd_run query roadmap\.analyze\)/);
     assert.doesNotMatch(discoverStep, /disk_status !== "complete"/);
 
@@ -207,5 +219,7 @@ describe('autonomous verification deferral contract', () => {
     );
     assert.match(iterateStep, /phase_complete !== true/);
     assert.match(iterateStep, /verification_status !== "passed"/);
+    assert.match(iterateStep, /STATE_CONTENT=\$\(cat \.planning\/STATE\.md 2>\/dev\/null \|\| true\)/);
+    assert.match(iterateStep, /drop deferred phases from the autonomous queue/);
   });
 });

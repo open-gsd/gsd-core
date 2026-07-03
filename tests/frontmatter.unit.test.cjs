@@ -15,6 +15,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const yaml = require('js-yaml');
 
 const {
   extractFrontmatter,
@@ -1122,6 +1123,81 @@ describe('reconstructFrontmatter: round-trip', () => {
     const parsed = extractFrontmatter(doc);
     assert.ok(Array.isArray(parsed.tags));
     assert.equal(parsed.tags.length, 0);
+  });
+});
+
+// #1779 — reconstructFrontmatter must emit valid YAML for scalars and block-
+// array items that carry an embedded `"`/`\`, a control char, an empty string,
+// a leading YAML indicator, or surrounding whitespace. The project's own lossy
+// `extractFrontmatter` tolerates the broken output, which is exactly why these
+// assert round-trip through a STRICT parser (js-yaml) instead — the strict path
+// fails on the unescaped/bare emission and passes only once every wrap site
+// escapes and every unsafe-bare value is routed through the quoted form.
+describe('reconstructFrontmatter: strict-YAML round-trip (#1779)', () => {
+  // Serialize via the production path, then load with a strict YAML parser.
+  const strictRoundTrip = (obj) => yaml.load(reconstructFrontmatter(obj));
+
+  test('top-level scalar with indicator + embedded quotes (the reported case)', () => {
+    const obj = { upstream: 'https://x (Tom; "Git. Ship. Done")' };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('nested scalar with indicator + embedded quotes', () => {
+    const obj = { meta: { note: 'see: "the docs"' } };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('top-level block-array item with indicator + embedded quotes', () => {
+    // 4 items forces block form (the inline `[a, b]` branch caps at 3).
+    const obj = { tags: ['a: "1"', 'b: "2"', 'c: "3"', 'd: "4"'] };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('nested block-array item with indicator + embedded quotes', () => {
+    const obj = { meta: { tags: ['a: "1"', 'b: "2"', 'c: "3"', 'd: "4"'] } };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('embedded backslash is escaped (not just quotes)', () => {
+    const obj = { path: 'a:\\b\\c "x"' };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('control chars in a wrapped value are escaped (newline, tab, NUL)', () => {
+    const obj = { note: 'line1: a\nline2\twith\x00nul' };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('CRLF round-trips (locks the \\r escape for Windows-authored values)', () => {
+    const obj = { note: 'line1: a\r\nline2' };
+    assert.deepEqual(strictRoundTrip(obj), obj);
+  });
+
+  test('empty string round-trips as "" (bare `k:` would reload as null)', () => {
+    assert.deepEqual(strictRoundTrip({ k: '' }), { k: '' });
+  });
+
+  test('embedded/leading quote with NO indicator still round-trips', () => {
+    assert.deepEqual(strictRoundTrip({ k: '"x' }), { k: '"x' });
+    assert.deepEqual(strictRoundTrip({ k: "'leading single" }), { k: "'leading single" });
+    assert.deepEqual(strictRoundTrip({ k: 'say "hi" there' }), { k: 'say "hi" there' });
+  });
+
+  test('leading YAML indicators with no `:`/`#` still round-trip', () => {
+    for (const v of ['>x', '|x', '&anchor', '*alias', '!tag', '[flow', '{map', '%pct', '@reserved', '`tick']) {
+      assert.deepEqual(strictRoundTrip({ k: v }), { k: v }, `value ${JSON.stringify(v)}`);
+    }
+  });
+
+  test('leading/trailing whitespace is preserved (bare would be trimmed)', () => {
+    assert.deepEqual(strictRoundTrip({ k: '  leading' }), { k: '  leading' });
+    assert.deepEqual(strictRoundTrip({ k: 'trailing  ' }), { k: 'trailing  ' });
+  });
+
+  test('plain values without indicators are unaffected (no spurious quoting)', () => {
+    const obj = { name: 'simple-value', label: 'plain' };
+    assert.equal(reconstructFrontmatter(obj), 'name: simple-value\nlabel: plain');
+    assert.deepEqual(yaml.load(reconstructFrontmatter(obj)), obj);
   });
 });
 

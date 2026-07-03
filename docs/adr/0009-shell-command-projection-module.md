@@ -52,11 +52,11 @@ These call sites should migrate behind the Shell Command Projection Module:
 
 ### Tests expected to move with the seam
 
-- `tests/bug-2979-hook-absolute-node.test.cjs`
+- `tests/install.test.cjs` (folds former `bug-2979-hook-absolute-node`, consolidation epic #1969)
 - `tests/sh-hook-paths.test.cjs`
 - `tests/bug-3011-sdk-path-diagnostic.test.cjs`
-- `tests/bug-3017-codex-hook-absolute-node.test.cjs`
-- `tests/bug-2376-opencode-windows-home-path.test.cjs`
+- `tests/codex-config.test.cjs` (folds former `bug-3017-codex-hook-absolute-node`, consolidation epic #1969)
+- `tests/path-replacement.test.cjs` (folds former `bug-2376-opencode-windows-home-path`, consolidation epic #1969)
 - `tests/bug-3020-install-shell-path-probe.test.cjs`
 - `tests/bug-3359-stale-gsd-sdk-path-version.test.cjs`
 

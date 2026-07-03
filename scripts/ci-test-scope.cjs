@@ -133,7 +133,14 @@ const RULES = [
       'tests/install-regressions.test.cjs',
       'tests/install-runtime-artifacts.test.cjs',
       'tests/install-path-detection.test.cjs',
-      'tests/release-tarball-smoke.install.test.cjs',
+      // NOTE: release-tarball-smoke.install.test.cjs is intentionally NOT here.
+      // It is a 3–6 min `npm pack` + `npm install -g` integration test with its
+      // OWN dedicated workflow (.github/workflows/install-smoke.yml, triggered on
+      // the production install paths). Running it in the scoped/targeted lane too
+      // is redundant and blows the per-chunk Windows timeout when a broad PR
+      // bundles it with many other changed test files (epic #1969). See the
+      // SCOPED_LANE_EXCLUDE guard below, which also drops it when it is itself a
+      // changed test file.
       'tests/runtime-artifact-layout.test.cjs',
       'tests/golden-install-parity.test.cjs', // any src/installer change can alter emitted install artifacts → re-verify golden install parity (drift guard)
     ],
@@ -397,6 +404,17 @@ function classify(files) {
       }
     }
   }
+
+  // Heavy integration tests that own a dedicated workflow must never run in the
+  // scoped/targeted lane — they carry a multi-minute cost that overruns the
+  // per-chunk timeout (worst on Windows) when a broad PR bundles them with many
+  // other changed test files, and their production paths already trigger their
+  // own workflow. Drop them however they entered (matched rule OR changed-file).
+  const SCOPED_LANE_EXCLUDE = new Set([
+    // covered by .github/workflows/install-smoke.yml
+    'tests/release-tarball-smoke.install.test.cjs',
+  ]);
+  for (const f of SCOPED_LANE_EXCLUDE) { targeted.delete(f); windows.delete(f); }
 
   // code_changed: true when product/pipeline OR inert CI changed.
   // Docs-only PRs (neither flag set) get code_changed=false → full matrix skip.

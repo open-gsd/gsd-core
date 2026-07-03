@@ -57,7 +57,7 @@
  * Milestone Operations:
  *   milestone complete <version>       Archive milestone, create MILESTONES.md
  *     [--name <name>]
- *     [--archive-phases]               Move phase dirs to milestones/vX.Y-phases/
+ *     [--no-archive-phases]          Skip moving phase dirs to milestones/vX.Y-phases/ (archived by default)
  *
  * User Story Validation:
  *   user-story validate --story "..."  Validate "As a / I want to / so that" format
@@ -1459,7 +1459,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       const subcommand = args[1];
       if (subcommand === 'complete') {
         const milestoneName = parseMultiwordArg(args, 'name');
-        const archivePhases = args.includes('--archive-phases');
+        // #1871: archive phase dirs by default on milestone complete so the next
+        // new-milestone never inherits un-archived dirs. --no-archive-phases opts out.
+        const archivePhases = !args.includes('--no-archive-phases');
         const force = args.includes('--force');
         milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force }, raw);
       } else {
@@ -1671,13 +1673,22 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         return undefined;
       };
       // Running GSD version (hard gate for engines.gsd at install/load); fail-closed to 0.0.0.
+      // #1920: prefer the authoritative gsd-core/VERSION the installer writes for EVERY runtime
+      // (gsd-core/bin/ -> ../VERSION), so installed layouts report the true version even when the
+      // walked-up ../../package.json is the versionless CommonJS marker or the user's own project.
+      // Fall back to the runtime-root package.json (dev/source tree), then fail-closed. Mirrors
+      // readHostVersion() in capability-loader.cts.
       const capHostVersion = () => {
+        const SEMVER_PREFIX = /^\d+\.\d+\.\d+/;
         try {
-          const pkg = require('../../package.json'); // gsd-core/bin/ -> repo root is two up
-          return typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
-        } catch {
-          return '0.0.0';
-        }
+          const v = fs.readFileSync(path.join(__dirname, '..', 'VERSION'), 'utf8').trim();
+          if (SEMVER_PREFIX.test(v)) return v;
+        } catch { /* not an installed tree (no gsd-core/VERSION) */ }
+        try {
+          const pkg = require(path.join(__dirname, '..', '..', 'package.json')); // gsd-core/bin/ -> repo root is two up
+          if (pkg && typeof pkg.version === 'string' && SEMVER_PREFIX.test(pkg.version)) return pkg.version;
+        } catch { /* runtime root has no package.json */ }
+        return '0.0.0';
       };
       // #1459: the USER-OWNED consent home (GSD_HOME||homedir()) where project-scope consent records
       // live — OUTSIDE any repo. SAME rule as the loader/consent-store path resolution so a record

@@ -374,6 +374,7 @@ const {
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs'));
 const {
   updateCacheFileName,
+  PACKAGE_NAME,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
 
 // ADR-1239 Phase B: runtime-artifact install cluster extracted to install-engine.cjs.
@@ -7316,6 +7317,22 @@ function uninstall(isGlobal, runtime = 'claude') {
     }
   }
 
+  // 4z. Remove the OpenCode native plugin adapter (#1914). Only GSD's own
+  // plugin file is removed; the plugins/ dir is pruned only if it becomes
+  // empty, preserving any user-authored OpenCode plugins.
+  if (isOpencode) {
+    const pluginsDir = path.join(targetDir, 'plugins');
+    const pluginPath = path.join(pluginsDir, 'gsd-core.js');
+    if (fs.existsSync(pluginPath)) {
+      try {
+        fs.unlinkSync(pluginPath);
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed OpenCode plugin`);
+      } catch (_) { /* best-effort */ }
+      try { fs.rmdirSync(pluginsDir); } catch (_) { /* not empty — user plugins present */ }
+    }
+  }
+
   // 4a. Remove scripts/changeset/ and scripts/lib/ (#935)
   // GSD-managed files only: enumerate the exact set the installer writes.
   // Any file NOT in this set is user-owned and must survive uninstall.
@@ -7359,6 +7376,11 @@ function uninstall(isGlobal, runtime = 'claude') {
   // Remove scripts/fix-slash-commands.cjs (#1223) — must come before the scripts/ rmdir
   const fixSlashUninstallPath = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
   try { fs.unlinkSync(fixSlashUninstallPath); } catch (_) { /* best-effort */ }
+
+  // Remove the capability registry generator scripts (#1920) — before the scripts/ rmdir
+  for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+    try { fs.unlinkSync(path.join(targetDir, 'scripts', gen)); } catch (_) { /* best-effort */ }
+  }
 
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
@@ -7702,12 +7724,31 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
     modified = true;
   }
 
-  // Configure external_directory permission (the safety guard for paths outside project)
+  // Configure external_directory permission (the safety guard for paths outside)
   if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
     config.permission.external_directory = {};
   }
   if (config.permission.external_directory[gsdPath] !== 'allow') {
     config.permission.external_directory[gsdPath] = 'allow';
+    modified = true;
+  }
+
+  // ADR-1239 Phase D / #1682 — register the companion MCP server (Phase 4) so
+  // OpenCode connects to GSD's command (point 1) + state-IO (point 5) surface
+  // with NO bespoke plugin. Idempotent + non-clobbering: only added when
+  // `mcp.gsd` is absent (a user-defined `mcp.gsd` is respected — Hyrum's Law).
+  // Local-stdio schema per OpenCode config (packages/core/src/config/mcp.ts).
+  // `-p @opengsd/gsd-core` resolves the `gsd-mcp-server` bin from this package
+  // (bin name != package name) regardless of global-install state.
+  if (!config.mcp || typeof config.mcp !== 'object') {
+    config.mcp = {};
+  }
+  if (config.mcp.gsd === undefined) {
+    config.mcp.gsd = {
+      type: 'local',
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+      enabled: true,
+    };
     modified = true;
   }
 
@@ -8062,6 +8103,24 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
   if (fs.existsSync(fixSlashInstallPath)) {
     manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
+  }
+
+  // Track the capability registry generator scripts (#1920) — top-level scripts/ files
+  // not covered by the changeset/lib loops.
+  for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+    const genInstallPath = path.join(configDir, 'scripts', gen);
+    if (fs.existsSync(genInstallPath)) {
+      manifest.files['scripts/' + gen] = fileHash(genInstallPath);
+    }
+  }
+
+  // Track the OpenCode native plugin adapter (#1914) so update/drift detection
+  // and uninstall can account for it.
+  if (isOpencode) {
+    const pluginInstallPath = path.join(configDir, 'plugins', 'gsd-core.js');
+    if (fs.existsSync(pluginInstallPath)) {
+      manifest.files['plugins/gsd-core.js'] = fileHash(pluginInstallPath);
+    }
   }
 
   fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -8999,6 +9058,39 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     } else {
       failures.push('skills/gsd-*');
     }
+
+    // OpenCode-only: install the native plugin adapter (#1914). OpenCode
+    // declares hooksSurface: 'none', so GSD's lifecycle hooks are never
+    // registered as settings.json hooks the way Claude Code does — the hook
+    // *scripts* ship to <configDir>/hooks/ but nothing invokes them. This
+    // plugin bridges OpenCode's event bus onto those existing hook scripts
+    // (prompt guard, read guard, injection scanner, context monitor, ...),
+    // spawning them as subprocesses. OpenCode auto-discovers plugin files under
+    // <configDir>/plugins/ at startup — no opencode.json registration needed
+    // (its `plugin` array is for npm packages, not local file paths).
+    //
+    // The file MUST land as `.js`: OpenCode's loader globs
+    // `{plugin,plugins}/*.{ts,js}` (verified against its source) — a `.cjs`
+    // extension would never be discovered. The config dir carries a
+    // `{"type":"commonjs"}` package.json (written above), so the `.js` file is
+    // interpreted as CommonJS, matching the adapter's module.exports/require.
+    // Kilo has no plugin surface, so this is gated to OpenCode only.
+    if (isOpencode) {
+      const pluginSrc = path.join(src, '.opencode', 'plugins', 'gsd-core.js');
+      const pluginDestDir = path.join(targetDir, 'plugins');
+      const pluginDest = path.join(pluginDestDir, 'gsd-core.js');
+      if (fs.existsSync(pluginSrc)) {
+        fs.mkdirSync(pluginDestDir, { recursive: true });
+        fs.copyFileSync(pluginSrc, pluginDest);
+        if (fs.existsSync(pluginDest)) {
+          console.log(`  ${green}✓${reset} Installed OpenCode plugin (bridges GSD hooks)`);
+        } else {
+          failures.push('plugins/gsd-core.js');
+        }
+      } else {
+        failures.push('plugins/gsd-core.js');
+      }
+    }
   } else if (isCline) {
     // Cline local install: rules-based only — commands are embedded in .clinerules (generated below).
     // No skills/commands directory needed for local installs.
@@ -9547,6 +9639,31 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       fs.copyFileSync(fixSlashSrc, fixSlashDest);
       if (!verifyFileInstalled(fixSlashDest, 'scripts/fix-slash-commands.cjs')) {
         failures.push('scripts/fix-slash-commands.cjs');
+      }
+    }
+  }
+
+  // Copy scripts/gen-capability-registry.cjs + scripts/gen-loop-host-contract.cjs —
+  // required by gsd-core/bin/lib/capability-loader.cjs at overlay-composition time via
+  // require('../../../scripts/gen-capability-registry.cjs') (which itself requires
+  // gen-loop-host-contract.cjs). Without these, the loader's never-crash invariant
+  // discards EVERY third-party capability overlay and silently falls back to the frozen
+  // first-party registry, so installed capabilities are inert (#1920). Same class of
+  // gap as #1223 (fix-slash-commands.cjs) and copied unconditionally for the same reason:
+  // any runtime that installs gsd-core/ needs the capability system to compose.
+  {
+    const capGenDestDir = path.join(targetDir, 'scripts');
+    fs.mkdirSync(capGenDestDir, { recursive: true });
+    for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+      const genSrc = path.join(src, 'scripts', gen);
+      const genDest = path.join(capGenDestDir, gen);
+      if (!fs.existsSync(genSrc)) {
+        failures.push(`scripts/${gen} (source missing from package — reinstall from npm)`);
+      } else {
+        fs.copyFileSync(genSrc, genDest);
+        if (!verifyFileInstalled(genDest, `scripts/${gen}`)) {
+          failures.push(`scripts/${gen}`);
+        }
       }
     }
   }

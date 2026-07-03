@@ -293,6 +293,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `mandatory-initial-read.md` | Shared required-reading boilerplate injected into agent prompts. |
+| `agent-skills-bootstrap.md` | Shared agent_skills self-load contract (query + Read + dedup guard) injected into all 22 consumer agents. |
 | `project-skills-discovery.md` | Shared project-skills-discovery boilerplate injected into agent prompts. |
 | `research-documentation-lookup.md` | Shared documentation-lookup protocol (Context7 MCP + guarded CLI fallback) injected into all researcher agents. |
 | `research-philosophy.md` | Shared research philosophy (training-as-hypothesis, honest reporting, investigation-not-confirmation) injected into researcher agents. |
