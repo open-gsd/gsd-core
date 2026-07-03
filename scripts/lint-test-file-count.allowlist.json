@@ -58,7 +58,6 @@
     },
     "state": {
       "files": [
-        "bug-21-state-md-template-frontmatter.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
         "state-rebuild-cli.test.cjs",
