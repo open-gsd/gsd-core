@@ -44,15 +44,15 @@ claude --dangerously-skip-permissions
 
 ---
 
-## ステップ 3 — コードベースのマッピング
+## ステップ 3 — Brownfield オンボーディングの開始
 
 プロジェクトを作成する前に、GSD Core に既存のコードを学習させてください。これがブラウンフィールドの計画を正確にするステップです。
 
 ```text
-/gsd-map-codebase
+/gsd-onboard
 ```
 
-GSD Core が4つの並行マッパーサブエージェントを生成します（「Spawning 4 parallel codebase mapper agents…」という通知が表示されます。1〜5分かかりますので中断しないでください）。各エージェントはそれぞれ異なる観点に注目します:
+オンボーディングがコードベースマップ不足を示したら、推奨オプションを選び、表示された `/gsd-map-codebase` ハンドオフを実行してから `/gsd-onboard` を再実行します。`/gsd-map-codebase` が4つの並行マッパーサブエージェントを生成します（「Spawning 4 parallel codebase mapper agents…」という通知が表示されます。1〜5分かかりますので中断しないでください）。各エージェントはそれぞれ異なる観点に注目します:
 
 | エージェント | 観点 |
 |-------|-------|
@@ -133,6 +133,7 @@ Proposed Roadmap
   ROADMAP.md          ← フェーズ 1、ステータス: pending
   STATE.md            ← セッションメモリ
   config.json         ← ワークフロー設定
+  onboarding/SUMMARY.md ← onboarding status and next command
   codebase/           ← ステップ 3 の7つのマップファイル
 ```
 

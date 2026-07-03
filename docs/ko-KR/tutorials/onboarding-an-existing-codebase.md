@@ -49,10 +49,10 @@ claude --dangerously-skip-permissions
 프로젝트를 생성하기 전에 GSD Core가 이미 존재하는 것을 학습하도록 합니다. 이 단계가 브라운필드 계획의 정확도를 높이는 핵심입니다.
 
 ```text
-/gsd-map-codebase
+/gsd-onboard
 ```
 
-GSD Core가 4개의 병렬 매퍼 서브 에이전트를 생성합니다("Spawning 4 parallel codebase mapper agents…" 메시지가 표시되며, 1–5분 소요됩니다. 중단하지 마세요). 각 에이전트는 서로 다른 관심사에 집중합니다:
+온보딩이 코드베이스 맵 누락을 보고하면 권장 옵션을 선택하고 출력된 `/gsd-map-codebase` handoff를 실행한 뒤 `/gsd-onboard`를 다시 실행합니다. `/gsd-map-codebase`가 4개의 병렬 매퍼 서브 에이전트를 생성합니다("Spawning 4 parallel codebase mapper agents…" 메시지가 표시되며, 1–5분 소요됩니다. 중단하지 마세요). 각 에이전트는 서로 다른 관심사에 집중합니다:
 
 | 에이전트 | 집중 영역 |
 |---------|---------|
@@ -133,6 +133,7 @@ Proposed Roadmap
   ROADMAP.md          ← Phase 1, 상태: pending
   STATE.md            ← 세션 메모리
   config.json         ← 워크플로 설정
+  onboarding/SUMMARY.md ← onboarding status and next command
   codebase/           ← Step 3에서 생성된 7개의 맵 파일
 ```
 

@@ -1202,7 +1202,7 @@ gsd capability remove my-cap --scope project          # Turn the installed overl
 
 ### `/gsd-map-codebase`
 
-Analyze existing codebase with parallel mapper agents. Use `--fast` for a quick single-agent scan, or `--query` to search existing intel.
+Analyze existing codebase with parallel mapper agents. Use `--fast` for a quick single-agent scan, or `--query` to search existing intel. First-time brownfield setup should usually start with `/gsd-onboard`, which hands off to this command when a map is missing.
 
 | Argument | Required | Description |
 |----------|----------|-------------|

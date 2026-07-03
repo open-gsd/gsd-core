@@ -47,13 +47,14 @@ The installer prompts for your runtime (Claude Code, OpenCode, Antigravity CLI, 
 
 On another runtime or without Node.js? See [Install on your runtime](docs/how-to/install-on-your-runtime.md).
 
-Once installed, start your first project:
+Once installed, start a new project or onboard an existing repo:
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # greenfield project
+/gsd-onboard       # existing codebase
 ```
 
-New here? Follow [Your first project](docs/tutorials/your-first-project.md) for a guided walkthrough from install to first shipped phase.
+New here? Follow [Your first project](docs/tutorials/your-first-project.md) for a guided walkthrough from install to first shipped phase, or [Onboarding an existing codebase](docs/tutorials/onboarding-an-existing-codebase.md) for brownfield setup.
 
 ---
 

@@ -82,7 +82,7 @@ Map an existing codebase for brownfield projects.
 - Analyzes codebase with parallel Explore agents
 - Creates `.planning/codebase/` with 7 focused documents
 - Covers stack, architecture, structure, conventions, testing, integrations, concerns
-- Use before `/gsd:new-project` on existing codebases
+- Usually reached through `/gsd:onboard` for first-time existing-codebase setup; run directly to refresh or focus a map
 
 Usage: `/gsd:map-codebase`
 

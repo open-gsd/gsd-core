@@ -78,6 +78,7 @@
 | 命令 | 角色 | 源文件 |
 |------|------|--------|
 | `/gsd-new-project` | 通过深度上下文收集和 PROJECT.md 初始化新项目。 | [commands/gsd/new-project.md](../../commands/gsd/new-project.md) |
+| `/gsd-onboard` | 引导现有代码库完成映射、文档摄取、项目设置和 onboarding summary。 | [commands/gsd/onboard.md](../../commands/gsd/onboard.md) |
 | `/gsd-workspace` | 管理 GSD 工作区 — 创建（`--new`）、列出（`--list`）或移除（`--remove`）隔离的工作区环境。 | [commands/gsd/workspace.md](../../commands/gsd/workspace.md) |
 | `/gsd-discuss-phase` | 在规划前通过自适应提问收集阶段上下文。 | [commands/gsd/discuss-phase.md](../../commands/gsd/discuss-phase.md) |
 | `/gsd-mvp-phase` | 将阶段规划为垂直 MVP 切片 — 用户故事、SPIDR 拆分，然后进行阶段规划。 | [commands/gsd/mvp-phase.md](../../commands/gsd/mvp-phase.md) |
@@ -218,6 +219,7 @@
 | `milestone-summary.md` | 里程碑摘要综合 — 从里程碑产物生成的入职和审查产物。 | `/gsd-milestone-summary` |
 | `new-milestone.md` | 启动新里程碑周期 — 加载项目上下文、收集目标、更新 PROJECT.md/STATE.md。 | `/gsd-new-milestone` |
 | `new-project.md` | 统一的新项目流程 — 提问、研究（可选）、需求、路线图。 | `/gsd-new-project` |
+| `onboard.md` | Brownfield 接入编排 — 映射代码库、摄取文档、初始化规划并总结下一步。 | `/gsd-onboard` |
 | `new-workspace.md` | 创建带有仓库 worktree/克隆和独立 `.planning/` 的隔离工作区。 | `/gsd-workspace --new` |
 | `next.md` | 检测当前项目状态并自动推进到下一个逻辑步骤。 | `/gsd-progress --next` |
 | `node-repair.md` | 用于失败任务验证的自主修复算子；由 `execute-plan` 调用。 | `execute-plan.md`（恢复） |

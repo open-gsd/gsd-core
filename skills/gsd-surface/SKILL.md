@@ -45,7 +45,7 @@ Display:
 
 ```
 Enabled (N skills, ~T tokens):
-  core_loop:   new-project  discuss-phase  plan-phase  execute-phase  help  update
+  core_loop:   new-project  onboard  discuss-phase  plan-phase  execute-phase  help  update
   audit_review: …
   …
 

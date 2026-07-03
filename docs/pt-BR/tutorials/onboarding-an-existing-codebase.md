@@ -49,10 +49,10 @@ claude --dangerously-skip-permissions
 Antes de criar um projeto, deixe o GSD Core aprender o que já existe. Este é o passo que torna o planejamento brownfield preciso.
 
 ```text
-/gsd-map-codebase
+/gsd-onboard
 ```
 
-O GSD Core cria quatro sub-agentes mapeadores paralelos (você verá "Spawning 4 parallel codebase mapper agents…" — isso leva de 1 a 5 minutos; não interrompa). Cada agente foca em uma preocupação diferente:
+Se o onboarding informar que o mapa da base de código está ausente, escolha a opção recomendada e execute o handoff `/gsd-map-codebase` impresso antes de rodar `/gsd-onboard` novamente. O `/gsd-map-codebase` cria quatro sub-agentes mapeadores paralelos (você verá "Spawning 4 parallel codebase mapper agents…" — isso leva de 1 a 5 minutos; não interrompa). Cada agente foca em uma preocupação diferente:
 
 | Agente | Foco |
 |--------|------|
@@ -133,6 +133,7 @@ Aprove o roteiro.
   ROADMAP.md          ← Fase 1, status: pending
   STATE.md            ← memória de sessão
   config.json         ← configurações do fluxo de trabalho
+  onboarding/SUMMARY.md ← onboarding status and next command
   codebase/           ← os sete arquivos de mapa do Passo 3
 ```
 
