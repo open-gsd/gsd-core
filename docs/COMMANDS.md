@@ -1718,7 +1718,7 @@ A lint gate enforces the budget:
 npm run lint:descriptions
 ```
 
-The check is also run as part of `npm test` via `tests/enh-2789-description-budget.test.cjs`.
+The check is also run as part of `npm test` via `tests/skill-frontmatter-contract.test.cjs`.
 
 ---
 

@@ -1272,3 +1272,429 @@ describe('bug-2838: SUMMARY rescue delegates to SDK (worktree.cleanup-wave)', ()
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-630-wave-cleanup-orchestrator-root.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-630-wave-cleanup-orchestrator-root (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: source-text-is-the-product (see #630)
+// execute-phase.md is the shipped orchestration contract for wave execution and
+// cleanup. Bug #630: the two wave-cleanup guards resolved PRIMARY_WT from
+// `git worktree list --porcelain`'s first entry — always the main checkout —
+// so an orchestrator running from a non-primary (per-phase lane) worktree was
+// cd'd off its own lane and tripped the #3174 branch-drift assertion at cleanup,
+// refusing merge-back. The fix persists the dispatch-time orchestrator root in
+// WAVE_WORKTREE_MANIFEST and pins cleanup to that, falling back to first-entry
+// only for pre-#630 manifests.
+//
+// This file locks the source contract (the .md is the product) AND behaviorally
+// proves the pivot by running the shipped manifest-reader one-liner against a
+// real non-primary-worktree git topology.
+
+'use strict';
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
+
+const EXECUTE_PHASE_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+
+function readMd() {
+  return fs.readFileSync(EXECUTE_PHASE_MD, 'utf8');
+}
+
+// Pull the exact `node -e '...'` manifest-reader script shipped in the cleanup
+// guard, so the behavioral test exercises the real shipped code, not a copy.
+function extractManifestReaderScript() {
+  const content = readMd();
+  // Anchor on `PRIMARY_WT=$(MANIFEST=...` so we grab the cleanup READER, not the
+  // dispatch-time writer one-liner (which shares the `MANIFEST="..." node -e` prefix).
+  const m = content.match(/PRIMARY_WT=\$\(MANIFEST="\$WAVE_WORKTREE_MANIFEST" node -e '([^']*)'\)/);
+  assert.ok(m, 'expected a `PRIMARY_WT=$(MANIFEST="$WAVE_WORKTREE_MANIFEST" node -e \'...\')` reader in execute-phase.md');
+  return m[1];
+}
+
+function git(cwd, args) {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+// Canonicalize a path the way the OS does. On Windows, os.tmpdir() can yield an 8.3
+// short name (RUNNER~1) while `git worktree list` reports the long form (runneradmin);
+// realpathSync.native reconciles both to the true canonical path so comparisons are stable.
+function canon(p) {
+  return fs.realpathSync.native(p);
+}
+
+describe('bug #630 — wave-cleanup pins to the orchestrator root, not git-worktree-list first entry', () => {
+  test('execute-phase.md is readable', () => {
+    assert.ok(readMd().length > 0, 'execute-phase.md must not be empty');
+  });
+
+  // ── Source contract (the .md is the product) ──────────────────────────────
+
+  test('dispatch persists the orchestrator root into the manifest (#630)', () => {
+    const content = readMd();
+    assert.match(
+      content,
+      /ORCH_ROOT=\$\(git rev-parse --show-toplevel\)/,
+      'manifest init must capture the dispatch-time orchestrator root via show-toplevel',
+    );
+    assert.match(
+      content,
+      /orchestrator_root:\s*process\.env\.ORCH_ROOT/,
+      'manifest init must write orchestrator_root into WAVE_WORKTREE_MANIFEST',
+    );
+  });
+
+  test('both cleanup guards resolve PRIMARY_WT from the manifest orchestrator_root (#630)', () => {
+    const content = readMd();
+    const readers = content.match(
+      /PRIMARY_WT=\$\(MANIFEST="\$WAVE_WORKTREE_MANIFEST" node -e '[^']*orchestrator_root[^']*'\)/g,
+    );
+    assert.ok(
+      readers && readers.length >= 2,
+      `both wave-cleanup guards (templated + cleanup-tail) must read orchestrator_root from the manifest; found ${readers ? readers.length : 0}`,
+    );
+  });
+
+  test('first-entry resolution survives only as a guarded fallback, never the sole resolver (#630)', () => {
+    const content = readMd();
+    // Every remaining first-entry resolution must be preceded by the `[ -n "$PRIMARY_WT" ] ||`
+    // guard, i.e. it only runs when the manifest lookup produced nothing.
+    const firstEntryLines = content.match(/^.*git worktree list --porcelain \| awk '\/\^worktree \/.*$/gm) || [];
+    for (const line of firstEntryLines) {
+      assert.match(
+        line,
+        /\[ -n "\$PRIMARY_WT" \] \|\|/,
+        `first-entry resolution must be a guarded fallback, not the primary resolver: ${line.trim()}`,
+      );
+    }
+    assert.ok(firstEntryLines.length >= 2, 'expected the fallback in both cleanup guards');
+  });
+
+  // ── Behavioral proof of the pivot ─────────────────────────────────────────
+
+  test('shipped manifest reader resolves to the lane worktree, while first-entry resolves to main (#630)', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-630-'));
+    try {
+      const mainDir = path.join(tmpRoot, 'main');
+      fs.mkdirSync(mainDir);
+      git(mainDir, ['-c', 'init.defaultBranch=main', 'init', '-q']);
+      git(mainDir, ['config', 'user.email', 'test@example.com']);
+      git(mainDir, ['config', 'user.name', 'Test']);
+      fs.writeFileSync(path.join(mainDir, 'f.txt'), 'x\n');
+      git(mainDir, ['add', '.']);
+      git(mainDir, ['commit', '-q', '-m', 'init']);
+
+      // Non-primary worktree on a per-phase lane branch.
+      const laneDir = path.join(tmpRoot, 'lane');
+      git(mainDir, ['worktree', 'add', '-q', '-b', 'feat/lane', laneDir]);
+
+      const realMain = canon(mainDir);
+      const realLane = canon(laneDir);
+
+      // Manifest as written at dispatch: orchestrator_root is the lane (the orchestrator runs there).
+      const manifest = path.join(tmpRoot, 'wave.json');
+      fs.writeFileSync(manifest, JSON.stringify({ orchestrator_root: realLane, worktrees: [] }) + '\n');
+
+      // Run the EXACT shipped reader one-liner.
+      const script = extractManifestReaderScript();
+      const resolved = execFileSync('node', ['-e', script], {
+        cwd: laneDir,
+        env: { ...process.env, MANIFEST: manifest },
+        encoding: 'utf8',
+      }).trim();
+
+      // The buggy first-entry resolution (run from the lane) yields the MAIN checkout.
+      const firstEntry = canon(
+        git(laneDir, ['worktree', 'list', '--porcelain'])
+          .split('\n')
+          .find(l => l.startsWith('worktree '))
+          .slice('worktree '.length),
+      );
+
+      assert.equal(canon(resolved), realLane, 'manifest reader must resolve to the orchestrator lane worktree');
+      assert.equal(firstEntry, realMain, 'sanity: first-entry resolution points at the main checkout (the #630 bug target)');
+      assert.notEqual(canon(resolved), firstEntry, 'the fix must diverge from the old first-entry behavior for a lane orchestrator');
+
+      // The #3174 branch assertion now passes (pinned to lane → branch matches EXPECTED_BRANCH);
+      // pinning to first-entry (main) would have failed it.
+      const expectedBranch = 'feat/lane';
+      assert.equal(git(resolved, ['rev-parse', '--abbrev-ref', 'HEAD']), expectedBranch, 'lane pin satisfies the #3174 branch check');
+      assert.notEqual(git(firstEntry, ['rev-parse', '--abbrev-ref', 'HEAD']), expectedBranch, 'first-entry pin would have tripped the #3174 branch check');
+    } finally {
+      cleanup(tmpRoot);
+    }
+  });
+
+  test('manifest reader falls through (empty output) when orchestrator_root is absent — fallback engages (#630)', () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-630-fb-'));
+    try {
+      const manifest = path.join(tmpRoot, 'legacy.json');
+      // Pre-#630 manifest shape: no orchestrator_root.
+      fs.writeFileSync(manifest, JSON.stringify({ worktrees: [] }) + '\n');
+      const script = extractManifestReaderScript();
+      const out = execFileSync('node', ['-e', script], {
+        env: { ...process.env, MANIFEST: manifest },
+        encoding: 'utf8',
+      });
+      assert.equal(out, '', 'reader must emit nothing for a manifest without orchestrator_root so the first-entry fallback engages');
+    } finally {
+      cleanup(tmpRoot);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-48-cwd-drift-guard-e2e.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-48-cwd-drift-guard-e2e (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: integration-test-input (see #48)
+// Reads execute-phase.md to extract + execute the cwd-drift guard bash snippet against real git worktrees.
+
+'use strict';
+
+const { describe, test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { execSync, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
+
+// ---------------------------------------------------------------------------
+// Extract the cwd-drift guard bash block from execute-phase.md
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads execute-phase.md and extracts the bash fenced block that implements
+ * the orchestrator cwd-drift guard inside <step name="execute_waves">.
+ *
+ * Algorithm:
+ *   1. Find <step name="execute_waves">
+ *   2. After that, find the first occurrence of "cwd-drift guard"
+ *   3. After that, find the first ```bash fence
+ *   4. Return the body between ```bash\n and the closing ```
+ *
+ * Throws with a clear message if any step fails or sanity checks don't pass.
+ */
+function extractCwdGuardBash() {
+  const content = fs.readFileSync(EXECUTE_PHASE_PATH, 'utf-8');
+
+  const stepMarker = '<step name="execute_waves">';
+  const stepIdx = content.indexOf(stepMarker);
+  if (stepIdx === -1) {
+    throw new Error(`extractCwdGuardBash: could not find "${stepMarker}" in ${EXECUTE_PHASE_PATH}`);
+  }
+
+  const afterStep = content.slice(stepIdx + stepMarker.length);
+
+  const driftMarker = 'cwd-drift guard';
+  const driftIdx = afterStep.indexOf(driftMarker);
+  if (driftIdx === -1) {
+    throw new Error(`extractCwdGuardBash: could not find "${driftMarker}" after execute_waves step in ${EXECUTE_PHASE_PATH}`);
+  }
+
+  const afterDrift = afterStep.slice(driftIdx + driftMarker.length);
+
+  // Extract the first ```bash|sh fenced block using a CRLF-safe regex.
+  // \r?\n tolerates both LF (Unix) and CRLF (Windows autocrlf=true checkouts).
+  const fenceRe = /```(?:bash|sh)\r?\n([\s\S]*?)```/;
+  const fenceMatch = fenceRe.exec(afterDrift);
+  if (!fenceMatch) {
+    throw new Error(`extractCwdGuardBash: could not find \`\`\`bash fence after cwd-drift guard heading in ${EXECUTE_PHASE_PATH}`);
+  }
+
+  const guardBash = fenceMatch[1];
+
+  if (!guardBash.trim()) {
+    throw new Error('extractCwdGuardBash: extracted bash block is empty');
+  }
+  if (!guardBash.includes('git rev-parse --show-toplevel')) {
+    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "git rev-parse --show-toplevel"');
+  }
+  if (!guardBash.includes('worktree-agent-')) {
+    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "worktree-agent-"');
+  }
+
+  return guardBash;
+}
+
+// ---------------------------------------------------------------------------
+// Run guard helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the guard bash snippet in a given cwd using bash -c.
+ * Returns { status, stderr }.
+ */
+function runGuard(guardBash, cwd) {
+  const result = spawnSync('bash', ['-c', guardBash], {
+    cwd,
+    encoding: 'utf-8',
+  });
+  return { status: result.status, stderr: result.stderr || '' };
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+let upstreamDir;      // bare upstream git repo (the main worktree)
+let featureDir;       // normal feature worktree on branch workspace/feature-x
+let agentWtDir;       // agent worktree on branch worktree-agent-deadbeef
+let agentSubdir;      // subdirectory inside agentWtDir
+let legitUnderClaude; // non-agent worktree whose PATH is under .claude/worktrees/
+const dirsToCleanup = [];
+
+function git(cwd, args) {
+  return execSync(`git ${args.map(a => `"${a}"`).join(' ')}`, {
+    cwd,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+before(() => {
+  // --- upstream: the main repo with an initial commit ---
+  upstreamDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-48-upstream-'));
+  dirsToCleanup.push(upstreamDir);
+
+  git(upstreamDir, ['init', '-b', 'main']);
+  git(upstreamDir, ['config', 'user.email', 'test@example.com']);
+  git(upstreamDir, ['config', 'user.name', 'Test User']);
+  git(upstreamDir, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(upstreamDir, 'README.md'), '# test\n');
+  git(upstreamDir, ['add', 'README.md']);
+  git(upstreamDir, ['commit', '-m', 'chore: init']);
+
+  // --- feature worktree: non-agent branch, path outside .claude/worktrees ---
+  featureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-48-feature-'));
+  dirsToCleanup.push(featureDir);
+  // git worktree add creates the directory itself; remove so it can do so
+  fs.rmdirSync(featureDir);
+  git(upstreamDir, ['worktree', 'add', '-b', 'workspace/feature-x', featureDir]);
+
+  // --- agent worktree: branch worktree-agent-deadbeef ---
+  // Sits under featureDir/.claude/worktrees/agent-deadbeef
+  const agentWtParent = path.join(featureDir, '.claude', 'worktrees');
+  fs.mkdirSync(agentWtParent, { recursive: true });
+  agentWtDir = path.join(agentWtParent, 'agent-deadbeef');
+  git(upstreamDir, ['worktree', 'add', '-b', 'worktree-agent-deadbeef', agentWtDir]);
+
+  // --- subdir inside agent worktree ---
+  agentSubdir = path.join(agentWtDir, 'src', 'deep');
+  fs.mkdirSync(agentSubdir, { recursive: true });
+
+  // --- legitUnderClaude: non-agent worktree whose PATH is under .claude/worktrees/ ---
+  // This proves the guard discriminates by branch name, not path.
+  const legitParent = path.join(upstreamDir, '.claude', 'worktrees');
+  fs.mkdirSync(legitParent, { recursive: true });
+  legitUnderClaude = path.join(legitParent, 'legit-feature');
+  git(upstreamDir, ['worktree', 'add', '-b', 'workspace/legit', legitUnderClaude]);
+});
+
+after(() => {
+  // Prune stale worktree metadata before removing dirs
+  try { git(upstreamDir, ['worktree', 'prune']); } catch (_) { /* best-effort */ }
+  for (const d of dirsToCleanup) {
+    try { cleanup(d); } catch (_) { /* best-effort */ }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('bug #48: orchestrator cwd-drift guard — executable e2e', () => {
+  let guardBash;
+
+  before(() => {
+    guardBash = extractCwdGuardBash();
+  });
+
+  test('guard passes from a feature worktree on a non-agent branch (exit 0)', () => {
+    const { status, stderr } = runGuard(guardBash, featureDir);
+    assert.equal(
+      status, 0,
+      `Expected exit 0 from feature worktree, got ${status}. stderr: ${stderr}`,
+    );
+  });
+
+  test('guard fails closed (exit 1) when cwd is inside an agent worktree', () => {
+    const { status, stderr } = runGuard(guardBash, agentWtDir);
+    assert.equal(
+      status, 1,
+      `Expected exit 1 from agent worktree, got ${status}. stderr: ${stderr}`,
+    );
+    assert.match(
+      stderr,
+      /agent worktree/i,
+      `Expected stderr to mention "agent worktree", got: ${stderr}`,
+    );
+  });
+
+  test('guard fails closed (exit 1) from a SUBDIRECTORY of an agent worktree (root resolution)', () => {
+    // git rev-parse --show-toplevel resolves to the worktree root regardless of cwd subdir.
+    // The guard must catch this via the branch-name check, not the path check.
+    const { status, stderr } = runGuard(guardBash, agentSubdir);
+    assert.equal(
+      status, 1,
+      `Expected exit 1 from agent worktree subdir, got ${status}. stderr: ${stderr}`,
+    );
+  });
+
+  test('guard does NOT blanket-refuse a non-agent worktree located under .claude/worktrees/ (exit 0)', () => {
+    // Discriminator is the worktree-agent-* branch namespace, NOT the path.
+    const { status, stderr } = runGuard(guardBash, legitUnderClaude);
+    assert.equal(
+      status, 0,
+      `Expected exit 0 from non-agent worktree under .claude/worktrees/, got ${status}. stderr: ${stderr}`,
+    );
+  });
+
+  test('guard fails closed (exit 1) when not inside a git repo', (t) => {
+    const nonRepoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-48-nongit-'));
+    try {
+      // Verify that git rev-parse --show-toplevel actually fails here.
+      // On some systems /tmp itself might be inside a git repo (e.g. if the
+      // user's HOME is a git repo). If it resolves, we must skip this test.
+      const check = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+        cwd: nonRepoDir,
+        encoding: 'utf-8',
+      });
+      if (check.status === 0) {
+        t.skip('nonRepoDir unexpectedly resolved to a git repo — skipping');
+        return;
+      }
+
+      const { status, stderr } = runGuard(guardBash, nonRepoDir);
+      assert.equal(
+        status, 1,
+        `Expected exit 1 when not inside a git repo, got ${status}. stderr: ${stderr}`,
+      );
+    } finally {
+      try { cleanup(nonRepoDir); } catch (_) { /* best-effort */ }
+    }
+  });
+});
+  });
+}
