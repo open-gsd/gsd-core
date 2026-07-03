@@ -1,0 +1,81 @@
+{
+  "id": "external-job",
+  "role": "feature",
+  "version": "1.0.0",
+  "title": "Async external-job scheduler adapter",
+  "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it.",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.7.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "config": {
+    "external_job.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+    },
+    "external_job.backend": {
+      "type": "enum",
+      "values": [
+        "slurm"
+      ],
+      "default": "slurm",
+      "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value."
+    },
+    "external_job.artifact_dir": {
+      "type": "string",
+      "default": "Artifacts/jobs",
+      "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout."
+    },
+    "external_job.submit_timeout_ms": {
+      "type": "number",
+      "default": 30000,
+      "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy."
+    },
+    "external_job.poll_timeout_ms": {
+      "type": "number",
+      "default": 15000,
+      "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback)."
+    }
+  },
+  "steps": [],
+  "contributions": [
+    {
+      "point": "execute:wave:post",
+      "into": "executor",
+      "fragment": {
+        "path": "fragments/execute-wave-post.md"
+      },
+      "produces": [
+        ".planning/async-jobs/<job>.json"
+      ],
+      "consumes": [
+        "PLAN.md"
+      ],
+      "when": "external_job.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "plan:post",
+      "into": "planner",
+      "fragment": {
+        "path": "fragments/plan-post.md"
+      },
+      "produces": [],
+      "consumes": [],
+      "when": "external_job.enabled",
+      "onError": "skip"
+    }
+  ],
+  "gates": []
+}

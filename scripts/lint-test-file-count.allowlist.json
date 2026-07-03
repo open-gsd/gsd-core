@@ -106,12 +106,6 @@
       ],
       "issue": "TBD"
     },
-    "external-job": {
-      "files": [
-        "external-job-waiting.test.cjs"
-      ],
-      "issue": "#1165"
-    },
     "host-integration": {
       "files": [
         "host-integration.test.cjs",
