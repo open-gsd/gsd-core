@@ -111,7 +111,7 @@ paused_at: null
 | **3. マイルストーン完了** | `percent` が `100` または `completed_phases == total_phases` | `v2.0 [██████████] 100% · milestone complete` |
 | **4. デフォルトフォールバック** | 上記のいずれにも該当しない | `v1.9 Code Quality · executing · ph 1/5`（既存フォーマット） |
 
-**シーン優先度:** `active_phase` と `next_action` が両方設定されている場合、シーン1が優先されます — オーケストレーターが実行中であるため「次の推奨」は誤解を招くためです。この優先度は `formatGsdState()` のチェック順序によって強制され、`tests/enh-2833-phase-lifecycle-statusline.test.cjs` の `"scene priority"` スイートでカバーされています。
+**シーン優先度:** `active_phase` と `next_action` が両方設定されている場合、シーン1が優先されます — オーケストレーターが実行中であるため「次の推奨」は誤解を招くためです。この優先度は `formatGsdState()` のチェック順序によって強制され、`tests/gsd-statusline.test.cjs` の `"scene priority"` スイートでカバーされています。
 
 進捗バー（`[██░░░░░░░░] 20%`）はフロントマターに `progress.percent` が存在する場合のみマイルストーンセグメントに追加されます。不在の場合はバーは表示されません。
 
@@ -119,7 +119,7 @@ paused_at: null
 
 ## フロントマターパースの制約
 
-ステータスラインフックは正規表現ベースのパース（完全な YAML ライブラリを使用しない）を使用するため、以下の制約が適用されます。これらは `tests/enh-2833-phase-lifecycle-statusline.test.cjs` でテストされています。
+ステータスラインフックは正規表現ベースのパース（完全な YAML ライブラリを使用しない）を使用するため、以下の制約が適用されます。これらは `tests/gsd-statusline.test.cjs` でテストされています。
 
 1. **フロントマターはファイルの先頭文字から始まる必要があります。** コメントを含む何かが開始 `---` の前にあると、マッチが無効になります。開始 `---` 行は末尾のスペースなしで正確にそれだけである必要があります。
 
@@ -189,7 +189,7 @@ paused_at: null
 - ライフサイクルフィールドの追加はオプトインです — フィールドが不在の場合レンダラーはグレースフルに縮退します。
 - 進捗バーは `progress` ブロックが存在する場合でもオプトインです: バーをトリガーするのは `progress.percent` のみで、`total_phases` と `completed_phases` だけではトリガーされません。
 
-`tests/enh-2833-phase-lifecycle-statusline.test.cjs` の `formatGsdState #2833 backward compatibility` テストスイートがこの保証を固定しています。レガシー `STATE.md` 描画を壊す変更があればスイートが失敗します。
+`tests/gsd-statusline.test.cjs` の `formatGsdState #2833 backward compatibility` テストスイートがこの保証を固定しています。レガシー `STATE.md` 描画を壊す変更があればスイートが失敗します。
 
 ---
 

@@ -86,9 +86,6 @@
     },
     "verify": {
       "files": [
-        "bug-2969-verify-reapply-patches.test.cjs",
-        "bug-2994-verify-reapply-patches-installed-path.test.cjs",
-        "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
         "verify-health.test.cjs",
         "verify-mvp-uat.test.cjs",
         "verify-npm-publish.test.cjs",

@@ -111,7 +111,7 @@ When an orchestrator command is in flight, the convention (issue #2833) is to wr
 | **3. Milestone complete** | `percent` is `100` OR `completed_phases == total_phases` | `v2.0 [██████████] 100% · milestone complete` |
 | **4. Default fallback** | None of the above match | `v1.9 Code Quality · executing · ph 1/5` (existing format) |
 
-**Scene priority:** when both `active_phase` and `next_action` are populated, Scene 1 wins — an orchestrator is in flight, so a "next recommendation" would be misleading. This priority is enforced by check order in `formatGsdState()` and covered by the `"scene priority"` suite in `tests/enh-2833-phase-lifecycle-statusline.test.cjs`.
+**Scene priority:** when both `active_phase` and `next_action` are populated, Scene 1 wins — an orchestrator is in flight, so a "next recommendation" would be misleading. This priority is enforced by check order in `formatGsdState()` and covered by the `"scene priority"` suite in `tests/gsd-statusline.test.cjs`.
 
 The progress bar (`[██░░░░░░░░] 20%`) is appended to the milestone segment only when `progress.percent` is present in frontmatter; absent means no bar.
 
@@ -119,7 +119,7 @@ The progress bar (`[██░░░░░░░░] 20%`) is appended to the mil
 
 ## Frontmatter parsing constraints
 
-The status-line hook uses regex-based parsing (no full YAML library), so the following constraints apply. They are tested in `tests/enh-2833-phase-lifecycle-statusline.test.cjs`.
+The status-line hook uses regex-based parsing (no full YAML library), so the following constraints apply. They are tested in `tests/gsd-statusline.test.cjs`.
 
 1. **Frontmatter must start at the very first character of the file.** Anything — including comments — above the opening `---` invalidates the match. The opening `---` line must be exactly that, with no trailing spaces.
 
@@ -189,7 +189,7 @@ The phase-lifecycle fields (`active_phase`, `next_action`, `next_phases`, and `p
 - Adding any lifecycle field is opt-in — the renderer degrades gracefully when fields are absent.
 - The progress bar is opt-in even when the `progress` block exists: only `progress.percent` triggers the bar; `total_phases` and `completed_phases` alone do not.
 
-The `formatGsdState #2833 backward compatibility` test suite in `tests/enh-2833-phase-lifecycle-statusline.test.cjs` locks this guarantee; any change that breaks legacy `STATE.md` rendering will fail the suite.
+The `formatGsdState #2833 backward compatibility` test suite in `tests/gsd-statusline.test.cjs` locks this guarantee; any change that breaks legacy `STATE.md` rendering will fail the suite.
 
 ---
 
