@@ -802,7 +802,7 @@ function cmdInitOnboard(
     ...buildOnboardProjection(cwd, {
       commitDocs: !!config.commit_docs,
       fast: options['fast'] === true,
-      textMode: !!config.text_mode || !!workflowConfig['text_mode'],
+      textMode: options['text'] === true || !!config.text_mode || !!workflowConfig['text_mode'],
     }),
     ...getInitGitState(cwd),
   };

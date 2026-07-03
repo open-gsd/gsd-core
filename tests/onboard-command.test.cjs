@@ -97,6 +97,14 @@ describe('init onboard public CLI projection', () => {
     ]);
   });
 
+  test('forwards the --text flag into the public projection', () => {
+    const result = runGsdTools(['init', 'onboard', '--text', '--raw'], tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.text_mode, true);
+  });
+
   test('reports complete codebase map and onboarding summary in existing planning', () => {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
     for (const name of ['STACK', 'ARCHITECTURE', 'STRUCTURE', 'CONVENTIONS', 'TESTING', 'INTEGRATIONS', 'CONCERNS']) {

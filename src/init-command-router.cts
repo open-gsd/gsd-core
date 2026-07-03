@@ -73,8 +73,8 @@ function routeInitCommand({ init, args, cwd, raw, error }: RouteInitCommandOptio
       'new-project': () => init.cmdInitNewProject(cwd, raw),
       'new-milestone': () => init.cmdInitNewMilestone(cwd, raw),
       onboard: () => {
-        const namedArgs = parseNamedArgs(args, [], ['fast']);
-        init.cmdInitOnboard(cwd, raw, { fast: namedArgs['fast'] });
+        const namedArgs = parseNamedArgs(args, [], ['fast', 'text']);
+        init.cmdInitOnboard(cwd, raw, { fast: namedArgs['fast'], text: namedArgs['text'] });
       },
       quick: () => init.cmdInitQuick(cwd, args.slice(2).join(' '), raw),
       'ingest-docs': () => init.cmdInitIngestDocs(cwd, raw),
