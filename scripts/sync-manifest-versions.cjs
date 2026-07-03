@@ -34,6 +34,7 @@ const VERSIONED_MANIFESTS = [
   { path: '.claude-plugin/plugin.json', versionKey: 'version' },
   { path: 'gemini-extension.json', versionKey: 'version' },
   { path: '.claude-plugin/marketplace.json', versionKey: 'plugins.0.version' },
+  { path: 'vscode/package.json', versionKey: 'version' },
 ];
 
 // Convenience: just the registered paths, for consumers that only need to
