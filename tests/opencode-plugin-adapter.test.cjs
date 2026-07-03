@@ -324,13 +324,13 @@ test('experimental.session.compacting injects the GSD state breadcrumb', async (
   assert.ok(output.context.some((c) => /GSD/.test(c)), 'breadcrumb is GSD-tagged');
 });
 
-test('plugin implements the full declared opencode-subset hook surface (Claude parity)', async (t) => {
-  const { hookEventSurfaceFor } = require('../gsd-core/bin/lib/host-integration.cjs');
-  const surface = hookEventSurfaceFor('opencode-subset');
-  assert.ok(surface, 'opencode-subset is a consumed dialect (non-null surface)');
+test('plugin implements the full declared opencode extension-event surface (Claude parity — #1943)', async (t) => {
+  const { extensionEventSurfaceFor } = require('../gsd-core/bin/lib/host-integration.cjs');
+  const surface = extensionEventSurfaceFor('opencode');
+  assert.ok(surface, 'opencode is a consumed extensionEvents dialect (non-null surface)');
   // The engine — not the host bus — owns workflow-phase sequencing on this host.
-  assert.ok(!surface.some((e) => /plan:|verify:|ship:|execute:/.test(e)),
-    'opencode-subset fires no workflow-phase events');
+  assert.ok(!surface.some((e) => /plan:|verify:|ship:/.test(e)),
+    'opencode extension events include no workflow-phase events');
 
   const { mod } = buildInstalledLayout(t, {});
   const handlers = await mod.server({ directory: process.cwd() });
@@ -344,7 +344,7 @@ test('plugin implements the full declared opencode-subset hook surface (Claude p
   for (const ev of surface) {
     const covered = typeof handlers[ev] === 'function'
       || ev === 'session.created' || ev === 'session.idle' || ev === 'file.edited';
-    assert.ok(covered, `plugin covers opencode-subset event: ${ev}`);
+    assert.ok(covered, `plugin covers opencode extension event: ${ev}`);
   }
 });
 

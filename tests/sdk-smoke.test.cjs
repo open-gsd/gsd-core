@@ -23,7 +23,7 @@ test('SDK exports the full public surface a host-plugin author needs', () => {
 
   const fns = [
     'negotiateHostCapabilities', 'profileOf', 'degradationFor',
-    'hookEventSurfaceFor', 'shouldFlattenDispatch',
+    'hookEventSurfaceFor', 'extensionEventSurfaceFor', 'shouldFlattenDispatch',
     'createDeclarativeAdapter', 'createImperativeAdapter',
     'createModelAdapter', 'createHookBus', 'createStateIO',
     'buildHandshakeRequest', 'handleHandshakeRequest',

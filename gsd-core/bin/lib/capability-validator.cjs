@@ -704,7 +704,12 @@ const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'mark
 const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']);
 const VALID_COMMAND_STYLES = new Set(['slash-hyphen', 'shell-var']);
 const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']);
-const VALID_HOOK_EVENTS = new Set(['claude', 'gemini', 'opencode-subset']);
+const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
+// extensionEvents — the plugin/extension-system event dialect (ADR-1239 amendment / #1943).
+// DISTINCT from hookEvents (managed-hook dialect): extensionEvents describes the
+// plugin-owned event subset imperative hosts expose (opencode / pi); 'none' = the
+// host exposes no extension surface (engine owns the bus, e.g. VS Code).
+const VALID_EXTENSION_EVENTS = new Set(['opencode', 'pi', 'none']);
 const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
@@ -978,7 +983,9 @@ function validateRuntimeBody(cap) {
     );
   }
 
-  // hookEvents — optional; if present must be in closed 3-enum (ADR-1016 Decision 5)
+  // hookEvents — optional; if present must be in closed enum (ADR-1016 Decision 5).
+  // Managed-hook dialect only (claude/gemini). The OpenCode extension-system event
+  // subset is NOT a hookEvents value — it is `extensionEvents` (ADR-1239 / #1943).
   if (r.hookEvents !== undefined) {
     if (r.hookEvents === '__proto__' || r.hookEvents === 'constructor' || r.hookEvents === 'prototype') {
       errors.push('runtime.hookEvents "' + r.hookEvents + '" is a reserved name');
@@ -986,6 +993,20 @@ function validateRuntimeBody(cap) {
       errors.push(
         'runtime.hookEvents must be one of: ' + [...VALID_HOOK_EVENTS].join(', ') +
         ' (got: ' + JSON.stringify(r.hookEvents) + ')',
+      );
+    }
+  }
+
+  // extensionEvents — optional; the extension-system event dialect (ADR-1239 amendment / #1943).
+  // Distinct from hookEvents. Only imperative-embedding hosts (with a plugin/extension
+  // API) set it; declarative hosts do not.
+  if (r.extensionEvents !== undefined) {
+    if (r.extensionEvents === '__proto__' || r.extensionEvents === 'constructor' || r.extensionEvents === 'prototype') {
+      errors.push('runtime.extensionEvents "' + r.extensionEvents + '" is a reserved name');
+    } else if (!VALID_EXTENSION_EVENTS.has(r.extensionEvents)) {
+      errors.push(
+        'runtime.extensionEvents must be one of: ' + [...VALID_EXTENSION_EVENTS].join(', ') +
+        ' (got: ' + JSON.stringify(r.extensionEvents) + ')',
       );
     }
   }
@@ -2225,6 +2246,7 @@ module.exports = {
   VALID_COMMAND_STYLES,
   VALID_HOOKS_SURFACES,
   VALID_HOOK_EVENTS,
+  VALID_EXTENSION_EVENTS,
   VALID_SANDBOX_TIERS,
   VALID_ARTIFACT_KIND_NAMES,
   VALID_ARTIFACT_NESTINGS,
