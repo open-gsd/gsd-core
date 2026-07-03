@@ -285,12 +285,12 @@ describe('ci-test-scope superset invariant (#494, narrowed)', () => {
   // so OS-specific breakage in the changed test (the #482 class) is still
   // exercised pre-merge. Ubuntu 22/24 coverage comes via targeted_tests.
   test('A1: a changed test file joins the windows scoped lane without full_matrix', () => {
-    const result = scopeFor(['tests/bug-1974-context-exhaustion-record.test.cjs']);
+    const result = scopeFor(['tests/perf-317-context-monitor-fs.test.cjs']);
     assert.strictEqual(result.full_matrix, false,
       `expected full_matrix=false for a tests/**-only change, got: ${JSON.stringify(result)}`);
-    assert.ok(result.targeted_tests.includes('tests/bug-1974-context-exhaustion-record.test.cjs'),
+    assert.ok(result.targeted_tests.includes('tests/perf-317-context-monitor-fs.test.cjs'),
       `expected the changed test in targeted_tests, got: ${JSON.stringify(result.targeted_tests)}`);
-    assert.ok(result.windows_tests.includes('tests/bug-1974-context-exhaustion-record.test.cjs'),
+    assert.ok(result.windows_tests.includes('tests/perf-317-context-monitor-fs.test.cjs'),
       `expected the changed test in windows_tests, got: ${JSON.stringify(result.windows_tests)}`);
   });
 

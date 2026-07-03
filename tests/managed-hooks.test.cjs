@@ -74,6 +74,14 @@ describe('bug #2136: MANAGED_HOOKS must include all shipped hook files', () => {
 {
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-2136-sh-hook-version (consolidation epic #1969 B6 #1975)", () => {
+  // Consolidation #1969: this block spawns a REAL install and asserts side effects.
+  // The host suite sets GSD_TEST_MODE=1 at collection time, which the install child
+  // inherits via process.env and which suppresses hook/skill writes. Clear it for
+  // this block's duration (standalone had it unset); restore after.
+  const { before: __gtmBefore, after: __gtmAfter } = require('node:test');
+  let __savedGsdTestMode;
+  __gtmBefore(() => { __savedGsdTestMode = process.env.GSD_TEST_MODE; delete process.env.GSD_TEST_MODE; });
+  __gtmAfter(() => { if (__savedGsdTestMode === undefined) delete process.env.GSD_TEST_MODE; else process.env.GSD_TEST_MODE = __savedGsdTestMode; });
 
 // allow-test-rule: structural-regression-guard (see #2136)
 // The shebang line must be `#!/usr/bin/env bash` (PATH-resolved) rather than
