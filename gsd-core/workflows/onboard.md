@@ -72,7 +72,21 @@ Run from worktree root {ONBOARDING_ROOT}:
 Then rerun /gsd:onboard from the same worktree root.
 ```
 
-Exit. If the user skips mapping, print:
+Exit. If the user skips mapping:
+
+- If `has_docs_candidates && !project_exists`, route the skip to docs ingest instead:
+
+```text
+Skipping codebase mapping may give downstream steps weaker context, but existing ADR/PRD/SPEC/RFC documents should still be ingested before /gsd:new-project.
+
+Run from worktree root {ONBOARDING_ROOT}:
+
+/gsd:ingest-docs
+```
+
+Exit.
+
+- Otherwise print:
 
 ```text
 Skipping codebase mapping may give /gsd:new-project weaker context.

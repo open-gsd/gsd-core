@@ -152,7 +152,8 @@ describe('init onboard public CLI projection', () => {
     assert.strictEqual(parsed.map_readiness, 'fast');
     assert.strictEqual(parsed.has_codebase_map, false);
     assert.strictEqual(parsed.has_fast_codebase_map, true);
-    assert.strictEqual(parsed.needs_codebase_map, false);
+    assert.strictEqual(parsed.needs_codebase_map, true);
+    assert.strictEqual(parsed.needs_fast_codebase_map, false);
     assert.strictEqual(parsed.next_action.kind, 'complete-map-before-new-project');
     assert.strictEqual(parsed.next_action.command, '/gsd:map-codebase');
     assert.match(parsed.next_action.reason, /complete codebase map/i);
@@ -363,8 +364,16 @@ describe('/gsd:onboard command contract', () => {
     assert.ok(content.includes('AskUserQuestion'), 'workflow must still support interactive choices');
     assert.ok(content.includes('--text'), 'workflow must document text-mode fallback');
     assert.ok(
-      content.includes('Exit. If the user skips mapping, print:'),
+      content.includes('Exit. If the user skips mapping:'),
       'skip mapping must hand off explicitly instead of falling through to summary creation',
+    );
+    assert.ok(
+      content.includes('If `has_docs_candidates && !project_exists`, route the skip to docs ingest instead:'),
+      'skip mapping must preserve the docs-ingest gate when planning docs are present',
+    );
+    assert.ok(
+      content.includes('/gsd:ingest-docs'),
+      'skip mapping docs-preserving handoff must name the docs ingest command',
     );
     assert.ok(
       content.includes('Skipping codebase mapping may give /gsd:new-project weaker context.'),

@@ -75,6 +75,7 @@ interface OnboardProjection {
   map_readiness: MapReadiness;
   next_action: OnboardNextAction;
   needs_codebase_map: boolean;
+  needs_fast_codebase_map: boolean;
   has_codebase_map: boolean;
   has_fast_codebase_map: boolean;
   codebase_dir_exists: boolean;
@@ -229,7 +230,7 @@ function planningMissing(
 function nextAction(params: {
   fastMode: boolean;
   isBrownfield: boolean;
-  needsCodebaseMap: boolean;
+  needsOnboardCodebaseMap: boolean;
   hasDocsCandidates: boolean;
   projectExists: boolean;
   mapReadiness: MapReadiness;
@@ -237,7 +238,7 @@ function nextAction(params: {
   hasPlanningArtifacts: boolean;
   missingPlanningFiles: string[];
 }): OnboardNextAction {
-  if (params.isBrownfield && params.needsCodebaseMap) {
+  if (params.isBrownfield && params.needsOnboardCodebaseMap) {
     return {
       kind: 'map-codebase',
       command: params.fastMode ? '/gsd:map-codebase --fast' : '/gsd:map-codebase',
@@ -314,9 +315,9 @@ function buildOnboardProjection(cwd: string, options: BuildOnboardProjectionOpti
   const hasCodebaseMap = codebaseMapFiles.length === REQUIRED_CODEBASE_MAP_FILES.length;
   const hasFastCodebaseMap = missingFastCodebaseMapFiles.length === 0;
   const mapReadinessValue = getMapReadiness(hasCodebaseMap, hasFastCodebaseMap);
-  const needsCodebaseMap = isBrownfield && (
-    options.fast ? !hasFastCodebaseMap : !hasCodebaseMap
-  );
+  const needsCodebaseMap = isBrownfield && !hasCodebaseMap;
+  const needsFastCodebaseMap = isBrownfield && !hasFastCodebaseMap;
+  const needsOnboardCodebaseMap = options.fast ? needsFastCodebaseMap : needsCodebaseMap;
   const projectExists = pathExistsInternal(cwd, '.planning/PROJECT.md');
   const requirementsExists = fs.existsSync(path.join(planningDir(cwd), 'REQUIREMENTS.md'));
   const roadmapExists = fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md'));
@@ -349,7 +350,7 @@ function buildOnboardProjection(cwd: string, options: BuildOnboardProjectionOpti
     next_action: nextAction({
       fastMode: options.fast,
       isBrownfield,
-      needsCodebaseMap,
+      needsOnboardCodebaseMap,
       hasDocsCandidates: docCandidates.length > 0,
       projectExists,
       mapReadiness: mapReadinessValue,
@@ -358,6 +359,7 @@ function buildOnboardProjection(cwd: string, options: BuildOnboardProjectionOpti
       missingPlanningFiles,
     }),
     needs_codebase_map: needsCodebaseMap,
+    needs_fast_codebase_map: needsFastCodebaseMap,
     has_codebase_map: hasCodebaseMap,
     has_fast_codebase_map: hasFastCodebaseMap,
     codebase_dir_exists: fs.existsSync(path.join(planningRoot(cwd), 'codebase')),
