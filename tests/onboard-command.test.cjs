@@ -138,7 +138,7 @@ describe('init onboard public CLI projection', () => {
     assert.strictEqual(parsed.text_mode, true);
   });
 
-  test('reports fast codebase map readiness for the default fast subset', () => {
+  test('reports fast codebase map readiness and a complete-map handoff before new-project', () => {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
     for (const name of ['STACK', 'INTEGRATIONS', 'ARCHITECTURE', 'STRUCTURE']) {
       fs.writeFileSync(path.join(tmpDir, '.planning', 'codebase', `${name}.md`), `# ${name}\n`);
@@ -149,9 +149,13 @@ describe('init onboard public CLI projection', () => {
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.map_readiness, 'fast');
     assert.strictEqual(parsed.has_codebase_map, false);
     assert.strictEqual(parsed.has_fast_codebase_map, true);
     assert.strictEqual(parsed.needs_codebase_map, false);
+    assert.strictEqual(parsed.next_action.kind, 'complete-map-before-new-project');
+    assert.strictEqual(parsed.next_action.command, '/gsd:map-codebase');
+    assert.match(parsed.next_action.reason, /complete codebase map/i);
     assert.deepStrictEqual(parsed.fast_codebase_map_files_required, [
       'STACK.md',
       'INTEGRATIONS.md',
@@ -159,6 +163,74 @@ describe('init onboard public CLI projection', () => {
       'STRUCTURE.md',
     ]);
     assert.deepStrictEqual(parsed.missing_fast_codebase_map_files, []);
+  });
+
+  test('projects the next action for code, docs, greenfield, partial planning, and summary states', () => {
+    fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'src', 'server.ts'), 'export const server = true;\n');
+    let result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(result.output).next_action, {
+      kind: 'map-codebase',
+      command: '/gsd:map-codebase',
+      reason: 'Existing code was detected, but the required .planning/codebase/ map is missing.',
+    });
+
+    cleanup(tmpDir);
+    tmpDir = createFixture({ planning: false, projectDoc: false });
+    fs.mkdirSync(path.join(tmpDir, 'docs', 'adr'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'docs', 'adr', '0001-runtime.md'), '# ADR: Runtime\n');
+    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(result.output).next_action, {
+      kind: 'ingest-docs',
+      command: '/gsd:ingest-docs',
+      reason: 'Detected existing ADR/PRD/SPEC/RFC document(s) before project setup.',
+    });
+
+    cleanup(tmpDir);
+    tmpDir = createFixture({ planning: false, projectDoc: false });
+    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(result.output).next_action, {
+      kind: 'new-project',
+      command: '/gsd:new-project',
+      reason: 'No existing code or planning docs were detected.',
+    });
+
+    cleanup(tmpDir);
+    tmpDir = createFixture({ planning: false, projectDoc: false });
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+    const partial = JSON.parse(result.output);
+    assert.strictEqual(partial.next_action.kind, 'partial-planning');
+    assert.deepStrictEqual(partial.next_action.missing, ['REQUIREMENTS.md']);
+
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
+    for (const name of ['STACK', 'ARCHITECTURE', 'STRUCTURE', 'CONVENTIONS', 'TESTING', 'INTEGRATIONS', 'CONCERNS']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'codebase', `${name}.md`), `# ${name}\n`);
+    }
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(result.output).next_action, {
+      kind: 'write-summary',
+      summary_path: '.planning/onboarding/SUMMARY.md',
+      reason: 'Onboarding summary is missing.',
+    });
+
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'onboarding'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'onboarding', 'SUMMARY.md'), '# Onboarding Summary\n');
+    result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+    assert.deepStrictEqual(JSON.parse(result.output).next_action, {
+      kind: 'ready',
+      reason: 'Onboarding summary already exists.',
+    });
   });
 
   test('reports missing requirements in otherwise existing planning', () => {
@@ -230,101 +302,37 @@ describe('/gsd:onboard command contract', () => {
     assert.ok(content.includes('@~/.claude/gsd-core/references/gate-prompts.md'));
   });
 
-  test('workflow routes through existing primitives and protects existing planning', () => {
+  test('workflow renders the init projection without owning the route state machine', () => {
     const content = fs.readFileSync(WF_PATH, 'utf8');
 
-    assert.ok(content.includes('init onboard'), 'workflow must use init onboard projection');
-    assert.match(content, /gsd_run --cwd "\$_GSD_RUNTIME_ROOT" init onboard/, 'workflow must anchor init onboard at runtime root');
+    assert.ok(content.includes('@~/.claude/gsd-core/references/gsd-run-resolver.md'));
     assert.ok(
-      !content.includes('ARGUMENTS:-'),
-      'workflow must not depend on an unexported shell ARGUMENTS variable',
+      !content.includes('_GSD_SHIM_NAME="gsd-tools.cjs"'),
+      'workflow must reference the shared resolver instead of inlining it',
     );
-    assert.match(
-      content,
-      /Run init from parsed prompt args, not shell `\$ARGUMENTS`/,
-      'workflow must forward fast mode from parsed prompt arguments into init onboard',
-    );
-    assert.match(
-      content,
-      /gsd_run --cwd "\$_GSD_RUNTIME_ROOT" init onboard --fast/,
-      'workflow must provide a literal fast init command',
-    );
-    assert.ok(content.includes('has_fast_codebase_map'), 'workflow must parse fast map readiness');
-    assert.match(content, /CODEBASE_MAP_READY=.*has_fast_codebase_map/s, 'workflow must treat the fast subset as acceptable in fast mode');
-    assert.ok(content.includes('Run from worktree root'), 'workflow handoffs must be anchored at the worktree root');
-    for (const runtimeHome of [
-      'HERMES_HOME',
-      'CURSOR_CONFIG_DIR',
-      'CODEX_HOME',
-      'GEMINI_CONFIG_DIR',
-      'WINDSURF_CONFIG_DIR',
-      'OPENCODE_CONFIG_DIR',
+    assert.match(content, /init onboard --fast --raw/);
+    assert.match(content, /init onboard --raw/);
+    assert.match(content, /next_action\.kind/);
+    assert.match(content, /map_readiness/);
+    assert.match(content, /codebase_map_summary_status/);
+    assert.match(content, /ONBOARDING_ROOT=\{git_worktree_root \|\| _GSD_RUNTIME_ROOT\}/);
+
+    for (const action of [
+      'map-codebase',
+      'ingest-docs',
+      'complete-map-before-new-project',
+      'new-project',
+      'partial-planning',
+      'write-summary',
+      'ready',
     ]) {
-      assert.ok(content.includes(runtimeHome), `workflow resolver must include ${runtimeHome}`);
+      assert.ok(content.includes(`next_action.kind == "${action}"`), `workflow must render ${action}`);
     }
-    assert.match(content, /Parse JSON fields:.*`commit_docs`/s, 'workflow must parse commit_docs before using it');
-    assert.ok(content.includes('map-codebase'), 'workflow must route to map-codebase');
-    assert.ok(content.includes('ingest-docs'), 'workflow must route to ingest-docs');
-    assert.match(
-      content,
-      /If `has_docs_candidates` is true and `project_exists` is false:/,
-      'workflow must offer docs ingest before project setup even when codebase mapping already created .planning',
-    );
-    assert.match(
-      content,
-      /If `is_brownfield` is false and `planning_exists` is false and `has_docs_candidates` is false, print:/,
-      'workflow must not send doc-only repos to new-project before the docs ingest gate',
-    );
-    assert.ok(content.includes('new-project'), 'workflow must route to new-project');
-    assert.ok(content.includes('.planning/onboarding/SUMMARY.md'), 'workflow must create onboarding summary');
-    assert.match(
-      content,
-      /ONBOARDING_ROOT=\{git_worktree_root \|\| _GSD_RUNTIME_ROOT\}/,
-      'workflow must resolve a single root for summary writes',
-    );
-    assert.match(
-      content,
-      /Create `\{ONBOARDING_ROOT\}\/\.planning\/onboarding\/SUMMARY\.md`/,
-      'workflow must anchor summary writes at onboarding root',
-    );
-    assert.match(
-      content,
-      /gsd_run --cwd "\$ONBOARDING_ROOT" query commit "docs: create onboarding summary" --files \.planning\/onboarding\/SUMMARY\.md/,
-      'workflow must commit the root-relative summary path from onboarding root',
-    );
-    assert.match(
-      content,
-      /CODEBASE_MAP_SUMMARY_STATUS=\.planning\/codebase\/ \(fast\/partial-but-accepted codebase map\)/,
-      'workflow summary must label fast accepted maps without implying a complete map',
-    );
-    assert.match(
-      content,
-      /CODEBASE_MAP_FINAL_STATUS=\(fast\/partial-but-accepted; required fast files present\)/,
-      'final status must distinguish complete maps from accepted fast maps',
-    );
-    assert.match(
-      content,
-      /If `project_exists` is false and `fast_mode && has_fast_codebase_map && !has_codebase_map` is true:/,
-      'workflow must not hand fast-partial maps directly to new-project',
-    );
-    assert.match(
-      content,
-      /Fast codebase context is accepted for onboarding, but \/gsd:new-project still requires the complete codebase map\./,
-      'workflow must explain why fast-partial onboarding stops before new-project',
-    );
-    const deriveMapStatusIndex = content.indexOf('Before summary keep/update choices, derive map status values safely:');
-    const keepExistingSummaryIndex = content.indexOf('If `onboarding_summary_exists` is true:');
-    assert.ok(deriveMapStatusIndex >= 0, 'workflow must derive map status values');
-    assert.ok(keepExistingSummaryIndex >= 0, 'workflow must define the existing-summary branch');
-    assert.ok(
-      deriveMapStatusIndex < keepExistingSummaryIndex,
-      'workflow must derive final map status before a keep-existing-summary path can skip to final status',
-    );
-    assert.match(content, /overwrite|idempotent|do not overwrite/i, 'workflow must protect existing planning');
-    assert.ok(content.includes('requirements_exists'), 'workflow must parse requirements existence');
-    assert.match(content, /REQUIREMENTS\.md: \{requirements_exists \? "present" : "missing"\}/, 'workflow must report missing requirements in partial planning');
-    assert.match(content, /If `project_exists` is true and .*`requirements_exists`.* is false/s, 'workflow must gate partial planning on missing requirements');
+
+    assert.ok(content.includes('AskUserQuestion'), 'workflow must still support interactive choices');
     assert.ok(content.includes('--text'), 'workflow must document text-mode fallback');
+    assert.match(content, /do not overwrite/i, 'workflow must protect existing summary/planning');
+    assert.match(content, /query commit "docs: create onboarding summary" --files \.planning\/onboarding\/SUMMARY\.md/);
     assert.ok(!content.includes('execute-phase'), 'onboarding must not execute implementation phases');
     assert.ok(!content.includes('gsd:ship'), 'onboarding must not ship work');
   });

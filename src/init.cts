@@ -51,6 +51,15 @@ const { checkAgentsInstalled } = agentInstallCheck;
 import gitBaseBranch = require('./git-base-branch.cjs');
 const { gitWorktreeInfoInternal } = gitBaseBranch;
 import { makeResolution } from './resolution.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- onboard-projection.cjs is an export= CommonJS module
+import onboardProjection = require('./onboard-projection.cjs');
+const {
+  REQUIRED_CODEBASE_MAP_FILES,
+  buildOnboardProjection,
+  hasCodeFilesInternal,
+  hasPackageFileInternal,
+  listCodebaseMapFiles,
+} = onboardProjection;
 
 const { output, error } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
@@ -85,130 +94,6 @@ void stripShippedMilestones;
 
 // Accept all bold/colon variants of the Requirements header (#2769)
 const REQUIREMENTS_HEADER_RE = /^\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([^\n]*)$/m;
-
-const CODE_EXTENSIONS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.swift', '.java',
-  '.kt', '.kts', '.c', '.cpp', '.cc', '.h', '.hpp', '.cs', '.rb', '.php', '.dart',
-  '.m', '.mm', '.scala', '.groovy', '.lua', '.r', '.R', '.zig', '.ex', '.exs', '.clj',
-]);
-
-const CODE_SCAN_SKIP_DIRS = new Set([
-  'node_modules', '.git', '.planning', '.claude', '.codex', '__pycache__', 'target',
-  'dist', 'build', '.next', '.nuxt', '.svelte-kit', 'coverage', 'vendor', '.venv', 'venv',
-]);
-
-const PACKAGE_FILES = [
-  'package.json', 'requirements.txt', 'pyproject.toml', 'Cargo.toml', 'go.mod',
-  'Package.swift', 'build.gradle', 'build.gradle.kts', 'pom.xml', 'Gemfile',
-  'composer.json', 'pubspec.yaml', 'CMakeLists.txt', 'Makefile', 'build.zig',
-  'mix.exs', 'project.clj',
-];
-
-const REQUIRED_CODEBASE_MAP_FILES = [
-  'STACK.md', 'ARCHITECTURE.md', 'STRUCTURE.md', 'CONVENTIONS.md', 'TESTING.md',
-  'INTEGRATIONS.md', 'CONCERNS.md',
-];
-
-const FAST_CODEBASE_MAP_FILES = [
-  'STACK.md', 'INTEGRATIONS.md', 'ARCHITECTURE.md', 'STRUCTURE.md',
-];
-
-const PLANNING_DOC_SEGMENTS = new Set([
-  'adr', 'adrs', 'prd', 'prds', 'spec', 'specs', 'rfc', 'rfcs',
-]);
-
-function hasCodeFilesInternal(dir: string, depth = 0): boolean {
-  if (depth > 3) return false;
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-
-  for (const entry of entries) {
-    if (entry.isFile() && CODE_EXTENSIONS.has(path.extname(entry.name))) return true;
-    if (entry.isDirectory() && !CODE_SCAN_SKIP_DIRS.has(entry.name)) {
-      if (hasCodeFilesInternal(path.join(dir, entry.name), depth + 1)) return true;
-    }
-  }
-
-  return false;
-}
-
-function hasPackageFileInternal(cwd: string): boolean {
-  return PACKAGE_FILES.some((file) => pathExistsInternal(cwd, file));
-}
-
-function listPlanningDocCandidates(cwd: string): string[] {
-  const roots = ['docs', 'adr', 'adrs', 'prd', 'prds', 'spec', 'specs', 'rfc', 'rfcs'];
-  const candidates = new Set<string>();
-
-  const isPlanningDocCandidate = (rel: string, name: string): boolean => {
-    const upperName = name.toUpperCase();
-    const relLower = rel.toLowerCase();
-    const pathSegments = relLower.split('/');
-    return (
-      /(^|[-_ ])(ADR|PRD|SPEC|RFC)([-_ ]|\.)/i.test(name) ||
-      /^\d{4}[-_].+\.md$/i.test(name) ||
-      pathSegments.some((segment) => PLANNING_DOC_SEGMENTS.has(segment)) ||
-      upperName === 'REQUIREMENTS.MD'
-    );
-  };
-
-  const addCandidate = (rel: string, name: string): void => {
-    if (name.toLowerCase().endsWith('.md') && isPlanningDocCandidate(rel, name)) {
-      candidates.add(toPosixPath(rel));
-    }
-  };
-
-  const visit = (dir: string, relDir: string, depth: number): void => {
-    if (depth > 3) return;
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        if (!CODE_SCAN_SKIP_DIRS.has(entry.name)) {
-          visit(path.join(dir, entry.name), rel, depth + 1);
-        }
-        continue;
-      }
-
-      if (entry.isFile()) addCandidate(rel, entry.name);
-    }
-  };
-
-  let rootEntries: fs.Dirent[] = [];
-  try {
-    rootEntries = fs.readdirSync(cwd, { withFileTypes: true });
-  } catch {
-    rootEntries = [];
-  }
-  for (const entry of rootEntries) {
-    if (entry.isFile()) addCandidate(entry.name, entry.name);
-  }
-
-  for (const root of roots) {
-    const full = path.join(cwd, root);
-    if (fs.existsSync(full)) visit(full, root, 0);
-  }
-
-  return [...candidates].sort();
-}
-
-function listCodebaseMapFiles(cwd: string): string[] {
-  const codebaseDir = path.join(planningRoot(cwd), 'codebase');
-  if (!fs.existsSync(codebaseDir)) return [];
-  return REQUIRED_CODEBASE_MAP_FILES.filter((file) =>
-    fs.existsSync(path.join(codebaseDir, file)),
-  );
-}
 
 function listPhaseSummaryFiles(phaseDir: string): string[] {
   return (scanPhasePlans(phaseDir) as unknown as Record<string, string[]>)['summaryFiles'];
@@ -912,65 +797,13 @@ function cmdInitOnboard(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  const codebaseMapFiles = listCodebaseMapFiles(cwd);
-  const missingCodebaseMapFiles = REQUIRED_CODEBASE_MAP_FILES.filter(
-    (file) => !codebaseMapFiles.includes(file),
-  );
-  const missingFastCodebaseMapFiles = FAST_CODEBASE_MAP_FILES.filter(
-    (file) => !codebaseMapFiles.includes(file),
-  );
-  const docCandidates = listPlanningDocCandidates(cwd);
-  const hasCode = hasCodeFilesInternal(cwd);
-  const hasPackageFile = hasPackageFileInternal(cwd);
-  const isBrownfield = hasCode || hasPackageFile;
-  const hasCodebaseMap = codebaseMapFiles.length === REQUIRED_CODEBASE_MAP_FILES.length;
-  const fastMode = options['fast'] === true;
-  const hasFastCodebaseMap = missingFastCodebaseMapFiles.length === 0;
-  const needsCodebaseMap = isBrownfield && (
-    fastMode ? !hasFastCodebaseMap : !hasCodebaseMap
-  );
-
-  const result: Record<string, unknown> = {
-    commit_docs: config.commit_docs,
-    text_mode:
-      !!config.text_mode || !!((config.workflow ?? {}) as Record<string, unknown>)['text_mode'],
-
-    project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),
-    planning_exists: fs.existsSync(planningRoot(cwd)),
-    requirements_exists: fs.existsSync(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
-    roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
-    state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
-    config_exists: fs.existsSync(path.join(planningDir(cwd), 'config.json')),
-
-    has_existing_code: hasCode,
-    has_package_file: hasPackageFile,
-    is_brownfield: isBrownfield,
-    fast_mode: fastMode,
-    needs_codebase_map: needsCodebaseMap,
-    has_codebase_map: hasCodebaseMap,
-    has_fast_codebase_map: hasFastCodebaseMap,
-    codebase_dir_exists: fs.existsSync(path.join(planningRoot(cwd), 'codebase')),
-    fast_codebase_map_files_required: FAST_CODEBASE_MAP_FILES,
-    codebase_map_files_present: codebaseMapFiles,
-    missing_codebase_map_files: missingCodebaseMapFiles,
-    missing_fast_codebase_map_files: missingFastCodebaseMapFiles,
-
-    has_docs_candidates: docCandidates.length > 0,
-    doc_candidate_count: docCandidates.length,
-    doc_candidates: docCandidates,
-
-    onboarding_summary_exists: pathExistsInternal(cwd, '.planning/onboarding/SUMMARY.md'),
-    onboarding_summary_path: '.planning/onboarding/SUMMARY.md',
-
-    project_path: '.planning/PROJECT.md',
-    requirements_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'REQUIREMENTS.md')),
-    ),
-    roadmap_path: toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md'))),
-    state_path: toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'STATE.md'))),
-    codebase_dir: toPosixPath(path.relative(cwd, path.join(planningRoot(cwd), 'codebase'))),
-    onboarding_dir: toPosixPath(path.relative(cwd, path.join(planningRoot(cwd), 'onboarding'))),
-
+  const workflowConfig = (config.workflow ?? {}) as Record<string, unknown>;
+  const result = {
+    ...buildOnboardProjection(cwd, {
+      commitDocs: !!config.commit_docs,
+      fast: options['fast'] === true,
+      textMode: !!config.text_mode || !!workflowConfig['text_mode'],
+    }),
     ...getInitGitState(cwd),
   };
 
