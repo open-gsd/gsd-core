@@ -40,7 +40,6 @@ const {
 const PROFILES = Object.freeze({
   core: Object.freeze([
     'new-project',
-    'onboard',
     'discuss-phase',
     'plan-phase',
     'execute-phase',

@@ -476,6 +476,8 @@ const KNOWN_SKILLS = new Set([
   'mvp-phase.md',
   'new-milestone.md',
   'new-project.md',
+  // #1990 brownfield onboarding entry command; sibling of new-project, routed under ns-project.
+  'onboard.md',
   // `next.md` was legitimately reclaimed (#1787): the old workflow-advance
   // command stays absorbed into `progress.md --next`, while the current
   // `/gsd:next` is a different state-aware smart-entry launcher.

@@ -43,6 +43,8 @@ Parse JSON fields: `planning_exists`, `project_exists`, `requirements_exists`,
 
 Set `TEXT_MODE=true` if `--text` is present OR `text_mode` from INIT is true.
 
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** When `TEXT_MODE` is active, replace every `AskUserQuestion` call in this workflow with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available and would otherwise render as an inert code block.
+
 ## 2. Git and Existing Planning Safety
 
 If `has_git` is true and `in_nested_subdir` is true, warn that onboarding artifacts will
