@@ -512,7 +512,8 @@ UI-SPEC.md (per phase) ───────────────────
 │   ├── FEATURES.md
 │   ├── ARCHITECTURE.md
 │   └── PITFALLS.md
-├── codebase/               # Brownfield mapping (from /gsd-map-codebase)
+├── codebase/               # Brownfield mapping (from /gsd-map-codebase or /gsd-onboard)
+├── onboarding/             # Brownfield onboarding summary (from /gsd-onboard)
 │   ├── STACK.md            # YAML frontmatter carries `last_mapped_commit`
 │   ├── ARCHITECTURE.md     # for the post-execute drift gate (#2003)
 │   ├── CONVENTIONS.md

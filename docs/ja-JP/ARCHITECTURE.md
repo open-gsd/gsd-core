@@ -474,7 +474,8 @@ UI-SPEC.md (per phase) ───────────────────
 │   ├── FEATURES.md
 │   ├── ARCHITECTURE.md
 │   └── PITFALLS.md
-├── codebase/               # ブラウンフィールドマッピング（/gsd-map-codebase から）
+├── codebase/               # ブラウンフィールドマッピング（/gsd-map-codebase または /gsd-onboard から）
+├── onboarding/             # ブラウンフィールドオンボーディング概要（/gsd-onboard から）
 │   ├── STACK.md
 │   ├── ARCHITECTURE.md
 │   ├── CONVENTIONS.md

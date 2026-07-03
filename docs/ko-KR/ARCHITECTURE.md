@@ -512,7 +512,8 @@ UI-SPEC.md (단계별) ───────────────────
 │   ├── FEATURES.md
 │   ├── ARCHITECTURE.md
 │   └── PITFALLS.md
-├── codebase/               # 브라운필드 매핑 (/gsd-map-codebase에서)
+├── codebase/               # 브라운필드 매핑 (/gsd-map-codebase 또는 /gsd-onboard에서)
+├── onboarding/             # 브라운필드 온보딩 요약 (/gsd-onboard에서)
 │   ├── STACK.md            # YAML 전문에 `last_mapped_commit` 포함
 │   ├── ARCHITECTURE.md     # 실행 후 드리프트 게이트를 위한 (#2003)
 │   ├── CONVENTIONS.md

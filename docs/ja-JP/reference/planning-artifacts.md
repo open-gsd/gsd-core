@@ -23,6 +23,8 @@
 │   ├── architecture.md
 │   ├── stack.md
 │   └── ...
+├── onboarding/                         # ブラウンフィールドオンボーディング概要（オプション）
+│   └── SUMMARY.md
 ├── intel/                              # クエリ可能なシンボルインデックス（オプション、intel.enabled）
 │   └── API-SURFACE.md
 └── phases/
@@ -48,7 +50,7 @@
 | | |
 |---|---|
 | **用途** | プロジェクトの正規アイデンティティ: 概要、対象ユーザー、コアバリュー、要件、制約、主要な意思決定。プロダクトの進化に伴いプロジェクトライフサイクル全体を通じて更新されます。 |
-| **生成元** | `/gsd-new-project`（初回作成）; 意思決定が検証されると `/gsd-complete-milestone` によって更新されます。 |
+| **生成元** | `/gsd-new-project`（初回作成、`/gsd-onboard` のハンドオフを含む）; 意思決定が検証されると `/gsd-complete-milestone` によって更新されます。 |
 | **参照先** | すべてのプランニングワークフロー; `gsd-phase-researcher`、`gsd-planner`（コンテキスト）; `discuss-phase`（過去の意思決定）; `gsd-plan-checker`（プロジェクト制約）。 |
 
 ### `ROADMAP.md`
@@ -56,7 +58,7 @@
 | | |
 |---|---|
 | **用途** | マイルストーンおよびフェーズ一覧。ゴール、要件 ID、成功基準、フェーズごとの正規リファレンスを含みます。プロジェクトが何をどの順序で構築するかに関する唯一の信頼できる情報源です。 |
-| **生成元** | `/gsd-new-project`（初回作成）; `/gsd-phase --insert` および `/gsd-complete-milestone` によって更新されます。 |
+| **生成元** | `/gsd-new-project`（初回作成、`/gsd-onboard` のハンドオフを含む）; `/gsd-phase --insert` および `/gsd-complete-milestone` によって更新されます。 |
 | **参照先** | `/gsd-discuss-phase`、`/gsd-plan-phase`、`/gsd-execute-phase`; フェーズ情報を必要とするすべてのオーケストレーションコマンド; `gsd-planner`、`gsd-plan-checker`、`gsd-phase-researcher`。 |
 
 ### `REQUIREMENTS.md`
@@ -64,7 +66,7 @@
 | | |
 |---|---|
 | **用途** | 番号付きのチェック可能な受け入れ基準。各要件はロードマップフェーズにマッピングされる ID（例: `AUTH-01`）を持ちます。フェーズが実行されると要件を完了済みとしてマークします。 |
-| **生成元** | `/gsd-new-project`（初回作成）; `execute-phase` によって要件が完了済みとしてマークされます。 |
+| **生成元** | `/gsd-new-project`（初回作成、`/gsd-onboard` のハンドオフを含む）; `execute-phase` によって要件が完了済みとしてマークされます。 |
 | **参照先** | `gsd-planner`（プランはすべてのフェーズ要件 ID に対処しなければならない）; `gsd-plan-checker` ディメンション1（要件カバレッジ）; `discuss-phase`（過去の要件）。 |
 
 ### `STATE.md`
@@ -72,7 +74,7 @@
 | | |
 |---|---|
 | **用途** | 現在地を追跡するリビングドキュメント — 現在のフェーズとプラン、進捗指標、蓄積された意思決定、セッション継続性ノート。すべてのワークフロー実行の開始時に読み込まれます。重要なアクションのたびに更新されます。 |
-| **生成元** | `/gsd-new-project`（初回作成）; すべてのフェーズワークフロー、`/gsd-pause-work`、`/gsd-resume-work` によって継続的に更新されます。 |
+| **生成元** | `/gsd-new-project`（初回作成、`/gsd-onboard` のハンドオフを含む）; すべてのフェーズワークフロー、`/gsd-pause-work`、`/gsd-resume-work` によって継続的に更新されます。 |
 | **参照先** | すべてのオーケストレーションワークフロー; `/gsd-progress`; `/gsd-quick` 経由のアドホックタスク実行; `gsd-planner` および `gsd-phase-researcher`（プロジェクトの意思決定）。 |
 
 完全なフィールドリファレンスは [STATE.md スキーマ](state-md.md) を参照してください。
@@ -86,6 +88,14 @@
 | **参照先** | すべてのワークフローとサブエージェント — `gsd-tools query config-get` 経由で初期化時に読み込まれます。 |
 
 完全なスキーマは [CONFIGURATION](../../CONFIGURATION.md) を参照してください。
+
+### `onboarding/SUMMARY.md`（オプション）
+
+| | |
+|---|---|
+| **用途** | ブラウンフィールドオンボーディングの索引。アーティファクト状態、コードベースマッピングの完了状況、初回セットアップ後に推奨される次の GSD コマンドを記録します。 |
+| **生成元** | `PROJECT.md`、`REQUIREMENTS.md`、`ROADMAP.md`、`STATE.md` がすべて存在した後の `/gsd-onboard`。 |
+| **参照先** | 初回セットアップを確認する人間、および既存オンボーディング状態を確認する今後の `/gsd-onboard` 実行。 |
 
 ### `MILESTONES.md`（オプション）
 
