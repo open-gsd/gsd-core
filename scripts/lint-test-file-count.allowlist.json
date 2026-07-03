@@ -16,7 +16,6 @@
         "bug-2943-config-get-context-window-default.test.cjs",
         "bug-321-config-defaults-clone-strategy.test.cjs",
         "bug-3227-config-set-model-overrides.test.cjs",
-        "bug-442-config-dir-equals-in-path.test.cjs",
         "config-field-docs.test.cjs",
         "config-get-default.test.cjs",
         "config-schema.property.test.cjs",
@@ -110,12 +109,12 @@
         "bug-3454-state-dollar-backreference-growth.test.cjs",
         "bug-397-state-preserve-executor-authored.test.cjs",
         "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
-    "bug-948-state-noop-write-guard.test.cjs",
-    "state-acquirestatelock-non-eexist.test.cjs",
-    "state-prune.test.cjs",
-    "state-rebuild-cli.test.cjs",
-    "state-rebuild.test.cjs",
-    "state.test.cjs"
+        "bug-948-state-noop-write-guard.test.cjs",
+        "state-acquirestatelock-non-eexist.test.cjs",
+        "state-prune.test.cjs",
+        "state-rebuild-cli.test.cjs",
+        "state-rebuild.test.cjs",
+        "state.test.cjs"
       ],
       "issue": "180"
     },
@@ -137,10 +136,7 @@
     },
     "install": {
       "files": [
-        "bug-410-install-defaults-test-mode-guard.test.cjs",
-        "enh-1077-install-hook-events-dialect-drive.test.cjs",
         "enh-1082-install-plan-capstone.test.cjs",
-        "enh-776-install-gemini-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
         "install-nested-layout.test.cjs",
         "install-path-detection.test.cjs",
