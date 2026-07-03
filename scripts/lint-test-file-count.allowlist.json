@@ -12,7 +12,6 @@
     },
     "graphify": {
       "files": [
-        "bug-622-graphify-optional-graph-html.test.cjs",
         "graphify-auto-update.slow.test.cjs",
         "graphify-command-cutover.test.cjs",
         "graphify-query.test.cjs",
@@ -112,14 +111,6 @@
         "external-job-waiting.test.cjs"
       ],
       "issue": "#1165"
-    },
-    "docs": {
-      "files": [
-        "docs-parity-live-registry.test.cjs",
-        "docs-update.test.cjs",
-        "fix-1464-docs-manifest-validation.test.cjs"
-      ],
-      "issue": "1496"
     },
     "host-integration": {
       "files": [

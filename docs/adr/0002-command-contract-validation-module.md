@@ -18,7 +18,7 @@ The command file contract defines what makes a valid `commands/gsd/*.md`:
 ## Context
 
 Before this ADR, the command contract was enforced inconsistently:
-- `tests/enh-2790-skill-consolidation.test.cjs` checked existence and frontmatter of specific post-consolidation commands
+- `tests/skill-frontmatter-contract.test.cjs` (folds former `enh-2790-skill-consolidation`, consolidation epic #1969) checked existence and frontmatter of specific post-consolidation commands
 - `tests/docs-update.test.cjs` (folds former `bug-3135-capture-backlog-workflow`, consolidation epic #1969) checked `execution_context` @-ref resolution (added 2026-05-05)
 - No test checked `allowed-tools` validity, `name:` convention, or `description:` non-emptiness across all commands simultaneously
 

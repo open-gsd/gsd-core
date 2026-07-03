@@ -1517,7 +1517,7 @@ GSD Discord 커뮤니티에 참여하려면 GSD README의 링크를 방문하거
 npm run lint:descriptions
 ```
 
-이 검사는 `tests/enh-2789-description-budget.test.cjs`를 통해 `npm test`의 일부로도 실행됩니다.
+이 검사는 `tests/skill-frontmatter-contract.test.cjs`를 통해 `npm test`의 일부로도 실행됩니다.
 
 ---
 
