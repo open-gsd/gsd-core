@@ -14,6 +14,7 @@ inline as part of `gsd-audit-milestone`'s output.
 | User wants | Invoke |
 |---|---|
 | Start a new project | gsd-new-project |
+| Onboard an existing codebase | gsd-onboard |
 | Create a new milestone | gsd-new-milestone |
 | Complete the current milestone | gsd-complete-milestone |
 | Audit a milestone for issues | gsd-audit-milestone |
