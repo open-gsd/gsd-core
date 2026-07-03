@@ -981,3 +981,722 @@ describe('enh #3209: plan-phase ADR ingest express path', () => {
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-621-plan-phase-gap-analysis-gsd-run.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-621-plan-phase-gap-analysis-gsd-run (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: source-text-is-the-product (see #621)
+// The post-planning-gaps gap-analysis invocation is deployed workflow text the
+// runtime executes; the contract is that it routes through the gsd_run launcher,
+// not a hardcoded $HOME path (#621).
+
+/**
+ * Regression test for #621: plan-phase gap-analysis must route through gsd_run
+ *
+ * Prior to the fix, line 1631 of plan-phase.md hardcoded:
+ *   node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" gap-analysis ...
+ * twice on the same line, breaking non-default install layouts.
+ *
+ * After the fix, both invocations route through gsd_run (the launcher defined
+ * at line ~34 of the same file that resolves gsd-tools.cjs against
+ * RUNTIME_DIR / git-toplevel / PATH / $HOME in order).
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const WORKFLOW_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'workflows',
+  'plan-phase.md'
+);
+
+// ─── Fixture ──────────────────────────────────────────────────────────────────
+
+const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+// ─── #621 regression: gap-analysis routes through gsd_run ────────────────────
+
+describe('plan-phase workflow: post-planning-gaps gap-analysis uses gsd_run launcher (#621)', () => {
+  test('gap-analysis dispatches via gsd_run loop render-hooks plan:post (ADR-857 capability gate)', () => {
+    assert.ok(
+      workflow.includes('gsd_run loop render-hooks plan:post'),
+      'workflow must dispatch gap-analysis via gsd_run loop render-hooks plan:post, not a hardcoded node path or direct gsd_run gap-analysis call'
+    );
+  });
+
+  test('inner phase_req_ids query also routes through gsd_run', () => {
+    assert.ok(
+      workflow.includes('gsd_run query init.plan-phase'),
+      'workflow must invoke the inner phase_req_ids query via gsd_run launcher'
+    );
+  });
+
+  test('no hardcoded node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" invocations remain (#621)', () => {
+    const hardcodedCount = (
+      workflow.match(/node "\$HOME\/\.claude\/gsd-core\/bin\/gsd-tools\.cjs"/g) || []
+    ).length;
+    assert.strictEqual(
+      hardcodedCount,
+      0,
+      [
+        '#621 regression: workflow must not contain any hardcoded',
+        'node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" invocations;',
+        `found ${hardcodedCount}`,
+      ].join(' ')
+    );
+  });
+
+  test('post-planning-gaps block still gates on workflow.post_planning_gaps and preserves required args', () => {
+    const hasGate = workflow.includes('workflow.post_planning_gaps');
+    const hasPhaseDir = workflow.includes('gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}"');
+    const hasPickArg = workflow.includes('--pick phase_req_ids');
+    assert.ok(
+      hasGate,
+      'workflow must still gate the gap-analysis step on workflow.post_planning_gaps config key'
+    );
+    assert.ok(
+      hasPhaseDir,
+      'gap-analysis check dispatch must pass "${PHASE_DIR}" (and "${PHASE_REQ_IDS}") positionally to gsd_run check'
+    );
+    assert.ok(
+      hasPickArg,
+      'inner query must still pass --pick phase_req_ids to extract phase requirement IDs'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-22-surfacing-docs.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-22-surfacing-docs (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: docs-parity (see #22)
+// Verifies that issue #22 drift-guard surfacing changes are present:
+//   - new-project workflow mentions plan_review.source_grounding
+//   - CONFIGURATION.md documents both new config keys
+//   - COMMANDS.md mentions gsd-tools intel api-surface
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+
+const NEW_PROJECT_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'new-project.md');
+const SETTINGS_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'settings.md');
+const CONFIGURATION_PATH = path.join(ROOT, 'docs', 'CONFIGURATION.md');
+const COMMANDS_PATH = path.join(ROOT, 'docs', 'COMMANDS.md');
+const USER_GUIDE_PATH = path.join(ROOT, 'docs', 'USER-GUIDE.md');
+const ARCHITECTURE_PATH = path.join(ROOT, 'docs', 'ARCHITECTURE.md');
+
+describe('feat-22-surfacing-docs', () => {
+  // ── A1: new-project workflow ─────────────────────────────────────────────
+
+  test('new-project workflow mentions source_grounding', () => {
+    const content = fs.readFileSync(NEW_PROJECT_PATH, 'utf-8');
+    assert.ok(
+      content.includes('source_grounding'),
+      'new-project.md must mention source_grounding'
+    );
+  });
+
+  test('new-project workflow has Drift Guard question', () => {
+    const content = fs.readFileSync(NEW_PROJECT_PATH, 'utf-8');
+    assert.ok(
+      content.includes('Drift Guard'),
+      'new-project.md must include a "Drift Guard" question header'
+    );
+  });
+
+  test('new-project workflow wires source_grounding into config-new-project call', () => {
+    const content = fs.readFileSync(NEW_PROJECT_PATH, 'utf-8');
+    assert.ok(
+      content.includes('"plan_review":{"source_grounding":'),
+      'new-project.md config-new-project call must include plan_review.source_grounding'
+    );
+  });
+
+  test('new-project workflow has Drift Guard default-yes option', () => {
+    const content = fs.readFileSync(NEW_PROJECT_PATH, 'utf-8');
+    // Both question blocks (auto and interactive) should have the yes option
+    const count = (content.match(/Yes \(Recommended\).*catches hallucinated names/g) || []).length;
+    assert.ok(
+      count >= 1,
+      'new-project.md must have at least one Drift Guard "Yes (Recommended)" option'
+    );
+  });
+
+  // ── A2: settings workflow ────────────────────────────────────────────────
+
+  test('settings workflow mentions source_grounding in read_current step', () => {
+    const content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('plan_review.source_grounding'),
+      'settings.md must mention plan_review.source_grounding in the read_current step'
+    );
+  });
+
+  test('settings workflow has Drift Guard AskUserQuestion toggle', () => {
+    const content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('Drift Guard'),
+      'settings.md must include a "Drift Guard" question header'
+    );
+  });
+
+  test('settings workflow update_config includes plan_review.source_grounding', () => {
+    const content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('"source_grounding": true/false'),
+      'settings.md update_config block must include source_grounding: true/false'
+    );
+  });
+
+  test('settings workflow mentions source_grounding_authority', () => {
+    const content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('source_grounding_authority'),
+      'settings.md must mention source_grounding_authority'
+    );
+  });
+
+  test('settings confirm table includes Plan Drift Guard row', () => {
+    const content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('Plan Drift Guard'),
+      'settings.md confirm table must include a "Plan Drift Guard" row'
+    );
+  });
+
+  // ── B1: CONFIGURATION.md ─────────────────────────────────────────────────
+
+  test('CONFIGURATION.md documents plan_review.source_grounding', () => {
+    const content = fs.readFileSync(CONFIGURATION_PATH, 'utf-8');
+    assert.ok(
+      content.includes('`plan_review.source_grounding`'),
+      'CONFIGURATION.md must document plan_review.source_grounding'
+    );
+  });
+
+  test('CONFIGURATION.md documents plan_review.source_grounding_authority', () => {
+    const content = fs.readFileSync(CONFIGURATION_PATH, 'utf-8');
+    assert.ok(
+      content.includes('`plan_review.source_grounding_authority`'),
+      'CONFIGURATION.md must document plan_review.source_grounding_authority'
+    );
+  });
+
+  test('CONFIGURATION.md documents grep as default authority', () => {
+    const content = fs.readFileSync(CONFIGURATION_PATH, 'utf-8');
+    assert.ok(
+      content.includes('`grep`') && content.includes('source_grounding_authority'),
+      'CONFIGURATION.md must document grep as the default source_grounding_authority'
+    );
+  });
+
+  test('CONFIGURATION.md lists all five authority enum values', () => {
+    const content = fs.readFileSync(CONFIGURATION_PATH, 'utf-8');
+    const authorities = ['grep', 'intel', 'treesitter', 'lsp', 'scip'];
+    const missing = authorities.filter(a => !content.includes(a));
+    assert.deepStrictEqual(
+      missing,
+      [],
+      `CONFIGURATION.md must list all authority values; missing: ${missing.join(', ')}`
+    );
+  });
+
+  // ── B2: COMMANDS.md ───────────────────────────────────────────────────────
+
+  test('COMMANDS.md mentions intel api-surface', () => {
+    const content = fs.readFileSync(COMMANDS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('intel api-surface'),
+      'COMMANDS.md must document the gsd-tools intel api-surface command'
+    );
+  });
+
+  test('COMMANDS.md documents api-surface gating on intel.enabled', () => {
+    const content = fs.readFileSync(COMMANDS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('intel.enabled'),
+      'COMMANDS.md intel api-surface section must mention the intel.enabled gate'
+    );
+  });
+
+  test('COMMANDS.md mentions API-SURFACE.md output', () => {
+    const content = fs.readFileSync(COMMANDS_PATH, 'utf-8');
+    assert.ok(
+      content.includes('API-SURFACE.md'),
+      'COMMANDS.md must mention the API-SURFACE.md output file'
+    );
+  });
+
+  // ── B3: USER-GUIDE.md ─────────────────────────────────────────────────────
+
+  test('USER-GUIDE.md has Plan Drift Guard subsection', () => {
+    const content = fs.readFileSync(USER_GUIDE_PATH, 'utf-8');
+    assert.ok(
+      content.includes('### Plan Drift Guard'),
+      'USER-GUIDE.md must have a "### Plan Drift Guard" subsection'
+    );
+  });
+
+  test('USER-GUIDE.md mentions needs-acknowledgement behavior', () => {
+    const content = fs.readFileSync(USER_GUIDE_PATH, 'utf-8');
+    assert.ok(
+      content.includes('needs-acknowledgement'),
+      'USER-GUIDE.md drift guard section must describe needs-acknowledgement behavior'
+    );
+  });
+
+  test('USER-GUIDE.md explains drift guard works without intel', () => {
+    const content = fs.readFileSync(USER_GUIDE_PATH, 'utf-8');
+    assert.ok(
+      content.includes('without intel') || content.includes('Works without intel'),
+      'USER-GUIDE.md must explain that the drift guard works without intel'
+    );
+  });
+
+  // ── B4: ARCHITECTURE.md ───────────────────────────────────────────────────
+
+  test('ARCHITECTURE.md links to ADR 22', () => {
+    const content = fs.readFileSync(ARCHITECTURE_PATH, 'utf-8');
+    assert.ok(
+      content.includes('adr/22-plan-drift-guard.md') || content.includes('ADR 22'),
+      'ARCHITECTURE.md must link to ADR 22 (adr/22-plan-drift-guard.md)'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-2430-learnings-consumption.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-2430-learnings-consumption (consolidation epic #1969 B4 #1973)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #2430)
+// Reads .md/.json/.yml product files whose deployed text IS what the
+// runtime loads — testing text content tests the deployed contract.
+
+/**
+ * Tests for #2430 — LEARNINGS.md consumption loop.
+ *
+ * Part A: plan-phase.md cross-phase context load includes LEARNINGS.md
+ * Part B: transition.md graduation_scan step + graduation.md helper
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const WORKFLOWS_DIR = path.join(__dirname, '../gsd-core/workflows');
+
+function readWorkflow(name) {
+  return fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf-8');
+}
+
+describe('enh-2430 Part A — plan-phase LEARNINGS.md context load', () => {
+  let content;
+
+  test('plan-phase.md includes LEARNINGS.md in cross-phase context load', () => {
+    content = readWorkflow('plan-phase.md');
+    assert.ok(
+      content.includes('LEARNINGS.md files from the 3 most recent completed phases'),
+      'plan-phase.md must mention LEARNINGS.md in cross-phase context block'
+    );
+  });
+
+  test('plan-phase.md LEARNINGS load is inside the 1M context-window gate', () => {
+    content = content || readWorkflow('plan-phase.md');
+    const windowBlock = content.match(/\$\{CONTEXT_WINDOW >= 500000[\s\S]*?` : ''\}/);
+    assert.ok(windowBlock, 'CONTEXT_WINDOW gate block must exist');
+    assert.ok(
+      windowBlock[0].includes('LEARNINGS.md'),
+      'LEARNINGS.md load must be inside the CONTEXT_WINDOW >= 500000 gate'
+    );
+  });
+
+  test('plan-phase.md source attribution mentioned for LEARNINGS load', () => {
+    content = content || readWorkflow('plan-phase.md');
+    assert.ok(
+      content.includes('[from Phase N LEARNINGS]') || content.includes('source attribution'),
+      'plan-phase.md must document source attribution for loaded LEARNINGS.md content'
+    );
+  });
+
+  test('plan-phase.md handles missing LEARNINGS.md gracefully (silent skip)', () => {
+    content = content || readWorkflow('plan-phase.md');
+    assert.ok(
+      content.includes('skip silently if a phase has no LEARNINGS.md') ||
+      content.includes('skip silently'),
+      'plan-phase.md must document silent skip when LEARNINGS.md is absent'
+    );
+  });
+
+  test('plan-phase.md LEARNINGS load includes Depends-on chain', () => {
+    content = content || readWorkflow('plan-phase.md');
+    content.match(/Depends on.*?(\n.*?)+/);
+    assert.ok(
+      content.includes('LEARNINGS.md from any phases listed in'),
+      'plan-phase.md must load LEARNINGS.md for Depends on chain phases'
+    );
+  });
+
+  test('plan-phase.md specifies context budget limit for LEARNINGS', () => {
+    content = content || readWorkflow('plan-phase.md');
+    assert.ok(
+      content.includes('15%') || content.includes('drop oldest'),
+      'plan-phase.md must specify budget limit and truncation strategy for LEARNINGS'
+    );
+  });
+});
+
+describe('enh-2430 Part B — graduation_scan in transition.md', () => {
+  let content;
+
+  test('transition.md contains graduation_scan step', () => {
+    content = readWorkflow('transition.md');
+    assert.ok(
+      content.includes('graduation_scan'),
+      'transition.md must contain graduation_scan step'
+    );
+  });
+
+  test('graduation_scan is placed after evolve_project step', () => {
+    content = content || readWorkflow('transition.md');
+    const evolvePos = content.indexOf('name="evolve_project"');
+    const graduationPos = content.indexOf('name="graduation_scan"');
+    assert.ok(evolvePos >= 0, 'evolve_project step must exist');
+    assert.ok(graduationPos >= 0, 'graduation_scan step must exist');
+    assert.ok(
+      graduationPos > evolvePos,
+      'graduation_scan must appear after evolve_project in transition.md'
+    );
+  });
+
+  test('graduation_scan is non-blocking (transition continues regardless)', () => {
+    content = content || readWorkflow('transition.md');
+    const scanBlock = content.match(/name="graduation_scan"[\s\S]*?<\/step>/);
+    assert.ok(scanBlock, 'graduation_scan step must be parseable');
+    assert.ok(
+      scanBlock[0].includes('non-blocking') || scanBlock[0].includes('always non-blocking'),
+      'graduation_scan must be documented as non-blocking'
+    );
+  });
+
+  test('graduation_scan delegates to graduation.md helper', () => {
+    content = content || readWorkflow('transition.md');
+    assert.ok(
+      content.includes('graduation.md'),
+      'graduation_scan must reference graduation.md helper workflow'
+    );
+  });
+});
+
+describe('enh-2430 Part B — graduation.md helper workflow', () => {
+  let content;
+
+  test('graduation.md exists', () => {
+    content = readWorkflow('graduation.md');
+    assert.ok(content.length > 0, 'graduation.md must exist and be non-empty');
+  });
+
+  test('graduation.md documents features.graduation config flag', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('features.graduation'),
+      'graduation.md must document features.graduation config flag'
+    );
+  });
+
+  test('graduation.md documents graduation_window config', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('graduation_window'),
+      'graduation.md must document features.graduation_window config'
+    );
+  });
+
+  test('graduation.md documents graduation_threshold config', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('graduation_threshold'),
+      'graduation.md must document features.graduation_threshold config'
+    );
+  });
+
+  test('graduation.md specifies HITL: Promote / Defer / Dismiss', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(content.includes('Promote'), 'graduation.md must document Promote action');
+    assert.ok(content.includes('Defer'), 'graduation.md must document Defer action');
+    assert.ok(content.includes('Dismiss'), 'graduation.md must document Dismiss action');
+  });
+
+  test('graduation.md specifies category→target routing', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('PROJECT.md') && content.includes('PATTERNS.md'),
+      'graduation.md must route categories to appropriate target files'
+    );
+  });
+
+  test('graduation.md specifies graduation_backlog in STATE.md', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('graduation_backlog'),
+      'graduation.md must document STATE.md graduation_backlog for Defer/Dismiss'
+    );
+  });
+
+  test('graduation.md skips items with graduated: annotation', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('graduated:') || content.includes('Graduated:'),
+      'graduation.md must skip already-graduated items'
+    );
+  });
+
+  test('graduation.md has silent no-op for first phase / insufficient data', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('no-op') || content.includes('silent'),
+      'graduation.md must silently no-op when there is insufficient data'
+    );
+  });
+
+  test('graduation.md specifies Defer-all shorthand (A key)', () => {
+    content = content || readWorkflow('graduation.md');
+    assert.ok(
+      content.includes('Defer all') || content.includes('[Defer all]'),
+      'graduation.md must document the Defer all shorthand for first-run batches'
+    );
+  });
+});
+
+describe('enh-2430 — extract-learnings.md graduated: field', () => {
+  test('extract-learnings.md documents optional graduated: annotation', () => {
+    const content = readWorkflow('extract-learnings.md');
+    assert.ok(
+      content.includes('graduated:') || content.includes('Graduated:'),
+      'extract-learnings.md must document optional graduated: field'
+    );
+  });
+
+  test('extract-learnings.md clarifies graduated: is written only by graduation workflow', () => {
+    const content = readWorkflow('extract-learnings.md');
+    assert.ok(
+      content.includes('graduation workflow') || content.includes('graduation.md'),
+      'extract-learnings.md must clarify that graduated: is written only by graduation.md'
+    );
+  });
+});
+
+describe('enh-2430 — INVENTORY sync', () => {
+  test('INVENTORY.md lists graduation.md', () => {
+    const inventory = fs.readFileSync(
+      path.join(__dirname, '../docs/INVENTORY.md'), 'utf-8'
+    );
+    assert.ok(inventory.includes('graduation.md'), 'INVENTORY.md must list graduation.md');
+  });
+
+  test('INVENTORY-MANIFEST.json includes graduation.md', () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '../docs/INVENTORY-MANIFEST.json'), 'utf-8')
+    );
+    assert.ok(
+      manifest.families.workflows.includes('graduation.md'),
+      'INVENTORY-MANIFEST.json must include graduation.md in workflows array'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2492-context-coverage-gate.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2492-context-coverage-gate (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: source-text-is-the-product (see #2492)
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+/**
+ * Bug #2492: Add gates to ensure discuss-phase decisions are translated to
+ * plans (plan-phase, BLOCKING) and verified against shipped artifacts
+ * (verify-phase, NON-BLOCKING).
+ *
+ * These workflow files are loaded as prompts by the corresponding subagents.
+ * The tests below verify that the prompt text contains the gate steps and
+ * the config-toggle skip clauses — losing them silently would regress the
+ * fix.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const PLAN_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
+const VERIFY_PHASE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-phase.md');
+const SCHEMA_MANIFEST_JSON = path.join(__dirname, '..', 'gsd-core', 'bin', 'shared', 'config-schema.manifest.json');
+
+describe('plan-phase decision-coverage gate (#2492)', () => {
+  const md = fs.readFileSync(PLAN_PHASE, 'utf-8');
+
+  test('contains a Decision Coverage Gate step', () => {
+    assert.ok(
+      /Decision Coverage Gate/i.test(md),
+      'plan-phase.md must define a Decision Coverage Gate step',
+    );
+  });
+
+  test('invokes the check.decision-coverage-plan handler', () => {
+    assert.ok(
+      md.includes('check.decision-coverage-plan'),
+      'plan-phase.md must call gsd-sdk query check.decision-coverage-plan',
+    );
+  });
+
+  test('mentions workflow.context_coverage_gate skip clause', () => {
+    assert.ok(
+      md.includes('workflow.context_coverage_gate'),
+      'plan-phase.md must reference workflow.context_coverage_gate to allow skipping',
+    );
+  });
+
+  test('decision gate appears AFTER the existing Requirements Coverage Gate', () => {
+    // Anchored heading regexes — avoid prose-substring traps (review F8/F9).
+    const reqIdx = md.search(/^## 13[a-z]?\.\s+Requirements Coverage Gate/m);
+    const decIdx = md.search(/^## 13[a-z]?\.\s+Decision Coverage Gate/m);
+    assert.ok(reqIdx !== -1, 'Requirements Coverage Gate heading must exist as ## 13[a-z]?.');
+    assert.ok(decIdx !== -1, 'Decision Coverage Gate heading must exist as ## 13[a-z]?.');
+    assert.ok(decIdx > reqIdx, 'Decision gate must run after Requirements gate');
+  });
+
+  test('decision gate appears BEFORE plans are committed', () => {
+    const decIdx = md.search(/^## 13[a-z]?\.\s+Decision Coverage Gate/m);
+    const commitIdx = md.search(/^## 13[a-z]?\.\s+Commit Plans/m);
+    assert.ok(decIdx !== -1, 'Decision Coverage Gate heading must exist as ## 13[a-z]?.');
+    assert.ok(commitIdx !== -1, 'Commit Plans heading must exist as ## 13[a-z]?.');
+    assert.ok(decIdx < commitIdx, 'Decision gate must run before commit so failures block the commit');
+  });
+
+  test('plan-phase Decision Coverage Gate uses CONTEXT_PATH variable defined in INIT extraction (review F1)', () => {
+    // The CONTEXT_PATH bash variable is defined at Step 4 (`CONTEXT_PATH=$(_gsd_field "$INIT" context_path)`).
+    // The plan-phase gate snippet must reference the same casing — `${CONTEXT_PATH}` — not `${context_path}`,
+    // otherwise the BLOCKING gate is invoked with an empty path and silently skips.
+    const defIdx = md.indexOf('CONTEXT_PATH=$(_gsd_field "$INIT" context_path)');
+    assert.ok(defIdx !== -1, 'CONTEXT_PATH must be defined from INIT JSON');
+
+    const gateIdx = md.indexOf('check.decision-coverage-plan');
+    assert.ok(gateIdx !== -1, 'check.decision-coverage-plan invocation must exist');
+
+    // Slice the surrounding gate snippet (~600 chars) and verify variable casing matches the definition.
+    const snippet = md.slice(Math.max(0, gateIdx - 200), gateIdx + 400);
+    assert.ok(
+      snippet.includes('${CONTEXT_PATH}'),
+      'Gate snippet must reference ${CONTEXT_PATH} (uppercase) to match the variable defined in Step 4',
+    );
+    assert.ok(
+      !snippet.includes('${context_path}'),
+      'Gate snippet must NOT reference ${context_path} (lowercase) — that name is undefined in shell scope',
+    );
+  });
+
+  test('plan-phase blocking gate exits non-zero on failure (review F15)', () => {
+    // The gate is documented as BLOCKING. To actually block, the shell snippet must
+    // exit with non-zero status when `passed` is false. Without exit-1 the workflow
+    // continues silently past the failure.
+    const gateIdx = md.indexOf('check.decision-coverage-plan');
+    assert.ok(gateIdx !== -1);
+    const snippet = md.slice(gateIdx, gateIdx + 800);
+    // Accept either an inline `|| exit 1` or a `|| { ...; exit 1; }` group.
+    const hasJqGuard =
+      /jq[^\r\n]*\.data\.passed\s*==\s*true/.test(snippet) ||
+      /jq[^\r\n]*\(\.passed\s*\/\/\s*\.data\.passed\)\s*==\s*true/.test(snippet);
+    const hasExitOne = /\|\|\s*(?:exit\s+1|\{[\s\S]{0,200}?exit\s+1)/.test(snippet);
+    assert.ok(
+      hasJqGuard && hasExitOne,
+      'plan-phase gate must guard with `jq -e .passed == true || exit 1` (or `|| { ...; exit 1; }`) to actually block',
+    );
+  });
+
+  test('plan-phase gate accepts top-level .passed field from CLI output (#275)', () => {
+    const gateIdx = md.indexOf('check.decision-coverage-plan');
+    assert.ok(gateIdx !== -1, 'check.decision-coverage-plan invocation must exist');
+    const snippet = md.slice(gateIdx, gateIdx + 800);
+    assert.ok(
+      /\.(?:passed)\s*==\s*true\s*\|\|\s*\.data\.passed\s*==\s*true/.test(snippet) ||
+      /\(\.passed\s*\/\/\s*\.data\.passed\)\s*==\s*true/.test(snippet),
+      'plan-phase gate must explicitly check top-level .passed with a compatibility fallback to .data.passed',
+    );
+  });
+});
+
+describe('verify-phase decision-coverage gate (#2492)', () => {
+  const md = fs.readFileSync(VERIFY_PHASE, 'utf-8');
+
+  test('contains a verify_decisions step', () => {
+    assert.ok(
+      /verify_decisions/.test(md),
+      'verify-phase.md must define a verify_decisions step',
+    );
+  });
+
+  test('invokes the check.decision-coverage-verify handler', () => {
+    assert.ok(
+      md.includes('check.decision-coverage-verify'),
+      'verify-phase.md must call gsd-sdk query check.decision-coverage-verify',
+    );
+  });
+
+  test('declares the decision gate as non-blocking / warning only', () => {
+    const lower = md.toLowerCase();
+    assert.ok(
+      lower.includes('non-blocking') || lower.includes('warning only') || lower.includes('not block'),
+      'verify-phase.md must declare the decision gate is non-blocking',
+    );
+  });
+
+  test('mentions workflow.context_coverage_gate skip clause', () => {
+    assert.ok(
+      md.includes('workflow.context_coverage_gate'),
+      'verify-phase.md must reference workflow.context_coverage_gate to allow skipping',
+    );
+  });
+});
+
+describe('runtime wiring for #2492 gates', () => {
+  test('schema manifest includes context_coverage_gate', () => {
+    const manifest = JSON.parse(fs.readFileSync(SCHEMA_MANIFEST_JSON, 'utf-8'));
+    assert.ok(
+      manifest.validKeys.includes('workflow.context_coverage_gate'),
+      'workflow.context_coverage_gate must be present in config-schema manifest',
+    );
+  });
+});
+  });
+}

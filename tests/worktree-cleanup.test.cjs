@@ -798,3 +798,477 @@ describe('bug #48: orchestrator fail-closed handling of verify-only halts', () =
     assert.ok(/(blocked|do NOT merge|not merge)/i.test(withoutDispatchNote), 'execute-phase.md must document an orchestrator-side rule that an executor FATAL/exit 42 marks the plan blocked and is not merged (#48)');
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2384-post-merge-deletion-audit.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2384-post-merge-deletion-audit (consolidation epic #1969 B4 #1973)", () => {
+'use strict';
+
+/**
+ * Regression test for #2384.
+ *
+ * During execute-phase, the orchestrator merges per-plan worktree branches into
+ * main. The pre-merge deletion check (git diff --diff-filter=D HEAD...WT_BRANCH)
+ * only catches files deleted on the worktree branch. A post-merge audit is also
+ * required to catch deletions that made it into the merge commit (e.g., files
+ * that were in the common ancestor but deleted by the merged worktree) and to
+ * provide a revert safety net.
+ *
+ * After #3797: execute-phase.md delegates worktree cleanup to the SDK's
+ * worktree.cleanup-wave command, which implements pre-merge deletion checks
+ * (diff --diff-filter=D) internally via executeWorktreeWaveCleanupPlan.
+ * The manual post-merge shell audit (MERGE_DEL_COUNT, git reset --hard) has
+ * been removed from the workflow — it was part of the SDK-absence fallback.
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const EXECUTE_PHASE = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'
+);
+
+/**
+ * Parse execute-phase.md into a structured contract object.
+ * Returns typed boolean fields so tests can assert on structure
+ * rather than raw text.
+ */
+function parseExecutePhaseContract(filePath) {
+  const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/);
+  return {
+    // Does the workflow call the worktree.cleanup-wave SDK command?
+    delegatesToCleanupWave: lines.some(l => l.includes('worktree.cleanup-wave')),
+    // Does the cleanup-wave invocation use || exit 1 (fail-closed)?
+    cleanupWaveFailClosed: lines.some(
+      l => /gsd_run query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
+    ),
+    // Does the workflow export/reference WAVE_WORKTREE_MANIFEST for the SDK?
+    passesWaveManifest: lines.some(l => l.includes('WAVE_WORKTREE_MANIFEST')),
+  };
+}
+
+describe('execute-phase.md — post-merge deletion audit (#2384)', () => {
+  const contract = parseExecutePhaseContract(EXECUTE_PHASE);
+
+  test('execute-phase delegates to worktree.cleanup-wave (which handles deletion audit)', () => {
+    // After #3797: worktree.cleanup-wave in worktree-safety.cjs performs
+    // diff --diff-filter=D checks (blocks branches with deletions) before merge.
+    // The workflow delegates to the SDK rather than duplicating the check inline.
+    assert.ok(
+      contract.delegatesToCleanupWave,
+      'execute-phase.md must delegate to gsd_run query worktree.cleanup-wave (#2384/#3797)',
+    );
+  });
+
+  test('execute-phase cleanup-wave uses || exit 1 (fail-closed for blocked deletions)', () => {
+    // If worktree.cleanup-wave detects deletions, it exits 1 (blocked).
+    // The || exit 1 in the workflow propagates that refusal rather than swallowing it.
+    assert.ok(
+      contract.cleanupWaveFailClosed,
+      'execute-phase.md must use || exit 1 so deletion-blocked cleanups surface to the orchestrator',
+    );
+  });
+
+  test('execute-phase still has pre-merge deletion check (via guard before worktree.cleanup-wave)', () => {
+    // The primary deletion guard is now in worktree-safety.cjs (SDK).
+    // The workflow must still enforce WAVE_WORKTREE_MANIFEST so the SDK
+    // has the info it needs to validate branches.
+    assert.ok(
+      contract.passesWaveManifest,
+      'execute-phase.md must pass WAVE_WORKTREE_MANIFEST to worktree.cleanup-wave',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2501-resurrection-detection.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2501-resurrection-detection (consolidation epic #1969 B4 #1973)", () => {
+/**
+ * Tests for bug #2501: resurrection-detection block in execute-phase.md must
+ * check git history before deleting new .planning/ files.
+ *
+ * Root cause: the original logic deleted ANY .planning/ file that was absent
+ * from PRE_MERGE_FILES, which includes brand-new files (e.g. SUMMARY.md)
+ * that the executor just created. A true "resurrection" is a file that was
+ * previously tracked on main, deliberately deleted, and then re-introduced by
+ * a worktree merge. Detecting that requires a git history check, not just a
+ * pre-merge tree membership check.
+ *
+ * After #3797: execute-phase.md delegates worktree cleanup to the SDK's
+ * worktree.cleanup-wave command. Resurrection detection is handled internally
+ * by the SDK. The inline WAS_DELETED shell check has been removed from the
+ * workflow — it was part of the SDK-absence fallback which is no longer needed
+ * since the preflight block exits if neither local nor global SDK is available.
+ */
+
+'use strict';
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const EXECUTE_PHASE = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'
+);
+
+describe('execute-phase.md — resurrection-detection guard (#2501)', () => {
+  let content;
+
+  // Load once; each test reads from the cached string.
+  test('file is readable', () => {
+    content = fs.readFileSync(EXECUTE_PHASE, 'utf-8');
+    assert.ok(content.length > 0, 'execute-phase.md must not be empty');
+  });
+
+  test('cleanup delegates to SDK (handles resurrection detection internally)', () => {
+    if (!content) content = fs.readFileSync(EXECUTE_PHASE, 'utf-8');
+    // After #3797: execute-phase.md delegates to worktree.cleanup-wave, which
+    // handles pre-merge deletion checks internally. The SDK checks diff --diff-filter=D
+    // before merging, blocking branches that contain file deletions (#2384/#2501).
+    assert.ok(
+      content.includes('worktree.cleanup-wave'),
+      'execute-phase.md must delegate to worktree.cleanup-wave (#2501/#3797)',
+    );
+  });
+
+  test('execute-phase does not use the buggy PRE_MERGE_FILES form', () => {
+    if (!content) content = fs.readFileSync(EXECUTE_PHASE, 'utf-8');
+    // The buggy pattern from before #2501 — deletion conditioned on absence
+    // from PRE_MERGE_FILES snapshot. Must remain absent.
+    const hasBuggyGuard =
+      content.includes('PRE_MERGE_FILES') &&
+      /if\s*!\s*echo\s*"\$PRE_MERGE_FILES"\s*\|\s*grep\s+-qxF\s*"\$RESURRECTED"/.test(content);
+    assert.ok(
+      !hasBuggyGuard,
+      'execute-phase.md must NOT delete files based on the PRE_MERGE_FILES snapshot grep (inverted guard bug #2501)',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3195-quick-resurrection-guard.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3195-quick-resurrection-guard (consolidation epic #1969 B4 #1973)", () => {
+/**
+ * Drift-guard for bug #3195: quick.md and execute-phase.md must both use
+ * the same resurrection-detection approach so they stay in sync.
+ *
+ * After #3797: both workflows delegate worktree cleanup to the SDK's
+ * worktree.cleanup-wave command, which implements resurrection detection
+ * (diff --diff-filter=D history checks) internally. The inline WAS_DELETED
+ * shell variable form has been removed from both workflows — it was part of
+ * the SDK-absence fallback which is now dead code since preflight exits if
+ * neither local nor global SDK is available.
+ *
+ * This test ensures both workflows continue to use the same cleanup
+ * mechanism (SDK delegation), not one inline and one delegated.
+ */
+
+'use strict';
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const QUICK_MD = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'quick.md'
+);
+const EXECUTE_PHASE_MD = path.join(
+  __dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md'
+);
+
+describe('resurrection guard drift check — quick.md vs execute-phase.md (#3195)', () => {
+  let quickContent;
+  let executePhaseContent;
+
+  test('both workflow files are readable', () => {
+    quickContent = fs.readFileSync(QUICK_MD, 'utf-8');
+    executePhaseContent = fs.readFileSync(EXECUTE_PHASE_MD, 'utf-8');
+    assert.ok(quickContent.length > 0, 'quick.md must not be empty');
+    assert.ok(executePhaseContent.length > 0, 'execute-phase.md must not be empty');
+  });
+
+  test('quick.md delegates resurrection detection to SDK (worktree.cleanup-wave)', () => {
+    if (!quickContent) quickContent = fs.readFileSync(QUICK_MD, 'utf-8');
+    // After #3797: quick.md delegates to worktree.cleanup-wave, which handles
+    // resurrection detection (diff --diff-filter=D) internally. The inline
+    // WAS_DELETED form has been removed — it was part of the SDK-absence fallback.
+    assert.ok(
+      quickContent.includes('worktree.cleanup-wave'),
+      'quick.md must delegate to worktree.cleanup-wave for resurrection detection (#3195/#3797)'
+    );
+  });
+
+  test('execute-phase.md delegates resurrection detection to SDK (worktree.cleanup-wave)', () => {
+    if (!executePhaseContent) executePhaseContent = fs.readFileSync(EXECUTE_PHASE_MD, 'utf-8');
+    // After #3797: execute-phase.md delegates to worktree.cleanup-wave, which handles
+    // resurrection detection (diff --diff-filter=D) internally.
+    assert.ok(
+      executePhaseContent.includes('worktree.cleanup-wave'),
+      'execute-phase.md must delegate to worktree.cleanup-wave for resurrection detection (#3195/#3797)'
+    );
+  });
+
+  test('both workflows use the same cleanup mechanism (SDK delegation parity)', () => {
+    if (!quickContent) quickContent = fs.readFileSync(QUICK_MD, 'utf-8');
+    if (!executePhaseContent) executePhaseContent = fs.readFileSync(EXECUTE_PHASE_MD, 'utf-8');
+    const quickDelegates = quickContent.includes('worktree.cleanup-wave');
+    const executeDelegates = executePhaseContent.includes('worktree.cleanup-wave');
+    assert.strictEqual(
+      quickDelegates,
+      executeDelegates,
+      'quick.md and execute-phase.md must both use the same cleanup mechanism (SDK delegation parity, #3195)'
+    );
+  });
+
+  test('quick.md does not use the buggy PRE_MERGE_FILES grep form', () => {
+    if (!quickContent) quickContent = fs.readFileSync(QUICK_MD, 'utf-8');
+    // The buggy pattern: deletion conditioned on absence from PRE_MERGE_FILES snapshot
+    const hasBuggyGuard =
+      quickContent.includes('PRE_MERGE_FILES') &&
+      /if\s*!\s*echo\s*"\$PRE_MERGE_FILES"\s*\|\s*grep\s+-qxF\s*"\$RESURRECTED"/.test(quickContent);
+    assert.ok(
+      !hasBuggyGuard,
+      'quick.md must NOT delete files based on the PRE_MERGE_FILES snapshot grep (inverted guard bug #3195)'
+    );
+  });
+
+  test('execute-phase.md does not use the buggy PRE_MERGE_FILES grep form', () => {
+    if (!executePhaseContent) executePhaseContent = fs.readFileSync(EXECUTE_PHASE_MD, 'utf-8');
+    const hasBuggyGuard =
+      executePhaseContent.includes('PRE_MERGE_FILES') &&
+      /if\s*!\s*echo\s*"\$PRE_MERGE_FILES"\s*\|\s*grep\s+-qxF\s*"\$RESURRECTED"/.test(executePhaseContent);
+    assert.ok(
+      !hasBuggyGuard,
+      'execute-phase.md must NOT delete files based on the PRE_MERGE_FILES snapshot grep (inverted guard bug)'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3521-quick-cleanup-cwd-pin.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3521-quick-cleanup-cwd-pin (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: source-text-is-the-product (see #3521)
+// quick.md is the shipped orchestration contract for /gsd-quick; this
+// regression test previously locked the CWD-safety guard in the manual shell
+// cleanup loop. After #3797, quick.md delegates cleanup entirely to the SDK's
+// worktree.cleanup-wave command, which encapsulates CWD-pinning, STATE.md/
+// ROADMAP.md backup/restore, and deletion guards internally.
+//
+// This test file now verifies the delegation contract: quick.md calls
+// worktree.cleanup-wave with || exit 1 (fail-closed), which enforces the
+// safety semantics that were previously implemented inline in the shell loop.
+
+'use strict';
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const QUICK_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
+
+function readQuickMd() {
+  return fs.readFileSync(QUICK_MD, 'utf8');
+}
+
+describe('bug #3521 — quick.md post-merge cleanup CWD safety (via SDK delegation, #3797)', () => {
+
+  test('quick.md is readable', () => {
+    const content = readQuickMd();
+    assert.ok(content.length > 0, 'quick.md must not be empty');
+  });
+
+  test('quick.md cleanup delegates CWD-safe worktree cleanup to SDK (worktree.cleanup-wave)', () => {
+    const content = readQuickMd();
+    // After #3797: quick.md delegates to gsd_run query worktree.cleanup-wave
+    // which handles CWD pinning, STATE.md backup, deletion guards, and branch
+    // cleanup internally. The manual shell loop has been removed.
+    assert.ok(
+      content.includes('worktree.cleanup-wave'),
+      'quick.md must delegate cleanup to gsd_run query worktree.cleanup-wave (#3797)',
+    );
+  });
+
+  test('quick.md cleanup-wave call uses || exit 1 to enforce fail-closed safety (#3521 contract)', () => {
+    const content = readQuickMd();
+    // The || exit 1 enforces fail-closed: SDK safety refusals (e.g. branch
+    // drift detection from #3174) surface immediately rather than being swallowed.
+    // This is the equivalent of the pre-#3797 `gsd_run query ... || exit 1` in the
+    // `if command -v gsd-sdk` branch.
+    assert.match(
+      content,
+      /gsd_run query worktree\.cleanup-wave.*\|\| exit 1/,
+      'quick.md cleanup-wave must use || exit 1 — fail-closed for safety refusals (#3521/#3797)',
+    );
+  });
+
+  test('quick.md manifest guard still blocks broad cleanup when manifest is missing (#3384)', () => {
+    const content = readQuickMd();
+    // The manifest guard must still be present before the cleanup-wave call
+    // to prevent broad worktree cleanup when the manifest file is absent.
+    assert.ok(
+      content.includes('QUICK_WORKTREE_MANIFEST') || content.includes('WAVE_WORKTREE_MANIFEST'),
+      'quick.md must still guard cleanup behind QUICK_WORKTREE_MANIFEST (#3384)',
+    );
+    assert.ok(
+      content.includes('refusing broad worktree cleanup') || content.includes('missing QUICK_WORKTREE_MANIFEST'),
+      'quick.md must emit a blocked message when the manifest is missing (#3384)',
+    );
+  });
+
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2838-summary-rescue-gitignored-planning.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2838-summary-rescue-gitignored-planning (consolidation epic #1969 B4 #1973)", () => {
+/**
+ * Regression tests for #2838: SUMMARY rescue silently fails when .planning/
+ * is gitignored.
+ *
+ * After #3797: execute-phase.md and quick.md delegate worktree cleanup to the
+ * SDK's worktree.cleanup-wave command. The SDK's executeWorktreeWaveCleanupPlan
+ * handles SUMMARY rescue internally using a filesystem-level find+cp approach
+ * (bypassing gitignore) rather than the old git ls-files --exclude-standard
+ * form that silently dropped gitignored files.
+ *
+ * The inline "Safety net" shell rescue block that was previously in both
+ * workflow files has been removed — it was part of the SDK-absence fallback
+ * which is now dead code since preflight exits if neither local nor global SDK
+ * is available.
+ *
+ * This test file verifies that both workflows correctly delegate to the SDK
+ * for SUMMARY rescue, and that neither workflow retains the broken inline form.
+ */
+
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const EXECUTE_PHASE_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md');
+const QUICK_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'quick.md');
+
+/**
+ * Parse a workflow markdown file into a structured contract object.
+ * Returns typed boolean fields so tests assert on structure, not raw text.
+ */
+function parseWorkflowContract(filePath) {
+  const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/);
+  return {
+    // Non-empty check
+    nonEmpty: lines.length > 0 && lines.some(l => l.length > 0),
+    // Does the workflow delegate SUMMARY rescue to worktree.cleanup-wave?
+    delegatesToCleanupWave: lines.some(l => l.includes('worktree.cleanup-wave')),
+    // Does the cleanup-wave invocation use || exit 1 (fail-closed)?
+    cleanupWaveFailClosed: lines.some(
+      l => /gsd_run query worktree\.cleanup-wave.*\|\| exit 1/.test(l),
+    ),
+    // Does the workflow still contain the broken ls-files --exclude-standard rescue form?
+    hasBrokenLsFilesForm: lines.some(
+      l => l.includes('ls-files --modified --others --exclude-standard'),
+    ),
+  };
+}
+
+const executePhaseContract = parseWorkflowContract(EXECUTE_PHASE_PATH);
+const quickContract = parseWorkflowContract(QUICK_PATH);
+
+describe('bug-2838: SUMMARY rescue delegates to SDK (worktree.cleanup-wave)', () => {
+
+  test('execute-phase.md is readable', () => {
+    assert.ok(executePhaseContract.nonEmpty, 'execute-phase.md must not be empty');
+  });
+
+  test('quick.md is readable', () => {
+    assert.ok(quickContract.nonEmpty, 'quick.md must not be empty');
+  });
+
+  test('execute-phase.md delegates SUMMARY rescue to SDK (worktree.cleanup-wave)', () => {
+    // After #3797: worktree.cleanup-wave handles SUMMARY rescue via find+cp
+    // (bypasses gitignore, fixing the #2838 bug). The workflow delegates to the
+    // SDK rather than implementing rescue inline.
+    assert.ok(
+      executePhaseContract.delegatesToCleanupWave,
+      'execute-phase.md must delegate to worktree.cleanup-wave for SUMMARY rescue (#2838/#3797)',
+    );
+  });
+
+  test('quick.md delegates SUMMARY rescue to SDK (worktree.cleanup-wave)', () => {
+    // After #3797: worktree.cleanup-wave handles SUMMARY rescue via find+cp
+    // (bypasses gitignore, fixing the #2838 bug).
+    assert.ok(
+      quickContract.delegatesToCleanupWave,
+      'quick.md must delegate to worktree.cleanup-wave for SUMMARY rescue (#2838/#3797)',
+    );
+  });
+
+  test('execute-phase.md does not retain broken git ls-files --exclude-standard rescue form (#2838)', () => {
+    // The broken form used --exclude-standard which silently filtered out
+    // gitignored .planning/ files — the root cause of #2838.
+    assert.ok(
+      !executePhaseContract.hasBrokenLsFilesForm,
+      'execute-phase.md must not use ls-files --exclude-standard for SUMMARY rescue (broken for gitignored .planning/)',
+    );
+  });
+
+  test('quick.md does not retain broken git ls-files --exclude-standard rescue form (#2838)', () => {
+    assert.ok(
+      !quickContract.hasBrokenLsFilesForm,
+      'quick.md must not use ls-files --exclude-standard for SUMMARY rescue (broken for gitignored .planning/)',
+    );
+  });
+
+  test('execute-phase.md cleanup-wave uses || exit 1 (fail-closed so rescue errors surface)', () => {
+    // If the SDK's rescue fails (e.g. filesystem error), || exit 1 surfaces
+    // the failure to the orchestrator rather than silently continuing and
+    // losing the SUMMARY.
+    assert.ok(
+      executePhaseContract.cleanupWaveFailClosed,
+      'execute-phase.md cleanup-wave must use || exit 1 so SUMMARY rescue failures surface (#2838/#3797)',
+    );
+  });
+
+  test('quick.md cleanup-wave uses || exit 1 (fail-closed so rescue errors surface)', () => {
+    assert.ok(
+      quickContract.cleanupWaveFailClosed,
+      'quick.md cleanup-wave must use || exit 1 so SUMMARY rescue failures surface (#2838/#3797)',
+    );
+  });
+});
+  });
+}
