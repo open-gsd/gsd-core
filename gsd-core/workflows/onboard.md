@@ -163,7 +163,7 @@ Planning file status:
 Run one of these top-level commands, then rerun /gsd:onboard:
 
 /gsd:ingest-docs --mode merge
-/gsd:new-project
+/gsd:new-milestone
 ```
 
 Exit. Do not write `.planning/onboarding/SUMMARY.md` and do not print the onboarding
