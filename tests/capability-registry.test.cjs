@@ -3195,11 +3195,15 @@ const {
   VALID_COMMAND_STYLES,
   VALID_HOOKS_SURFACES,
   VALID_HOOK_EVENTS,
-  VALID_EXTENSION_EVENTS,
   VALID_SANDBOX_TIERS,
   VALID_ARTIFACT_KIND_NAMES,
   VALID_ARTIFACT_NESTINGS,
 } = require('../scripts/gen-capability-registry.cjs');
+
+// VALID_EXTENSION_EVENTS is imported from the validator directly (not from
+// gen-capability-registry) to avoid changing gen-capability-registry.cjs — that
+// file is an installed artifact captured by golden-install-parity (#1943).
+const VALID_EXTENSION_EVENTS = capValidatorModule.VALID_EXTENSION_EVENTS;
 
 const RUNTIME_IDS = [
   'claude', 'codex', 'antigravity', 'gemini', 'cursor', 'opencode',
