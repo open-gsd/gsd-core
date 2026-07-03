@@ -50,6 +50,21 @@ describe('init onboard public CLI projection', () => {
     assert.strictEqual(parsed.text_mode, false);
   });
 
+  test('detects planning docs in top-level ADR and PRD folders', () => {
+    fs.mkdirSync(path.join(tmpDir, 'prd'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'prd', 'product.md'), '# Product Requirements\n');
+    fs.mkdirSync(path.join(tmpDir, 'adr'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'adr', 'decision.md'), '# Architecture Decision\n');
+
+    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.has_docs_candidates, true);
+    assert.strictEqual(parsed.doc_candidate_count, 2);
+    assert.deepStrictEqual(parsed.doc_candidates, ['adr/decision.md', 'prd/product.md']);
+  });
+
   test('reports complete codebase map and onboarding summary in existing planning', () => {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
     for (const name of ['STACK', 'ARCHITECTURE', 'STRUCTURE', 'CONVENTIONS', 'TESTING', 'INTEGRATIONS', 'CONCERNS']) {
@@ -58,6 +73,7 @@ describe('init onboard public CLI projection', () => {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'onboarding'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.planning', 'onboarding', 'SUMMARY.md'), '# Onboarding Summary\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'), JSON.stringify({ workflow: { text_mode: true } }));
@@ -80,6 +96,7 @@ describe('init onboard public CLI projection', () => {
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.planning_exists, true);
     assert.strictEqual(parsed.project_exists, true);
+    assert.strictEqual(parsed.requirements_exists, true);
     assert.strictEqual(parsed.roadmap_exists, true);
     assert.strictEqual(parsed.state_exists, true);
     assert.strictEqual(parsed.has_codebase_map, true);
@@ -87,6 +104,22 @@ describe('init onboard public CLI projection', () => {
     assert.strictEqual(parsed.onboarding_summary_exists, true);
     assert.strictEqual(parsed.onboarding_summary_path, '.planning/onboarding/SUMMARY.md');
     assert.strictEqual(parsed.text_mode, true);
+  });
+
+  test('reports missing requirements in otherwise existing planning', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+
+    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.project_exists, true);
+    assert.strictEqual(parsed.requirements_exists, false);
+    assert.strictEqual(parsed.roadmap_exists, true);
+    assert.strictEqual(parsed.state_exists, true);
   });
 
   test('ignores generated and vendor directories when detecting existing code', () => {
@@ -151,6 +184,9 @@ describe('/gsd:onboard command contract', () => {
     assert.ok(content.includes('new-project'), 'workflow must route to new-project');
     assert.ok(content.includes('.planning/onboarding/SUMMARY.md'), 'workflow must create onboarding summary');
     assert.match(content, /overwrite|idempotent|do not overwrite/i, 'workflow must protect existing planning');
+    assert.ok(content.includes('requirements_exists'), 'workflow must parse requirements existence');
+    assert.match(content, /REQUIREMENTS\.md: \{requirements_exists \? "present" : "missing"\}/, 'workflow must report missing requirements in partial planning');
+    assert.match(content, /If `project_exists` is true and .*`requirements_exists`.* is false/s, 'workflow must gate partial planning on missing requirements');
     assert.ok(content.includes('--text'), 'workflow must document text-mode fallback');
     assert.ok(!content.includes('execute-phase'), 'onboarding must not execute implementation phases');
     assert.ok(!content.includes('gsd:ship'), 'onboarding must not ship work');

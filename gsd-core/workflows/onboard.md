@@ -34,8 +34,9 @@ INIT=$(gsd_run init onboard)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Parse JSON fields: `planning_exists`, `project_exists`, `roadmap_exists`, `state_exists`,
-`has_existing_code`, `has_package_file`, `is_brownfield`, `has_codebase_map`,
+Parse JSON fields: `planning_exists`, `project_exists`, `requirements_exists`,
+`roadmap_exists`, `state_exists`, `has_existing_code`, `has_package_file`,
+`is_brownfield`, `has_codebase_map`,
 `codebase_map_files_present`, `missing_codebase_map_files`, `has_docs_candidates`,
 `doc_candidate_count`, `onboarding_summary_exists`, `text_mode`, `agents_installed`,
 `missing_agents`, `has_git`, `git_worktree_root`, `in_nested_subdir`.
@@ -148,12 +149,14 @@ Run this top-level command, then rerun /gsd:onboard:
 
 Exit.
 
-If `project_exists` is true and either `roadmap_exists` or `state_exists` is false, print:
+If `project_exists` is true and either `requirements_exists`, `roadmap_exists`, or
+`state_exists` is false, print:
 
 ```text
 Existing PROJECT.md was found, but planning is incomplete.
 
 Planning file status:
+- REQUIREMENTS.md: {requirements_exists ? "present" : "missing"}
 - ROADMAP.md: {roadmap_exists ? "present" : "missing"}
 - STATE.md: {state_exists ? "present" : "missing"}
 
@@ -166,7 +169,8 @@ Run one of these top-level commands, then rerun /gsd:onboard:
 Exit. Do not write `.planning/onboarding/SUMMARY.md` and do not print the onboarding
 complete status for partial planning.
 
-If `project_exists`, `roadmap_exists`, and `state_exists` are all true, continue.
+If `project_exists`, `requirements_exists`, `roadmap_exists`, and `state_exists` are all
+true, continue.
 
 ## 6. Write Onboarding Summary
 
@@ -184,6 +188,7 @@ Summary contents:
 ## Artifact Status
 
 - Project: .planning/PROJECT.md
+- Requirements: .planning/REQUIREMENTS.md
 - Roadmap: .planning/ROADMAP.md
 - State: .planning/STATE.md
 - Codebase map: {has_codebase_map ? ".planning/codebase/ (complete)" : ".planning/codebase/ (incomplete or skipped)"}
@@ -232,7 +237,7 @@ Print:
 Created / confirmed / status:
 - .planning/codebase/ {has_codebase_map ? "(complete)" : "(incomplete or skipped; missing: {missing_codebase_map_files})"}
 - .planning/PROJECT.md
-- .planning/REQUIREMENTS.md
+- .planning/REQUIREMENTS.md {requirements_exists ? "(present)" : "(missing; onboarding incomplete)"}
 - .planning/ROADMAP.md
 - .planning/STATE.md
 - .planning/onboarding/SUMMARY.md

@@ -109,6 +109,10 @@ const REQUIRED_CODEBASE_MAP_FILES = [
   'INTEGRATIONS.md', 'CONCERNS.md',
 ];
 
+const PLANNING_DOC_SEGMENTS = new Set([
+  'adr', 'adrs', 'prd', 'prds', 'spec', 'specs', 'rfc', 'rfcs',
+]);
+
 function hasCodeFilesInternal(dir: string, depth = 0): boolean {
   if (depth > 3) return false;
   let entries: fs.Dirent[];
@@ -157,12 +161,11 @@ function listPlanningDocCandidates(cwd: string): string[] {
       if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
       const upperName = entry.name.toUpperCase();
       const relLower = rel.toLowerCase();
+      const pathSegments = relLower.split('/');
       if (
         /(^|[-_ ])(ADR|PRD|SPEC|RFC)([-_ ]|\.)/i.test(entry.name) ||
         /^\d{4}[-_].+\.md$/i.test(entry.name) ||
-        relLower.includes('/adr') ||
-        relLower.includes('/prd') ||
-        relLower.includes('/spec') ||
+        pathSegments.some((segment) => PLANNING_DOC_SEGMENTS.has(segment)) ||
         upperName === 'REQUIREMENTS.md'
       ) {
         candidates.add(toPosixPath(rel));
@@ -899,6 +902,7 @@ function cmdInitOnboard(cwd: string, raw: boolean): void {
 
     project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),
     planning_exists: fs.existsSync(planningRoot(cwd)),
+    requirements_exists: fs.existsSync(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
     config_exists: fs.existsSync(path.join(planningDir(cwd), 'config.json')),
@@ -920,6 +924,9 @@ function cmdInitOnboard(cwd: string, raw: boolean): void {
     onboarding_summary_path: '.planning/onboarding/SUMMARY.md',
 
     project_path: '.planning/PROJECT.md',
+    requirements_path: toPosixPath(
+      path.relative(cwd, path.join(planningDir(cwd), 'REQUIREMENTS.md')),
+    ),
     roadmap_path: toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md'))),
     state_path: toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'STATE.md'))),
     codebase_dir: toPosixPath(path.relative(cwd, path.join(planningRoot(cwd), 'codebase'))),
