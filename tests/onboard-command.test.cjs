@@ -288,6 +288,14 @@ describe('/gsd:onboard command contract', () => {
       /CODEBASE_MAP_FINAL_STATUS=\(fast\/partial-but-accepted; required fast files present\)/,
       'final status must distinguish complete maps from accepted fast maps',
     );
+    const deriveMapStatusIndex = content.indexOf('Before summary keep/update choices, derive map status values safely:');
+    const keepExistingSummaryIndex = content.indexOf('If `onboarding_summary_exists` is true:');
+    assert.ok(deriveMapStatusIndex >= 0, 'workflow must derive map status values');
+    assert.ok(keepExistingSummaryIndex >= 0, 'workflow must define the existing-summary branch');
+    assert.ok(
+      deriveMapStatusIndex < keepExistingSummaryIndex,
+      'workflow must derive final map status before a keep-existing-summary path can skip to final status',
+    );
     assert.match(content, /overwrite|idempotent|do not overwrite/i, 'workflow must protect existing planning');
     assert.ok(content.includes('requirements_exists'), 'workflow must parse requirements existence');
     assert.match(content, /REQUIREMENTS\.md: \{requirements_exists \? "present" : "missing"\}/, 'workflow must report missing requirements in partial planning');

@@ -199,6 +199,18 @@ invocations do not create `subdir/.planning` artifacts.
 Create `{ONBOARDING_ROOT}/.planning/onboarding/SUMMARY.md` only after PROJECT.md exists.
 If it already exists, update it only after confirmation; do not overwrite silently.
 
+Before summary keep/update choices, derive map status values safely:
+
+- If `has_codebase_map` is true:
+  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (complete)`
+  - `CODEBASE_MAP_FINAL_STATUS=(complete)`
+- Else if `fast_mode && has_fast_codebase_map` is true:
+  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (fast/partial-but-accepted codebase map)`
+  - `CODEBASE_MAP_FINAL_STATUS=(fast/partial-but-accepted; required fast files present)`
+- Else:
+  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (incomplete or skipped)`
+  - `CODEBASE_MAP_FINAL_STATUS=(incomplete or skipped; missing: {missing_codebase_map_files})`
+
 If `onboarding_summary_exists` is true:
 
 - If `TEXT_MODE=true`, print:
@@ -225,18 +237,6 @@ If the user chooses to keep the existing summary, skip to Step 7 without writing
 
 If `onboarding_summary_exists` is false or the user confirms an update, write the summary
 using the template below.
-
-Before rendering summary and final status, derive map status values:
-
-- If `has_codebase_map` is true:
-  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (complete)`
-  - `CODEBASE_MAP_FINAL_STATUS=(complete)`
-- Else if `fast_mode && has_fast_codebase_map` is true:
-  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (fast/partial-but-accepted codebase map)`
-  - `CODEBASE_MAP_FINAL_STATUS=(fast/partial-but-accepted; required fast files present)`
-- Else:
-  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (incomplete or skipped)`
-  - `CODEBASE_MAP_FINAL_STATUS=(incomplete or skipped; missing: {missing_codebase_map_files})`
 
 Summary contents:
 
