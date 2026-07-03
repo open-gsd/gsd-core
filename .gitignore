@@ -68,6 +68,8 @@ build/
 # Published via prepublishOnly; built before test via pretest. Grows as modules migrate.
 /tsconfig.build.tsbuildinfo
 /gsd-core/bin/lib/host-integration.cjs
+/gsd-core/bin/lib/host-integration-sdk.cjs
+/gsd-core/bin/lib/handshake-serialized.cjs
 /gsd-core/bin/lib/install-engine.cjs
 /gsd-core/bin/lib/embedding-adapter.cjs
 /gsd-core/bin/lib/adapter-declarative.cjs
