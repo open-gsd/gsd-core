@@ -5,9 +5,7 @@
       "files": [
         "audit-command-cutover.test.cjs",
         "audit-fix-command.test.cjs",
-        "bug-2659-audit-open-crash.test.cjs",
-        "bug-2836-audit-open-summary-uat-drift.test.cjs",
-        "bug-2911-audit-open-output-shape.test.cjs"
+        "bug-2836-audit-open-summary-uat-drift.test.cjs"
       ],
       "issue": "192"
     },
@@ -49,7 +47,6 @@
     "milestone": {
       "files": [
         "bug-730-milestone-phase-details-scope.test.cjs",
-        "bug-978-milestone-complete-force.test.cjs",
         "milestone-archive.test.cjs",
         "milestone-helper.test.cjs",
         "milestone-prefixed-convention.test.cjs",
@@ -60,7 +57,6 @@
     },
     "phase": {
       "files": [
-        "fix-1437-phase-list-plans.test.cjs",
         "bug-214-phase-researcher-write-truncation-contract.test.cjs",
         "phase-dependency-levels.test.cjs",
         "phase.test.cjs"
@@ -69,10 +65,7 @@
     },
     "roadmap": {
       "files": [
-        "bug-2661-roadmap-sync-parallel.test.cjs",
         "bug-3128-roadmap-plan-count-slug-layout.test.cjs",
-        "bug-3599-roadmap-get-phase-project-code-prefix.test.cjs",
-        "enh-2447-roadmap-wave-deps.test.cjs",
         "roadmap-mode-field.test.cjs",
         "roadmap-phase-fallback.test.cjs",
         "roadmap.test.cjs"
@@ -99,17 +92,9 @@
     "state": {
       "files": [
         "bug-1695-state-patch-clobbers-phase-name.test.cjs",
-        "bug-1760-state-prune-noop-template-field.test.cjs",
-        "bug-1761-state-sync-wrong-progress.test.cjs",
         "bug-21-state-md-template-frontmatter.test.cjs",
-        "bug-2630-state-frontmatter-milestone-switch.test.cjs",
         "bug-3127-state-begin-phase-idempotent.test.cjs",
         "bug-3242-state-update-progress-trample.test.cjs",
-        "bug-3286-state-write-routing.test.cjs",
-        "bug-3454-state-dollar-backreference-growth.test.cjs",
-        "bug-397-state-preserve-executor-authored.test.cjs",
-        "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
-        "bug-948-state-noop-write-guard.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
         "state-rebuild-cli.test.cjs",
@@ -124,7 +109,6 @@
         "bug-2994-verify-reapply-patches-installed-path.test.cjs",
         "bug-3381-verify-work-workstream.test.cjs",
         "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
-        "bug-967-verify-key-links-strict-paths.test.cjs",
         "verify-health.test.cjs",
         "verify-mvp-uat.test.cjs",
         "verify-npm-publish.test.cjs",
