@@ -237,6 +237,69 @@ export function analyzeCoverage(
   return coreAnalyzeCoverage(items, resolutions, UI_VALIDATORS);
 }
 
+/**
+ * A per-element propose-then-confirm view (WIRE-01, #1867): the detected element `kinds`, the
+ * `categories` they raise, the proposed `considerations`, and an `unclassified` flag. The ui-phase
+ * probe step surfaces `kinds` to the user so a human can ADD a kind the heuristic missed — the
+ * classifier is a SIGNAL, not ground truth (Goodhart). A single tripped cue on a multi-kind surface
+ * under-covers; the confirm step, not the heuristic, is what makes coverage sound.
+ */
+export interface ElementProposal {
+  id: string;
+  kinds: UIElementKind[];
+  categories: string[];
+  considerations: UIConsideration[];
+  unclassified: boolean;
+}
+
+/**
+ * Build the propose-then-confirm view for every element (WIRE-01). Deterministic: a pure function
+ * of the input array (no Date/random/iteration-order surprise), so re-running the probe on an
+ * unchanged UI-SPEC yields byte-identical rows (the idempotency substrate WIRE-02 relies on). An
+ * aggregating VIEW over the existing Phase-1 functions — it adds no new classification logic.
+ *
+ * `unclassified` is true ONLY when prose classified to zero cues (#1110); an explicit `elements: []`
+ * opt-out stays silent (`unclassified: false`, empty considerations), matching proposeConsiderations.
+ */
+export function proposeElements(elements: Element[]): ElementProposal[] {
+  return elements.map((el): ElementProposal => {
+    validateRequirement(el);
+    const considerations = proposeConsiderations(el);
+    const kinds: UIElementKind[] = Array.isArray(el.elements)
+      ? el.elements // already validated inside proposeConsiderations
+      : classifyElement(el.text as string);
+    const unclassified = !Array.isArray(el.elements) && kinds.length === 0;
+    const categories = unclassified ? [] : applicableCategories(kinds);
+    return { id: el.id, kinds, categories, considerations, unclassified };
+  });
+}
+
+/**
+ * The deterministic `--auto` resolution FLOOR (WIRE-01, SC2). For each proposed consideration:
+ *   - an `unclassified` item stays `unresolved` — NEVER auto-backstopped (a missing cue is not
+ *     evidence a consideration applies, #1110);
+ *   - every applicable item auto-resolves to a conservative `backstop` (carrying the taxonomy
+ *     question as its `resolution` so probe-core's "backstop requires a resolution" check passes).
+ *   - it NEVER emits `dismissed` under any branch — a wrong auto-dismissal is the exact silent
+ *     failure this probe eliminates (the never-dismiss invariant, asserted on the typed return).
+ *
+ * This is the CODE floor only. It mirrors spec-phase.md Step 5.5's prose `--auto` rule
+ * (auto-`covered` where a defensible acceptance criterion can be written, else auto-`backstop`,
+ * never auto-`dismiss`) but deliberately keeps the covered-vs-backstop JUDGMENT in the ui-phase
+ * workflow (an LLM MAY upgrade an item to `explicit`/covered when it can write a real acceptance
+ * criterion). Encoding the never-dismiss FLOOR in code is what makes the invariant unit-testable;
+ * the covered-upgrade stays prose because "a defensible criterion exists" is not a code predicate.
+ * Keep the two in sync: if spec-phase's `--auto` policy changes, revisit this floor.
+ */
+export function autoResolve(items: UIConsideration[]): Resolution<UIVerification>[] {
+  return items.map((item): Resolution<UIVerification> => {
+    if (item.category === UNCLASSIFIED_CATEGORY) {
+      return { requirement_id: item.requirement_id, category: item.category, status: 'unresolved', verification: null, resolution: null, reason: null };
+    }
+    return { requirement_id: item.requirement_id, category: item.category, status: 'resolved', verification: 'backstop', resolution: item.probe, reason: null };
+  });
+}
+
 /*
  * CLI entry (invokable surface): `ui-consideration-probe.cjs <elements.json> [resolutions.json]`.
  * The generic I/O plumbing (parse, fail-closed exit 2, pretty-JSON out) lives in probe-core's

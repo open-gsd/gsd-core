@@ -201,3 +201,84 @@ describe('ui-consideration-probe LIFT-01: verify-time disposition (never silent 
     assert.equal(d.flagged, false);
   });
 });
+
+// ══ WIRE-01 (Phase 2, #1867) — the live ui-phase producer surface ════════════════════════════
+// Two new adapter functions the ui-phase Step 9.5 probe consumes: proposeElements (the
+// propose-then-confirm view exposing detected kinds + applicable categories per element) and
+// autoResolve (the deterministic `--auto` resolution FLOOR that never dismisses and never
+// auto-backstops an unclassified item, #1110). Structured-value assertions only.
+const LIST_ELEMENT = { id: 'C1', text: 'A table listing all rows of results' };
+const ZERO_CUE_ELEMENT = { id: 'Z', text: 'xyzzy plugh frobnicate' };
+// A surface that is genuinely BOTH a form and a list, but whose prose trips only the form cue —
+// the partial-cue recall gap the confirm step exists to close.
+const PARTIAL_CUE_ELEMENT = { id: 'P', text: 'A signup form with input fields and validation' };
+
+describe('ui-consideration-probe: proposeElements (WIRE-01 confirm surface, SC1)', () => {
+  test('a classified element returns one ElementProposal with kinds, applicable categories, considerations, unclassified:false', () => {
+    const [p] = uc.proposeElements([LIST_ELEMENT]);
+    assert.equal(p.id, 'C1');
+    assert.ok(p.kinds.includes('list-collection'));
+    assert.deepEqual([...p.categories].sort(), [...uc.applicableCategories(uc.classifyElement(LIST_ELEMENT.text))].sort());
+    assert.deepEqual(p.considerations.map((c) => c.category).sort(), [...p.categories].sort());
+    assert.equal(p.unclassified, false);
+  });
+  test('a zero-cue element returns kinds:[], categories:[], unclassified:true, and exactly one unclassified consideration (#1110)', () => {
+    const [p] = uc.proposeElements([ZERO_CUE_ELEMENT]);
+    assert.deepEqual(p.kinds, []);
+    assert.deepEqual(p.categories, []);
+    assert.equal(p.unclassified, true);
+    assert.equal(p.considerations.length, 1);
+    assert.equal(p.considerations[0].category, uc.UNCLASSIFIED_CATEGORY);
+  });
+  test('proposeElements is deterministic — two calls on the same element array deepEqual (idempotency substrate for WIRE-02)', () => {
+    assert.deepEqual(uc.proposeElements([LIST_ELEMENT, ZERO_CUE_ELEMENT]), uc.proposeElements([LIST_ELEMENT, ZERO_CUE_ELEMENT]));
+  });
+  test('an authored elements[] override bypasses prose classification and drives the categories', () => {
+    const [p] = uc.proposeElements([{ id: 'A', text: 'no cues here at all', elements: ['static-content'] }]);
+    assert.deepEqual([...p.kinds].sort(), ['static-content']);
+    assert.deepEqual([...p.categories].sort(), ['long-text', 'overflow']);
+    assert.equal(p.unclassified, false);
+  });
+});
+
+describe('ui-consideration-probe: autoResolve (WIRE-01 typed --auto never-dismiss, SC2, #1110)', () => {
+  test('every applicable consideration auto-resolves to a backstop with a non-empty resolution; NONE is dismissed', () => {
+    const items = uc.proposeConsiderations(LIST_ELEMENT);
+    const resolutions = uc.autoResolve(items);
+    assert.equal(resolutions.length, items.length);
+    for (const r of resolutions) {
+      assert.notEqual(r.status, 'dismissed');
+      assert.equal(r.status, 'resolved');
+      assert.equal(r.verification, 'backstop');
+      assert.equal(typeof r.resolution, 'string');
+      assert.ok(r.resolution.length > 0);
+    }
+  });
+  test('an unclassified item stays unresolved — never auto-backstopped (a missing cue is not evidence, #1110)', () => {
+    const items = uc.proposeConsiderations(ZERO_CUE_ELEMENT); // one unclassified item
+    const [r] = uc.autoResolve(items);
+    assert.equal(r.status, 'unresolved');
+    assert.equal(r.verification, null);
+    assert.equal(r.resolution, null);
+    assert.equal(r.reason, null);
+  });
+  test('autoResolve output validates and merges through probe-core: zero dismissed, byVerification.backstop === applicable', () => {
+    const items = uc.proposeConsiderations(LIST_ELEMENT);
+    const report = uc.analyzeCoverage([LIST_ELEMENT], uc.autoResolve(items));
+    assert.ok(report.items.every((it) => it.status !== 'dismissed'));
+    assert.equal(report.coverage.resolved, report.coverage.applicable);
+    assert.equal(report.coverage.byVerification.backstop, report.coverage.applicable);
+  });
+});
+
+describe('ui-consideration-probe: partial-cue recall gap (confirm is load-bearing, not the heuristic — Goodhart)', () => {
+  test('prose that trips only the form cue under-covers: heuristic categories are a STRICT SUBSET of the confirmed form+list union', () => {
+    const [heuristic] = uc.proposeElements([PARTIAL_CUE_ELEMENT]);
+    const [confirmed] = uc.proposeElements([{ ...PARTIAL_CUE_ELEMENT, elements: ['form', 'list-collection'] }]);
+    assert.deepEqual(heuristic.kinds, ['form']); // prose only tripped 'form'
+    const hSet = new Set(heuristic.categories);
+    const cSet = new Set(confirmed.categories);
+    for (const cat of hSet) assert.ok(cSet.has(cat), `heuristic category ${cat} must be in the confirmed union`);
+    assert.ok(cSet.size > hSet.size, 'the confirmed union must strictly exceed the heuristic set — proving the confirm step recovers missed coverage');
+  });
+});
