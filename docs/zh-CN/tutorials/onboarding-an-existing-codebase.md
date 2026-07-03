@@ -52,7 +52,7 @@ claude --dangerously-skip-permissions
 /gsd-onboard
 ```
 
-如果 onboarding 报告缺少代码库映射，请选择推荐选项并运行打印出的 `/gsd-map-codebase` 交接命令，然后重新运行 `/gsd-onboard`。`/gsd-map-codebase` 会派生四个并行映射子代理（您将看到"Spawning 4 parallel codebase mapper agents…"——这需要 1–5 分钟；请勿中断）。每个代理专注于不同的关注点：
+如果 onboarding 报告缺少代码库映射，请选择推荐选项并运行打印出的 `/gsd-map-codebase` 交接命令，然后重新运行 `/gsd-onboard`。`/gsd-onboard --fast` 只适合轻量首次通过；在 `/gsd-new-project` 前仍需要完整映射。`/gsd-map-codebase` 会派生四个并行映射子代理（您将看到"Spawning 4 parallel codebase mapper agents…"——这需要 1–5 分钟；请勿中断）。每个代理专注于不同的关注点：
 
 | 代理 | 关注点 |
 |-------|-------|

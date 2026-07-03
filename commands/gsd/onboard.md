@@ -37,7 +37,7 @@ Guide brownfield onboarding for an existing codebase by routing through the exis
 Arguments: $ARGUMENTS
 
 Flags:
-- `--fast` — prefer `/gsd:map-codebase --fast` for the mapping handoff.
+- `--fast` — prefer `/gsd:map-codebase --fast` for the mapping handoff; the complete map is still required before `/gsd:new-project`.
 - `--text` — use plain-text numbered lists instead of TUI menus.
 </context>
 

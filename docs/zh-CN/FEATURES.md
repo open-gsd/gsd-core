@@ -814,7 +814,7 @@
 
 **需求：**
 - REQ-ONBOARD-01：系统必须检测现有代码、package manifest、规划文档、部分 `.planning/` 状态以及缺失的代码库映射文件。
-- REQ-ONBOARD-02：当 brownfield 缺少完整 `.planning/codebase/` 时，系统必须交接到 `/gsd-map-codebase` 或 `/gsd-map-codebase --fast`。
+- REQ-ONBOARD-02：当 brownfield 缺少所需 `.planning/codebase/` 映射文件时，系统必须交接到 `/gsd-map-codebase` 或 `/gsd-map-codebase --fast`。fast 映射 readiness 是部分状态，不得视为足以运行 `/gsd-new-project`。
 - REQ-ONBOARD-03：当存在 ADR/PRD/SPEC/RFC 候选且 project 不存在时，系统必须在 `/gsd-new-project` 前提供 `/gsd-ingest-docs`。
 - REQ-ONBOARD-04：在 `PROJECT.md`、`REQUIREMENTS.md`、`ROADMAP.md`、`STATE.md` 全部存在前，系统不得报告 onboarding 完成。
 - REQ-ONBOARD-05：系统必须仅在 project setup 后创建或确认 `.planning/onboarding/SUMMARY.md`。

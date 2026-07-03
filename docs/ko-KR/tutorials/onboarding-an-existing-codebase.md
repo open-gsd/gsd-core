@@ -52,7 +52,7 @@ claude --dangerously-skip-permissions
 /gsd-onboard
 ```
 
-온보딩이 코드베이스 맵 누락을 보고하면 권장 옵션을 선택하고 출력된 `/gsd-map-codebase` handoff를 실행한 뒤 `/gsd-onboard`를 다시 실행합니다. `/gsd-map-codebase`가 4개의 병렬 매퍼 서브 에이전트를 생성합니다("Spawning 4 parallel codebase mapper agents…" 메시지가 표시되며, 1–5분 소요됩니다. 중단하지 마세요). 각 에이전트는 서로 다른 관심사에 집중합니다:
+온보딩이 코드베이스 맵 누락을 보고하면 권장 옵션을 선택하고 출력된 `/gsd-map-codebase` handoff를 실행한 뒤 `/gsd-onboard`를 다시 실행합니다. `/gsd-onboard --fast`는 가벼운 첫 패스에는 충분하지만, `/gsd-new-project` 전에는 완전한 맵이 필요합니다. `/gsd-map-codebase`가 4개의 병렬 매퍼 서브 에이전트를 생성합니다("Spawning 4 parallel codebase mapper agents…" 메시지가 표시되며, 1–5분 소요됩니다. 중단하지 마세요). 각 에이전트는 서로 다른 관심사에 집중합니다:
 
 | 에이전트 | 집중 영역 |
 |---------|---------|

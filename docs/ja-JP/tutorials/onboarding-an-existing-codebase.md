@@ -52,7 +52,7 @@ claude --dangerously-skip-permissions
 /gsd-onboard
 ```
 
-オンボーディングがコードベースマップ不足を示したら、推奨オプションを選び、表示された `/gsd-map-codebase` ハンドオフを実行してから `/gsd-onboard` を再実行します。`/gsd-map-codebase` が4つの並行マッパーサブエージェントを生成します（「Spawning 4 parallel codebase mapper agents…」という通知が表示されます。1〜5分かかりますので中断しないでください）。各エージェントはそれぞれ異なる観点に注目します:
+オンボーディングがコードベースマップ不足を示したら、推奨オプションを選び、表示された `/gsd-map-codebase` ハンドオフを実行してから `/gsd-onboard` を再実行します。`/gsd-onboard --fast` は軽量な初回パスには使えますが、`/gsd-new-project` の前には完全なマップが必要です。`/gsd-map-codebase` が4つの並行マッパーサブエージェントを生成します（「Spawning 4 parallel codebase mapper agents…」という通知が表示されます。1〜5分かかりますので中断しないでください）。各エージェントはそれぞれ異なる観点に注目します:
 
 | エージェント | 観点 |
 |-------|-------|

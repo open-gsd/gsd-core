@@ -58,7 +58,7 @@ If code exists and `.planning/codebase/` is missing, GSD Core asks you to map th
 /gsd-map-codebase
 ```
 
-Use `/gsd-onboard --fast` if you want the onboarding gate to prefer `/gsd-map-codebase --fast` for a lighter first pass. The full mapper spawns four parallel mapper sub-agents (you'll see "Spawning 4 parallel codebase mapper agents…" — this takes 1–5 minutes; do not interrupt). Each agent focuses on a different concern:
+Use `/gsd-onboard --fast` if you want the onboarding gate to prefer `/gsd-map-codebase --fast` for a lighter first pass. Fast mode is only enough for lightweight onboarding; `/gsd-onboard` still sends you back to the full mapper before `/gsd-new-project`. The full mapper spawns four parallel mapper sub-agents (you'll see "Spawning 4 parallel codebase mapper agents…" — this takes 1–5 minutes; do not interrupt). Each agent focuses on a different concern:
 
 | Agent | Focus |
 |-------|-------|

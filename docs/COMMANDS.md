@@ -64,7 +64,7 @@ Guide an existing codebase through first-time GSD onboarding. The command checks
 
 | Flag | Description |
 |------|-------------|
-| `--fast` | Prefer the lightweight `/gsd-map-codebase --fast` mapping handoff |
+| `--fast` | Prefer the lightweight `/gsd-map-codebase --fast` mapping handoff; a complete map is still required before `/gsd-new-project` |
 | `--text` | Use numbered plain-text gates instead of TUI menus |
 
 **Prerequisites:** Existing repo or planning docs. For empty greenfield projects, use `/gsd-new-project`.
@@ -72,7 +72,7 @@ Guide an existing codebase through first-time GSD onboarding. The command checks
 
 ```bash
 /gsd-onboard           # Guided brownfield onboarding
-/gsd-onboard --fast    # Use lightweight codebase mapping first
+/gsd-onboard --fast    # Use lightweight codebase mapping first, then complete the map before project setup
 ```
 
 ---

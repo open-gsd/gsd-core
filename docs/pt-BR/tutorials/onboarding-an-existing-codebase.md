@@ -52,7 +52,7 @@ Antes de criar um projeto, deixe o GSD Core inspecionar o estado do repositório
 /gsd-onboard
 ```
 
-Se o onboarding informar que o mapa da base de código está ausente, escolha a opção recomendada e execute o handoff `/gsd-map-codebase` impresso antes de rodar `/gsd-onboard` novamente. O `/gsd-map-codebase` cria quatro sub-agentes mapeadores paralelos (você verá "Spawning 4 parallel codebase mapper agents…" — isso leva de 1 a 5 minutos; não interrompa). Cada agente foca em uma preocupação diferente:
+Se o onboarding informar que o mapa da base de código está ausente, escolha a opção recomendada e execute o handoff `/gsd-map-codebase` impresso antes de rodar `/gsd-onboard` novamente. `/gsd-onboard --fast` serve para uma primeira passada leve, mas um mapa completo ainda é necessário antes de `/gsd-new-project`. O `/gsd-map-codebase` cria quatro sub-agentes mapeadores paralelos (você verá "Spawning 4 parallel codebase mapper agents…" — isso leva de 1 a 5 minutos; não interrompa). Cada agente foca em uma preocupação diferente:
 
 | Agente | Foco |
 |--------|------|

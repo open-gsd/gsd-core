@@ -814,7 +814,7 @@
 
 **要件:**
 - REQ-ONBOARD-01: 既存コード、package manifest、計画ドキュメント、部分的な `.planning/`、コードベースマップの不足を検出する。
-- REQ-ONBOARD-02: 完全な `.planning/codebase/` がない brownfield では `/gsd-map-codebase` または `/gsd-map-codebase --fast` へハンドオフする。
+- REQ-ONBOARD-02: 必要な `.planning/codebase/` マップファイルがない brownfield では `/gsd-map-codebase` または `/gsd-map-codebase --fast` へハンドオフする。fast マップの readiness は部分的であり、`/gsd-new-project` に十分として扱ってはならない。
 - REQ-ONBOARD-03: ADR/PRD/SPEC/RFC 候補があり project がない場合、`/gsd-new-project` の前に `/gsd-ingest-docs` を提示する。
 - REQ-ONBOARD-04: `PROJECT.md`、`REQUIREMENTS.md`、`ROADMAP.md`、`STATE.md` が揃うまで完了扱いにしない。
 - REQ-ONBOARD-05: project setup 後にのみ `.planning/onboarding/SUMMARY.md` を作成または確認する。

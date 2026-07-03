@@ -57,7 +57,7 @@ Guia o onboarding inicial de um código existente no GSD. O comando verifica o e
 
 | Flag | Descrição |
 |------|-----------|
-| `--fast` | Prefere o handoff leve `/gsd-map-codebase --fast` para mapeamento |
+| `--fast` | Prefere o handoff leve `/gsd-map-codebase --fast`; um mapa completo ainda é necessário antes de `/gsd-new-project` |
 | `--text` | Usa gates numerados em texto puro em vez de menus TUI |
 
 **Pré-requisitos:** Repositório existente ou documentos de planejamento. Para projetos greenfield vazios, use `/gsd-new-project`.
@@ -65,7 +65,7 @@ Guia o onboarding inicial de um código existente no GSD. O comando verifica o e
 
 ```bash
 /gsd-onboard           # Onboarding brownfield guiado
-/gsd-onboard --fast    # Usa primeiro o mapeamento leve da base de código
+/gsd-onboard --fast    # Usa primeiro o mapa leve e depois completa o mapa antes do setup do projeto
 ```
 
 ---
