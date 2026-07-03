@@ -5943,3 +5943,959 @@ describe('bug #1229: phase.add must count bullet-only phases to avoid number col
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/247-phase-uat-passed.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:247-phase-uat-passed (consolidation epic #1969 B2 #1971)", () => {
+'use strict';
+
+/**
+ * Integration tests for `phase uat-passed <N>` CLI command.
+ * Issue #247 — phase uat-passed predicate
+ *
+ * Tests the full dispatch path: gsd-tools → phase-command-router → phase.cmdPhaseUatPassed
+ */
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Set up a minimal project with a phase directory and ROADMAP so that
+ * findPhaseInternal(cwd, phaseNum) can resolve it.
+ * Returns { tmpDir, phaseDir }.
+ */
+function setupProject(phaseSlug = '01-feature') {
+  const tmpDir = createTempProject();
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'ROADMAP.md'),
+    [
+      '# Roadmap',
+      '',
+      '- [ ] Phase 1: Feature',
+      '',
+      '### Phase 1: Feature',
+      '**Goal:** Build feature',
+      '**Plans:** 1 plans',
+      '',
+    ].join('\n'),
+  );
+  const phaseDir = path.join(tmpDir, '.planning', 'phases', phaseSlug);
+  fs.mkdirSync(phaseDir, { recursive: true });
+  return { tmpDir, phaseDir };
+}
+
+function writeUatFile(phaseDir, filename, content) {
+  fs.writeFileSync(path.join(phaseDir, filename), content, 'utf-8');
+}
+
+function setMtime(filePath, time) {
+  fs.utimesSync(filePath, time, time);
+}
+
+function makePassingUat() {
+  return [
+    '---',
+    'status: passed',
+    '---',
+    '',
+    '# UAT Results',
+    '',
+    '### 1. Login works',
+    'expected: User logs in successfully',
+    'result: passed',
+    '',
+  ].join('\n');
+}
+
+function makePendingUat() {
+  return [
+    '---',
+    'status: partial',
+    '---',
+    '',
+    '# UAT Results',
+    '',
+    '### 1. Login works',
+    'expected: User logs in successfully',
+    'result: passed',
+    '',
+    '### 2. Logout works',
+    'expected: User logs out successfully',
+    'result: pending',
+    '',
+  ].join('\n');
+}
+
+function makeFencedFalsePositiveUat() {
+  // Only "result: passed" lines are inside a fenced block.
+  // The real test has result: pending → should evaluate to passed:false.
+  return [
+    '---',
+    'status: partial',
+    '---',
+    '',
+    '# UAT Results',
+    '',
+    '## Example (do not run)',
+    '```',
+    '### 1. Test',
+    'expected: Example',
+    'result: passed',
+    '```',
+    '',
+    '### 1. Real Test',
+    'expected: The thing works',
+    'result: pending',
+    '',
+  ].join('\n');
+}
+
+// ─── Basic pass/fail cases ─────────────────────────────────────────────────────
+
+describe('phase uat-passed — basic pass/fail', () => {
+  let tmpDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    ({ tmpDir, phaseDir } = setupProject('01-feature'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('passing UAT → passed:true with correct JSON shape', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const result = runGsdTools('phase uat-passed 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}\nOutput: ${result.output}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, true);
+    assert.strictEqual(out.phase, '1');
+    assert.ok(Array.isArray(out.uat_files), 'uat_files must be an array');
+    assert.ok(Array.isArray(out.verification_files), 'verification_files must be an array');
+    assert.ok(Array.isArray(out.checks), 'checks must be an array');
+    assert.ok(Array.isArray(out.blockers), 'blockers must be an array');
+    assert.ok(out.policy && typeof out.policy.require_verification === 'boolean',
+      'policy.require_verification must be a boolean');
+    assert.strictEqual(typeof out.no_uat_artifacts, 'boolean', 'no_uat_artifacts must be a boolean');
+    assert.strictEqual(out.no_uat_artifacts, false, 'no_uat_artifacts must be false when checks exist');
+    assert.strictEqual(out.blockers.length, 0);
+  });
+
+  test('pending UAT → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePendingUat());
+    const result = runGsdTools('phase uat-passed 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+    assert.strictEqual(out.phase, '1');
+    assert.ok(out.blockers.length > 0, 'Should have blockers for pending test');
+  });
+
+  test('false-positive only (fenced block) → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makeFencedFalsePositiveUat());
+    const result = runGsdTools('phase uat-passed 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false,
+      'result:passed inside a fenced block must not flip the predicate to passed');
+  });
+
+  test('no UAT files → passed:false + no_uat_artifacts:true (fail-closed, no vacuous pass)', () => {
+    // Phase directory exists but has no UAT files — fail-closed: absence is NOT a pass
+    const result = runGsdTools('phase uat-passed 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false,
+      'Phase with no UAT files must NOT vacuously pass — fail-closed predicate');
+    assert.strictEqual(out.no_uat_artifacts, true,
+      'no_uat_artifacts must be true when no UAT items found');
+    assert.deepStrictEqual(out.uat_files, []);
+  });
+});
+
+// ─── --require-verification flag ──────────────────────────────────────────────
+
+describe('phase uat-passed — --require-verification flag', () => {
+  let tmpDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    ({ tmpDir, phaseDir } = setupProject('01-feature'));
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('--require-verification with no verification file → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false,
+      'require-verification with no verification file should fail');
+    assert.strictEqual(out.policy.require_verification, true);
+    assert.ok(out.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(out.blockers)}`);
+  });
+
+  test('--require-verification with passing verification → passed:true', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: passed\n---\n\nVerified OK.');
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, true);
+    assert.strictEqual(out.policy.require_verification, true);
+  });
+
+  test('--require-verification with stale passed verification → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    const verificationPath = path.join(phaseDir, 'feature-VERIFICATION.md');
+    const summaryPath = path.join(phaseDir, 'feature-SUMMARY.md');
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: passed\n---\n\nVerified OK.');
+    writeUatFile(phaseDir, 'feature-SUMMARY.md', '# Summary\n\nImplementation changed after verification.\n');
+    const now = new Date();
+    setMtime(verificationPath, new Date(now.getTime() - 60_000));
+    setMtime(summaryPath, now);
+
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+    assert.ok(
+      out.blockers.some(b => /verification status=stale/i.test(b)),
+      `Expected stale-verification blocker, got: ${JSON.stringify(out.blockers)}`,
+    );
+  });
+
+  test('--require-verification with non-canonical complete verification → passed:false', () => {
+    writeUatFile(phaseDir, 'feature-UAT.md', makePassingUat());
+    writeUatFile(phaseDir, 'feature-VERIFICATION.md', '---\nstatus: complete\n---\n\nLegacy OK.');
+    const result = runGsdTools('phase uat-passed 1 --require-verification', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.passed, false);
+    assert.ok(out.blockers.some(b => /verification required/i.test(b)),
+      `Expected verification-required blocker, got: ${JSON.stringify(out.blockers)}`);
+  });
+});
+
+// ─── Error cases ──────────────────────────────────────────────────────────────
+
+describe('phase uat-passed — error cases', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    // Write a minimal ROADMAP so phase 1 exists
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '### Phase 1: Feature',
+        '**Goal:** Build feature',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-feature'), { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('missing phase number → error message', () => {
+    const result = runGsdTools('phase uat-passed', tmpDir);
+    assert.ok(!result.success, 'Should fail with no phase number');
+    assert.ok(
+      result.error.includes('phase number required') ||
+      result.error.includes('Available:'),
+      `Expected phase-number-required error, got: ${result.error}`,
+    );
+  });
+
+  test('unknown phase number → error message', () => {
+    const result = runGsdTools('phase uat-passed 99', tmpDir);
+    assert.ok(!result.success, 'Should fail for unknown phase');
+    assert.ok(
+      result.error.includes('not found') || result.error.includes('99'),
+      `Expected not-found error, got: ${result.error}`,
+    );
+  });
+
+  test('unknown flag (typo --require-verifcation) → InvalidArgs error, not silent pass', () => {
+    const result = runGsdTools('phase uat-passed 1 --require-verifcation', tmpDir);
+    assert.ok(!result.success,
+      'Unknown flag must cause an error, not silently pass');
+    assert.ok(
+      result.error.includes('--require-verifcation') ||
+      result.error.includes('does not support') ||
+      result.error.includes('invalid'),
+      `Expected unknown-flag error, got: ${result.error}`,
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2769-requirements-header-variants.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2769-requirements-header-variants (consolidation epic #1969 B2 #1971)", () => {
+/**
+ * Regression tests for issue #2769
+ *
+ * The Requirements header in ROADMAP.md phase blocks renders identically in
+ * markdown for three textually distinct forms:
+ *
+ *   **Requirements:**          colon INSIDE bold delimiters
+ *   **Requirements**:          colon OUTSIDE bold delimiters
+ *   **Requirements** :         space-then-colon outside bold
+ *
+ * Two parsers in the codebase used opposing strict regexes — one only
+ * matched the outside-colon form (init.cjs / init.ts), the other only the
+ * inside-colon form (phase.cjs `cmdPhaseComplete` REQUIREMENTS.md
+ * traceability sweep). Both must accept all three variants so phase
+ * metadata propagation is robust to authoring style.
+ *
+ * Tests for the init query side live in `tests/init.test.cjs` (parameterized
+ * over the three variants). This file exercises the inverse bug in
+ * `phase complete`: the REQUIREMENTS.md checkbox must flip when ROADMAP
+ * uses the outside-colon form, which previously was silently skipped.
+ */
+
+'use strict';
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+describe('bug #2769: phase complete ticks REQUIREMENTS.md across header variants', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      ['---', 'current_phase: 1', 'status: executing', '---', '# State', ''].join('\n'),
+    );
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  const headerVariants = [
+    { name: 'colon inside bold (**Requirements:**)', header: '**Requirements:** REQ-001' },
+    { name: 'colon outside bold (**Requirements**:)', header: '**Requirements**: REQ-001' },
+    { name: 'space before colon (**Requirements** :)', header: '**Requirements** : REQ-001' },
+  ];
+
+  for (const variant of headerVariants) {
+    test(`flips REQ-001 checkbox in REQUIREMENTS.md when ROADMAP uses ${variant.name}`, () => {
+      const phasesDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+      fs.mkdirSync(phasesDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(phasesDir, '01-1-PLAN.md'),
+        ['---', 'phase: 1', 'plan: 1', '---', '# Plan 1', ''].join('\n'),
+      );
+      fs.writeFileSync(
+        path.join(phasesDir, '01-1-SUMMARY.md'),
+        ['---', 'status: complete', '---', '# Summary', 'Done.'].join('\n'),
+      );
+      fs.writeFileSync(
+        path.join(phasesDir, '01-VERIFICATION.md'),
+        ['---', 'status: passed', 'score: "1/1"', '---', '# Verification', 'Passed.'].join('\n'),
+      );
+
+      const roadmap = [
+        '# Roadmap',
+        '',
+        '### Phase 1: Foundation',
+        '',
+        '**Goal:** Build core',
+        variant.header,
+        '**Plans:** 1 plans',
+        '',
+        'Plans:',
+        '- [x] 01-1-PLAN.md',
+        '',
+        '| Phase | Plans | Status | Completed |',
+        '|-------|-------|--------|-----------|',
+        '| 1. Foundation | 0/1 | Pending | - |',
+      ].join('\n');
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+
+      const requirements = [
+        '# Requirements',
+        '',
+        '## Functional Requirements',
+        '',
+        '- [ ] **REQ-001**: Core data model',
+        '',
+        '## Traceability',
+        '',
+        '| REQ-ID | Phase | Status |',
+        '|--------|-------|--------|',
+        '| REQ-001 | 1 | Pending |',
+      ].join('\n');
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), requirements);
+
+      const result = runGsdTools(['phase', 'complete', '1'], tmpDir);
+      assert.ok(result.success, `phase complete failed: ${result.error}`);
+
+      const updated = fs.readFileSync(
+        path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+        'utf-8',
+      );
+      assert.match(
+        updated,
+        /-\s*\[x\]\s*\*\*REQ-001\*\*/,
+        `REQ-001 checkbox must be flipped to [x] when ROADMAP header is "${variant.header}". Got:\n${updated}`,
+      );
+      assert.match(
+        updated,
+        /\|\s*REQ-001\s*\|\s*1\s*\|\s*Complete\s*\|/,
+        `Traceability row for REQ-001 must be marked Complete. Got:\n${updated}`,
+      );
+    });
+  }
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3537-padded-id-against-unpadded-roadmap.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3537-padded-id-against-unpadded-roadmap (consolidation epic #1969 B2 #1971)", () => {
+/**
+ * Regression tests for bug #3537
+ *
+ * Phase state verbs must match a canonical phase id against ROADMAP.md prose
+ * regardless of zero-padding on either side: the skills pass the padded form
+ * (`02.7`) after resolving the phase directory, but human-authored ROADMAP
+ * prose is conventionally un-padded (`### Phase 2.7:`, `- [ ] **Phase 2.7:**`).
+ *
+ * v1.42.1 added `phaseMarkdownRegexSource()` which renders `0*<integer><...>`
+ * — padding-tolerant on both sides — but wired it into only 1 of 8 call sites.
+ * The other 7 used raw `escapeRegex(phaseNum)` or `0*${escapeRegex(...)}`
+ * (tolerated extra padding, not missing), so passing the padded form silently
+ * no-op'd and the verbs returned success while ROADMAP.md was unchanged.
+ *
+ * Parity assertion (per CONTEXT.md DEFECT.GENERATIVE-FIX): for each verb,
+ * running with the padded form must produce the same ROADMAP.md as running
+ * with the un-padded form against an identical fixture. Per-site fixes
+ * without a parity test let the next call-site drift back undetected.
+ */
+
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { execFileSync } = require('node:child_process');
+
+const { cleanup } = require('./helpers.cjs');
+
+const gsdTools = path.resolve(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+function run(args, cwd) {
+  try {
+    return {
+      stdout: execFileSync('node', [gsdTools, ...args], {
+        cwd,
+        timeout: 15000,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }),
+      ok: true,
+    };
+  } catch (e) {
+    return {
+      stdout: (e.stdout && e.stdout.toString()) || '',
+      stderr: (e.stderr && e.stderr.toString()) || '',
+      ok: false,
+      code: e.status,
+    };
+  }
+}
+
+/**
+ * Build a planning fixture with project_code='CK', padded phase directory
+ * (`CK-02.7-meta-lead-ads/`), and un-padded ROADMAP prose (`Phase 2.7`).
+ * This mirrors the reporter's environment in #3537 exactly.
+ */
+function setupFixture(tmpDir, opts = {}) {
+  const {
+    projectCode = 'CK',
+    paddedId = '02.7',
+    unpaddedId = '2.7',
+    extraPhases = [],
+  } = opts;
+
+  const planningDir = path.join(tmpDir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(planningDir, 'config.json'),
+    JSON.stringify({ project_code: projectCode })
+  );
+
+  fs.writeFileSync(
+    path.join(planningDir, 'STATE.md'),
+    `---\ncurrent_phase: ${unpaddedId}\nstatus: executing\n---\n# State\n`
+  );
+
+  // Padded phase directory with one plan + matching summary so the phase
+  // is "complete" for phase-complete and update-plan-progress verbs.
+  const phaseDirName = `${projectCode}-${paddedId}-meta-lead-ads`;
+  const phaseDir = path.join(planningDir, 'phases', phaseDirName);
+  fs.mkdirSync(phaseDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(phaseDir, `${paddedId}-01-PLAN.md`),
+    `---\nphase: ${unpaddedId}\nplan: 1\nwave: 1\n---\n# Plan 1\n`
+  );
+  fs.writeFileSync(
+    path.join(phaseDir, `${paddedId}-01-SUMMARY.md`),
+    '---\nstatus: complete\n---\n# Summary\nDone.'
+  );
+  fs.writeFileSync(
+    path.join(phaseDir, `${paddedId}-VERIFICATION.md`),
+    '---\nstatus: passed\nscore: "1/1"\n---\n# Verification\nPassed.\n'
+  );
+
+  const extra = extraPhases
+    .map((p) => `- [ ] **Phase ${p.id}: ${p.name}**`)
+    .join('\n');
+
+  const roadmap = [
+    '# Roadmap',
+    '',
+    '## v1.0 Milestone',
+    '',
+    `- [ ] **Phase ${unpaddedId}: Meta Lead Ads**`,
+    extra,
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans | Status | Completed |',
+    '|-------|-------|--------|-----------|',
+    `| ${unpaddedId} Meta Lead Ads | 0/1 | Planned | - |`,
+    '',
+    `### Phase ${unpaddedId}: Meta Lead Ads`,
+    '',
+    '**Goal:** ship the thing',
+    '**Plans:** 0 plans',
+    '',
+    'Plans:',
+    `- [ ] ${paddedId}-01-PLAN.md`,
+    '',
+    ...extraPhases.flatMap((p) => [
+      `### Phase ${p.id}: ${p.name}`,
+      '',
+      '**Goal:** stub',
+      '**Plans:** 0 plans',
+      '',
+      'Plans:',
+      `- [ ] ${p.id}-01-PLAN.md`,
+      '',
+    ]),
+  ]
+    .filter((l) => l !== '')
+    .join('\n') + '\n';
+
+  fs.writeFileSync(path.join(planningDir, 'ROADMAP.md'), roadmap);
+
+  return {
+    planningDir,
+    roadmapPath: path.join(planningDir, 'ROADMAP.md'),
+    phaseDir,
+  };
+}
+
+/**
+ * Run a verb in two parallel fixtures — one passing the padded form, one
+ * passing the un-padded form — then compare the resulting ROADMAP.md bytes.
+ * Any divergence means the verb's regex did not tolerate padding on at least
+ * one side.
+ */
+function expectParity({ verbWithPadded, verbWithUnpadded, fixtureOpts }) {
+  const tmpA = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-A-'));
+  const tmpB = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-B-'));
+  try {
+    const a = setupFixture(tmpA, fixtureOpts);
+    const b = setupFixture(tmpB, fixtureOpts);
+
+    const ra = verbWithPadded(tmpA);
+    const rb = verbWithUnpadded(tmpB);
+
+    const aRoadmap = fs.readFileSync(a.roadmapPath, 'utf-8');
+    const bRoadmap = fs.readFileSync(b.roadmapPath, 'utf-8');
+
+    return { aRoadmap, bRoadmap, ra, rb };
+  } finally {
+    cleanup(tmpA);
+    cleanup(tmpB);
+  }
+}
+
+describe('bug #3537: phase verbs accept padded ids against un-padded ROADMAP prose', () => {
+  test('phase complete: padded 02.7 and un-padded 2.7 produce identical ROADMAP', () => {
+    const { aRoadmap, bRoadmap } = expectParity({
+      fixtureOpts: {},
+      verbWithPadded: (cwd) => run(['phase', 'complete', '02.7'], cwd),
+      verbWithUnpadded: (cwd) => run(['phase', 'complete', '2.7'], cwd),
+    });
+
+    assert.equal(
+      aRoadmap,
+      bRoadmap,
+      'padded `02.7` must mutate ROADMAP identically to un-padded `2.7`'
+    );
+    // And the canonical mutation must have actually happened (otherwise
+    // both forms could be silently no-op'ing and still produce identical
+    // output — a vacuous parity pass).
+    assert.match(
+      aRoadmap,
+      /- \[x\] \*\*Phase 2\.7:/,
+      'overview checkbox should be flipped under both invocations'
+    );
+  });
+
+  test('roadmap get-phase: padded 02.7 returns the same section as un-padded 2.7', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-get-'));
+    try {
+      setupFixture(tmp, {});
+      const padded = run(['roadmap', 'get-phase', '02.7', '--raw'], tmp);
+      const unpadded = run(['roadmap', 'get-phase', '2.7', '--raw'], tmp);
+
+      assert.equal(
+        padded.stdout,
+        unpadded.stdout,
+        'padded and un-padded ids must return identical sections'
+      );
+      // Non-vacuous guard: both forms must have actually returned a section
+      // (the bug we're fixing was that the padded form returned an empty
+      // string while reporting success).
+      assert.ok(
+        padded.stdout.trim().length > 0,
+        'verb must return non-empty section under both invocations'
+      );
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('phase next-decimal: padded 02 finds decimals in un-padded ROADMAP', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-nd-'));
+    try {
+      setupFixture(tmp, {
+        paddedId: '02.7',
+        unpaddedId: '2.7',
+      });
+
+      // Padded base `02` must discover the existing decimal `2.7` from the
+      // un-padded heading and propose `2.8` (or higher) as next.
+      const padded = run(['phase', 'next-decimal', '02', '--raw'], tmp);
+      const unpadded = run(['phase', 'next-decimal', '2', '--raw'], tmp);
+
+      assert.equal(
+        padded.stdout,
+        unpadded.stdout,
+        'next-decimal must produce identical JSON for padded and un-padded base'
+      );
+
+      // Sanity: the existing 2.7 must be reflected. If the prose-scan regex
+      // silently failed to match `Phase 2.7`, the result would skip 2.7 and
+      // wrongly propose 2.1 as next. `phase next-decimal --raw` emits the
+      // next id as plain text (`02.8`), so trimmed string equality is the
+      // typed assertion shape (no raw-text regex matching — lint policy).
+      const nextDecimalPadded = padded.stdout.trim();
+      assert.notEqual(
+        nextDecimalPadded,
+        '02.1',
+        'must not propose 02.1 when 2.7 already exists in ROADMAP'
+      );
+      assert.notEqual(
+        nextDecimalPadded,
+        '2.1',
+        'must not propose 2.1 when 2.7 already exists in ROADMAP'
+      );
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('phase insert: padded base 02 finds anchor in un-padded ROADMAP', () => {
+    const tmpA = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-ins-A-'));
+    const tmpB = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-ins-B-'));
+    try {
+      // Use a phase 2 (no decimal) base so insert proposes 2.1.
+      const optsA = {
+        paddedId: '02',
+        unpaddedId: '2',
+      };
+      setupFixture(tmpA, optsA);
+      setupFixture(tmpB, optsA);
+
+      const padded = run(['phase', 'insert', '02', 'urgent extension'], tmpA);
+      const unpadded = run(['phase', 'insert', '2', 'urgent extension'], tmpB);
+
+      // Both invocations should succeed (exit 0) — passing the padded base
+      // against un-padded prose used to error "Phase 02 not found".
+      assert.ok(
+        padded.ok,
+        `padded form must succeed, got code=${padded.code}, stderr=${padded.stderr}`
+      );
+      assert.ok(
+        unpadded.ok,
+        `un-padded form must succeed, got code=${unpadded.code}`
+      );
+
+      const aRoadmap = fs.readFileSync(
+        path.join(tmpA, '.planning', 'ROADMAP.md'),
+        'utf-8'
+      );
+
+      // The new header may be rendered as `Phase 02.1` or `Phase 2.1`
+      // (normalizePhaseName pads to 2 digits today; that is pre-existing
+      // behavior, not the subject of #3537). The critical assertion for
+      // this verb is "padded form found the anchor and the insertion
+      // happened" — full byte-parity is gated by an unrelated `Depends on:
+      // Phase ${afterPhase}` echo bug that lies outside #3537's scope.
+      assert.match(
+        aRoadmap,
+        /### Phase 0?2\.1: urgent extension/,
+        'padded form must insert the new decimal phase header'
+      );
+      // Reference `tmpB` to ensure cleanup runs and keep it alive in the
+      // closure — also a smoke-check that the un-padded sibling did not
+      // crash mid-run.
+      assert.ok(fs.existsSync(path.join(tmpB, '.planning', 'ROADMAP.md')));
+    } finally {
+      cleanup(tmpA);
+      cleanup(tmpB);
+    }
+  });
+
+  test('roadmap annotate-dependencies: padded 02.7 finds phase section', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-ann-'));
+    try {
+      const { roadmapPath } = setupFixture(tmp, {});
+      const before = fs.readFileSync(roadmapPath, 'utf-8');
+
+      const padded = run(
+        ['roadmap', 'annotate-dependencies', '02.7'],
+        tmp
+      );
+      assert.ok(
+        padded.ok,
+        `padded form must succeed, got code=${padded.code}, stderr=${padded.stderr}`
+      );
+
+      const after = fs.readFileSync(roadmapPath, 'utf-8');
+      // The annotation may be a no-op if there's only one wave and no
+      // cross-cutting truths, but the verb must have reached the phase
+      // section. Confirm by running parity against un-padded form on a
+      // separate fixture and asserting equality.
+      const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3537-ann2-'));
+      try {
+        const { roadmapPath: rp2 } = setupFixture(tmp2, {});
+        run(['roadmap', 'annotate-dependencies', '2.7'], tmp2);
+        const unpadded = fs.readFileSync(rp2, 'utf-8');
+        assert.equal(
+          after,
+          unpadded,
+          'annotate-dependencies must produce identical output for padded and un-padded ids'
+        );
+        // And the verb must not have silently destroyed the file (sanity).
+        assert.match(after, /### Phase 2\.7:/, 'phase header must survive');
+        // Reference `before` to keep it from being dead-binding-flagged
+        // and to assert the run did not corrupt the rest of the file.
+        assert.ok(before.length > 0);
+      } finally {
+        cleanup(tmp2);
+      }
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('roadmap update-plan-progress: control case — already wired in 1.42.1', () => {
+    // This is the one site already using phaseMarkdownRegexSource. Including
+    // it as a control proves the parity assertion is a meaningful signal
+    // (this test should pass on main, while the others fail).
+    const { aRoadmap, bRoadmap } = expectParity({
+      fixtureOpts: {},
+      verbWithPadded: (cwd) =>
+        run(['roadmap', 'update-plan-progress', '02.7'], cwd),
+      verbWithUnpadded: (cwd) =>
+        run(['roadmap', 'update-plan-progress', '2.7'], cwd),
+    });
+
+    assert.equal(
+      aRoadmap,
+      bRoadmap,
+      'control verb must already produce identical output (wired in 1.42.1)'
+    );
+    assert.match(
+      aRoadmap,
+      /- \[x\] \*\*Phase 2\.7:/,
+      'control verb must flip checkbox under both invocations'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2268-parallel-discuss.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2268-parallel-discuss (consolidation epic #1969 B2 #1971)", () => {
+/**
+ * Regression test for bug #2268
+ *
+ * cmdInitProgress used a sliding-window pattern that set is_next_to_discuss
+ * only on the FIRST undiscussed phase. Multiple independent undiscussed phases
+ * could not be discussed in parallel — the manager only ever recommended one
+ * discuss action at a time.
+ *
+ * Fix: mark ALL undiscussed phases as is_next_to_discuss = true so the user
+ * can pick any of them.
+ */
+
+'use strict';
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+function writeRoadmap(tmpDir, phases) {
+  const sections = phases.map(p => {
+    let section = `### Phase ${p.number}: ${p.name}\n\n**Goal:** Do the thing\n`;
+    return section;
+  }).join('\n');
+  const checklist = phases.map(p => {
+    const mark = p.complete ? 'x' : ' ';
+    return `- [${mark}] **Phase ${p.number}: ${p.name}**`;
+  }).join('\n');
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'ROADMAP.md'),
+    `# Roadmap\n\n## Progress\n\n${checklist}\n\n${sections}`
+  );
+}
+
+function writeState(tmpDir) {
+  fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: active\n---\n# State\n');
+}
+
+let tmpDir;
+
+describe('bug #2268: parallel discuss — all undiscussed phases marked is_next_to_discuss', () => {
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('two undiscussed phases: both marked is_next_to_discuss', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Foundation' },
+      { number: '2', name: 'Cloud Deployment' },
+    ]);
+
+    const result = runGsdTools('init manager', tmpDir);
+    const output = JSON.parse(result.output);
+
+    assert.strictEqual(output.phases[0].is_next_to_discuss, true, 'phase 1 should be discussable');
+    assert.strictEqual(output.phases[1].is_next_to_discuss, true, 'phase 2 should also be discussable');
+  });
+
+  test('two undiscussed phases: both get discuss recommendations', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Foundation' },
+      { number: '2', name: 'Cloud Deployment' },
+    ]);
+
+    const result = runGsdTools('init manager', tmpDir);
+    const output = JSON.parse(result.output);
+
+    const discussActions = output.recommended_actions.filter(a => a.action === 'discuss');
+    assert.strictEqual(discussActions.length, 2, 'should recommend discuss for both undiscussed phases');
+
+    const phases = discussActions.map(a => a.phase).sort();
+    assert.deepStrictEqual(phases, ['1', '2']);
+  });
+
+  test('five undiscussed phases: all five marked is_next_to_discuss', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Alpha' },
+      { number: '2', name: 'Beta' },
+      { number: '3', name: 'Gamma' },
+      { number: '4', name: 'Delta' },
+      { number: '5', name: 'Epsilon' },
+    ]);
+
+    const result = runGsdTools('init manager', tmpDir);
+    const output = JSON.parse(result.output);
+
+    for (const phase of output.phases) {
+      assert.strictEqual(phase.is_next_to_discuss, true, `phase ${phase.number} should be discussable`);
+    }
+  });
+
+  test('discussed phase stays false; undiscussed sibling is true', () => {
+    writeState(tmpDir);
+    writeRoadmap(tmpDir, [
+      { number: '1', name: 'Foundation' },
+      { number: '2', name: 'API Layer' },
+    ]);
+    // scaffold CONTEXT.md to mark phase 1 as discussed
+    const dir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '01-CONTEXT.md'), '# Context');
+
+    const result = runGsdTools('init manager', tmpDir);
+    const output = JSON.parse(result.output);
+
+    assert.strictEqual(output.phases[0].is_next_to_discuss, false, 'discussed phase must not be is_next_to_discuss');
+    assert.strictEqual(output.phases[1].is_next_to_discuss, true, 'undiscussed sibling must be is_next_to_discuss');
+  });
+});
+  });
+}

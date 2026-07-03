@@ -1462,3 +1462,585 @@ describe('config-set workflow.test_command (#1216)', () => {
     assert.strictEqual(config.workflow?.build_command, 'npm run build', 'value must be persisted');
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2601-inherit-model-profile.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2601-inherit-model-profile (consolidation epic #1969 B2 #1971)", () => {
+'use strict';
+
+/**
+ * Regression tests for bug #2601
+ *
+ * `config-set-model-profile inherit` (and `config-set model_profile inherit`)
+ * was rejected by the validator even though the runtime accepts 'inherit' as a
+ * valid model_profile value meaning "inherit from parent configuration".
+ *
+ * Root cause: VALID_PROFILES in model-profiles.cjs is derived from
+ * Object.keys(MODEL_PROFILES['gsd-planner']), which does not include 'inherit'.
+ * cmdConfigSetModelProfile() rejects any value not in VALID_PROFILES.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+describe('bug #2601: config-set-model-profile accepts inherit', () => {
+  test('config-set-model-profile inherit succeeds', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set-model-profile', 'inherit'], tmpDir);
+    assert.ok(result.success, `should accept inherit: ${result.error}`);
+  });
+
+  test('config-set model_profile inherit succeeds', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'model_profile', 'inherit'], tmpDir);
+    assert.ok(result.success, `config-set model_profile inherit should succeed: ${result.error}`);
+  });
+
+  test('config-set-model-profile inherit writes inherit to config', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    runGsdTools(['config-set-model-profile', 'inherit'], tmpDir);
+    const getResult = runGsdTools(['config-get', 'model_profile'], tmpDir);
+    assert.ok(getResult.success, `config-get should succeed: ${getResult.error}`);
+    assert.strictEqual(JSON.parse(getResult.output), 'inherit');
+  });
+
+  test('config-set-model-profile still rejects truly invalid profiles', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set-model-profile', 'not-a-real-profile'], tmpDir);
+    assert.ok(!result.success, 'should reject invalid profiles');
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3197-gsd-tools-config-whitelist.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3197-gsd-tools-config-whitelist (consolidation epic #1969 B2 #1971)", () => {
+'use strict';
+
+/**
+ * Regression test for #3197 — gsd-tools config-set rejects workflow._auto_chain_active.
+ *
+ * Root cause: RUNTIME_STATE_KEYS was added to sdk/src/query/config-schema.ts in #3162
+ * but not to gsd-core/bin/lib/config-schema.cjs, so gsd-tools.cjs users still hit
+ * "Unknown config key" when setting workflow._auto_chain_active.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+describe('#3197 — gsd-tools.cjs config-set workflow._auto_chain_active', () => {
+  test('config-set workflow._auto_chain_active true succeeds via gsd-tools.cjs (CJS path)', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-set', 'workflow._auto_chain_active', 'true'], tmpDir);
+    assert.ok(
+      result.success,
+      `config-set workflow._auto_chain_active true should succeed, got:\nstdout: ${result.output}\nstderr: ${result.error}`
+    );
+  });
+
+  test('config-set workflow._auto_chain_active true writes value to config.json', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    runGsdTools(['config-set', 'workflow._auto_chain_active', 'true'], tmpDir);
+
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    assert.ok(fs.existsSync(configPath), '.planning/config.json must exist after config-set');
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.ok(
+      config.workflow !== undefined && config.workflow._auto_chain_active === true,
+      `Expected workflow._auto_chain_active: true in config.json, got: ${JSON.stringify(config)}`
+    );
+  });
+
+  test('config-set workflow._auto_chain_active false writes false to config.json', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    runGsdTools(['config-set', 'workflow._auto_chain_active', 'false'], tmpDir);
+
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    assert.ok(fs.existsSync(configPath), '.planning/config.json must exist after config-set');
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.ok(
+      config.workflow !== undefined && config.workflow._auto_chain_active === false,
+      `Expected workflow._auto_chain_active: false in config.json, got: ${JSON.stringify(config)}`
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3086-git-create-tag-config-gate.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3086-git-create-tag-config-gate (consolidation epic #1969 B2 #1971)", () => {
+// allow-test-rule: workflow-markdown-is-the-runtime-contract (see #3086)
+// Justification: complete-milestone.md IS the runtime — the agent reads and
+// follows it directly. Asserting the <config-check> block is present in the
+// markdown is the only way to verify the gate is wired. Per CONTEXT.md L611.
+'use strict';
+
+/**
+ * #3086 — git.create_tag config gate for milestone tagging.
+ *
+ * Tests:
+ *   A. Default value: fresh project returns `true` for git.create_tag
+ *   B. config-set false → config-get returns false
+ *   C. Invalid value (e.g. "maybe") is rejected by schema validator
+ *   D. complete-milestone.md workflow contains the <config-check> gate for git.create_tag
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+const WORKFLOW_PATH = path.join(
+  __dirname,
+  '..',
+  'gsd-core',
+  'workflows',
+  'complete-milestone.md',
+);
+
+describe('#3086: git.create_tag config key', () => {
+  test('A. fresh project: config-get git.create_tag returns true (default)', (t) => {
+    const tmpDir = createTempProject('gsd-3086-default-');
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-get', 'git.create_tag'], tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `config-get git.create_tag failed:\n${result.error}`);
+    assert.strictEqual(
+      result.output.trim(),
+      'true',
+      `Expected default value 'true', got: '${result.output.trim()}'`,
+    );
+  });
+
+  test('B. config-set git.create_tag false → config-get returns false', (t) => {
+    const tmpDir = createTempProject('gsd-3086-set-false-');
+    t.after(() => cleanup(tmpDir));
+
+    const setResult = runGsdTools(['config-set', 'git.create_tag', 'false'], tmpDir, {
+      HOME: tmpDir,
+    });
+    assert.ok(setResult.success, `config-set git.create_tag false failed:\n${setResult.error}`);
+
+    const getResult = runGsdTools(['config-get', 'git.create_tag'], tmpDir, { HOME: tmpDir });
+    assert.ok(getResult.success, `config-get after set failed:\n${getResult.error}`);
+    assert.strictEqual(
+      getResult.output.trim(),
+      'false',
+      `Expected 'false' after set, got: '${getResult.output.trim()}'`,
+    );
+  });
+
+  test('C. config-set git.create_tag with invalid value "maybe" is rejected', (t) => {
+    const tmpDir = createTempProject('gsd-3086-invalid-');
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-set', 'git.create_tag', 'maybe'], tmpDir, {
+      HOME: tmpDir,
+    });
+    assert.ok(
+      !result.success,
+      `Expected config-set to fail for invalid value "maybe", but it succeeded`,
+    );
+  });
+
+  test('D. complete-milestone.md contains <config-check> gate for git.create_tag', () => {
+    const content = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    assert.ok(
+      content.includes('git.create_tag'),
+      'complete-milestone.md must reference git.create_tag in a <config-check> block',
+    );
+    assert.ok(
+      content.includes('<config-check>'),
+      'complete-milestone.md must have a <config-check> block in the git_tag step',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-3167-ship-pr-body-sections.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-3167-ship-pr-body-sections (consolidation epic #1969 B2 #1971)", () => {
+/**
+ * Regression tests for issue #3167: configurable /gsd-ship PR body sections.
+ */
+
+// allow-test-rule: source-text-is-the-product (see #3167)
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { describe, test, afterEach } = require('node:test');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+const repoRoot = path.resolve(__dirname, '..');
+const tmpDirs = [];
+
+function readRepoFile(relativePath) {
+  return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8');
+}
+
+function makeProject() {
+  const tmpDir = createTempProject('gsd-3167-');
+  tmpDirs.push(tmpDir);
+  return tmpDir;
+}
+
+afterEach(() => {
+  while (tmpDirs.length) {
+    cleanup(tmpDirs.pop());
+  }
+});
+
+describe('ship.pr_body_sections config (#3167)', () => {
+  test('CLI config-set accepts additional PR body section arrays', () => {
+    const cwd = makeProject();
+    const value = JSON.stringify([
+      {
+        heading: 'Risks & Rollback',
+        enabled: true,
+        source: 'PLAN.md ## Risks || PLAN.md ## Rollback',
+        fallback: '- Rollback: revert this PR.',
+      },
+      {
+        heading: 'Stakeholder Sign-off',
+        enabled: false,
+        template: '- Product owner: pending',
+      },
+    ]);
+
+    const result = runGsdTools(['config-set', 'ship.pr_body_sections', value, '--raw'], cwd, { HOME: cwd });
+
+    assert.equal(result.success, true, result.error);
+    const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+    assert.deepEqual(config.ship.pr_body_sections, [
+      {
+        heading: 'Risks & Rollback',
+        enabled: true,
+        source: 'PLAN.md ## Risks || PLAN.md ## Rollback',
+        fallback: '- Rollback: revert this PR.',
+      },
+      {
+        heading: 'Stakeholder Sign-off',
+        enabled: false,
+        template: '- Product owner: pending',
+      },
+    ]);
+  });
+
+  test('CLI config-set rejects malformed PR body section values before writing config', () => {
+    const cwd = makeProject();
+
+    const notArray = runGsdTools(
+      ['config-set', 'ship.pr_body_sections', JSON.stringify({ heading: 'Not an array' }), '--raw'],
+      cwd,
+      { HOME: cwd }
+    );
+    assert.equal(notArray.success, false);
+    assert.match(notArray.error, /ship\.pr_body_sections.*JSON array/);
+
+    const missingHeading = runGsdTools(
+      ['config-set', 'ship.pr_body_sections', JSON.stringify([{ fallback: '- Missing heading' }]), '--raw'],
+      cwd,
+      { HOME: cwd }
+    );
+    assert.equal(missingHeading.success, false);
+    assert.match(missingHeading.error, /heading/);
+
+    const invalidEnabled = runGsdTools(
+      ['config-set', 'ship.pr_body_sections', JSON.stringify([{ heading: 'Toggle', enabled: 'yes', fallback: '- item' }]), '--raw'],
+      cwd,
+      { HOME: cwd }
+    );
+    assert.equal(invalidEnabled.success, false);
+    assert.match(invalidEnabled.error, /enabled/);
+
+    assert.equal(fs.existsSync(path.join(cwd, '.planning', 'config.json')), false);
+  });
+
+  test('CLI config-new-project validates onboarded PR body sections before writing config', () => {
+    const cwd = makeProject();
+    const choices = JSON.stringify({
+      ship: {
+        pr_body_sections: [
+          {
+            heading: 'Invalid source',
+            source: 'package.json ## Scripts',
+          },
+        ],
+      },
+    });
+
+    const result = runGsdTools(['config-new-project', choices], cwd, { HOME: cwd });
+
+    assert.equal(result.success, false);
+    assert.match(result.error, /source must use selectors/);
+    assert.equal(fs.existsSync(path.join(cwd, '.planning', 'config.json')), false);
+  });
+
+  test('ship workflow composes configured sections as append-only extensions', () => {
+    const workflow = readRepoFile('gsd-core/workflows/ship.md');
+
+    assert.match(workflow, /config-get ship\.pr_body_sections --default '\[\]'/);
+    assert.match(workflow, /append-only/i);
+    assert.match(workflow, /enabled.*false/i);
+    assert.match(workflow, /cannot replace/i);
+    assert.match(workflow, /Summary[\s\S]*Changes[\s\S]*Requirements Addressed[\s\S]*Verification[\s\S]*Key Decisions/);
+    assert.match(workflow, /\{phase_number\}[\s\S]*\{phase_name\}[\s\S]*\{phase_dir\}[\s\S]*\{base_branch\}[\s\S]*\{padded_phase\}/);
+    assert.match(workflow, /User Stories & Acceptance Criteria/);
+    assert.match(workflow, /Definition of Done/);
+    assert.match(workflow, /--body-file/);
+    assert.match(workflow, /trap 'rm -f "\$\{PR_BODY_FILE:-\}"' EXIT/);
+  });
+
+  test('default config and documentation describe ship.pr_body_sections', () => {
+    const template = JSON.parse(readRepoFile('gsd-core/templates/config.json'));
+    assert.deepEqual(template.ship.pr_body_sections, []);
+
+    const docs = readRepoFile('docs/CONFIGURATION.md');
+    assert.match(docs, /`ship\.pr_body_sections`/);
+    assert.match(docs, /additional PR body sections/i);
+    assert.match(docs, /append-only/i);
+    assert.match(docs, /lean\/agile PRD/i);
+    assert.match(docs, /Definition of Done/);
+
+    const planningConfig = readRepoFile('gsd-core/references/planning-config.md');
+    assert.match(planningConfig, /ship\.pr_body_sections/);
+  });
+
+  test('new-project onboarding can seed enabled or disabled PR body sections', () => {
+    const workflow = readRepoFile('gsd-core/workflows/new-project.md');
+
+    assert.match(workflow, /ship\.pr_body_sections/);
+    assert.match(workflow, /enabled.*true/);
+    assert.match(workflow, /enabled.*false/);
+    assert.match(workflow, /User Stories & Acceptance Criteria/);
+    assert.match(workflow, /Risks & Dependencies/);
+    assert.match(workflow, /Success Metrics & Release Criteria/);
+    assert.match(workflow, /Stakeholder Review & Approval/);
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-3210-fallow-schema-enum.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-3210-fallow-schema-enum (consolidation epic #1969 B2 #1971)", () => {
+'use strict';
+
+/**
+ * Enum validation for code_quality.fallow.scope and code_quality.fallow.profile.
+ *
+ * Fixes H5 from #3424 review: config-set silently accepted invalid enum values
+ * (e.g. scope=fullrepo) and fell through to default behavior. This test asserts
+ * that invalid values are rejected with a helpful error, and valid values pass.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+describe('feat-3210 / H5: enum validation for code_quality.fallow.scope and .profile', () => {
+  // --- code_quality.fallow.scope ---
+
+  test('config-set code_quality.fallow.scope=fullrepo is REJECTED with helpful error', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.scope', 'fullrepo'],
+      tmpDir
+    );
+    assert.ok(
+      !result.success,
+      'config-set code_quality.fallow.scope=fullrepo must fail, but it succeeded'
+    );
+    const combined = (result.output || '') + (result.error || '');
+    assert.ok(
+      combined.includes('phase') && combined.includes('repo'),
+      `Error message must mention valid values "phase" and "repo", got: ${combined}`
+    );
+  });
+
+  test('config-set code_quality.fallow.scope=phase is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.scope', 'phase'],
+      tmpDir
+    );
+    assert.ok(
+      result.success,
+      [
+        'config-set code_quality.fallow.scope=phase must succeed,',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set code_quality.fallow.scope=repo is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.scope', 'repo'],
+      tmpDir
+    );
+    assert.ok(
+      result.success,
+      [
+        'config-set code_quality.fallow.scope=repo must succeed,',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set code_quality.fallow.scope=PHASE (wrong case) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.scope', 'PHASE'],
+      tmpDir
+    );
+    assert.ok(
+      !result.success,
+      'config-set code_quality.fallow.scope=PHASE must fail (values are case-sensitive)'
+    );
+  });
+
+  // --- code_quality.fallow.profile ---
+
+  test('config-set code_quality.fallow.profile=aggressive is REJECTED with helpful error', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.profile', 'aggressive'],
+      tmpDir
+    );
+    assert.ok(
+      !result.success,
+      'config-set code_quality.fallow.profile=aggressive must fail, but it succeeded'
+    );
+    const combined = (result.output || '') + (result.error || '');
+    assert.ok(
+      combined.includes('minimal') && combined.includes('standard') && combined.includes('strict'),
+      `Error message must mention valid values "minimal", "standard", "strict", got: ${combined}`
+    );
+  });
+
+  test('config-set code_quality.fallow.profile=minimal is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.profile', 'minimal'],
+      tmpDir
+    );
+    assert.ok(
+      result.success,
+      [
+        'config-set code_quality.fallow.profile=minimal must succeed,',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set code_quality.fallow.profile=standard is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.profile', 'standard'],
+      tmpDir
+    );
+    assert.ok(
+      result.success,
+      [
+        'config-set code_quality.fallow.profile=standard must succeed,',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set code_quality.fallow.profile=strict is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.profile', 'strict'],
+      tmpDir
+    );
+    assert.ok(
+      result.success,
+      [
+        'config-set code_quality.fallow.profile=strict must succeed,',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set code_quality.fallow.profile=unknown is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'code_quality.fallow.profile', 'unknown'],
+      tmpDir
+    );
+    assert.ok(
+      !result.success,
+      'config-set code_quality.fallow.profile=unknown must fail'
+    );
+  });
+});
+  });
+}

@@ -931,7 +931,7 @@ Full detail in `~/.claude/skills/gsd-pr-fix-discipline/SKILL.md`. AI agents MUST
 
 ### Slash command two-tier confusion
 
-- **Symptom:** `tests/bug-2543-gsd-slash-namespace.test.cjs` or `tests/bug-3584-runtime-slash-emitters.test.cjs` fails
+- **Symptom:** `tests/bug-2543-gsd-slash-namespace.test.cjs` or `tests/init-manager.test.cjs` (folds former `bug-3584-runtime-slash-emitters`, consolidation epic #1969) fails
 - **Affected this session:** #154 (three passes), #164 (added the authoritative matrix)
 - **Fix:** Consult `## Slash-command form` section of this file before touching any `/gsd-` or `/gsd:` token — colon for `agents/`/`commands/`, hyphen for runtime emitters
 
