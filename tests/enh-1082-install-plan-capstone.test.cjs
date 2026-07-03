@@ -178,13 +178,23 @@ const EXPECTED = {
     hooksSurface: 'none',
     sandboxTier: 'none',
   },
+  omp: {
+    runtime: 'omp',
+    installSurface: 'profile-marker-only',
+    writesSharedSettings: false,
+    finishPermissionWriter: null,
+    hookEvents: undefined,
+    extendedHookEvents: [],
+    hooksSurface: 'none',
+    sandboxTier: 'none',
+  },
 };
 
 const ALL_RUNTIMES = Object.keys(EXPECTED);
 
 describe('resolveInstallPlan — ADR-857 phase 5g golden master', () => {
-  it('covers exactly 16 runtimes', () => {
-    assert.strictEqual(ALL_RUNTIMES.length, 16);
+  it('covers exactly 17 runtimes', () => {
+    assert.strictEqual(ALL_RUNTIMES.length, 17);
   });
 
   for (const runtime of ALL_RUNTIMES) {

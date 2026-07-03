@@ -15,9 +15,8 @@
  * pi's extension entry shape: `export default function (pi: ExtensionAPI) { … }`.
  *
  * NOTE: this is the reference binding that proves the ExtensionAPI imperative
- * adapter (#1682 AC). Full `--pi` installable-runtime integration (descriptor +
- * installer wiring + golden parity 16→17) is a larger follow-up tracked
- * separately — it is intentionally NOT added to the runtime registry here.
+ * adapter (#1682 AC). pi is an alias for the canonical omp installable runtime;
+ * this fixture covers the legacy pi ExtensionAPI binding.
  *
  * @param {object} pi  pi ExtensionAPI (registerTool/registerCommand/on/…)
  */

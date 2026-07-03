@@ -457,6 +457,22 @@ Skills land in `~/.trae/`. GSD installs skills, agents, and rule references.
 
 ---
 
+### Oh My Pi / OMP
+
+```bash
+# Global install (all projects)
+npx @opengsd/gsd-core@latest --omp --global
+
+# Local install (this project only)
+npx @opengsd/gsd-core@latest --omp --local
+```
+
+`--pi` is an alias for `--omp`.
+
+Global root: `~/.omp/agent` (override with `PI_CODING_AGENT_DIR`). Local root: `.omp`.
+
+---
+
 ## Local vs global install
 
 All examples above use `--global`, which installs GSD once for your user account. To scope an install to a single project, replace `--global` with `--local`:

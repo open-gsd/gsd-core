@@ -31,6 +31,7 @@ const FALLBACK_ALIASES: Readonly<Record<string, string[]>> = {
   kimi: ['kimi'],
   codebuddy: ['codebuddy', 'codebuddy-cli'],
   cline: ['cline', 'cline-cli'],
+  omp: ['omp', 'oh-my-pi', 'ohmypi', 'pi', 'pi-coding-agent'],
 };
 
 function normalizeRuntimeToken(value: string): string {
@@ -126,6 +127,7 @@ export function getProjectInstructionFile(runtime: unknown): string {
   if (canonical === 'claude') return '.claude/CLAUDE.md';
   if (canonical === 'copilot') return '.github/copilot-instructions.md';
   if (canonical === 'antigravity' || canonical === 'gemini') return 'GEMINI.md';
+  if (canonical === 'omp') return '.omp/AGENTS.md';
   // codex, opencode, kilo, kimi, AND unknown/future runtimes all default to
   // root AGENTS.md (the safe cross-agent instruction file).
   return 'AGENTS.md';
@@ -196,6 +198,7 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   kimi: 'Kimi CLI',
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
+  omp: 'Oh My Pi',
 };
 
 /**
@@ -244,6 +247,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   codebuddy: "'.codebuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
+  omp:       "'.omp', 'agent'",
 };
 
 /**
@@ -267,7 +271,7 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
  */
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'gemini', 'codex', 'copilot', 'antigravity', 'cursor',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'omp',
 ] as const);
 
 /**

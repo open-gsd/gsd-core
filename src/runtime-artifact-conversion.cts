@@ -1307,6 +1307,142 @@ function convertClaudeCommandToClineSkill(content, skillName, _runtime = null, c
 
 // ── End Cline converters ─────────────────────────────────────────────────────
 
+// ── Oh My Pi (OMP) converters ────────────────────────────────────────────────
+// OMP (pi) discovers native commands from `.omp/commands/*.md`, native skills
+// from `.omp/skills/<name>/SKILL.md`, and native agents from `.omp/agents/*.md`
+// (user equivalents under `~/.omp/agent`). Commands and agents get minimal
+// frontmatter; skills reuse the shared Claude skill converter (descriptor).
+// Path/brand rewrites for OMP bodies are applied by _applyRuntimeRewrites('omp').
+
+// Tool name mapping from Claude/GSD agents to OMP native tool names.
+const claudeToOmpTools = {
+  Read: 'read',
+  ReadFile: 'read',
+  Write: 'write',
+  WriteFile: 'write',
+  Edit: 'edit',
+  MultiEdit: 'edit',
+  StrReplaceFile: 'edit',
+  Bash: 'bash',
+  Shell: 'bash',
+  Grep: 'grep',
+  Glob: 'glob',
+  Task: 'task',
+  Agent: 'task',
+  AskUserQuestion: 'ask',
+  TodoWrite: 'todo',
+  SetTodoList: 'todo',
+  WebSearch: 'web_search',
+  SearchWeb: 'web_search',
+  WebFetch: 'read',
+  FetchURL: 'read',
+};
+
+/**
+ * Map a Claude/GSD tool name to an OMP native tool name.
+ * - `mcp__*` tools pass through unchanged.
+ * - `Skill` / `SlashCommand` are omitted: OMP reaches skills via `read skill://…`
+ *   and slash commands, not a Claude `Skill` tool.
+ * - Unknown tools are dropped (conservative).
+ * @returns {string|null}
+ */
+function convertOmpToolName(claudeTool) {
+  const tool = String(claudeTool || '').trim();
+  if (!tool) return null;
+  if (tool.startsWith('mcp__')) return tool;
+  if (tool === 'Skill' || tool === 'SlashCommand') return null;
+  return claudeToOmpTools[tool] || null;
+}
+
+/** Map + de-dupe (source order) a list of Claude tool names to OMP tool names. */
+function mapClaudeToolsToOmpTools(claudeTools) {
+  const out = [];
+  const seen = new Set();
+  for (const t of claudeTools) {
+    const mapped = convertOmpToolName(t);
+    if (mapped && !seen.has(mapped)) {
+      seen.add(mapped);
+      out.push(mapped);
+    }
+  }
+  return out;
+}
+
+/**
+ * Convert a Claude Code slash-command (.md) to an OMP slash-command (.md).
+ *
+ * The filename determines the command name (gsd-<stem>.md → /gsd-<stem>); we also
+ * emit an explicit `name: gsd-<stem>` so the command id is stable regardless of how
+ * the host derives it. Only description + argument-hint frontmatter is carried —
+ * OMP command expansion uses command content, not Claude's tool-gate fields
+ * (allowed-tools/tools/effort/context/agent).
+ *
+ * @param {string} content      raw Claude command markdown
+ * @param {string} commandName  installed command name (e.g. 'gsd-execute-phase')
+ * @returns {string}
+ */
+function convertClaudeCommandToOmpCommand(content, commandName) {
+  // Normalize the stem — strip a leading gsd- / gsd: then prefix exactly once.
+  const stem = String(commandName || '').replace(/^gsd[-:]/, '');
+  const name = `gsd-${stem}`;
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  let description = `Run GSD workflow ${name}.`;
+  let argumentHint = '';
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) description = maybeDescription;
+    const maybeArgHint = extractFrontmatterField(frontmatter, 'argument-hint');
+    if (maybeArgHint) argumentHint = maybeArgHint;
+  }
+  description = toSingleLine(description);
+  const convertedBody = neutralizeAgentReferences(
+    transformContentToHyphen(body, readGsdCommandNames()),
+    '.omp/AGENTS.md',
+  );
+  const lines = ['---', `name: ${yamlIdentifier(name)}`, `description: ${yamlQuote(description)}`];
+  if (argumentHint) lines.push(`argument-hint: ${yamlQuote(toSingleLine(argumentHint))}`);
+  lines.push('---', convertedBody.trimStart());
+  return lines.join('\n');
+}
+
+/**
+ * Convert a Claude agent (.md) to an OMP task-agent (.md).
+ *
+ * Emits minimal OMP task-agent frontmatter (name + description + mapped tools);
+ * the body is hyphen-normalized and de-branded (CLAUDE.md → .omp/AGENTS.md,
+ * standalone "Claude" → "the agent"). Claude-only frontmatter (color, commented
+ * hooks, permissionMode, maxTurns, disallowedTools) is dropped.
+ *
+ * @param {string} content  raw Claude agent markdown
+ * @returns {string}
+ */
+function convertClaudeAgentToOmpAgent(content) {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  if (!frontmatter) {
+    return neutralizeAgentReferences(
+      transformContentToHyphen(content, readGsdCommandNames()),
+      '.omp/AGENTS.md',
+    );
+  }
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const tools = mapClaudeToolsToOmpTools(parseFrontmatterTools(frontmatter));
+  const convertedBody = neutralizeAgentReferences(
+    transformContentToHyphen(body, readGsdCommandNames()),
+    '.omp/AGENTS.md',
+  );
+  const lines = [
+    '---',
+    `name: ${yamlIdentifier(name)}`,
+    `description: ${yamlQuote(toSingleLine(description))}`,
+  ];
+  if (tools.length > 0) lines.push(`tools: ${tools.join(', ')}`);
+  lines.push('---');
+  return `${lines.join('\n')}\n${convertedBody}`;
+}
+
+// ── End Oh My Pi (OMP) converters ────────────────────────────────────────────
+
 function convertSlashCommandsToCodexSkillMentions(content) {
   // Colon-style /gsd: never appears as a filesystem path segment, so no boundary guard is needed (unlike the hyphen-style below).
   let converted = content.replace(/\/gsd:([a-z0-9-]+)/gi, (_, commandName) => {
@@ -2401,6 +2537,17 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = processAttribution(content, attribution);
       break;
 
+    case 'omp':
+      content = content.replace(/CLAUDE\.md/g, '.omp/AGENTS.md');
+      content = content.replace(/~\/\.claude\//g, pathPrefix);
+      content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
+      content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
+      content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
+      content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
+      content = processAttribution(content, attribution);
+      break;
+
     default:
       // Unknown runtime — no rewrites (OpenCode/Kilo handled by their own install path).
       break;
@@ -2665,6 +2812,8 @@ export = {
   convertClaudeCommandToCodebuddyCommand,
   convertClaudeToCliineMarkdown,
   convertClaudeCommandToClineSkill,
+  convertClaudeCommandToOmpCommand,
+  convertClaudeAgentToOmpAgent,
   convertSlashCommandsToCodexSkillMentions,
   getCodexSkillAdapterHeader,
   convertClaudeToCodexMarkdown,

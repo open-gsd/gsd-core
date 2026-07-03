@@ -10,7 +10,7 @@
 //   [agent-skills] WARNING: Global skill not found at "~/.cursor/skills/X/SKILL.md" — skipping
 //
 // Fix introduces gsd-core/bin/lib/runtime-homes.cjs with first-class
-// support for all 15 supported runtimes, including:
+//   support for all 17 supported runtimes, including:
 //   - hermes: nested skills/gsd/<skillName>/ layout (#2841)
 //   - cline: rules-based, returns null (no skills directory)
 //   - CLAUDE_CONFIG_DIR env var for Claude (was missing)
@@ -58,6 +58,7 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
     ['cline',       path.join(os.homedir(), '.cline')],
     ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
     ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
+    ['omp',         path.join(os.homedir(), '.omp', 'agent')],
   ];
   for (const [runtime, expected] of defaults) {
     test(`${runtime} default configDir`, () => {
@@ -127,6 +128,12 @@ describe('bug #3126: runtime-homes env-var overrides', () => {
     });
   });
 
+  test('omp respects PI_CODING_AGENT_DIR', () => {
+    withEnv('PI_CODING_AGENT_DIR', '/custom/omp-agent', () => {
+      assert.strictEqual(String(getGlobalConfigDir('omp')).replace(/\\/g, '/'), '/custom/omp-agent');
+    });
+  });
+
   test('antigravity detects 2.x IDE dir when legacy dir is absent', () => {
     const home = require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-home-'));
     try {
@@ -173,6 +180,15 @@ describe('bug #3126: runtime-homes getGlobalSkillsBase', () => {
       assert.strictEqual(
         getGlobalSkillsBase('cline'),
         path.join(os.homedir(), '.cline', 'skills'),
+      );
+    });
+  });
+
+  test('omp: skills at ~/.omp/agent/skills (dot-home-nested)', () => {
+    withEnv('PI_CODING_AGENT_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillsBase('omp'),
+        path.join(os.homedir(), '.omp', 'agent', 'skills'),
       );
     });
   });

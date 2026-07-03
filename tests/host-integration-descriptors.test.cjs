@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * ADR-1239 Phase A: Descriptor tests — validate that all 16 role:runtime
+ * ADR-1239 Phase A: Descriptor tests — validate that all 17 role:runtime
  * capability descriptors have correct hostIntegration axes, pass the validator,
  * and negotiate correctly via the host-integration module.
  *
@@ -31,15 +31,15 @@ const SCALAR_AXES = ['embeddingMode', 'commandSurface', 'modelMode', 'hookBus', 
 // All 6 dispatch sub-keys (includes backgroundDispatch added in feat/1679-dispatch-flatten)
 const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'subagentToolkit', 'backgroundDispatch'];
 
-// All 16 runtime IDs (ordered alphabetically)
+// All 17 runtime IDs (ordered alphabetically)
 const RUNTIME_IDS = [
   'antigravity', 'augment', 'claude', 'cline', 'codebuddy',
   'codex', 'copilot', 'cursor', 'gemini', 'hermes',
-  'kilo', 'kimi', 'opencode', 'qwen', 'trae', 'windsurf',
+  'kilo', 'kimi', 'omp', 'opencode', 'qwen', 'trae', 'windsurf',
 ];
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
-// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, qwen, trae (9)
+// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, omp, opencode, qwen, trae (10)
 // declarative-cli:  antigravity, augment, codebuddy, codex, copilot, gemini, windsurf (7)
 // ide: 0
 const EXPECTED_PROFILES = {
@@ -52,6 +52,7 @@ const EXPECTED_PROFILES = {
   opencode:    'programmatic-cli',
   qwen:        'programmatic-cli',
   trae:        'programmatic-cli',
+  omp:         'programmatic-cli',
   antigravity: 'declarative-cli',
   augment:     'declarative-cli',
   codebuddy:   'declarative-cli',
@@ -64,7 +65,7 @@ const EXPECTED_PROFILES = {
 describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
   // ─── Registry shape ──────────────────────────────────────────────────────────
 
-  test('registry.runtimes contains all 16 expected runtime ids', () => {
+  test('registry.runtimes contains all 17 expected runtime ids', () => {
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -73,8 +74,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     }
     assert.strictEqual(
       Object.keys(registry.runtimes).length,
-      16,
-      'registry.runtimes must have exactly 16 entries',
+      17,
+      'registry.runtimes must have exactly 17 entries',
     );
   });
 
@@ -209,7 +210,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── Contract-pin profile split ───────────────────────────────────────────────
 
-  test('contract-pin: exactly 9 programmatic-cli, 7 declarative-cli, 0 ide', () => {
+  test('contract-pin: exactly 10 programmatic-cli, 7 declarative-cli, 0 ide', () => {
     const counts = { 'programmatic-cli': 0, 'declarative-cli': 0, 'ide': 0 };
     for (const id of RUNTIME_IDS) {
       const cap = registry.runtimes[id];
@@ -221,7 +222,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
         counts[profile]++;
       }
     }
-    assert.strictEqual(counts['programmatic-cli'], 9, 'Must have exactly 9 programmatic-cli runtimes');
+    assert.strictEqual(counts['programmatic-cli'], 10, 'Must have exactly 10 programmatic-cli runtimes');
     assert.strictEqual(counts['declarative-cli'], 7, 'Must have exactly 7 declarative-cli runtimes');
     assert.strictEqual(counts['ide'], 0, 'Must have exactly 0 ide runtimes');
   });
@@ -250,7 +251,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── shouldFlattenDispatch per-host (#853 discriminator) ─────────────────────
 
-  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 14.
+  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 15.
   const EXPECTED_FLATTEN = {
     antigravity: true,
     augment:     true,
@@ -264,6 +265,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     hermes:      true,
     kilo:        true,
     kimi:        true,
+    omp:         true,
     opencode:    true,
     qwen:        true,
     trae:        true,

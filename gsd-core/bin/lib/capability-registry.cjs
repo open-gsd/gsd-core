@@ -1627,6 +1627,109 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "omp": {
+    "id": "omp",
+    "role": "runtime",
+    "version": "1.7.0-rc.1",
+    "title": "Oh My Pi",
+    "description": "Oh My Pi / OMP (pi) — native .omp commands, skills, and agents artifact layout; profile-marker-only config surface; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "parent": ".omp",
+        "name": "agent",
+        "env": [
+          "PI_CODING_AGENT_DIR"
+        ]
+      },
+      "localConfigDir": ".omp",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToOmpCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToOmpAgent"
+          }
+        ],
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToOmpCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToOmpAgent"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": "undocumented",
+          "background": "undocumented",
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      }
+    }
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -4164,6 +4267,109 @@ const runtimes = {
       }
     }
   },
+  "omp": {
+    "id": "omp",
+    "role": "runtime",
+    "version": "1.7.0-rc.1",
+    "title": "Oh My Pi",
+    "description": "Oh My Pi / OMP (pi) — native .omp commands, skills, and agents artifact layout; profile-marker-only config surface; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "parent": ".omp",
+        "name": "agent",
+        "env": [
+          "PI_CODING_AGENT_DIR"
+        ]
+      },
+      "localConfigDir": ".omp",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToOmpCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToOmpAgent"
+          }
+        ],
+        "local": [
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToOmpCommand"
+          },
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToOmpAgent"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": "undocumented",
+          "background": "undocumented",
+          "subagentToolkit": "full",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      }
+    }
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -4660,6 +4866,7 @@ const _requiresGraph = {
   "kimi": [],
   "mempalace": [],
   "nyquist": [],
+  "omp": [],
   "opencode": [],
   "pattern-mapper": [
     "research"

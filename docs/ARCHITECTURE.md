@@ -605,6 +605,7 @@ Equivalent paths for other runtimes:
 - **Hermes Agent:** `~/.hermes/` global or `./.hermes/` local
 - **CodeBuddy:** `~/.codebuddy/` global or `./.codebuddy/` local
 - **Cline:** `~/.cline/` global or project-root `.clinerules` local
+- **Oh My Pi / OMP:** `~/.omp/agent/` global or `./.omp/` local
 
 ### Project Files (`.planning/`)
 
@@ -688,7 +689,7 @@ verification.
 
 The installer (`bin/install.js`, ~10,700 lines) handles:
 
-1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--gemini`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--all`)
+1. **Runtime detection** — Interactive prompt or CLI flags (`--claude`, `--opencode`, `--gemini`, `--kimi`, `--kilo`, `--codex`, `--copilot`, `--antigravity`, `--cursor`, `--windsurf`, `--augment`, `--trae`, `--qwen`, `--hermes`, `--codebuddy`, `--cline`, `--omp` (`--pi` alias), `--all`)
 2. **Location selection** — Global (`--global`) or local (`--local`)
 3. **File deployment** — Copies commands, skills, workflows, references, templates, agents, and hooks
 4. **Runtime adaptation** — Transforms file content per runtime:
@@ -708,6 +709,7 @@ The installer (`bin/install.js`, ~10,700 lines) handles:
   - CodeBuddy: Skills-first with CodeBuddy path and prompt rewrites
   - Cline: Writes `.clinerules` for rule-based integration
   - Augment Code: Skills-first with full skill conversion and config management
+  - Oh My Pi / OMP: Profile-marker-only install to `~/.omp/agent` / `./.omp`, with native `.omp/commands`, `.omp/skills`, and `.omp/agents` artifacts
 5. **Path normalization** — Replaces `~/.claude/` paths with runtime-specific paths
 6. **Settings integration** — Registers hooks in runtime's `settings.json`
 7. **Patch backup** — Since v1.17, backs up locally modified files to `gsd-local-patches/` for `/gsd-update --reapply`
@@ -849,6 +851,7 @@ The migration-specific ownership and source snapshots live in
 | Hermes Agent | `~/.hermes` | `./.hermes` | `skills/gsd/ns-*/SKILL.md` (6 routers, prefix='') + `skills/gsd/ns-*/skills/<name>/SKILL.md` (nested concretes) | `agents/gsd-*.md` | Common GSD settings and hook entries where supported |
 | CodeBuddy | `~/.codebuddy` | `./.codebuddy` | `skills/gsd-*/SKILL.md` (flat, `user-invocable: false`) | `agents/gsd-*.md` | `/gsd-*` slash commands under `commands/`; common GSD settings and hook entries where supported |
 | Cline | `~/.cline` | project root | `skills/gsd-ns-*/SKILL.md` (6 routers) + `skills/gsd-ns-*/skills/<name>/SKILL.md` (nested concretes) + `.clinerules` | Rules only | No GSD hooks or statusline |
+| Oh My Pi / OMP | `~/.omp/agent` | `./.omp` | `commands/gsd-*.md` slash commands; `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Profile marker only; no shared settings or GSD hooks |
 
 ### Upstream Contract Sources
 

@@ -60,6 +60,7 @@ const ALL_ENV_KEYS = [
   'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR', 'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR',
   'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'KIMI_CONFIG_DIR',
   'OPENCODE_CONFIG_DIR', 'OPENCODE_CONFIG', 'KILO_CONFIG_DIR', 'KILO_CONFIG',
+  'PI_CODING_AGENT_DIR',
   'XDG_CONFIG_HOME',
 ];
 
@@ -102,6 +103,7 @@ const GOLDEN_DEFAULTS = {
   cline:       path.join(HOME, '.cline'),
   opencode:    path.join(HOME, '.config', 'opencode'),
   kilo:        path.join(HOME, '.config', 'kilo'),
+  omp:         path.join(HOME, '.omp', 'agent'),
 };
 
 // ── GOLDEN DEFAULTS ────────────────────────────────────────────────────────────
@@ -158,6 +160,7 @@ describe('descriptor-driven equivalence: env-var overrides', () => {
     { runtime: 'kimi',      envKey: 'KIMI_CONFIG_DIR',      value: '/custom/kimi' },
     { runtime: 'opencode',  envKey: 'OPENCODE_CONFIG_DIR',  value: '/custom/opencode' },
     { runtime: 'kilo',      envKey: 'KILO_CONFIG_DIR',      value: '/custom/kilo' },
+    { runtime: 'omp',       envKey: 'PI_CODING_AGENT_DIR',   value: '/custom/omp-agent' },
   ];
 
   for (const { runtime, envKey, value } of cases) {
@@ -818,6 +821,15 @@ describe('descriptor-driven global skills base', () => {
     }
   });
 
+  test('omp skills base is derived from the dot-home-nested descriptor (~/.omp/agent/skills)', () => {
+    const saved = clearAllEnvKeys();
+    try {
+      assert.strictEqual(getGlobalSkillsBase('omp'), path.join(HOME, '.omp', 'agent', 'skills'));
+    } finally {
+      restoreEnvKeys(saved);
+    }
+  });
+
   test('synthetic runtime skillsHome descriptor resolves without a runtime-name branch', () => {
     const base = resolveSkillsBaseFromDescriptor(
       {
@@ -843,7 +855,7 @@ describe('descriptor-driven global skills base', () => {
 
 // ── GOLDEN PARITY: getGlobalConfigDir via process.env for all 16 registry runtimes ──
 
-describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-vars = golden defaults', () => {
+describe('descriptor-driven parity: 15 non-probe registry runtimes × no-env-vars = golden defaults', () => {
   // This is the hardest assertion: it drives getGlobalConfigDir() (which calls
   // the registry internally) and compares against GOLDEN_DEFAULTS captured from
   // the old switch. Any discrepancy means a regression.

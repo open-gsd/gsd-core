@@ -10,8 +10,8 @@
  *   2. pi's axes (imperative + bun) classify as 'programmatic-cli' (the reference profile).
  *   3. the reference pi host-plugin binds GSD via ExtensionAPI (registers command + tool + event).
  *
- * Full `--pi` installable-runtime integration is a larger follow-up (descriptor
- * + installer + golden parity 16→17); this slice proves the imperative binding.
+ * pi is an alias for the canonical omp installable runtime; this fixture
+ * covers the legacy pi ExtensionAPI binding.
  */
 
 const { test } = require('node:test');

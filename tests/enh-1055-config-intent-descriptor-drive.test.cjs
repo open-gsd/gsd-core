@@ -41,10 +41,11 @@ const EXPECTED = [
   { runtime: 'windsurf',     installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
   { runtime: 'trae',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
   { runtime: 'kimi',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'omp',          installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
 ];
 
 // ---------------------------------------------------------------------------
-// Test 1: Golden master — all 16 runtimes resolve to expected values
+// Test 1: Golden master — all 17 runtimes resolve to expected values
 // ---------------------------------------------------------------------------
 
 describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent golden master', () => {
@@ -84,21 +85,21 @@ describe('enh-1055 descriptor-drive: unknown runtime throws TypeError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4: ALLOWED_CONFIG_RUNTIMES contains all 16 expected runtimes
+// Test 4: ALLOWED_CONFIG_RUNTIMES contains all 17 expected runtimes
 // ---------------------------------------------------------------------------
 
 describe('enh-1055 descriptor-drive: ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_16 = new Set([
+  const EXPECTED_17 = new Set([
     'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
-    'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae', 'kimi',
+    'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae', 'kimi', 'omp',
   ]);
 
-  test('contains exactly the 16 expected runtimes', () => {
-    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), EXPECTED_16);
+  test('contains exactly the 17 expected runtimes', () => {
+    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), EXPECTED_17);
   });
 
-  test('has exactly 16 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 16);
+  test('has exactly 17 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 17);
   });
 });
 

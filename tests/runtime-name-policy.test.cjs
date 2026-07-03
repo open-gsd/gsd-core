@@ -25,6 +25,13 @@ describe('runtime-name-policy canonical runtime ids', () => {
     assert.strictEqual(canonicalizeRuntimeName('DEVIN-DESKTOP'), 'windsurf');
     assert.strictEqual(resolveRuntimeNameFromCandidates('devin-desktop'), 'windsurf');
   });
+
+  test('canonicalizes pi / oh-my-pi to the canonical omp runtime', () => {
+    assert.strictEqual(canonicalizeRuntimeName('pi'), 'omp');
+    assert.strictEqual(canonicalizeRuntimeName('oh-my-pi'), 'omp');
+    assert.strictEqual(canonicalizeRuntimeName('omp'), 'omp');
+    assert.strictEqual(resolveRuntimeNameFromCandidates('pi'), 'omp');
+  });
 });
 
 describe('runtime-name-policy windsurf alias parity — manifest vs FALLBACK_ALIASES (#792)', () => {
@@ -73,6 +80,45 @@ describe('runtime-name-policy windsurf alias parity — manifest vs FALLBACK_ALI
   });
 });
 
+describe('runtime-name-policy omp alias parity — manifest vs FALLBACK_ALIASES (pi→omp)', () => {
+  // DEFECT.GENERATIVE-FIX: manifest and FALLBACK_ALIASES are manually mirrored;
+  // this test fails if they diverge for the omp key.
+  const manifestPath = path.join(ROOT, 'gsd-core', 'bin', 'shared', 'runtime-aliases.manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+  test('manifest omp array includes the pi alias', () => {
+    assert.ok(
+      Array.isArray(manifest.omp) && manifest.omp.includes('pi'),
+      `runtime-aliases.manifest.json omp array must include 'pi'; got: ${JSON.stringify(manifest.omp)}`,
+    );
+  });
+
+  test('pi / oh-my-pi resolve to omp via canonicalization round-trip', () => {
+    assert.strictEqual(canonicalizeRuntimeName('pi'), 'omp', 'pi must resolve to omp via alias lookup');
+    assert.strictEqual(canonicalizeRuntimeName('oh-my-pi'), 'omp', 'oh-my-pi must resolve to omp via alias lookup');
+  });
+
+  test('manifest and FALLBACK_ALIASES omp alias sets are identical', () => {
+    const srcPath = path.join(ROOT, 'src', 'runtime-name-policy.cts');
+    // allow-test-rule: runtime-contract-is-the-product — FALLBACK_ALIASES source text IS the
+    // product contract for runtimes that can't load the manifest at runtime; verifying
+    // both surfaces contain the same omp aliases catches manual-mirror drift.
+    const src = fs.readFileSync(srcPath, 'utf8');
+    const match = src.match(/omp:\s*\[([^\]]+)\]/);
+    assert.ok(match, 'FALLBACK_ALIASES omp row must exist in src/runtime-name-policy.cts');
+    const srcAliases = match[1]
+      .split(',')
+      .map(s => s.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean);
+    const manifestAliases = [...manifest.omp].sort();
+    assert.deepStrictEqual(
+      [...srcAliases].sort(),
+      manifestAliases,
+      `FALLBACK_ALIASES omp=${JSON.stringify(srcAliases.sort())} must match manifest omp=${JSON.stringify(manifestAliases)}`,
+    );
+  });
+});
+
 describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
   test('claude maps to .claude/CLAUDE.md (kept-as-is boundary case)', () => {
     assert.strictEqual(getProjectInstructionFile('claude'), '.claude/CLAUDE.md');
@@ -104,6 +150,14 @@ describe('runtime-name-policy getProjectInstructionFile (#1529)', () => {
 
   test('antigravity maps to GEMINI.md', () => {
     assert.strictEqual(getProjectInstructionFile('antigravity'), 'GEMINI.md');
+  });
+
+  test('omp maps to .omp/AGENTS.md', () => {
+    assert.strictEqual(getProjectInstructionFile('omp'), '.omp/AGENTS.md');
+  });
+
+  test('pi (alias) maps to .omp/AGENTS.md', () => {
+    assert.strictEqual(getProjectInstructionFile('pi'), '.omp/AGENTS.md');
   });
 
   test('unknown runtime maps to AGENTS.md (safe cross-agent default, boundary case)', () => {

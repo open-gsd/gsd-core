@@ -86,6 +86,11 @@
       "opus": null,
       "sonnet": null,
       "haiku": null
+    },
+    "omp": {
+      "opus": null,
+      "sonnet": null,
+      "haiku": null
     }
   },
   "providerPresets": {

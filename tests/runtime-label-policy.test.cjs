@@ -58,9 +58,10 @@ const GOLDEN_LABEL_MAP = {
   kimi: 'Kimi CLI',
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
+  omp: 'Oh My Pi',
 };
 
-test('getRuntimeLabel: golden map matches for all 16 known runtime ids', () => {
+test('getRuntimeLabel: golden map matches for all 17 known runtime ids', () => {
   for (const [id, expected] of Object.entries(GOLDEN_LABEL_MAP)) {
     const actual = getRuntimeLabel(id);
     assert.strictEqual(
@@ -116,15 +117,15 @@ const GOLDEN_COMMAND_MAP = {
 };
 const DEFAULT_CMD = '/gsd-new-project';
 
-test('getRuntimeNewProjectCommand: the 4 overrides + the default for the other 12 runtimes', () => {
+test('getRuntimeNewProjectCommand: the 4 overrides + the default for the other 13 runtimes', () => {
   for (const [id, expected] of Object.entries(GOLDEN_COMMAND_MAP)) {
     assert.strictEqual(getRuntimeLabel ? getRuntimeNewProjectCommand(id) : null, expected, `override ${id}`);
   }
   // sanity: getRuntimeNewProjectCommand is imported alongside getRuntimeLabel above
 });
 
-test('getRuntimeNewProjectCommand: claude/unknown/empty + the 12 non-override runtimes → default', () => {
-  for (const id of ['claude', 'opencode', 'kilo', 'copilot', 'antigravity', 'windsurf', 'augment', 'trae', 'cline', 'qwen', 'hermes', 'codebuddy', 'unknown', '']) {
+test('getRuntimeNewProjectCommand: claude/unknown/empty + the 13 non-override runtimes → default', () => {
+  for (const id of ['claude', 'opencode', 'kilo', 'copilot', 'antigravity', 'windsurf', 'augment', 'trae', 'cline', 'qwen', 'hermes', 'codebuddy', 'omp', 'unknown', '']) {
     assert.strictEqual(getRuntimeNewProjectCommand(id), DEFAULT_CMD, `runtime '${id}' must return the default command`);
   }
 });

@@ -24,6 +24,7 @@ consumed verbatim by `gen:capability-registry` and validated by `capability-vali
 | `stateIO` | Filesystem access model: `filesystem` (full local FS), `sandboxed-storage`, `session-log-append`. |
 | `transport` | Integration transport: `mcp` (Model Context Protocol), `native-extension`. |
 | `runtime` | Plugin/extension execution runtime: `node`, `bun`, `python`, `go`, `rust`, `electron`, `sandboxed-web`, `other`. |
+| `profile` | Coarse integration profile used by capability tests: `programmatic-cli`, `declarative-cli`, or `ide`. |
 
 ### dispatch sub-axes
 
@@ -580,3 +581,36 @@ Sources consulted:
 Documentation gaps:
 - dispatch.subagentToolkit — docs show three built-in subagent types each with different tool subsets (coder=full, explore=read-only, plan=no shell/write); no single 'full' or 'read-only' value covers all types; maintainer should clarify the intended classification.
 - runtime — CLI core is Python; a Rust Wire implementation also exists; docs do not state a canonical plugin extension runtime.
+
+---
+
+## omp
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | OMP docs — host task-agents and SDK/model runtime | "Host task-agents and the SDK run imperative integrations inside OMP." |
+| commandSurface | slash-file | OMP docs — `.omp` commands, skills, and agents layout | "Native `.omp/commands/*.md` slash commands, `.omp/skills/<name>/SKILL.md` skills, and `.omp/agents/*.md` agents load from both `~/.omp/agent` and `./.omp`." |
+| modelMode | active | OMP docs — SDK/model runtime | "OMP owns the active model runtime; GSD ships no static OMP model IDs and users configure via `inherit`, `model_policy`, or `model_profile_overrides.omp`." |
+| hookBus | host | OMP docs — host task-agents | "Task-agent lifecycle is owned by the OMP host; GSD registers no separate hook surface for OMP." |
+| stateIO | filesystem | OMP docs — `.omp` config roots | "Global config lives under `~/.omp/agent` (relocatable by `PI_CODING_AGENT_DIR`) and project-local config under `./.omp`." |
+| transport | mcp | OMP docs — MCP transport | "OMP uses MCP transport for external tool and capability integrations." |
+| runtime | bun | OMP docs — Bun runtime | "OMP runs on Bun." |
+| profile | programmatic-cli | OMP docs — Bun CLI runtime | "Oh My Pi / OMP is a programmatic CLI runtime backed by Bun." |
+| dispatch.namedDispatch | true | OMP docs — host task-agents | "Named task-agents load from `.omp/agents/*.md`." |
+| dispatch.nested | true | OMP docs — host task-agents | "OMP task-agents can delegate to nested task-agents." |
+| dispatch.maxDepth | undocumented | no authoritative OMP doc — task-agent docs do not state a maximum nesting depth | — |
+| dispatch.background | undocumented | no authoritative OMP doc — task-agent docs do not state background dispatch support | — |
+| dispatch.subagentToolkit | full | OMP docs — host task-agents | "OMP task-agents have the full task-agent toolkit." |
+| dispatch.backgroundDispatch | undocumented | no authoritative OMP doc — task-agent docs do not state whether a background-dispatched task-agent can spawn further named task-agents | — |
+
+Sources consulted:
+- OMP docs — `.omp` commands, skills, and agents layout
+- OMP docs — host task-agents
+- OMP docs — SDK/model runtime
+- OMP docs — MCP transport
+- OMP docs — Bun runtime
+
+Documentation gaps:
+- dispatch.maxDepth — no public OMP documentation states a maximum nesting depth.
+- dispatch.background — no public OMP documentation states background task-agent support.
+- dispatch.backgroundDispatch — no public OMP documentation states whether a background-dispatched task-agent can spawn further named task-agents.
