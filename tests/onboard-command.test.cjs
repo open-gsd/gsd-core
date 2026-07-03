@@ -235,6 +235,20 @@ describe('/gsd:onboard command contract', () => {
 
     assert.ok(content.includes('init onboard'), 'workflow must use init onboard projection');
     assert.match(content, /gsd_run --cwd "\$_GSD_RUNTIME_ROOT" init onboard/, 'workflow must anchor init onboard at runtime root');
+    assert.ok(
+      !content.includes('ARGUMENTS:-'),
+      'workflow must not depend on an unexported shell ARGUMENTS variable',
+    );
+    assert.match(
+      content,
+      /Run init from parsed prompt args, not shell `\$ARGUMENTS`/,
+      'workflow must forward fast mode from parsed prompt arguments into init onboard',
+    );
+    assert.match(
+      content,
+      /gsd_run --cwd "\$_GSD_RUNTIME_ROOT" init onboard --fast/,
+      'workflow must provide a literal fast init command',
+    );
     assert.ok(content.includes('has_fast_codebase_map'), 'workflow must parse fast map readiness');
     assert.match(content, /CODEBASE_MAP_READY=.*has_fast_codebase_map/s, 'workflow must treat the fast subset as acceptable in fast mode');
     assert.ok(content.includes('Run from worktree root'), 'workflow handoffs must be anchored at the worktree root');
