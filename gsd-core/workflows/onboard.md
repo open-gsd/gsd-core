@@ -101,7 +101,7 @@ Exit.
 
 ## 4. Existing Docs Gate
 
-If `has_docs_candidates` is true and `planning_exists` is false:
+If `has_docs_candidates` is true and `project_exists` is false:
 
 - If `TEXT_MODE=true`, print:
 

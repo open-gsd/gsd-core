@@ -50,19 +50,25 @@ describe('init onboard public CLI projection', () => {
     assert.strictEqual(parsed.text_mode, false);
   });
 
-  test('detects planning docs in top-level ADR and PRD folders', () => {
+  test('detects planning docs in top-level ADR, PRD, and RFC folders', () => {
     fs.mkdirSync(path.join(tmpDir, 'prd'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'prd', 'product.md'), '# Product Requirements\n');
     fs.mkdirSync(path.join(tmpDir, 'adr'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'adr', 'decision.md'), '# Architecture Decision\n');
+    fs.mkdirSync(path.join(tmpDir, 'rfc'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'rfc', 'proposal.md'), '# Request for Comments\n');
 
     const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
 
     const parsed = JSON.parse(result.output);
     assert.strictEqual(parsed.has_docs_candidates, true);
-    assert.strictEqual(parsed.doc_candidate_count, 2);
-    assert.deepStrictEqual(parsed.doc_candidates, ['adr/decision.md', 'prd/product.md']);
+    assert.strictEqual(parsed.doc_candidate_count, 3);
+    assert.deepStrictEqual(parsed.doc_candidates, [
+      'adr/decision.md',
+      'prd/product.md',
+      'rfc/proposal.md',
+    ]);
   });
 
   test('reports complete codebase map and onboarding summary in existing planning', () => {
@@ -181,6 +187,11 @@ describe('/gsd:onboard command contract', () => {
     assert.ok(content.includes('init onboard'), 'workflow must use init onboard projection');
     assert.ok(content.includes('map-codebase'), 'workflow must route to map-codebase');
     assert.ok(content.includes('ingest-docs'), 'workflow must route to ingest-docs');
+    assert.match(
+      content,
+      /If `has_docs_candidates` is true and `project_exists` is false:/,
+      'workflow must offer docs ingest before project setup even when codebase mapping already created .planning',
+    );
     assert.ok(content.includes('new-project'), 'workflow must route to new-project');
     assert.ok(content.includes('.planning/onboarding/SUMMARY.md'), 'workflow must create onboarding summary');
     assert.match(content, /overwrite|idempotent|do not overwrite/i, 'workflow must protect existing planning');

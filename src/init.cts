@@ -137,7 +137,7 @@ function hasPackageFileInternal(cwd: string): boolean {
 }
 
 function listPlanningDocCandidates(cwd: string): string[] {
-  const roots = ['docs', 'adr', 'adrs', 'prd', 'prds', 'spec', 'specs', 'rfcs'];
+  const roots = ['docs', 'adr', 'adrs', 'prd', 'prds', 'spec', 'specs', 'rfc', 'rfcs'];
   const candidates = new Set<string>();
 
   const visit = (dir: string, relDir: string, depth: number): void => {
