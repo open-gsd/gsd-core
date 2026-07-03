@@ -287,7 +287,8 @@ describe('smart-entry: real STATE.md schema (nested progress YAML + body Phase f
     }));
     const result = classifyProject(dir);
     assert.equal(result.situation, 'verify-pending');
-    assert.equal(result.recommended, 'verify-work');
+    // Forward motion delegates to the gated engine; verify-work stays available.
+    assert.equal(result.recommended, 'progress-next');
     assert.match(result.summary, /Phase 3 of 5/);
   });
 
@@ -298,8 +299,56 @@ describe('smart-entry: real STATE.md schema (nested progress YAML + body Phase f
     }));
     const result = classifyProject(dir);
     assert.equal(result.situation, 'executing');
-    assert.equal(result.recommended, 'execute-phase');
+    // Forward motion delegates to /gsd:progress --next, not a raw execute-phase.
+    assert.equal(result.recommended, 'progress-next');
   });
+});
+
+describe('smart-entry: in-project advancement delegates to the gated engine', () => {
+  afterEach(removeAll);
+
+  // Reconciliation guard (#1787): /gsd:next must not re-implement forward routing.
+  // For every in-project forward-motion situation the recommended action is
+  // `/gsd:progress --next` (workflows/next.md), so Route 0's resume-incomplete
+  // -phase invariant + Gates 1-3 are never bypassed. Re-deriving advancement here
+  // is what got the old flat /gsd-next removed (#3054). The specific command
+  // (execute-phase / plan-phase / verify-work) stays as an explicit secondary.
+  for (const situation of ['planning', 'executing', 'verify-pending']) {
+    test(`${situation}: recommended action is /gsd:progress --next`, () => {
+      const signals = {
+        current_phase: 2, total_phases: 5, status: situation, progress: 40,
+        has_planning: true, has_roadmap: true, git_dirty: false, git_unpushed: false,
+        paused: false, blockers: [], has_git: true, verify_failed: false, stale_activity: false,
+      };
+      const actions = smartEntry.actionsFor(situation, signals);
+      const recommended = actions.filter((a) => a.recommended);
+      assert.equal(recommended.length, 1, 'exactly one recommended action');
+      assert.equal(recommended[0].command, '/gsd:progress --next');
+    });
+  }
+
+  // Remediation / lifecycle situations are OFF the linear advance path — they
+  // keep direct specific recommendations (their distinct value over --next).
+  const DIRECT = {
+    'no-project': '/gsd:new-project',
+    paused: '/gsd:resume-work',
+    blocked: '/gsd:debug',
+    'verify-failed': '/gsd:verify-work',
+    'idle-stranded': '/gsd:ship',
+    complete: '/gsd:new-milestone',
+  };
+  for (const [situation, command] of Object.entries(DIRECT)) {
+    test(`${situation}: keeps its direct recommendation (${command})`, () => {
+      const signals = {
+        current_phase: 2, total_phases: 5, status: situation, progress: 40,
+        has_planning: true, has_roadmap: true, git_dirty: false, git_unpushed: false,
+        paused: false, blockers: [], has_git: true, verify_failed: false, stale_activity: false,
+      };
+      const actions = smartEntry.actionsFor(situation, signals);
+      const recommended = actions.find((a) => a.recommended);
+      assert.equal(recommended.command, command);
+    });
+  }
 });
 
 describe('smart-entry: JSON shape invariants', () => {

@@ -10,7 +10,18 @@
  * workflow shells out to `smart-entry --json`, renders an AskUserQuestion menu
  * (with a --text numbered-list fallback for non-Claude runtimes), and dispatches
  * the chosen action to an existing slash command. See
- * docs/superpowers/specs/2026-06-27-gsd-smart-entry-design.md.
+ * docs/superpowers/specs/2026-06-27-gsd-smart-entry-design.md and
+ * docs/adr/1787-gsd-next-smart-entry.md.
+ *
+ * Relationship to `/gsd:progress --next`: this classifier is a *menu* front door,
+ * not a second router. For in-project forward motion (planning → executing →
+ * verify-pending) the recommended action delegates to `/gsd:progress --next`
+ * (workflows/next.md) — the single, gated advancement engine (Route 0 resume-
+ * incomplete-phase invariant + Gates 1-3). smart-entry never re-derives forward
+ * routing itself; a standalone advancement command that bypassed those gates is
+ * exactly what got the old flat `/gsd-next` removed (#3054). Its distinct value is
+ * the states `--next` cannot reach: pre-project (no-project), remediation (paused,
+ * blocked, verify-failed), and lifecycle exits (idle-stranded, complete).
  *
  * Design note: this is the gsd-core analog of gsd-pi's `showSmartEntry` branch
  * tree, redesigned for gsd-core's `.planning/` phase loop. gsd-pi's
@@ -444,25 +455,32 @@ export function actionsFor(situation: Situation, s: SmartEntrySignals): SmartEnt
         action('progress', 'Show progress', '/gsd:progress'),
       ];
     case 'planning':
+      // Forward motion → delegate to the single gated engine (see 'executing').
       return [
-        rec('plan-phase', `Plan phase ${phaseN || 1}`, `/gsd:plan-phase`),
+        rec('progress-next', `Advance to the next step (plan phase ${phaseN || 1})`, '/gsd:progress --next'),
+        action('plan-phase', `Plan phase ${phaseN || 1}`, '/gsd:plan-phase'),
         action('discuss-phase', 'Discuss before planning', '/gsd:discuss-phase'),
-        action('quick', 'Quick task', '/gsd:quick'),
         action('progress', 'Show progress', '/gsd:progress'),
       ];
     case 'executing':
+      // In-project forward motion delegates to the single gated engine
+      // (/gsd:progress --next → workflows/next.md). Its Route 0 resume-incomplete
+      // -phase invariant + Gates 1-3 must not be bypassed by dispatching a raw
+      // /gsd:execute-phase here — that divergence is why the old flat /gsd-next
+      // was removed (#3054). Direct execute stays as an explicit secondary choice.
       return [
-        rec('execute-phase', execLabel, '/gsd:execute-phase'),
-        action('progress-next', 'Advance to the next step', '/gsd:progress --next'),
+        rec('progress-next', 'Advance to the next step', '/gsd:progress --next'),
+        action('execute-phase', execLabel, '/gsd:execute-phase'),
         action('quick', 'Quick task', '/gsd:quick'),
         action('code-review', 'Review recent work', '/gsd:code-review'),
       ];
     case 'verify-pending':
+      // Forward motion → delegate to the single gated engine (see 'executing').
       return [
-        rec('verify-work', 'Verify work', '/gsd:verify-work'),
+        rec('progress-next', 'Advance to the next step (verify)', '/gsd:progress --next'),
+        action('verify-work', 'Verify work', '/gsd:verify-work'),
         action('code-review', 'Review recent work', '/gsd:code-review'),
         action('ship', 'Ship completed work', '/gsd:ship'),
-        action('progress', 'Show progress', '/gsd:progress'),
       ];
     case 'idle-stranded':
       return [
