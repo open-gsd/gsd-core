@@ -140,6 +140,24 @@ function listPlanningDocCandidates(cwd: string): string[] {
   const roots = ['docs', 'adr', 'adrs', 'prd', 'prds', 'spec', 'specs', 'rfc', 'rfcs'];
   const candidates = new Set<string>();
 
+  const isPlanningDocCandidate = (rel: string, name: string): boolean => {
+    const upperName = name.toUpperCase();
+    const relLower = rel.toLowerCase();
+    const pathSegments = relLower.split('/');
+    return (
+      /(^|[-_ ])(ADR|PRD|SPEC|RFC)([-_ ]|\.)/i.test(name) ||
+      /^\d{4}[-_].+\.md$/i.test(name) ||
+      pathSegments.some((segment) => PLANNING_DOC_SEGMENTS.has(segment)) ||
+      upperName === 'REQUIREMENTS.MD'
+    );
+  };
+
+  const addCandidate = (rel: string, name: string): void => {
+    if (name.toLowerCase().endsWith('.md') && isPlanningDocCandidate(rel, name)) {
+      candidates.add(toPosixPath(rel));
+    }
+  };
+
   const visit = (dir: string, relDir: string, depth: number): void => {
     if (depth > 3) return;
     let entries: fs.Dirent[];
@@ -158,20 +176,19 @@ function listPlanningDocCandidates(cwd: string): string[] {
         continue;
       }
 
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
-      const upperName = entry.name.toUpperCase();
-      const relLower = rel.toLowerCase();
-      const pathSegments = relLower.split('/');
-      if (
-        /(^|[-_ ])(ADR|PRD|SPEC|RFC)([-_ ]|\.)/i.test(entry.name) ||
-        /^\d{4}[-_].+\.md$/i.test(entry.name) ||
-        pathSegments.some((segment) => PLANNING_DOC_SEGMENTS.has(segment)) ||
-        upperName === 'REQUIREMENTS.md'
-      ) {
-        candidates.add(toPosixPath(rel));
-      }
+      if (entry.isFile()) addCandidate(rel, entry.name);
     }
   };
+
+  let rootEntries: fs.Dirent[] = [];
+  try {
+    rootEntries = fs.readdirSync(cwd, { withFileTypes: true });
+  } catch {
+    rootEntries = [];
+  }
+  for (const entry of rootEntries) {
+    if (entry.isFile()) addCandidate(entry.name, entry.name);
+  }
 
   for (const root of roots) {
     const full = path.join(cwd, root);

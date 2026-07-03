@@ -71,6 +71,32 @@ describe('init onboard public CLI projection', () => {
     ]);
   });
 
+  test('detects root-level planning docs without broad repo scan', () => {
+    fs.writeFileSync(path.join(tmpDir, 'PRD.md'), '# Product Requirements\n');
+    fs.writeFileSync(path.join(tmpDir, 'SPEC.md'), '# Specification\n');
+    fs.writeFileSync(path.join(tmpDir, 'RFC.md'), '# Request for Comments\n');
+    fs.writeFileSync(path.join(tmpDir, 'ADR.md'), '# Architecture Decision\n');
+    fs.writeFileSync(path.join(tmpDir, 'REQUIREMENTS.md'), '# Requirements\n');
+    fs.writeFileSync(path.join(tmpDir, '0001-decision.md'), '# Decision\n');
+    fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'src', 'PRD.md'), '# Nested Product Requirements\n');
+
+    const result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.has_docs_candidates, true);
+    assert.strictEqual(parsed.doc_candidate_count, 6);
+    assert.deepStrictEqual(parsed.doc_candidates, [
+      '0001-decision.md',
+      'ADR.md',
+      'PRD.md',
+      'REQUIREMENTS.md',
+      'RFC.md',
+      'SPEC.md',
+    ]);
+  });
+
   test('reports complete codebase map and onboarding summary in existing planning', () => {
     fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
     for (const name of ['STACK', 'ARCHITECTURE', 'STRUCTURE', 'CONVENTIONS', 'TESTING', 'INTEGRATIONS', 'CONCERNS']) {
@@ -185,6 +211,17 @@ describe('/gsd:onboard command contract', () => {
     const content = fs.readFileSync(WF_PATH, 'utf8');
 
     assert.ok(content.includes('init onboard'), 'workflow must use init onboard projection');
+    for (const runtimeHome of [
+      'HERMES_HOME',
+      'CURSOR_CONFIG_DIR',
+      'CODEX_HOME',
+      'GEMINI_CONFIG_DIR',
+      'WINDSURF_CONFIG_DIR',
+      'OPENCODE_CONFIG_DIR',
+    ]) {
+      assert.ok(content.includes(runtimeHome), `workflow resolver must include ${runtimeHome}`);
+    }
+    assert.match(content, /Parse JSON fields:.*`commit_docs`/s, 'workflow must parse commit_docs before using it');
     assert.ok(content.includes('map-codebase'), 'workflow must route to map-codebase');
     assert.ok(content.includes('ingest-docs'), 'workflow must route to ingest-docs');
     assert.match(
