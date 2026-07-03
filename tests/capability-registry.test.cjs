@@ -3195,6 +3195,7 @@ const {
   VALID_COMMAND_STYLES,
   VALID_HOOKS_SURFACES,
   VALID_HOOK_EVENTS,
+  VALID_EXTENSION_EVENTS,
   VALID_SANDBOX_TIERS,
   VALID_ARTIFACT_KIND_NAMES,
   VALID_ARTIFACT_NESTINGS,
@@ -3384,6 +3385,14 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
       !Object.prototype.hasOwnProperty.call(rt, 'hookEvents'),
       'opencode.runtime must NOT have hookEvents (no lifecycle hook registration)',
     );
+  });
+
+  test('opencode: extensionEvents === opencode (the extension-system event dialect — #1943)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const rt = registry.runtimes['opencode'].runtime;
+    assert.strictEqual(rt.extensionEvents, 'opencode',
+      'opencode declares the extension-system event subset via extensionEvents (NOT hookEvents)');
   });
 
   test('kilo: hooksSurface === none, no hookEvents (registers zero lifecycle hooks)', () => {
@@ -3952,12 +3961,22 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_HOOKS_SURFACES.size, 6);
   });
 
-  test('VALID_HOOK_EVENTS has exactly 3 values', () => {
+  test('VALID_HOOK_EVENTS has exactly 2 managed-hook dialects (claude/gemini)', () => {
     assert.ok(VALID_HOOK_EVENTS instanceof Set);
-    for (const v of ['claude', 'gemini', 'opencode-subset']) {
+    for (const v of ['claude', 'gemini']) {
       assert.ok(VALID_HOOK_EVENTS.has(v), 'VALID_HOOK_EVENTS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_HOOK_EVENTS.size, 3);
+    assert.strictEqual(VALID_HOOK_EVENTS.size, 2);
+    assert.ok(!VALID_HOOK_EVENTS.has('opencode-subset'),
+      'opencode-subset is NOT a hookEvents value — it is the extensionEvents vocabulary (#1943)');
+  });
+
+  test('VALID_EXTENSION_EVENTS has the extension-system dialects (opencode/pi/none — #1943)', () => {
+    assert.ok(VALID_EXTENSION_EVENTS instanceof Set);
+    for (const v of ['opencode', 'pi', 'none']) {
+      assert.ok(VALID_EXTENSION_EVENTS.has(v), 'VALID_EXTENSION_EVENTS must contain "' + v + '"');
+    }
+    assert.strictEqual(VALID_EXTENSION_EVENTS.size, 3);
   });
 
   test('VALID_SANDBOX_TIERS has exactly 2 values', () => {

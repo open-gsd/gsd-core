@@ -40,6 +40,7 @@ const SDK = Object.freeze({
   profileOf: hostIntegration.profileOf,
   degradationFor: hostIntegration.degradationFor,
   hookEventSurfaceFor: hostIntegration.hookEventSurfaceFor,
+  extensionEventSurfaceFor: hostIntegration.extensionEventSurfaceFor,
   shouldFlattenDispatch: hostIntegration.shouldFlattenDispatch,
 
   // ── Embedding + engine adapters ──────────────────────────────────────────
