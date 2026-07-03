@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (see #1990)
 // Command/workflow markdown is deployed runtime product; source-text assertions
 // below verify the installed command contract. CLI assertions exercise real
 // gsd-tools behavior through the public command boundary.
