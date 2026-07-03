@@ -5272,3 +5272,1159 @@ describe('ADR-1244 D2: validator extraction generative parity', () => {
     assert.ok(validateCapability(noVersion, 'demo').some((e) => e.includes('version')));
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2530-valid-config-keys.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2530-valid-config-keys (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * Regression tests for config key bugs:
+ * #2530 — workflow._auto_chain_active is internal state, must not be in VALID_CONFIG_KEYS
+ * #2531 — hooks.workflow_guard is used by hook and documented but missing from VALID_CONFIG_KEYS
+ * #2532 — workflow.ui_review is used in autonomous.md but missing from config validation
+ * #2533 — workflow.max_discuss_passes is used in discuss-phase.md but missing from VALID_CONFIG_KEYS
+ * #2535 — sub_repos and plan_checker legacy keys need CONFIG_KEY_SUGGESTIONS migration hints
+ * #3162 — resolve_model_ids missing from VALID_CONFIG_KEYS; workflow._auto_chain_active must be
+ *          accepted by isValidConfigKey (written by workflows) without being user-visible
+ * #1747 — buildNewProjectConfig emits four search-provider keys (tavily_search, ref_search,
+ *          perplexity, jina) that research-provider.cts consumes but were missing from
+ *          VALID_CONFIG_KEYS, causing /gsd-settings unknown-key warnings on fresh projects
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+const {
+  VALID_CONFIG_KEYS,
+  isCentralConfigKey,
+  isValidConfigKey,
+} = require('../gsd-core/bin/lib/config-schema.cjs');
+
+const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
+
+describe('VALID_CONFIG_KEYS correctness', () => {
+  test('#2530: workflow._auto_chain_active must not be in VALID_CONFIG_KEYS (internal state)', () => {
+    assert.ok(
+      !VALID_CONFIG_KEYS.has('workflow._auto_chain_active'),
+      'workflow._auto_chain_active is internal runtime state and must not be user-settable'
+    );
+  });
+
+  test('#2531: hooks.workflow_guard must be in VALID_CONFIG_KEYS (used by hook, documented)', () => {
+    assert.ok(
+      VALID_CONFIG_KEYS.has('hooks.workflow_guard'),
+      'hooks.workflow_guard is read by gsd-workflow-guard.js hook and documented in CONFIGURATION.md'
+    );
+  });
+
+  test('#2532: workflow.ui_review must remain valid but is no longer centrally owned', () => {
+    assert.strictEqual(
+      isValidConfigKey('workflow.ui_review'),
+      true,
+      'workflow.ui_review is still user-facing config and must validate'
+    );
+    assert.strictEqual(
+      isCentralConfigKey('workflow.ui_review'),
+      false,
+      'workflow.ui_review is owned by the UI capability after ADR-857 Phase 6 cutover'
+    );
+  });
+
+  test('#2533: workflow.max_discuss_passes must be in VALID_CONFIG_KEYS (used in discuss-phase.md)', () => {
+    assert.ok(
+      VALID_CONFIG_KEYS.has('workflow.max_discuss_passes'),
+      'workflow.max_discuss_passes is read in discuss-phase.md via gsd-sdk query config-get'
+    );
+  });
+
+  test('#3162: resolve_model_ids must be in VALID_CONFIG_KEYS (documented user-facing key)', () => {
+    assert.ok(
+      VALID_CONFIG_KEYS.has('resolve_model_ids'),
+      'resolve_model_ids is documented in CONFIGURATION.md and read by core.cjs/session-runner.ts'
+    );
+  });
+
+  test('#3162: workflow._auto_chain_active must be accepted by isValidConfigKey (written by workflows)', () => {
+    assert.strictEqual(
+      isValidConfigKey('workflow._auto_chain_active'),
+      true,
+      'workflow._auto_chain_active is written by plan-phase, execute-phase, discuss-phase, transition workflows via config-set'
+    );
+  });
+});
+
+describe('#1747: new-project config emits only schema-recognized provider keys', () => {
+  // buildNewProjectConfig emits seven search-provider availability flags and
+  // research-provider.cts providerAvailability() consumes all seven, but only
+  // three were in VALID_CONFIG_KEYS → /gsd-settings warned on the four
+  // unregistered keys (tavily_search, ref_search, perplexity, jina) for every
+  // freshly generated .planning/config.json.
+
+  // The four keys that were emitted + consumed but missing from the schema.
+  const MISSING_KEYS = ['tavily_search', 'ref_search', 'perplexity', 'jina'];
+
+  // Every config-driven provider flag read by providerAvailability() in
+  // src/research-provider.cts. context7/websearch are excluded: hardcoded
+  // `true`, not config-gated, so no config key to register.
+  const PROVIDER_CONFIG_KEYS = [
+    'brave_search',
+    'firecrawl',
+    'exa_search',
+    'tavily_search',
+    'ref_search',
+    'perplexity',
+    'jina',
+  ];
+
+  test('the four previously-missing provider keys are in VALID_CONFIG_KEYS', () => {
+    const absent = MISSING_KEYS.filter((k) => !VALID_CONFIG_KEYS.has(k));
+    assert.deepStrictEqual(
+      absent,
+      [],
+      `These provider keys are emitted by buildNewProjectConfig and consumed by research-provider.cts but missing from VALID_CONFIG_KEYS:\n  ${absent.join('\n  ')}\n\nAdd them to gsd-core/bin/shared/config-schema.manifest.json (validKeys).`
+    );
+  });
+
+  test('every config-driven research-provider flag is registered in the schema (drift guard)', () => {
+    const drifted = PROVIDER_CONFIG_KEYS.filter((k) => !VALID_CONFIG_KEYS.has(k));
+    assert.deepStrictEqual(
+      drifted,
+      [],
+      `These research-provider config flags are not in VALID_CONFIG_KEYS — a fresh /gsd-new-project config would trigger an unknown-key warning under /gsd-settings:\n  ${drifted.join('\n  ')}\n\nWhen you add a provider to providerAvailability() in src/research-provider.cts, also register its config key in gsd-core/bin/shared/config-schema.manifest.json.`
+    );
+  });
+});
+
+describe('ADR-857 Phase 6 capability config ownership', () => {
+  test('migrated capability config keys are valid through the registry, not central schema residue', () => {
+    const capabilityKeys = Object.keys(capabilityRegistry.configSchema || {}).sort();
+    assert.ok(capabilityKeys.length > 0, 'expected generated registry config schema keys');
+
+    for (const key of capabilityKeys) {
+      assert.strictEqual(isValidConfigKey(key), true, `${key} must remain accepted by config validation`);
+      assert.strictEqual(isCentralConfigKey(key), false, `${key} must be capability-owned, not central`);
+      assert.strictEqual(VALID_CONFIG_KEYS.has(key), false, `${key} must not remain in central VALID_CONFIG_KEYS`);
+    }
+  });
+});
+
+describe('CONFIG_KEY_SUGGESTIONS migration hints (#2535)', () => {
+  let tmpDir;
+
+  test('config-set sub_repos emits "Did you mean planning.sub_repos?" suggestion', (t) => {
+    tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-set', 'sub_repos', '[]'], tmpDir);
+    assert.ok(!result.success, 'config-set sub_repos should fail');
+    const combined = result.error + result.output;
+    assert.ok(
+      combined.includes('Did you mean') && combined.includes('planning.sub_repos'),
+      `Expected "Did you mean planning.sub_repos?" in error, got:\nstdout: ${result.output}\nstderr: ${result.error}`
+    );
+  });
+
+  test('config-set plan_checker emits "Did you mean workflow.plan_check?" suggestion', (t) => {
+    tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(['config-set', 'plan_checker', 'true'], tmpDir);
+    assert.ok(!result.success, 'config-set plan_checker should fail');
+    const combined = result.error + result.output;
+    assert.ok(
+      combined.includes('Did you mean') && combined.includes('workflow.plan_check'),
+      `Expected "Did you mean workflow.plan_check?" in error, got:\nstdout: ${result.output}\nstderr: ${result.error}`
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2851-workflow-bare-gsd-tools.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2851-workflow-bare-gsd-tools (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Bug #2851: plan-phase.md §13e calls bare `gsd-tools` — incomplete fix of #2245
+ *
+ * Workflow bodies should not call `gsd-tools` as an unguarded bare command.
+ * Use the resolver snippets for SDK calls, or an explicit local CJS path when
+ * a command intentionally targets the checked-in legacy script:
+ *
+ *   node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand> [args]
+ *
+ * As of #621, the §13e gap-analysis call uses the `gsd_run` launcher (the
+ * canonical resolvable form) instead of the absolute-$HOME path above.
+ * Both forms are resolvable; `gsd_run` is now the preferred canonical form.
+ *
+ * Some workflow markdown files leaked the bare `gsd-tools <subcommand>` form,
+ * which fails with `command not found` at runtime.
+ *
+ * This test parses every markdown file in gsd-core/workflows/ structurally:
+ * it tokenizes the content into fenced code blocks, then on each shell-block
+ * line checks whether `gsd-tools` appears as a bare command (not preceded by
+ * `node `, not part of the filename `gsd-tools.cjs`, not inside a comment).
+ *
+ * Per project rule: this test does NOT use grep/regex .includes() on raw file
+ * content as the assertion surface. Instead, it splits into code-fenced blocks
+ * and tokenizes each line — only command-position tokens count as violations.
+ */
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
+
+/**
+ * Extract shell-fenced code blocks from a markdown file.
+ * Returns an array of { startLine, lines } where lines are the contents
+ * between the ```bash / ```sh / ```shell fence markers.
+ */
+function extractShellBlocks(content) {
+  const allLines = content.split('\n');
+  const blocks = [];
+  let inBlock = false;
+  let blockLang = null;
+  let blockStart = 0;
+  let blockLines = [];
+
+  for (let i = 0; i < allLines.length; i++) {
+    const line = allLines[i];
+    const fenceOpen = line.match(/^```(\w+)?/);
+    if (!inBlock && fenceOpen) {
+      inBlock = true;
+      blockLang = (fenceOpen[1] || '').toLowerCase();
+      blockStart = i + 2; // 1-indexed line number of first content line
+      blockLines = [];
+      continue;
+    }
+    if (inBlock && /^```\s*$/.test(line)) {
+      if (['bash', 'sh', 'shell', 'zsh', ''].includes(blockLang)) {
+        blocks.push({ startLine: blockStart, lines: blockLines });
+      }
+      inBlock = false;
+      blockLang = null;
+      blockLines = [];
+      continue;
+    }
+    if (inBlock) {
+      blockLines.push(line);
+    }
+  }
+  return blocks;
+}
+
+/**
+ * Check a single shell-block line for a bare `gsd-tools` command-position token.
+ * Returns true if the line is a violation.
+ */
+function lineHasBareGsdTools(line) {
+  // Strip leading whitespace and any prompt prefix ($ , > , # )
+  let l = line.replace(/^\s*[$>]\s*/, '');
+  // Skip pure comment lines
+  if (/^\s*#/.test(l)) return false;
+  // Strip inline comment (# preceded by whitespace, not inside a string)
+  // Conservative: only strip if # appears after whitespace and outside quotes —
+  // we just look for the first ` #` outside of quoted context. For our needs,
+  // splitting on `^[^"']*?(\s#)` is good enough.
+  const hashIdx = l.search(/(?:^|[^"'\w])#/);
+  if (hashIdx > 0) l = l.slice(0, hashIdx);
+
+  // Unwrap command-substitution forms so the substituted command is in
+  // command position. `$(cmd …)` and `` `cmd …` `` both run the inner string
+  // as a fresh command, so a bare `gsd-tools` inside them is just as broken
+  // as one at the start of the line. Iterate until stable for nested forms.
+  let prev;
+  do {
+    prev = l;
+    l = l.replace(/\$\(([^()]*)\)/g, ' $1 ').replace(/`([^`]*)`/g, ' $1 ');
+  } while (l !== prev);
+
+  // Tokenize on whitespace, semicolons, pipes, and && / ||
+  // Then walk tokens — a violation is a token that starts with `gsd-tools`
+  // followed by a word boundary (so `gsd-tools.cjs` does NOT match), and the
+  // preceding token is NOT `node`.
+  const segments = l.split(/(?:\s*(?:&&|\|\||;|\|)\s*)/);
+  for (const seg of segments) {
+    const tokens = seg.trim().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) continue;
+    // Skip env var assignments at the start (FOO=bar gsd-tools …, tmp=1 gsd-tools …).
+    // POSIX shell variable names are [A-Za-z_][A-Za-z0-9_]*; lowercase is valid.
+    let cmdIdx = 0;
+    while (cmdIdx < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[cmdIdx])) {
+      cmdIdx++;
+    }
+    if (cmdIdx >= tokens.length) continue;
+    const cmd = tokens[cmdIdx];
+    // Match `gsd-tools` exactly (no extension), as command position.
+    if (cmd === 'gsd-tools') return true;
+  }
+  return false;
+}
+
+const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+
+describe('bug #1041: agent files must not call bare gsd-tools (all-runtime resolver)', () => {
+  test('no agents/gsd-*.md file contains a bare gsd-tools command', () => {
+    const files = fs.readdirSync(AGENTS_DIR).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
+    assert.ok(files.length > 0, 'expected agent files to exist');
+
+    const violations = [];
+    for (const f of files) {
+      const full = path.join(AGENTS_DIR, f);
+      const content = fs.readFileSync(full, 'utf-8');
+      const blocks = extractShellBlocks(content);
+      for (const blk of blocks) {
+        for (let i = 0; i < blk.lines.length; i++) {
+          if (lineHasBareGsdTools(blk.lines[i])) {
+            violations.push(`${f}:${blk.startLine + i}: ${blk.lines[i].trim()}`);
+          }
+        }
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Bare `gsd-tools` invocations found in agent shell blocks. ' +
+        'Inject the runtime-launcher preamble (_runtime-launcher.snippet.sh) and use `gsd_run` instead.\n' +
+        violations.join('\n'),
+    );
+  });
+});
+
+describe('bug-2851: workflow files must not call bare `gsd-tools` (#2245 sweep regression)', () => {
+  test('no gsd-core/workflows/*.md file contains a bare gsd-tools command', () => {
+    const files = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.md'));
+    assert.ok(files.length > 0, 'expected workflow files to exist');
+
+    const violations = [];
+    for (const f of files) {
+      const full = path.join(WORKFLOWS_DIR, f);
+      const content = fs.readFileSync(full, 'utf-8');
+      const blocks = extractShellBlocks(content);
+      for (const blk of blocks) {
+        for (let i = 0; i < blk.lines.length; i++) {
+          if (lineHasBareGsdTools(blk.lines[i])) {
+            violations.push(`${f}:${blk.startLine + i}: ${blk.lines[i].trim()}`);
+          }
+        }
+      }
+    }
+
+    assert.deepStrictEqual(
+      violations,
+      [],
+      'Bare `gsd-tools` invocations found in workflow shell blocks. ' +
+        'Use a resolver snippet or `node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" <subcommand>` instead.\n' +
+        violations.join('\n'),
+    );
+  });
+
+  test('plan-phase.md §13e gap-analysis dispatches via gsd_run loop render-hooks plan:post (ADR-857 capability gate, #621)', () => {
+    const planPhase = fs.readFileSync(path.join(WORKFLOWS_DIR, 'plan-phase.md'), 'utf-8');
+    const blocks = extractShellBlocks(planPhase);
+    let foundPlanPostDispatch = false;
+    for (const blk of blocks) {
+      for (const line of blk.lines) {
+        if (/gsd_run\s+loop\s+render-hooks\s+plan:post\s+--raw/.test(line) && !/^\s*#/.test(line)) {
+          foundPlanPostDispatch = true;
+        }
+      }
+    }
+    assert.ok(
+      foundPlanPostDispatch,
+      'expected plan-phase.md §13e to dispatch gsd_run loop render-hooks plan:post --raw (gap-analysis moved to capability gate plan:post in ADR-857 migration)',
+    );
+    const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const planPostPoint = (registry.byLoopPoint || {})['plan:post'] || {};
+    const gates = planPostPoint.gates || [];
+    const gapAnalysisGate = gates.find((g) => g.capId === 'gap-analysis');
+    assert.ok(
+      gapAnalysisGate,
+      'gap-analysis capability must be registered as a plan:post gate in capability-registry.cjs',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1628-config-set-validation.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1628-config-set-validation (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * Regression test suite for bug #1628: config-set validation gaps.
+ *
+ * This file consolidates all #1628 config-set validation regression tests:
+ *   1. Security-key enum guards (workflow.security_block_on, workflow.security_asvs_level)
+ *   2. JSON-array coercion bypass: every affected string-enum key
+ *   3. Generic capability-registry validation (enum/boolean/number/string keys)
+ *
+ * Covers:
+ * - workflow.security_block_on must be one of: critical | high | medium | low | none
+ * - workflow.security_asvs_level must be an integer in {1, 2, 3}
+ * - JSON-array (["<member>"]) and JSON-object ({"x":1}) values must be REJECTED for
+ *   all string-enum keys (typeof check before enum guard)
+ * - capability-registry-owned keys: ENUM, BOOLEAN, NUMBER, STRING
+ *
+ * Boundary coverage per RULESET.TESTS.boundary-coverage:
+ *   security_asvs_level: 0 (limit-1), 1 (limit), 2, 3 (limit), 4 (limit+1)
+ *   security_block_on: each valid enum member + bogus values
+ *
+ * Registry canary: verifies capability registry's .values for workflow.security_block_on
+ * matches the canonical enum (guards against silent gutting per DEFECT.GENERATIVE-FIX).
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+// ─── Registry canary ──────────────────────────────────────────────────────────
+// Verify the capability registry's declared .values for workflow.security_block_on
+// matches the canonical enum. config.cts sources its allowed set DIRECTLY from the
+// registry, so this canary guards against the registry being silently gutted — which
+// would cause every config-set call to fail (per DEFECT.GENERATIVE-FIX).
+describe('fix-1628: registry canary — capability registry declares the canonical security_block_on enum', () => {
+  test('registry workflow.security_block_on.values declares the expected canonical enum', () => {
+    // Load the capability registry as a module (behavioral call, not source grep).
+    // The registry IS the source of truth: config.cts reads from it at runtime.
+    // This assertion guards against the registry entry being gutted or values removed.
+    const { configSchema } = require('../gsd-core/bin/lib/capability-registry.cjs');
+    const entry = configSchema['workflow.security_block_on'];
+    assert.ok(entry, 'capability registry must have an entry for workflow.security_block_on');
+    assert.ok(Array.isArray(entry.values), 'registry entry must have a .values array');
+
+    const EXPECTED = ['critical', 'high', 'medium', 'low', 'none'];
+    assert.deepEqual(
+      [...entry.values].sort(),
+      [...EXPECTED].sort(),
+      `Registry workflow.security_block_on.values must be ${JSON.stringify(EXPECTED)} — update ` +
+      `the capability registry if the canonical enum changes`
+    );
+  });
+});
+
+// ─── workflow.security_block_on ───────────────────────────────────────────────
+
+describe('fix-1628: workflow.security_block_on enum validation', () => {
+  const VALID_VALUES = ['critical', 'high', 'medium', 'low', 'none'];
+  const INVALID_VALUES = ['bogus', 'High', 'CRITICAL', '', 'all', 'urgent'];
+
+  for (const v of VALID_VALUES) {
+    test(`config-set workflow.security_block_on=${v} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_block_on', v],
+        tmpDir
+      );
+      assert.ok(
+        result.success,
+        [
+          `config-set workflow.security_block_on=${v} must succeed,`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  for (const v of INVALID_VALUES) {
+    test(`config-set workflow.security_block_on=${JSON.stringify(v)} is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_block_on', v],
+        tmpDir
+      );
+      assert.ok(
+        !result.success,
+        `config-set workflow.security_block_on=${JSON.stringify(v)} must fail, but it succeeded`
+      );
+      const combined = (result.output || '') + (result.error || '');
+      // Error message must mention the valid values
+      assert.ok(
+        combined.includes('critical') && combined.includes('none'),
+        `Error message must mention valid values (got: ${combined})`
+      );
+    });
+  }
+});
+
+// ─── workflow.security_block_on — JSON-parse coercion bypass ─────────────────
+// Regression for the String(parsedValue) coercion bug: an array like ["high"]
+// coerces to "high" via String(), bypassing the enum check and writing an array
+// to a string-enum key. The fix requires typeof parsedValue === 'string'.
+
+describe('fix-1628: workflow.security_block_on rejects JSON-parsed non-string inputs', () => {
+  const JSON_BYPASS_CASES = [
+    { val: '["high"]',   label: 'JSON array with valid member' },
+    { val: '["bogus"]',  label: 'JSON array with invalid member' },
+    { val: '{"high":1}', label: 'JSON object' },
+  ];
+
+  for (const { val, label } of JSON_BYPASS_CASES) {
+    test(`config-set workflow.security_block_on=${label} is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_block_on', val],
+        tmpDir
+      );
+      assert.ok(
+        !result.success,
+        `config-set workflow.security_block_on=${label} must fail, but it succeeded`
+      );
+    });
+  }
+});
+
+// ─── workflow.security_asvs_level ─────────────────────────────────────────────
+
+describe('fix-1628: workflow.security_asvs_level range validation', () => {
+  // Boundary: 0 (below limit), 1 (min valid), 2 (mid), 3 (max valid), 4 (above limit)
+  const ACCEPTED_INTEGERS = [1, 2, 3];
+  const REJECTED_VALUES = [
+    { val: '0',   label: '0 (below lower bound)' },
+    { val: '4',   label: '4 (above upper bound)' },
+    { val: '2.5', label: '2.5 (non-integer float)' },
+    { val: 'abc', label: '"abc" (non-numeric string)' },
+    { val: '-1',  label: '-1 (negative)' },
+  ];
+
+  for (const n of ACCEPTED_INTEGERS) {
+    test(`config-set workflow.security_asvs_level=${n} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_asvs_level', String(n)],
+        tmpDir
+      );
+      assert.ok(
+        result.success,
+        [
+          `config-set workflow.security_asvs_level=${n} must succeed,`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  for (const { val, label } of REJECTED_VALUES) {
+    test(`config-set workflow.security_asvs_level=${label} is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(
+        ['config-set', 'workflow.security_asvs_level', val],
+        tmpDir
+      );
+      assert.ok(
+        !result.success,
+        `config-set workflow.security_asvs_level=${label} must fail, but it succeeded`
+      );
+      const combined = (result.output || '') + (result.error || '');
+      assert.ok(
+        combined.includes('security_asvs_level'),
+        `Error message must reference the key name (got: ${combined})`
+      );
+    });
+  }
+});
+
+// ─── JSON-array coercion bypass — parameterised matrix ───────────────────────
+// The root cause: cmdConfigSet JSON-parses any value starting with '[' or '{'
+// BEFORE per-key enum guards run. Guards using `.includes(String(parsedValue))`
+// are then fooled because `String(["mid-flight"]) === "mid-flight"`, so the
+// array bypasses the guard and gets stored in a scalar key.
+//
+// The fix: `assertEnumValue()` checks `typeof parsedValue === 'string'` FIRST,
+// so a parsed array is rejected regardless of its string coercion.
+//
+// Coverage: every affected string-enum key.
+// - `["<member>"]` (JSON array with valid member) → REJECTED
+// - `{"x":1}` (JSON object) → REJECTED
+// - `<member>` (plain string, valid) → ACCEPTED
+
+// Each row: { key, member } where `member` is a valid enum value for `key`.
+// Verified against VALID_* arrays in src/config.cts.
+const ENUM_KEYS = [
+  { key: 'context',                              member: 'research'   },
+  { key: 'workflow.drift_action',                member: 'warn'       },
+  { key: 'workflow.human_verify_mode',           member: 'mid-flight' },
+  { key: 'workflow.context_guard_mode',          member: 'off'        },
+  { key: 'statusline.context_position',          member: 'front'      },
+  { key: 'code_quality.fallow.scope',            member: 'phase'      },
+  { key: 'code_quality.fallow.profile',          member: 'standard'   },
+  { key: 'plan_review.source_grounding_authority', member: 'grep'     },
+  { key: 'workflow.security_block_on',           member: 'high'       },
+];
+
+for (const { key, member } of ENUM_KEYS) {
+  describe(`fix-1628 coercion bypass: ${key}`, () => {
+    // ── JSON array with valid member must be REJECTED ────────────────────────
+    test(`["${member}"] (JSON array with valid member) is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const val = `["${member}"]`;
+      const result = runGsdTools(['config-set', key, val], tmpDir);
+      assert.ok(
+        !result.success,
+        [
+          `config-set ${key}=${val} must be REJECTED (JSON-array coercion bypass)`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+
+    // ── JSON object must be REJECTED ─────────────────────────────────────────
+    test(`{"x":1} (JSON object) is REJECTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const val = '{"x":1}';
+      const result = runGsdTools(['config-set', key, val], tmpDir);
+      assert.ok(
+        !result.success,
+        [
+          `config-set ${key}=${val} must be REJECTED (JSON-object bypass)`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+
+    // ── Plain valid string must be ACCEPTED ──────────────────────────────────
+    test(`"${member}" (plain valid string) is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(['config-set', key, member], tmpDir);
+      assert.ok(
+        result.success,
+        [
+          `config-set ${key}=${member} must be ACCEPTED (plain string, valid enum member)`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  });
+}
+
+// ─── ENUM: workflow.code_review_depth ────────────────────────────────────────
+
+describe('fix-1628 capability validation: workflow.code_review_depth (enum)', () => {
+  const VALID_VALUES = ['quick', 'standard', 'deep'];
+
+  for (const v of VALID_VALUES) {
+    test(`config-set workflow.code_review_depth=${v} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(['config-set', 'workflow.code_review_depth', v], tmpDir);
+      assert.ok(
+        result.success,
+        [
+          `config-set workflow.code_review_depth=${v} must succeed`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  test('config-set workflow.code_review_depth=["standard"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.code_review_depth', '["standard"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.code_review_depth=["standard"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.code_review_depth=garbage is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.code_review_depth', 'garbage'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.code_review_depth=garbage must be REJECTED (out-of-enum)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── ENUM: mempalace.memory_mode ─────────────────────────────────────────────
+
+describe('fix-1628 capability validation: mempalace.memory_mode (enum)', () => {
+  const VALID_VALUES = ['augment', 'kg_backend', 'replace'];
+
+  for (const v of VALID_VALUES) {
+    test(`config-set mempalace.memory_mode=${v} is ACCEPTED`, (t) => {
+      const tmpDir = createTempProject();
+      t.after(() => cleanup(tmpDir));
+      const result = runGsdTools(['config-set', 'mempalace.memory_mode', v], tmpDir);
+      assert.ok(
+        result.success,
+        [
+          `config-set mempalace.memory_mode=${v} must succeed`,
+          'stdout: ' + result.output,
+          'stderr: ' + result.error,
+        ].join('\n')
+      );
+    });
+  }
+
+  test('config-set mempalace.memory_mode=["augment"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.memory_mode', '["augment"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.memory_mode=["augment"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set mempalace.memory_mode=garbage is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.memory_mode', 'garbage'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.memory_mode=garbage must be REJECTED (out-of-enum)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── BOOLEAN: workflow.tdd_mode ──────────────────────────────────────────────
+
+describe('fix-1628 capability validation: workflow.tdd_mode (boolean)', () => {
+  test('config-set workflow.tdd_mode=true is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', 'true'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set workflow.tdd_mode=true must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=false is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', 'false'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set workflow.tdd_mode=false must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=["true"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', '["true"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode=["true"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode={"x":1} (JSON object) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', '{"x":1}'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode={"x":1} must be REJECTED (JSON-object bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=maybe (non-boolean string) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', 'maybe'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode=maybe must be REJECTED (non-boolean string)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.tdd_mode=1 (numeric 1 coerces to number, not boolean) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.tdd_mode', '1'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.tdd_mode=1 must be REJECTED (number, not boolean)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── BOOLEAN: graphify.enabled ────────────────────────────────────────────────
+
+describe('fix-1628 capability validation: graphify.enabled (boolean)', () => {
+  test('config-set graphify.enabled=true is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', 'true'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set graphify.enabled=true must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=false is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', 'false'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set graphify.enabled=false must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=["true"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', '["true"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled=["true"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled={"x":1} (JSON object) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', '{"x":1}'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled={"x":1} must be REJECTED (JSON-object bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=maybe (non-boolean string) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', 'maybe'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled=maybe must be REJECTED (non-boolean string)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set graphify.enabled=1 (numeric 1, not boolean) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'graphify.enabled', '1'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set graphify.enabled=1 must be REJECTED (number, not boolean)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── NUMBER: workflow.drift_threshold ────────────────────────────────────────
+
+describe('fix-1628 capability validation: workflow.drift_threshold (number)', () => {
+  test('config-set workflow.drift_threshold=5 is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.drift_threshold', '5'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set workflow.drift_threshold=5 must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set workflow.drift_threshold=["3"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'workflow.drift_threshold', '["3"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set workflow.drift_threshold=["3"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+
+// ─── STRING: mempalace.wing ───────────────────────────────────────────────────
+
+describe('fix-1628 capability validation: mempalace.wing (string)', () => {
+  test('config-set mempalace.wing=myWing is ACCEPTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.wing', 'myWing'], tmpDir);
+    assert.ok(
+      result.success,
+      [
+        'config-set mempalace.wing=myWing must succeed',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set mempalace.wing=["x"] (JSON array bypass) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.wing', '["x"]'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.wing=["x"] must be REJECTED (JSON-array coercion bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set mempalace.wing={"a":1} (JSON object) is REJECTED', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+    const result = runGsdTools(['config-set', 'mempalace.wing', '{"a":1}'], tmpDir);
+    assert.ok(
+      !result.success,
+      [
+        'config-set mempalace.wing={"a":1} must be REJECTED (JSON-object bypass)',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-1055-config-intent-descriptor-drive.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-1055-config-intent-descriptor-drive (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * ADR-857 phase 5g drive 2: resolveRuntimeConfigIntent is now driven by the
+ * runtime capability descriptor (capability-registry.cjs) rather than a
+ * hand-kept REGISTRY const.
+ *
+ * This golden-master test pins the observable contract: the return shape and
+ * values must be identical to the pre-change behavior for all 16 runtimes.
+ * Purely behavioral — no source-grep.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+const {
+  resolveRuntimeConfigIntent,
+  ALLOWED_CONFIG_RUNTIMES,
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs'));
+
+// ---------------------------------------------------------------------------
+// Frozen expected table (pre-change behavior — the contract being pinned)
+// ---------------------------------------------------------------------------
+
+const EXPECTED = [
+  { runtime: 'claude',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'gemini',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'antigravity',  installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'augment',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'qwen',         installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'hermes',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'codebuddy',    installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
+  { runtime: 'opencode',     installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: 'opencode'  },
+  { runtime: 'kilo',         installSurface: 'settings-json',        writesSharedSettings: false, finishPermissionWriter: 'kilo'      },
+  { runtime: 'codex',        installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'copilot',      installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'cline',        installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'cursor',       installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'windsurf',     installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'trae',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
+  { runtime: 'kimi',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
+];
+
+// ---------------------------------------------------------------------------
+// Test 1: Golden master — all 16 runtimes resolve to expected values
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent golden master', () => {
+  for (const row of EXPECTED) {
+    test(`${row.runtime} resolves to expected intent`, () => {
+      const intent = resolveRuntimeConfigIntent(row.runtime);
+      assert.deepStrictEqual(intent, {
+        runtime:               row.runtime,
+        installSurface:        row.installSurface,
+        writesSharedSettings:  row.writesSharedSettings,
+        finishPermissionWriter: row.finishPermissionWriter,
+      });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Test 3: Unknown runtime throws TypeError
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: unknown runtime throws TypeError', () => {
+  test('throws TypeError for "bogus-runtime"', () => {
+    assert.throws(() => resolveRuntimeConfigIntent('bogus-runtime'), TypeError);
+  });
+
+  test('throws TypeError for empty string', () => {
+    assert.throws(() => resolveRuntimeConfigIntent(''), TypeError);
+  });
+
+  test('throws TypeError for undefined', () => {
+    assert.throws(() => resolveRuntimeConfigIntent(undefined), TypeError);
+  });
+
+  test('throws TypeError for "__proto__"', () => {
+    assert.throws(() => resolveRuntimeConfigIntent('__proto__'), TypeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 4: ALLOWED_CONFIG_RUNTIMES contains all 16 expected runtimes
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: ALLOWED_CONFIG_RUNTIMES completeness', () => {
+  const EXPECTED_16 = new Set([
+    'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
+    'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae', 'kimi',
+  ]);
+
+  test('contains exactly the 16 expected runtimes', () => {
+    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), EXPECTED_16);
+  });
+
+  test('has exactly 16 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 16);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test 5: Descriptor drive — the function reads from the descriptor, not
+// a hardcoded local constant. This is proven indirectly: the golden master
+// passes, meaning capability-registry.cjs (the live descriptor) matches the
+// expected table. If the adapter had its own REGISTRY, a descriptor change
+// would diverge silently; with drive, it cannot.
+// ---------------------------------------------------------------------------
+
+describe('enh-1055 descriptor-drive: finishPermissionWriter passthrough', () => {
+  test('opencode → "opencode" (descriptor permissionWriter)', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('opencode').finishPermissionWriter, 'opencode');
+  });
+
+  test('kilo → "kilo" (descriptor permissionWriter)', () => {
+    assert.strictEqual(resolveRuntimeConfigIntent('kilo').finishPermissionWriter, 'kilo');
+  });
+
+  test('all other runtimes have finishPermissionWriter === null', () => {
+    const nullExpected = EXPECTED
+      .filter(r => r.finishPermissionWriter === null)
+      .map(r => r.runtime);
+    for (const runtime of nullExpected) {
+      assert.strictEqual(
+        resolveRuntimeConfigIntent(runtime).finishPermissionWriter,
+        null,
+        `${runtime} should have finishPermissionWriter null`,
+      );
+    }
+  });
+});
+  });
+}

@@ -659,3 +659,469 @@ describe('readActiveProfile / writeActiveProfile', () => {
     }
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3659-applysurface-prune-skill-dirs.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3659-applysurface-prune-skill-dirs (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+/**
+ * Regression test for bug #3659
+ *
+ * applySurface did not prune ~/.claude/skills/gsd-STEM dirs when a cluster
+ * was disabled. install/uninstall both prune correctly via _removeGsdEntries;
+ * applySurface called _syncGsdDir with the right logic but the surface.md spec
+ * directed the AI to use RUNTIME_CONFIG_DIR=~/.claude/skills (the skills dir
+ * itself) instead of the base Claude config dir (~/.claude).
+ *
+ * When runtimeConfigDir = ~/.claude/skills and scope = 'global':
+ *   kind.destSubpath = 'skills'
+ *   dest = path.join('~/.claude/skills', 'skills') = ~/.claude/skills/skills  WRONG
+ *
+ * The pruning ran against the wrong (non-existent) dir so stale gsd-Y dirs
+ * were never removed from ~/.claude/skills/.
+ *
+ * Fix:
+ *   1. surface.md RUNTIME_CONFIG_DIR changed to use the base Claude config dir
+ *      (getGlobalDir('claude') = ~/.claude), not ~/.claude/skills.
+ *   2. Surface state file moves to <configDir>/.gsd-surface.json at the config
+ *      root, matching install/uninstall conventions.
+ *   3. applySurface is called with scope='global' so the skills kind is active.
+ *
+ * Tests:
+ *   a) disabled cluster gsd-STEM dirs are REMOVED from ~/.claude/skills/
+ *   b) gsd-STEM dirs in the retain set are preserved
+ *   c) non-gsd dirs are UNTOUCHED (user-owned)
+ *   d) idempotence: running applySurface twice produces the same on-disk state
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { writeSurface, applySurface } = require('../gsd-core/bin/lib/surface.cjs');
+const { loadSkillsManifest } = require('../gsd-core/bin/lib/install-profiles.cjs');
+const { CLUSTERS } = require('../gsd-core/bin/lib/clusters.cjs');
+const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
+
+const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
+
+/**
+ * Build a minimal fixture simulating a Claude global install.
+ *
+ * configDir  — analogous to ~/.claude
+ * skillsDir  — analogous to ~/.claude/skills (contains gsd-* dirs)
+ *
+ * Pre-populated with:
+ *   gsd-explore/SKILL.md  — in research_ideate cluster (will be disabled)
+ *   gsd-help/SKILL.md     — in core_loop cluster (will remain enabled)
+ *   my-custom-skill/      — user-owned, not gsd-prefixed (must never be touched)
+ */
+function createFixture() {
+  const configDir = createTempDir('gsd-bug3659-');
+  const skillsDir = path.join(configDir, 'skills');
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  const gsdExplore = path.join(skillsDir, 'gsd-explore');
+  const gsdHelp = path.join(skillsDir, 'gsd-help');
+  const userSkill = path.join(skillsDir, 'my-custom-skill');
+
+  for (const d of [gsdExplore, gsdHelp, userSkill]) {
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'SKILL.md'), '# skill\n', 'utf8');
+  }
+
+  return { configDir, skillsDir, gsdExplore, gsdHelp, userSkill };
+}
+
+/**
+ * Extended fixture that also includes a user-created gsd-* directory.
+ * Used by the all-clusters-disabled counter-test to prove the manifest-membership
+ * gate (Finding 1 fix) protects user-owned gsd-* dirs from data loss.
+ */
+function createFixtureWithUserGsdDir() {
+  const base = createFixture();
+  const userGsdDir = path.join(base.skillsDir, 'gsd-mything');
+  fs.mkdirSync(userGsdDir, { recursive: true });
+  fs.writeFileSync(path.join(userGsdDir, 'SKILL.md'), '# user skill\n', 'utf8');
+  return { ...base, userGsdDir };
+}
+
+describe('bug-3659: applySurface prunes ~/.claude/skills/gsd-*/ on cluster disable', () => {
+  test('(a) disabled cluster gsd-* dirs are removed from skills dir', (t) => {
+    const { configDir, gsdExplore, gsdHelp } = createFixture();
+    t.after(() => cleanup(configDir));
+
+    // Surface state at configDir (= ~/.claude), NOT at skillsDir (= ~/.claude/skills).
+    // This is the corrected location after the fix.
+    writeSurface(configDir, {
+      baseProfile: 'full',
+      disabledClusters: ['research_ideate'], // contains 'explore'
+      explicitAdds: [],
+      explicitRemoves: [],
+    });
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    // scope='global' gives the skills kind for Claude (destSubpath='skills', prefix='gsd-')
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+    applySurface(configDir, layout, manifest, CLUSTERS);
+
+    // gsd-explore is in the research_ideate cluster which was disabled:
+    // it must be pruned from skillsDir.
+    assert.ok(
+      !fs.existsSync(gsdExplore),
+      'gsd-explore/ must be removed from skills dir when research_ideate cluster is disabled'
+    );
+
+    // gsd-help is in core_loop (not disabled) and must survive.
+    assert.ok(
+      fs.existsSync(gsdHelp),
+      'gsd-help/ must be preserved when its cluster is not disabled'
+    );
+  });
+
+  test('(b) gsd-* dirs in retained clusters are preserved', (t) => {
+    const { configDir, gsdHelp } = createFixture();
+    t.after(() => cleanup(configDir));
+
+    // Disable a cluster that does NOT include help (core_loop has help)
+    writeSurface(configDir, {
+      baseProfile: 'full',
+      disabledClusters: ['research_ideate'],
+      explicitAdds: [],
+      explicitRemoves: [],
+    });
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+    applySurface(configDir, layout, manifest, CLUSTERS);
+
+    assert.ok(
+      fs.existsSync(gsdHelp),
+      'gsd-help/ must be preserved — core_loop cluster remains enabled'
+    );
+  });
+
+  test('(c) non-gsd user dirs are untouched', (t) => {
+    const { configDir, userSkill } = createFixture();
+    t.after(() => cleanup(configDir));
+
+    writeSurface(configDir, {
+      baseProfile: 'full',
+      disabledClusters: ['research_ideate'],
+      explicitAdds: [],
+      explicitRemoves: [],
+    });
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+    applySurface(configDir, layout, manifest, CLUSTERS);
+
+    assert.ok(
+      fs.existsSync(userSkill),
+      'my-custom-skill/ (non-gsd user dir) must be preserved by applySurface'
+    );
+    assert.ok(
+      fs.existsSync(path.join(userSkill, 'SKILL.md')),
+      'user skill SKILL.md must be untouched'
+    );
+  });
+
+  test('(d) idempotence: running applySurface twice produces identical on-disk state', (t) => {
+    const { configDir, skillsDir, gsdExplore, userSkill } = createFixture();
+    t.after(() => cleanup(configDir));
+
+    writeSurface(configDir, {
+      baseProfile: 'full',
+      disabledClusters: ['research_ideate'],
+      explicitAdds: [],
+      explicitRemoves: [],
+    });
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+
+    // First apply
+    applySurface(configDir, layout, manifest, CLUSTERS);
+    const afterFirst = fs.readdirSync(skillsDir).sort();
+
+    // Second apply — must produce exactly the same set
+    applySurface(configDir, layout, manifest, CLUSTERS);
+    const afterSecond = fs.readdirSync(skillsDir).sort();
+
+    assert.deepStrictEqual(
+      afterSecond,
+      afterFirst,
+      'skills dir contents must be identical after two consecutive applySurface calls (idempotent)'
+    );
+
+    // Double-check the pruned dir is gone after both runs
+    assert.ok(
+      !fs.existsSync(gsdExplore),
+      'gsd-explore/ must remain absent after second applySurface call'
+    );
+
+    // User dir must survive both runs
+    assert.ok(
+      fs.existsSync(userSkill),
+      'my-custom-skill/ must survive both applySurface calls'
+    );
+  });
+
+  test('(e) all-clusters-disabled: all gsd-owned dirs removed; user dirs and user gsd-* dirs survive', (t) => {
+    // Counter-test for Finding 1 (data-loss class) and Finding 3 (missing coverage).
+    //
+    // Disables EVERY cluster so the resolved skill set is empty.
+    // Assertions:
+    //   1. gsd-explore/ — GSD-owned, disabled cluster → REMOVED
+    //   2. gsd-help/    — GSD-owned, disabled cluster → REMOVED
+    //   3. my-custom-skill/ — user-owned, no gsd- prefix → PRESERVED
+    //   4. gsd-mything/ — prefix match but NOT in manifest → PRESERVED (Finding 1 fix)
+    const { configDir, gsdExplore, gsdHelp, userSkill, userGsdDir } =
+      createFixtureWithUserGsdDir();
+    t.after(() => cleanup(configDir));
+
+    const allClusters = Object.keys(CLUSTERS);
+
+    writeSurface(configDir, {
+      baseProfile: 'full',
+      disabledClusters: allClusters,
+      explicitAdds: [],
+      explicitRemoves: [],
+    });
+
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const layout = resolveRuntimeArtifactLayout('claude', configDir, 'global');
+    applySurface(configDir, layout, manifest, CLUSTERS);
+
+    // 1. GSD-owned dirs in now-disabled clusters must be removed.
+    assert.ok(
+      !fs.existsSync(gsdExplore),
+      'gsd-explore/ must be removed when all clusters are disabled'
+    );
+    assert.ok(
+      !fs.existsSync(gsdHelp),
+      'gsd-help/ must be removed when all clusters are disabled'
+    );
+
+    // 2. Non-gsd user dir must be preserved regardless.
+    assert.ok(
+      fs.existsSync(userSkill),
+      'my-custom-skill/ (non-gsd user dir) must survive when all clusters are disabled'
+    );
+
+    // 3. User-created gsd-* dir NOT in the manifest must be preserved.
+    //    This is the critical Finding 1 regression guard: without the manifest-membership
+    //    gate, gsd-mything/ would have been silently deleted.
+    assert.ok(
+      fs.existsSync(userGsdDir),
+      'gsd-mything/ (user-created gsd-* dir not in manifest) must be preserved — ' +
+      'prefix match alone must not trigger deletion (Finding 1 data-loss fix)'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-924-claude-flat-skill-layout.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-924-claude-flat-skill-layout (consolidation epic #1969 B3 #1972)", () => {
+// allow-test-rule: source-text-is-the-product (see #924)
+// Reads installed SKILL.md files from a real install run —
+// testing their on-disk layout tests the deployed contract.
+
+/**
+ * Regression test for bug #924.
+ *
+ * PR #883 accidentally nested concrete gsd-* skills 3 levels deep for the
+ * Claude global install:
+ *
+ *   ~/.claude/skills/gsd-ns-<router>/skills/<stem>/SKILL.md
+ *
+ * Claude Code's skills discovery scans only ONE level under ~/.claude/skills/,
+ * so nested concretes were never listed in the Skill-tool available-skills list.
+ * Direct `Skill(skill="gsd-plan-phase")` calls stopped working.
+ *
+ * Fix: revert Claude to the FLAT layout — concrete skills at the top level:
+ *
+ *   ~/.claude/skills/gsd-<name>/SKILL.md
+ *
+ * The 6 ns-* routers are also top-level entries in the flat layout (they are
+ * concrete skills themselves). No nested skills/ subdirs for Claude.
+ *
+ * Other 6 runtimes (cline, qwen, hermes, augment, trae, antigravity) stay nested.
+ */
+
+'use strict';
+
+process.env.GSD_TEST_MODE = '1';
+
+const { describe, test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+
+const ROOT = path.join(__dirname, '..');
+const COMMANDS_GSD = path.join(ROOT, 'commands', 'gsd');
+
+const { installRuntimeArtifacts } = require('../gsd-core/bin/lib/install-engine.cjs');
+const { cleanup } = require('./helpers.cjs');
+const {
+  loadSkillsManifest,
+  resolveProfile,
+} = require('../gsd-core/bin/lib/install-profiles.cjs');
+const { applySurface } = require('../gsd-core/bin/lib/surface.cjs');
+const { resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+
+const MANIFEST = loadSkillsManifest(COMMANDS_GSD);
+const RESOLVED_FULL = resolveProfile({ modes: ['full'], manifest: MANIFEST });
+
+// ---------------------------------------------------------------------------
+// #924 regression: Claude global install must use FLAT layout
+// ---------------------------------------------------------------------------
+
+describe('bug-924: claude global install uses flat skill layout (concrete skills discoverable)', () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-924-claude-flat-'));
+    installRuntimeArtifacts('claude', tmpDir, 'global', RESOLVED_FULL);
+  });
+
+  after(() => {
+    if (tmpDir) {
+      try { cleanup(tmpDir); } catch { /* best-effort */ }
+    }
+  });
+
+  test('claude global: concrete skills are at the TOP LEVEL of skills/ (flat, directly discoverable)', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+    assert.ok(fs.existsSync(skillsDir), `skills/ dir must exist under ${tmpDir}`);
+
+    const topLevel = fs.readdirSync(skillsDir).filter((n) => n.startsWith('gsd-'));
+
+    // Flat layout must have MANY more than 6 top-level gsd-* entries (concrete skills).
+    // Pre-#924-fix nested layout had exactly 6 (only routers). Flat must have >= 60.
+    assert.ok(
+      topLevel.length >= 60,
+      `Claude global must have >= 60 gsd-* top-level skill dirs (concrete flat layout). ` +
+      `Got ${topLevel.length}: [${topLevel.slice(0, 10).join(', ')}${topLevel.length > 10 ? ', …' : ''}]. ` +
+      'Nested layout detected — #924 regression: Claude must be flat.',
+    );
+  });
+
+  test('claude global: gsd-plan-phase is directly at the top level of skills/', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+    const planPhaseDir = path.join(skillsDir, 'gsd-plan-phase');
+    assert.ok(
+      fs.existsSync(path.join(planPhaseDir, 'SKILL.md')),
+      `skills/gsd-plan-phase/SKILL.md must exist at top level for Claude global install. ` +
+      'Concrete skill buried in nested layout — #924 regression.',
+    );
+  });
+
+  test('claude global: gsd-execute-phase is directly at the top level of skills/', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-execute-phase', 'SKILL.md')),
+      `skills/gsd-execute-phase/SKILL.md must exist at top level for Claude global install.`,
+    );
+  });
+
+  test('claude global: gsd-code-review is directly at the top level of skills/', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-code-review', 'SKILL.md')),
+      `skills/gsd-code-review/SKILL.md must exist at top level for Claude global install.`,
+    );
+  });
+
+  test('claude global: gsd-ns-workflow is at the top level as a concrete skill (no nested skills/ subdir)', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+    const nsWorkflowDir = path.join(skillsDir, 'gsd-ns-workflow');
+    assert.ok(
+      fs.existsSync(path.join(nsWorkflowDir, 'SKILL.md')),
+      `skills/gsd-ns-workflow/SKILL.md must exist at top level (router as concrete skill).`,
+    );
+
+    // In the FLAT layout, gsd-ns-workflow/ must NOT have a skills/ subdir.
+    // A skills/ subdir means nested layout was applied (the #924 regression).
+    assert.ok(
+      !fs.existsSync(path.join(nsWorkflowDir, 'skills')),
+      `skills/gsd-ns-workflow/skills/ must NOT exist in flat layout (nested layout detected — #924 regression).`,
+    );
+  });
+
+  test('claude global: no concrete skill is nested under gsd-ns-*/skills/<stem>/SKILL.md', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+    const topLevel = fs.readdirSync(skillsDir).filter((n) => n.startsWith('gsd-ns-'));
+
+    for (const nsDir of topLevel) {
+      const nestedSkillsDir = path.join(skillsDir, nsDir, 'skills');
+      assert.ok(
+        !fs.existsSync(nestedSkillsDir),
+        `${nsDir}/skills/ must NOT exist in Claude flat layout (#924 regression: nested layout detected).`,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #924 regression: applySurface on Claude must also preserve flat layout
+// (no re-nesting after surface update)
+// ---------------------------------------------------------------------------
+
+describe('bug-924: applySurface on claude preserves flat layout (no re-nesting)', () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-924-surface-'));
+    installRuntimeArtifacts('claude', tmpDir, 'global', RESOLVED_FULL);
+  });
+
+  after(() => {
+    if (tmpDir) {
+      try { cleanup(tmpDir); } catch { /* best-effort */ }
+    }
+  });
+
+  test('claude: applySurface keeps concrete skills at the top level (flat, no re-nesting)', () => {
+    const skillsDir = path.join(tmpDir, 'skills');
+
+    // Sanity: install must produce flat layout (>= 60 top-level gsd-* dirs)
+    const topLevelAfterInstall = fs.readdirSync(skillsDir).filter((n) => n.startsWith('gsd-'));
+    assert.ok(
+      topLevelAfterInstall.length >= 60,
+      `Install must produce flat layout with >= 60 gsd-* dirs. Got ${topLevelAfterInstall.length}.`,
+    );
+
+    // Run applySurface (full surface → full profile)
+    const layout = resolveRuntimeArtifactLayout('claude', tmpDir, 'global');
+    applySurface(tmpDir, layout, MANIFEST);
+
+    // After applySurface: still flat
+    const topLevelAfterSurface = fs.readdirSync(skillsDir).filter((n) => n.startsWith('gsd-'));
+    assert.ok(
+      topLevelAfterSurface.length >= 60,
+      `After applySurface: must still have >= 60 gsd-* top-level dirs (flat). ` +
+      `Got ${topLevelAfterSurface.length}. Re-nesting detected.`,
+    );
+
+    // gsd-plan-phase must remain directly accessible
+    assert.ok(
+      fs.existsSync(path.join(skillsDir, 'gsd-plan-phase', 'SKILL.md')),
+      'After applySurface: gsd-plan-phase/SKILL.md must remain at top level.',
+    );
+  });
+});
+  });
+}

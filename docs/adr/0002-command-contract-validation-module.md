@@ -19,7 +19,7 @@ The command file contract defines what makes a valid `commands/gsd/*.md`:
 
 Before this ADR, the command contract was enforced inconsistently:
 - `tests/enh-2790-skill-consolidation.test.cjs` checked existence and frontmatter of specific post-consolidation commands
-- `tests/bug-3135-capture-backlog-workflow.test.cjs` checked `execution_context` @-ref resolution (added 2026-05-05)
+- `tests/docs-update.test.cjs` (folds former `bug-3135-capture-backlog-workflow`, consolidation epic #1969) checked `execution_context` @-ref resolution (added 2026-05-05)
 - No test checked `allowed-tools` validity, `name:` convention, or `description:` non-emptiness across all commands simultaneously
 
 This meant any PR touching a command file could break the contract without a single test catching it. The `add-backlog.md` gap (#3135) is a concrete example: the workflow file was missing for the full consolidation cycle before a targeted regression test was written.

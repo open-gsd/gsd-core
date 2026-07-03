@@ -608,3 +608,952 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.strictEqual(filter('02-02-build'), true, 'bracket-prefixed phase 2-02 matched');
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2554-decimal-phase-filter.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2554-decimal-phase-filter (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Regression test for bug #2554:
+ * state disk-scan excludes decimal phase dirs (e.g. "00.1") from progress counts.
+ *
+ * Root cause: getMilestonePhaseFilter normalized phase IDs with `replace(/^0+/, '')`,
+ * which over-strips on decimals: "00.1" → ".1", while the disk-side extractor
+ * applied to "00.1-<slug>" yields "0.1" — so the dir is excluded from the milestone.
+ *
+ * Fix: strip leading zeros only when followed by a digit (`replace(/^0+(?=\d)/, '')`),
+ * preserving the zero before the decimal point.
+ */
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { createTempProject, cleanup } = require('./helpers.cjs');
+const { getMilestonePhaseFilter } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+
+describe('bug #2554 — getMilestonePhaseFilter decimal phase dirs', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('matches decimal phase directory like "00.1-<slug>" against ROADMAP phase "00.1"', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '## Roadmap v1.0: Current',
+        '',
+        '### Phase 0: Foundation',
+        '**Goal:** foundation',
+        '',
+        '### Phase 00.1: Inserted urgent work',
+        '**Goal:** inserted',
+        '',
+        '### Phase 1: Feature',
+        '**Goal:** feature',
+      ].join('\n')
+    );
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+
+    // Phase 00.1 inserted between Phase 0 and Phase 1 must match its on-disk dir.
+    assert.strictEqual(
+      filter('00.1-app-namespace-rename'),
+      true,
+      'decimal phase dir "00.1-<slug>" must be counted in the milestone'
+    );
+
+    // Neighbours should still match (no regression).
+    assert.strictEqual(filter('0-foundation'), true);
+    assert.strictEqual(filter('1-feature'), true);
+  });
+
+  test('preserves existing behavior for zero-padded integer phases', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '## Roadmap v1.0: Current',
+        '',
+        '### Phase 01: One',
+        '**Goal:** g',
+        '',
+        '### Phase 10: Ten',
+        '**Goal:** g',
+      ].join('\n')
+    );
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(filter('01-one'), true);
+    assert.strictEqual(filter('10-ten'), true);
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-730-milestone-phase-details-scope.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-730-milestone-phase-details-scope (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Regression test for bug #730: phase details defined under a milestone-scoped
+ * "## Milestone vX.Y — … (Phase Details)" section are invisible to phase
+ * resolution (getRoadmapPhaseInternal / init phase-op) when the flat shared
+ * "## Phase Details" section for an earlier milestone sits between the shared
+ * ## Phases checklist and the per-milestone Phase Details section.
+ *
+ * The bug manifests ONLY before any .planning/phases/ directory exists because
+ * findPhaseInternal masks it once the dir is created. RED step — tests 1 and 3
+ * are expected to fail against current code.
+ */
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { runGsdTools, cleanup } = require('./helpers.cjs');
+
+// ---------------------------------------------------------------------------
+// Shared fixture content
+// ---------------------------------------------------------------------------
+
+const STATE_CONTENT = `---
+milestone: v1.1
+---
+`;
+
+const ROADMAP_CONTENT = `# Roadmap: Example
+
+## Phases
+
+- [x] **Phase 1: Setup** — initial scaffold
+
+### Milestone v1.1 — Second milestone (added 2026-01-01)
+
+- [ ] **Phase 2: Feature** — the new thing
+
+## Phase Details
+
+### Phase 1: Setup
+**Goal:** scaffold the app.
+
+## Milestone v1.1 — Second milestone (Phase Details)
+
+### Phase 2: Feature
+**Goal:** build the new thing.
+`;
+
+// ---------------------------------------------------------------------------
+// Helper: create a bare project with .planning/ but NO .planning/phases/ dir
+// ---------------------------------------------------------------------------
+
+function createBareProject() {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-'));
+  fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+  return tmpDir;
+}
+
+// ---------------------------------------------------------------------------
+// Suite
+// ---------------------------------------------------------------------------
+
+describe('bug #730 — milestone (Phase Details) section scope resolution', () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = createBareProject();
+    fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), STATE_CONTENT, 'utf-8');
+    fs.writeFileSync(path.join(dir, '.planning', 'ROADMAP.md'), ROADMAP_CONTENT, 'utf-8');
+  });
+
+  afterEach(() => {
+    cleanup(dir);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 1 (AC1): init phase-op resolves phase defined only under its
+  // per-milestone "(Phase Details)" section
+  // -------------------------------------------------------------------------
+  test('init phase-op resolves a current-milestone phase defined only under its (Phase Details) section', () => {
+    const r = runGsdTools('init phase-op 2', dir);
+    assert.ok(r.success, `init phase-op 2 failed: ${r.error}`);
+
+    const out = JSON.parse(r.output);
+    assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}, expected_phase_dir=${out.expected_phase_dir}`);
+    assert.strictEqual(out.phase_name, 'Feature', `phase_name should be 'Feature'; got '${out.phase_name}'`);
+    assert.strictEqual(out.padded_phase, '02', `padded_phase should be '02'; got '${out.padded_phase}'`);
+    assert.strictEqual(out.expected_phase_dir, '.planning/phases/02-feature', `expected_phase_dir should be '.planning/phases/02-feature'; got '${out.expected_phase_dir}'`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 2 (AC4): first-milestone phase still resolves via the flat
+  // "## Phase Details" section — no regression
+  // -------------------------------------------------------------------------
+  test('init phase-op still resolves a first-milestone phase (no regression on flat Phase Details)', () => {
+    const r = runGsdTools('init phase-op 1', dir);
+    assert.ok(r.success, `init phase-op 1 failed: ${r.error}`);
+
+    const out = JSON.parse(r.output);
+    assert.strictEqual(out.phase_found, true, `phase_found should be true for phase 1; got ${out.phase_found}`);
+    assert.strictEqual(out.phase_name, 'Setup', `phase_name should be 'Setup'; got '${out.phase_name}'`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 3 (AC5): getRoadmapPhaseInternal resolves the current-milestone phase
+  // directly before any phases/ dir exists
+  // -------------------------------------------------------------------------
+  test('getRoadmapPhaseInternal resolves the current-milestone phase directly before any dir exists', () => {
+    const { getRoadmapPhaseInternal } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+
+    const res = getRoadmapPhaseInternal(dir, '2');
+    assert.ok(res !== null && res !== undefined, `getRoadmapPhaseInternal returned null/undefined for phase 2`);
+    assert.strictEqual(res.found, true, `res.found should be true; got ${JSON.stringify(res)}`);
+    assert.strictEqual(res.phase_name, 'Feature', `res.phase_name should be 'Feature'; got '${res.phase_name}'`);
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 4 (AC3): validate health raises W006 for a current-milestone phase
+  // defined under (Phase Details) with no directory on disk.
+  //
+  // Before the fix, extractCurrentMilestone's slice stopped before the
+  // "## Milestone v1.1 — … (Phase Details)" section, so phase 2's
+  // "### Phase 2: Feature" header was invisible and W006 was never raised.
+  // After the fix the slice includes that section and W006 is emitted.
+  //
+  // This test uses its OWN local fixture (separate tmpdir) so it does not
+  // disturb the shared beforeEach/afterEach fixture used by tests 1–3.
+  // -------------------------------------------------------------------------
+  test('validate health raises W006 for a started current-milestone phase defined under (Phase Details) with no directory', () => {
+    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t4-'));
+    try {
+      const planning = path.join(localDir, '.planning');
+      fs.mkdirSync(planning, { recursive: true });
+
+      // STATE.md — milestone: v1.1
+      fs.writeFileSync(
+        path.join(planning, 'STATE.md'),
+        `---\nmilestone: v1.1\n---\n`,
+        'utf-8',
+      );
+
+      // ROADMAP.md — phase 2 is [x] (started/complete) so the not-started
+      // guard does NOT suppress W006.  Phase 2's details live exclusively in
+      // the per-milestone "(Phase Details)" section (the blind-spot pre-fix).
+      fs.writeFileSync(
+        path.join(planning, 'ROADMAP.md'),
+        `# Roadmap: Example\n\n## Phases\n\n- [x] **Phase 1: Setup** — initial scaffold\n\n### Milestone v1.1 — Second milestone (added 2026-01-01)\n\n- [x] **Phase 2: Feature** — the new thing\n\n## Phase Details\n\n### Phase 1: Setup\n**Goal:** scaffold the app.\n\n## Milestone v1.1 — Second milestone (Phase Details)\n\n### Phase 2: Feature\n**Goal:** build the new thing.\n`,
+        'utf-8',
+      );
+
+      // Create the phase 1 directory so phase 1 does NOT trigger W006.
+      // Phase 2 has NO directory — that's the missing-dir condition under test.
+      fs.mkdirSync(path.join(planning, 'phases', '01-setup'), { recursive: true });
+
+      const result = runGsdTools(['validate', 'health'], localDir);
+      const payload = JSON.parse(result.output);
+      const warnings = payload.warnings || [];
+
+      // Find a W006 entry whose message references phase 2 (by number or name).
+      const w006ForPhase2 = warnings.find(
+        (w) =>
+          w.code === 'W006' &&
+          (/\b2\b/.test(w.message) || /\b02\b/.test(w.message) || /Feature/i.test(w.message)),
+      );
+
+      assert.ok(
+        w006ForPhase2 != null,
+        `Expected a W006 warning referencing phase 2 (Feature) — phase 2 is started ([x]) and has no directory on disk, ` +
+          `but its ### Phase 2: header lives in the Milestone v1.1 (Phase Details) section which was invisible before the fix. ` +
+          `Got warnings: ${JSON.stringify(warnings)}`,
+      );
+    } finally {
+      cleanup(localDir);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 5: three-milestone roadmap, current = latest (v1.2)
+  // -------------------------------------------------------------------------
+  test('init phase-op resolves the latest milestone phase in a 3-milestone roadmap', () => {
+    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t5-'));
+    try {
+      const planning = path.join(localDir, '.planning');
+      fs.mkdirSync(planning, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(planning, 'STATE.md'),
+        `---\nmilestone: v1.2\n---\n`,
+        'utf-8',
+      );
+
+      fs.writeFileSync(
+        path.join(planning, 'ROADMAP.md'),
+        `# Roadmap: Example\n\n## Phases\n\n- [x] **Phase 1: Setup** — done\n\n### Milestone v1.1 — Second (added 2026-01-01)\n\n- [x] **Phase 2: Feature** — done\n\n### Milestone v1.2 — Third (added 2026-02-01)\n\n- [ ] **Phase 3: Polish** — current\n\n## Phase Details\n\n### Phase 1: Setup\n**Goal:** scaffold.\n\n## Milestone v1.1 — Second (Phase Details)\n\n### Phase 2: Feature\n**Goal:** build.\n\n## Milestone v1.2 — Third (Phase Details)\n\n### Phase 3: Polish\n**Goal:** refine.\n`,
+        'utf-8',
+      );
+
+      const r = runGsdTools('init phase-op 3', localDir);
+      assert.ok(r.success, `init phase-op 3 failed: ${r.error}`);
+
+      const out = JSON.parse(r.output);
+      assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}`);
+      assert.strictEqual(out.phase_name, 'Polish', `phase_name should be 'Polish'; got '${out.phase_name}'`);
+      assert.strictEqual(out.padded_phase, '03', `padded_phase should be '03'; got '${out.padded_phase}'`);
+      assert.strictEqual(out.expected_phase_dir, '.planning/phases/03-polish', `expected_phase_dir should be '.planning/phases/03-polish'; got '${out.expected_phase_dir}'`);
+    } finally {
+      cleanup(localDir);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Test 6: sub-milestone sharing a version prefix — closed sibling must NOT
+  // cross-pollinate into the active milestone's Phase Details lookup (#730)
+  // -------------------------------------------------------------------------
+  test('init phase-op anchors Phase Details to the selected sub-milestone, not a closed same-prefix sibling', () => {
+    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t6-'));
+    try {
+      const planning = path.join(localDir, '.planning');
+      fs.mkdirSync(planning, { recursive: true });
+
+      // STATE.md — milestone: v3.0 (matches v3.0-B active slice)
+      fs.writeFileSync(
+        path.join(planning, 'STATE.md'),
+        `---\nmilestone: v3.0\n---\n`,
+        'utf-8',
+      );
+
+      // ROADMAP.md — v3.0-A is SHIPPED (closed), v3.0-B is active.
+      // The Phase Details for v3.0-A comes FIRST — without version-boundary
+      // anchoring the old code would grab it (first non-closed (Phase Details)
+      // heading outside the window), returning phase_name='Alpha' instead of 'Beta'.
+      fs.writeFileSync(
+        path.join(planning, 'ROADMAP.md'),
+        [
+          '# Roadmap: Example',
+          '',
+          '## Phases',
+          '',
+          '### Milestone v3.0-A — First slice (added 2026-01-01) ✅ SHIPPED',
+          '',
+          '- [x] **Phase 1: Alpha** — done',
+          '',
+          '### Milestone v3.0-B — Second slice (added 2026-02-01)',
+          '',
+          '- [ ] **Phase 2: Beta** — current',
+          '',
+          '## Phase Details',
+          '',
+          '## Milestone v3.0-A — First slice (Phase Details)',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal:** alpha goal.',
+          '',
+          '## Milestone v3.0-B — Second slice (Phase Details)',
+          '',
+          '### Phase 2: Beta',
+          '**Goal:** beta goal.',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const r = runGsdTools('init phase-op 2', localDir);
+      assert.ok(r.success, `init phase-op 2 failed: ${r.error}`);
+
+      const out = JSON.parse(r.output);
+      assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}, output=${JSON.stringify(out)}`);
+      assert.strictEqual(out.phase_name, 'Beta', `phase_name should be 'Beta' (v3.0-B section), not '${out.phase_name}' (would indicate v3.0-A cross-pollination)`);
+      assert.strictEqual(out.expected_phase_dir, '.planning/phases/02-beta', `expected_phase_dir should be '.planning/phases/02-beta'; got '${out.expected_phase_dir}'`);
+    } finally {
+      cleanup(localDir);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3128-roadmap-plan-count-slug-layout.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3128-roadmap-plan-count-slug-layout (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+// allow-test-rule: reads roadmap.cjs source to verify isPlanFile pattern was adopted — structural contract prevents silent regression to old filter (see #3128)
+
+// Regression guard for bug #3128.
+//
+// roadmap.cjs countPhasePlansAndSummaries() used to filter plan files with:
+//   f.endsWith('-PLAN.md') || f === 'PLAN.md'
+// This misses the {N}-PLAN-{NN}-{slug}.md layout that gsd-plan-phase
+// actually writes (e.g. 5-PLAN-01-setup-database.md), ending in -database.md.
+// Result: init manager returned plan_count=0 and disk_status='discussed' for
+// fully-planned phases, triggering unnecessary background planner agents.
+//
+// Root cause: same regex flaw as #2893 (fixed in phase.cjs via #2896), but
+// the manager-dashboard path in roadmap.cjs was not updated alongside it.
+//
+// Fix: apply the same looksLikePlanFile logic from phase.cjs to roadmap.cjs.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+// Require the module under test directly
+const roadmapLib = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'roadmap.cjs');
+const planScanLib = path.join(ROOT, 'gsd-core', 'bin', 'lib', 'plan-scan.cjs');
+
+// We test countPhasePlansAndSummaries indirectly via getManagerInfo since
+// it is not exported. We build a real phaseDir on disk and call the full
+// roadmap.cjs init manager path via its exported helper, or fall back to
+// direct filesystem inspection of what the filter would produce.
+// The simplest correct seam: inspect the source for the regex pattern and
+// validate with a synthetic directory that the manager path returns correct counts.
+
+
+// Import countPhasePlansAndSummaries by monkey-patching: we inline the
+// fixed filter logic and verify it matches the file on disk.
+// Since the function is module-private, we validate via its public caller
+// by using the exported analyzeRoadmap / getPhaseInfo path with a
+// synthetic .planning/ directory tree.
+
+describe('bug #3128: roadmap.cjs plan-count for {N}-PLAN-{NN}-{slug}.md layout', () => {
+
+  test('isPlanFile rejects PLAN-OUTLINE and pre-bounce derivatives', () => {
+    // Inlined from fix — mirrors the exact logic in the fix
+    const PLAN_OUTLINE_RE = /-PLAN-OUTLINE\.md$/i;
+    const PLAN_PRE_BOUNCE_RE = /-PLAN.*\.pre-bounce\.md$/i;
+    const isPlanFile = (f) =>
+      (f.endsWith('-PLAN.md') || f === 'PLAN.md') ||
+      (/\.md$/i.test(f) && /PLAN/i.test(f) && !PLAN_OUTLINE_RE.test(f) && !PLAN_PRE_BOUNCE_RE.test(f));
+
+    // canonical forms — must match
+    assert.ok(isPlanFile('PLAN.md'),              'PLAN.md must match');
+    assert.ok(isPlanFile('5-PLAN.md'),            '5-PLAN.md must match');
+    assert.ok(isPlanFile('05-PLAN.md'),           '05-PLAN.md must match');
+
+    // slug form — was the bug; must now match
+    assert.ok(isPlanFile('5-PLAN-01-setup.md'),          '5-PLAN-01-setup.md must match');
+    assert.ok(isPlanFile('05-PLAN-02-database.md'),       '05-PLAN-02-database.md must match');
+    assert.ok(isPlanFile('5-PLAN-DELTA-2026-05-05.md'),  '5-PLAN-DELTA-2026-05-05.md must match');
+
+    // derivative files — must NOT match
+    assert.ok(!isPlanFile('5-PLAN-OUTLINE.md'),             'PLAN-OUTLINE must not match');
+    assert.ok(!isPlanFile('5-PLAN-01.pre-bounce.md'),       'pre-bounce must not match');
+    assert.ok(!isPlanFile('CONTEXT.md'),                    'CONTEXT.md must not match');
+    assert.ok(!isPlanFile('SUMMARY.md'),                    'SUMMARY.md must not match');
+    assert.ok(!isPlanFile('5-RESEARCH.md'),                 'RESEARCH.md must not match');
+  });
+
+  test('roadmap.cjs source uses the extended isPlanFile filter', () => {
+    const roadmapSrc = fs.readFileSync(roadmapLib, 'utf8');
+    // Verify the fix is in place: the old simple inline filter is gone from roadmap.cjs
+    assert.ok(
+      !roadmapSrc.includes("phaseFiles.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md')"),
+      'Old simple plan filter still present in roadmap.cjs — fix not applied',
+    );
+    // roadmap.cjs now delegates to plan-scan.cjs via require('./plan-scan.cjs')
+    assert.ok(
+      roadmapSrc.includes('plan-scan.cjs'),
+      'roadmap.cjs does not require plan-scan.cjs — delegation not applied',
+    );
+    // plan-scan.cjs is where the extended plan-file detection logic lives (isRootPlanFile)
+    const planScanSrc = fs.readFileSync(planScanLib, 'utf8');
+    assert.ok(
+      planScanSrc.includes('isRootPlanFile') && planScanSrc.includes('/PLAN/i'),
+      'isRootPlanFile with /PLAN/i not found in plan-scan.cjs — canonical helper missing extended filter',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-500-planned-phase-progress-corruption.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-500-planned-phase-progress-corruption (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Bug #500: `state planned-phase` corrupts STATE.md milestone progress.* counters.
+ *
+ * Two independent defects:
+ *
+ * RC1 — plan-phase resyncs progress it should not touch.
+ *   cmdStatePlannedPhase wrote via writeStateMd, which unconditionally runs
+ *   syncStateFrontmatter and rebuilds progress.* from a half-planned disk
+ *   snapshot, trampling curated counters. It must route through
+ *   readModifyWriteStateMd(..., { resync: false }) like other body-only writes.
+ *
+ * RC2 — isRootPlanFile double-counts legacy `<N>-PLAN-<NN>-SUMMARY.md` as a plan.
+ *   The final `/PLAN/i` fallback matches the substring "PLAN" inside a legacy
+ *   summary name, so a 4-plan/4-summary phase scans as planCount:8 / completed:false
+ *   instead of planCount:4 / completed:true. A summary is never a plan.
+ */
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const planScan = require('../gsd-core/bin/lib/plan-scan.cjs');
+const { isRootPlanFile, scanPhasePlans } = planScan;
+
+describe('isRootPlanFile does not count legacy summaries as plans (#500 RC2)', () => {
+  test('legacy <N>-PLAN-<NN>-SUMMARY.md is not a root plan file', () => {
+    assert.equal(isRootPlanFile('14-PLAN-01-SUMMARY.md'), false);
+  });
+
+  test('legacy <N>-PLAN-<NN>.md is still a root plan file', () => {
+    assert.equal(isRootPlanFile('14-PLAN-01.md'), true);
+  });
+
+  test('canonical -PLAN.md is still a root plan file', () => {
+    assert.equal(isRootPlanFile('01-PLAN.md'), true);
+  });
+
+  test('a 4-plan / 4-summary legacy phase scans as planCount:4 completed:true', () => {
+    const tmp = createTempProject();
+    const phaseDir = path.join(tmp, '.planning', 'phases', '14-legacy');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    for (let i = 1; i <= 4; i++) {
+      const nn = String(i).padStart(2, '0');
+      fs.writeFileSync(path.join(phaseDir, `14-PLAN-${nn}.md`), '# Plan\n', 'utf-8');
+      fs.writeFileSync(path.join(phaseDir, `14-PLAN-${nn}-SUMMARY.md`), '# Summary\n', 'utf-8');
+    }
+    try {
+      const scan = scanPhasePlans(phaseDir);
+      assert.equal(scan.planCount, 4, `expected 4 plans, got ${scan.planCount}`);
+      assert.equal(scan.summaryCount, 4, `expected 4 summaries, got ${scan.summaryCount}`);
+      assert.equal(scan.completed, true, 'a fully-summarized phase must scan as completed');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});
+
+describe('state planned-phase preserves curated milestone progress.* (#500 RC1)', () => {
+  let tmpDir;
+
+  // Curated progress counters that deliberately do NOT match what a disk scan
+  // would derive (disk has only one near-empty phase dir). The bug rebuilds
+  // progress.* from that disk snapshot, trampling these values.
+  const STATE = `---
+gsd_state_version: 1.0
+milestone: v3.0
+milestone_name: Active
+status: in_progress
+progress:
+  total_phases: 7
+  completed_phases: 5
+  total_plans: 99
+  completed_plans: 88
+  percent: 88
+---
+
+# Project State
+
+## Configuration
+Current Phase: 2
+Current Phase Name: builder
+Total Plans in Phase: 0
+Status: Not started
+Last Activity: TBD
+Last Activity Description: pending
+
+## Current Position
+
+Phase: 2 (builder)
+Status: Not started
+Last activity: TBD
+`;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'STATE.md'), STATE, 'utf-8');
+    fs.writeFileSync(
+      path.join(planning, 'ROADMAP.md'),
+      '# Roadmap\n\n## 🚧 v3.0: Active\n\n### Phase 2: builder\n',
+      'utf-8'
+    );
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+    // One sparse phase dir so a disk resync would derive small/zero counters.
+    const dir = path.join(planning, 'phases', '02-builder');
+    fs.mkdirSync(dir, { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function readProgress() {
+    const md = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const block = md.split('---')[1] || '';
+    const num = (key) => {
+      const m = block.match(new RegExp(`${key}:\\s*(\\d+)`));
+      return m ? Number(m[1]) : null;
+    };
+    return {
+      total_plans: num('total_plans'),
+      completed_plans: num('completed_plans'),
+      total_phases: num('total_phases'),
+      completed_phases: num('completed_phases'),
+    };
+  }
+
+  test('planned-phase updates per-phase body fields but leaves milestone progress.* untouched', () => {
+    const result = runGsdTools(['state', 'planned-phase', '--phase', '2', '--plans', '3'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    // The command did its real job: per-phase "Total Plans in Phase" was set.
+    const md = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.match(md, /Total Plans in Phase:\s*3/, 'per-phase Total Plans in Phase should be updated to 3');
+
+    // ...but the curated milestone-wide progress block is preserved verbatim.
+    assert.deepEqual(readProgress(), {
+      total_plans: 99,
+      completed_plans: 88,
+      total_phases: 7,
+      completed_phases: 5,
+    }, 'curated milestone progress.* must survive a planned-phase write');
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-3262-scan-phase-plans.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-3262-scan-phase-plans (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Tests for the shared scanPhasePlans() helper (k014).
+ *
+ * Covers:
+ *   - Top-level plans only (flat layout)
+ *   - Top-level + nested layout (post-#3139)
+ *   - Completed-summary detection (summaries >= plans)
+ *   - Ignored files (OUTLINE, pre-bounce, CONTEXT, RESEARCH)
+ *   - Empty phase dir → { planCount: 0, summaryCount: 0 }
+ *   - Parity: helper produces correct counts for mixed flat+nested fixture tree
+ */
+
+'use strict';
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { cleanup } = require('./helpers.cjs');
+
+// Helper under test — must exist at this path (GREEN phase wires it up)
+const scanPhasePlans = require('../gsd-core/bin/lib/plan-scan.cjs');
+
+// ---------------------------------------------------------------------------
+// Fixture helpers
+// ---------------------------------------------------------------------------
+
+let tmpDir;
+
+function phaseDir(name = 'phase') {
+  const d = path.join(tmpDir, name);
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+
+function touch(dir, ...filenames) {
+  for (const f of filenames) {
+    fs.writeFileSync(path.join(dir, f), '');
+  }
+}
+
+beforeEach(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-plan-scan-'));
+});
+
+afterEach(() => {
+  cleanup(tmpDir);
+});
+
+// ---------------------------------------------------------------------------
+// Basic shapes
+// ---------------------------------------------------------------------------
+
+describe('scanPhasePlans — flat layout', () => {
+  test('empty directory → zero counts', () => {
+    const dir = phaseDir();
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 0, 'planCount');
+    assert.strictEqual(result.summaryCount, 0, 'summaryCount');
+  });
+
+  test('bare PLAN.md counts as one plan', () => {
+    const dir = phaseDir();
+    touch(dir, 'PLAN.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'planCount');
+    assert.strictEqual(result.summaryCount, 0, 'summaryCount');
+  });
+
+  test('canonical padded plan file (01-01-PLAN.md)', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'planCount');
+  });
+
+  test('canonical padded plan + matching summary → completed', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md', '01-01-SUMMARY.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1);
+    assert.strictEqual(result.summaryCount, 1);
+    assert.strictEqual(result.completed, true, 'phase should be complete when summaries >= plans');
+  });
+
+  test('plan without summary → not completed', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.completed, false);
+  });
+
+  test('multiple plans all summarized → completed', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md', '01-02-PLAN.md', '01-01-SUMMARY.md', '01-02-SUMMARY.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2);
+    assert.strictEqual(result.summaryCount, 2);
+    assert.strictEqual(result.completed, true);
+  });
+
+  test('bare SUMMARY.md counts as one summary', () => {
+    const dir = phaseDir();
+    touch(dir, 'PLAN.md', 'SUMMARY.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1);
+    assert.strictEqual(result.summaryCount, 1);
+  });
+
+  test('extended-layout root file (5-PLAN-01-setup.md style)', () => {
+    // roadmap.cjs isPlanFile explicitly matches any .md with PLAN in name at root
+    // (not just ending with -PLAN.md). The canonical helper must too.
+    // e.g. gsd-plan-phase writes "5-PLAN-01-setup.md".
+    const dir = phaseDir();
+    // The summary for this file follows the canonical *-SUMMARY.md suffix convention.
+    touch(dir, '3-PLAN-01-setup.md', '3-01-SUMMARY.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'extended-layout root plan counted');
+    assert.strictEqual(result.summaryCount, 1, 'extended-layout root summary counted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ignored files
+// ---------------------------------------------------------------------------
+
+describe('scanPhasePlans — ignored files', () => {
+  test('PLAN-OUTLINE file is ignored (flat)', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md', '01-01-PLAN-OUTLINE.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'OUTLINE should not count as a plan');
+  });
+
+  test('pre-bounce file is ignored (flat)', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md', '01-01-PLAN.pre-bounce.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'pre-bounce should not count as a plan');
+  });
+
+  test('CONTEXT.md is not counted as a plan', () => {
+    const dir = phaseDir();
+    touch(dir, 'PLAN.md', 'CONTEXT.md', '01-01-CONTEXT.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'CONTEXT files should not be plans');
+  });
+
+  test('RESEARCH.md is not counted as a plan', () => {
+    const dir = phaseDir();
+    touch(dir, 'PLAN.md', 'RESEARCH.md', '01-01-RESEARCH.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'RESEARCH files should not be plans');
+  });
+
+  test('VERIFICATION.md is not counted as a plan', () => {
+    const dir = phaseDir();
+    touch(dir, 'PLAN.md', 'VERIFICATION.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'VERIFICATION files should not be plans');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nested layout (post-#3139)
+// ---------------------------------------------------------------------------
+
+describe('scanPhasePlans — nested layout', () => {
+  test('nested PLAN-NN-slug.md files counted', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-setup.md', 'PLAN-02-impl.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'nested plans counted');
+    assert.strictEqual(result.hasNestedPlans, true, 'hasNestedPlans flag set');
+  });
+
+  test('nested SUMMARY-NN-slug.md files counted', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-setup.md', 'SUMMARY-01-setup.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1);
+    assert.strictEqual(result.summaryCount, 1);
+    assert.strictEqual(result.completed, true);
+    assert.deepStrictEqual(result.planFiles, ['plans/PLAN-01-setup.md']);
+    assert.deepStrictEqual(result.summaryFiles, ['plans/SUMMARY-01-setup.md']);
+  });
+
+  test('flat root + nested plans combined', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    // root: 1 plan, 1 summary
+    touch(dir, '01-01-PLAN.md', '01-01-SUMMARY.md');
+    // nested: 2 plans, 1 summary
+    touch(plansDir, 'PLAN-01-setup.md', 'PLAN-02-impl.md', 'SUMMARY-01-setup.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 3, 'root + nested plans');
+    assert.strictEqual(result.summaryCount, 2, 'root + nested summaries');
+    assert.strictEqual(result.completed, false, 'not all plans have summaries');
+  });
+
+  test('hasNestedPlans is false when plans/ directory absent', () => {
+    const dir = phaseDir();
+    touch(dir, 'PLAN.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.hasNestedPlans, false);
+  });
+
+  test('nested OUTLINE files are ignored', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-setup.md', 'PLAN-01-OUTLINE.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'OUTLINE excluded in nested');
+  });
+
+  test('nested pre-bounce files are ignored', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-setup.md', 'PLAN-01.pre-bounce.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'pre-bounce excluded in nested');
+  });
+
+  test('plans/ that is not readable as directory does not throw', () => {
+    const dir = phaseDir();
+    // Create plans/ as a file (unreadable as directory)
+    fs.writeFileSync(path.join(dir, 'plans'), 'not-a-directory');
+    touch(dir, 'PLAN.md');
+    // Should not throw
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1);
+    assert.strictEqual(result.hasNestedPlans, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parity: helper output shape and mixed fixture
+// ---------------------------------------------------------------------------
+
+describe('scanPhasePlans — call-site parity on mixed fixture', () => {
+  // Build a fixture tree that exercises both flat and nested layout:
+  // 01-foundation/
+  //   01-01-PLAN.md
+  //   01-01-SUMMARY.md
+  //   01-01-PLAN-OUTLINE.md   (should be ignored)
+  //   01-02-PLAN.md
+  //   plans/
+  //     PLAN-01-setup.md
+  //     SUMMARY-01-setup.md
+
+  function buildMixedPhase() {
+    const dir = phaseDir('01-foundation');
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(dir, '01-01-PLAN.md', '01-01-SUMMARY.md', '01-01-PLAN-OUTLINE.md', '01-02-PLAN.md');
+    touch(plansDir, 'PLAN-01-setup.md', 'SUMMARY-01-setup.md');
+    return dir;
+  }
+
+  test('scanPhasePlans() counts match expected values for mixed fixture', () => {
+    const dir = buildMixedPhase();
+    const result = scanPhasePlans(dir);
+    // flat: 01-01-PLAN.md + 01-02-PLAN.md = 2 (OUTLINE ignored)
+    // nested: PLAN-01-setup.md = 1
+    assert.strictEqual(result.planCount, 3, 'planCount should be 3');
+    // flat: 01-01-SUMMARY.md = 1; nested: SUMMARY-01-setup.md = 1
+    assert.strictEqual(result.summaryCount, 2, 'summaryCount should be 2');
+    assert.strictEqual(result.completed, false, 'not all plans have summaries');
+    assert.strictEqual(result.hasNestedPlans, true, 'nested layout present');
+  });
+
+  test('scanPhasePlans() output shape has required fields', () => {
+    const dir = buildMixedPhase();
+    const result = scanPhasePlans(dir);
+    assert.ok('planCount' in result, 'planCount field present');
+    assert.ok('summaryCount' in result, 'summaryCount field present');
+    assert.ok('completed' in result, 'completed field present');
+    assert.ok('hasNestedPlans' in result, 'hasNestedPlans field present');
+    assert.ok('planFiles' in result, 'planFiles field present');
+    assert.ok('summaryFiles' in result, 'summaryFiles field present');
+    assert.ok(Array.isArray(result.planFiles), 'planFiles is array');
+    assert.ok(Array.isArray(result.summaryFiles), 'summaryFiles is array');
+  });
+
+  test('parity baseline: 2 flat + 1 nested plans across all call sites', () => {
+    // This test documents the exact expected counts for a representative fixture.
+    // After the GREEN phase ports roadmap.cjs/state.cjs/init.cjs to use
+    // scanPhasePlans, those call sites delegate here and this assertion is
+    // the single contract all of them must satisfy.
+    const dir = phaseDir('02-api');
+    touch(dir, '02-01-PLAN.md', '02-02-PLAN.md', '02-01-SUMMARY.md');
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-impl.md', 'SUMMARY-01-impl.md');
+
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 3, 'helper: 2 flat + 1 nested');
+    assert.strictEqual(result.summaryCount, 2, 'helper: 1 flat + 1 nested');
+    assert.strictEqual(result.completed, false, '2 summaries < 3 plans');
+    assert.strictEqual(result.hasNestedPlans, true, 'plans/ dir exists with plans');
+  });
+});
+  });
+}

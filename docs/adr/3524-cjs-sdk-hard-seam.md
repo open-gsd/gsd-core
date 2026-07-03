@@ -192,7 +192,7 @@ No new behavioral fix is required — the generator pattern extension is the del
 - `extractTopLevelFunction()` (new in `gen-validate.mjs`) — brace-balanced parser for top-level
   named function declarations. Used for `canonicalPlanStem`.
 
-**Parity tests:** `tests/26-w005-w006-i001-cjs-drift-regression.test.cjs` — 7 tests.
+**Parity tests:** `tests/health-validation.test.cjs` (folds former `26-w005-w006-i001-cjs-drift-regression`, consolidation epic #1969) — 7 tests.
 - W005: no false positive for `999.1-foo`; W005 still fires for single-digit prefix.
 - W006-archived: no false W006 for phase archived under `milestones/v1.0-phases/`; unit tests
   for `MILESTONE_ARCHIVE_DIR_RE` and `PHASE_TOKEN_FROM_DIR_RE` export and behavior.

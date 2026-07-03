@@ -1,32 +1,18 @@
 {
   "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
-    "audit": {
-      "files": [
-        "audit-command-cutover.test.cjs",
-        "audit-fix-command.test.cjs",
-        "bug-2836-audit-open-summary-uat-drift.test.cjs"
-      ],
-      "issue": "192"
-    },
     "config": {
       "files": [
-        "bug-2943-config-get-context-window-default.test.cjs",
-        "bug-321-config-defaults-clone-strategy.test.cjs",
-        "bug-3227-config-set-model-overrides.test.cjs",
         "config-field-docs.test.cjs",
         "config-get-default.test.cjs",
         "config-schema.property.test.cjs",
-        "config.test.cjs",
-        "enh-1055-config-intent-descriptor-drive.test.cjs",
-        "fix-1628-config-set-validation.test.cjs"
+        "config.test.cjs"
       ],
       "issue": "TBD"
     },
     "graphify": {
       "files": [
         "bug-622-graphify-optional-graph-html.test.cjs",
-        "bug-974-graphify-budget-missing-value.test.cjs",
         "graphify-auto-update.slow.test.cjs",
         "graphify-command-cutover.test.cjs",
         "graphify-query.test.cjs",
@@ -46,7 +32,6 @@
     },
     "milestone": {
       "files": [
-        "bug-730-milestone-phase-details-scope.test.cjs",
         "milestone-archive.test.cjs",
         "milestone-helper.test.cjs",
         "milestone-prefixed-convention.test.cjs",
@@ -65,7 +50,6 @@
     },
     "roadmap": {
       "files": [
-        "bug-3128-roadmap-plan-count-slug-layout.test.cjs",
         "roadmap-mode-field.test.cjs",
         "roadmap-phase-fallback.test.cjs",
         "roadmap.test.cjs"
@@ -91,10 +75,7 @@
     },
     "state": {
       "files": [
-        "bug-1695-state-patch-clobbers-phase-name.test.cjs",
         "bug-21-state-md-template-frontmatter.test.cjs",
-        "bug-3127-state-begin-phase-idempotent.test.cjs",
-        "bug-3242-state-update-progress-trample.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
         "state-rebuild-cli.test.cjs",
@@ -120,7 +101,6 @@
     },
     "install": {
       "files": [
-        "enh-1082-install-plan-capstone.test.cjs",
         "install-minimal-hooks.test.cjs",
         "install-nested-layout.test.cjs",
         "install-path-detection.test.cjs",
@@ -131,14 +111,6 @@
         "install.test.cjs"
       ],
       "issue": "1679"
-    },
-    "validate": {
-      "files": [
-        "bug-3129-validate-commit-git-bypass.test.cjs",
-        "bug-892-validate-checklist-roadmap-phases.test.cjs",
-        "validate-context.test.cjs"
-      ],
-      "issue": "892"
     },
     "edge-probe": {
       "files": [

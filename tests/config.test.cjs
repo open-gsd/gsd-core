@@ -2044,3 +2044,660 @@ describe('feat-3210 / H5: enum validation for code_quality.fallow.scope and .pro
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3212-execute-phase-stall-safe-resume.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3212-execute-phase-stall-safe-resume (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-product [#3212]
+// The bug is in workflow/config contracts consumed by agents at runtime.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { cleanup } = require('./helpers.cjs');
+
+const ROOT = path.join(__dirname, '..');
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
+}
+
+function runGsd(args, cwd) {
+  return spawnSync(process.execPath, [path.join(ROOT, 'gsd-core/bin/gsd-tools.cjs'), ...args], {
+    cwd,
+    encoding: 'utf8',
+  });
+}
+
+describe('bug #3212 execute-phase stall detection and safe resume', () => {
+  test('config schemas register executor stall detector keys', () => {
+    // After Cycle 5 (#3536), both CJS and SDK source from the manifest.
+    // Use the CJS runtime Set for CJS; use the manifest directly for SDK-side
+    // verification (since config-schema.ts no longer has inline literals).
+    const { VALID_CONFIG_KEYS: cjsKeys } = require('../gsd-core/bin/lib/config-schema.cjs');
+    const manifest = JSON.parse(read('gsd-core/bin/shared/config-schema.manifest.json'));
+    const manifestKeys = new Set(manifest.validKeys);
+
+    for (const key of ['executor.stall_detect_interval_minutes', 'executor.stall_threshold_minutes']) {
+      assert.ok(cjsKeys.has(key), `CJS VALID_CONFIG_KEYS must include ${key}`);
+      assert.ok(manifestKeys.has(key), `Manifest validKeys must include ${key} (SDK sources from manifest)`);
+    }
+  });
+
+  test('configuration docs describe stall detector defaults', () => {
+    const docs = read('docs/CONFIGURATION.md');
+
+    assert.match(docs, /`executor\.stall_detect_interval_minutes`\s*\|\s*number\s*\|\s*`5`/);
+    assert.match(docs, /`executor\.stall_threshold_minutes`\s*\|\s*number\s*\|\s*`10`/);
+  });
+
+  test('config-get returns schema defaults for executor stall detector keys', (t) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3212-'));
+    t.after(() => cleanup(tmp));
+    fs.mkdirSync(path.join(tmp, '.planning'));
+    fs.writeFileSync(path.join(tmp, '.planning/config.json'), '{}\n');
+
+    const interval = runGsd(['config-get', 'executor.stall_detect_interval_minutes', '--raw'], tmp);
+    const threshold = runGsd(['config-get', 'executor.stall_threshold_minutes', '--raw'], tmp);
+
+    assert.equal(interval.status, 0, interval.stderr);
+    assert.equal(interval.stdout.trim(), '5');
+    assert.equal(threshold.status, 0, threshold.stderr);
+    assert.equal(threshold.stdout.trim(), '10');
+  });
+
+  test('execute-phase verifies partial-plan drift before dispatch', () => {
+    const workflow = read('gsd-core/workflows/execute-phase.md');
+
+    assert.match(workflow, /<step name="safe_resume_gate"/, 'execute-phase must define a safe_resume_gate step');
+    assert.match(workflow, /git log --oneline --grep="\$\{CURRENT_PLAN_ID\}"/, 'safe resume gate must check commits for the current plan id');
+    assert.match(workflow, /SUMMARY.md is missing/, 'safe resume gate must detect production commits with missing SUMMARY.md');
+    assert.match(workflow, /close out manually/, 'safe resume gate must offer manual close-out recovery');
+    assert.match(workflow, /re-execute from scratch/, 'safe resume gate must offer re-execute recovery');
+    assert.match(workflow, /mark-and-skip/, 'safe resume gate must offer mark-and-skip recovery');
+  });
+
+  test('execute-phase has configurable executor stall surveillance after dispatch', () => {
+    const workflow = read('gsd-core/workflows/execute-phase.md');
+
+    assert.match(workflow, /EXECUTOR_STALL_INTERVAL_MINUTES=.*executor\.stall_detect_interval_minutes/);
+    assert.match(workflow, /EXECUTOR_STALL_THRESHOLD_MINUTES=.*executor\.stall_threshold_minutes/);
+    assert.match(workflow, /DISPATCH_TS=/, 'execute-phase must record dispatch timestamp');
+    assert.match(workflow, /EXPECTED_BRANCH=/, 'execute-phase must record expected branch');
+    assert.match(workflow, /git log "\$\{EXPECTED_BRANCH\}" --since="\$\{DISPATCH_TS\}"/, 'stall check must inspect branch commits since dispatch');
+    assert.match(workflow, /continue waiting/, 'stall warning must offer continue waiting');
+    assert.match(workflow, /kill and retry/, 'stall warning must offer kill and retry');
+    assert.match(workflow, /kill and switch to inline execution/, 'stall warning must offer inline fallback');
+  });
+
+  test('execute-plan documents atomic close-out invariant', () => {
+    const workflow = read('gsd-core/workflows/execute-plan.md');
+
+    assert.match(workflow, /<atomic_close_out_invariant>/, 'execute-plan must contain a formal atomic close-out invariant');
+    assert.match(workflow, /production-code commit\(s\) -> SUMMARY commit -> STATE\/ROADMAP update/, 'invariant must name the legal close-out sequence');
+    assert.match(workflow, /only legal half-state is mid-production-commits/, 'invariant must define the only legal half-state');
+  });
+
+  test('forensics includes the partial-plan drift detector', () => {
+    const workflow = read('gsd-core/workflows/forensics.md');
+
+    assert.match(workflow, /Partial-plan Drift Detection/);
+    assert.match(workflow, /commits exist but SUMMARY.md is missing/);
+    assert.match(workflow, /safe-resume verifier/);
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3227-config-set-model-overrides.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3227-config-set-model-overrides (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * Regression test for bug #3227 — config-set rejects model_overrides.<agent-id>.
+ *
+ * `gsd-sdk query config-set model_overrides.gsd-plan-checker opus` was
+ * rejected with "Unknown config key" because `model_overrides.<agent-id>` was
+ * missing from DYNAMIC_KEY_PATTERNS in both the CJS schema and the SDK schema.
+ *
+ * The override mechanism itself worked correctly (resolve-model returned the
+ * override after a direct file edit). Only the write path was gated wrong.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+const { DYNAMIC_KEY_PATTERNS, isValidConfigKey } = require('../gsd-core/bin/lib/config-schema.cjs');
+
+describe('#3227 — config-set accepts model_overrides.<agent-id>', () => {
+  test('isValidConfigKey accepts model_overrides.gsd-plan-checker', () => {
+    assert.ok(
+      isValidConfigKey('model_overrides.gsd-plan-checker'),
+      'model_overrides.gsd-plan-checker must be accepted by isValidConfigKey'
+    );
+  });
+
+  test('isValidConfigKey accepts model_overrides with various agent-id formats', () => {
+    const validKeys = [
+      'model_overrides.gsd-executor',
+      'model_overrides.gsd-planner',
+      'model_overrides.gsd-codebase-mapper',
+      'model_overrides.my_custom_agent',
+      'model_overrides.agent123',
+    ];
+    for (const key of validKeys) {
+      assert.ok(isValidConfigKey(key), `isValidConfigKey must accept ${key}`);
+    }
+  });
+
+  test('isValidConfigKey rejects bare model_overrides (no agent-id)', () => {
+    assert.ok(
+      !isValidConfigKey('model_overrides'),
+      'bare model_overrides must be rejected (use model_overrides.<agent-id>)'
+    );
+  });
+
+  test('DYNAMIC_KEY_PATTERNS includes an entry for model_overrides', () => {
+    const hasPattern = DYNAMIC_KEY_PATTERNS.some(
+      (p) => p.description && p.description.includes('model_overrides')
+    );
+    assert.ok(hasPattern, 'DYNAMIC_KEY_PATTERNS must have an entry covering model_overrides.<agent-id>');
+  });
+
+  test('config-set model_overrides.gsd-plan-checker opus succeeds via gsd-tools.cjs', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    const result = runGsdTools(
+      ['config-set', 'model_overrides.gsd-plan-checker', 'opus'],
+      tmpDir
+    );
+    assert.ok(
+      result.success,
+      [
+        'config-set model_overrides.gsd-plan-checker opus should succeed,',
+        'got:',
+        'stdout: ' + result.output,
+        'stderr: ' + result.error,
+      ].join('\n')
+    );
+  });
+
+  test('config-set model_overrides.gsd-plan-checker opus writes to config.json', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    runGsdTools(['config-set', 'model_overrides.gsd-plan-checker', 'opus'], tmpDir);
+
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    assert.ok(fs.existsSync(configPath), '.planning/config.json must exist after config-set');
+
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.ok(
+      config.model_overrides !== undefined &&
+        config.model_overrides['gsd-plan-checker'] === 'opus',
+      [
+        'Expected model_overrides["gsd-plan-checker"]: "opus" in config.json,',
+        'got: ' + JSON.stringify(config),
+      ].join('\n')
+    );
+  });
+
+  test('config-get model_overrides.gsd-plan-checker returns opus after config-set', (t) => {
+    const tmpDir = createTempProject();
+    t.after(() => cleanup(tmpDir));
+
+    runGsdTools(['config-set', 'model_overrides.gsd-plan-checker', 'opus'], tmpDir);
+
+    const getResult = runGsdTools(
+      ['config-get', 'model_overrides.gsd-plan-checker'],
+      tmpDir
+    );
+    assert.ok(
+      getResult.success,
+      [
+        'config-get model_overrides.gsd-plan-checker should succeed,',
+        'got:',
+        'stdout: ' + getResult.output,
+        'stderr: ' + getResult.error,
+      ].join('\n')
+    );
+    assert.ok(
+      getResult.output.includes('opus'),
+      'config-get output should contain "opus", got: ' + getResult.output
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-1452-context-guard-mode.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-1452-context-guard-mode (consolidation epic #1969 B3 #1972)", () => {
+// allow-test-rule: source-text-is-the-product see #1452
+// The execute-phase.md workflow and context-budget.md reference ARE the runtime
+// contract loaded by AI runtimes. Asserting that the canonical wording for
+// `workflow.context_guard_mode` is present in those files is the only way to
+// verify runtimes will respect the flag at runtime.
+
+/**
+ * Enhancement #1452: workflow.context_guard_mode
+ *
+ * Guards long execute-phase workflows from driving the host session to context
+ * exhaustion (ctx 100%). Before each wave, the orchestrator self-assesses
+ * context pressure using the degradation signals defined in context-budget.md.
+ *
+ * Modes:
+ *   "warn"  (default) — emit a structured warning + recommend /gsd:pause-work
+ *   "auto"            — auto-invoke pause-work before the next wave
+ *   "off"             — disable the guard entirely
+ *
+ * The check fires at wave boundaries ONLY (before spawning), never mid-wave.
+ */
+
+'use strict';
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+function readConfig(tmpDir) {
+  const configPath = path.join(tmpDir, '.planning', 'config.json');
+  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+}
+
+const REPO_ROOT = path.join(__dirname, '..');
+
+// ─── Schema registration ──────────────────────────────────────────────────────
+
+describe('workflow.context_guard_mode in VALID_CONFIG_KEYS', () => {
+  test('is a recognized config key', () => {
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
+    assert.ok(
+      VALID_CONFIG_KEYS.has('workflow.context_guard_mode'),
+      'workflow.context_guard_mode should be in VALID_CONFIG_KEYS',
+    );
+  });
+});
+
+// ─── Default value ────────────────────────────────────────────────────────────
+
+describe('workflow.context_guard_mode default value', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('defaults to warn in new project config', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `config-ensure-section failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(
+      config.workflow.context_guard_mode,
+      'warn',
+      'workflow.context_guard_mode should default to "warn" — proactive checkpoint warning without auto-pausing workflows',
+    );
+  });
+});
+
+// ─── Round-trip ──────────────────────────────────────────────────────────────
+
+describe('workflow.context_guard_mode config round-trip', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir });
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('config-set warn persists to config.json', () => {
+    const setResult = runGsdTools('config-set workflow.context_guard_mode warn', tmpDir);
+    assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.context_guard_mode, 'warn');
+  });
+
+  test('config-set auto persists to config.json', () => {
+    const setResult = runGsdTools('config-set workflow.context_guard_mode auto', tmpDir);
+    assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.context_guard_mode, 'auto');
+  });
+
+  test('config-set off persists to config.json', () => {
+    const setResult = runGsdTools('config-set workflow.context_guard_mode off', tmpDir);
+    assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.context_guard_mode, 'off');
+  });
+
+  test('persists in config.json as string', () => {
+    runGsdTools('config-set workflow.context_guard_mode warn', tmpDir);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.context_guard_mode, 'warn');
+    assert.strictEqual(typeof config.workflow.context_guard_mode, 'string');
+  });
+
+  test('rejects unknown mode values with clear error', () => {
+    const result = runGsdTools('config-set workflow.context_guard_mode aggressive', tmpDir);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid workflow\.context_guard_mode 'aggressive'/);
+    assert.match(result.error, /auto, warn, off/);
+  });
+
+  test('rejects partial match values', () => {
+    const result = runGsdTools('config-set workflow.context_guard_mode warnmode', tmpDir);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid workflow\.context_guard_mode 'warnmode'/);
+  });
+});
+
+// ─── execute-phase contract ───────────────────────────────────────────────────
+
+describe('execute-phase.md documents the context_guard step', () => {
+  let executePhase;
+  let contextGuardRef;
+
+  beforeEach(() => {
+    executePhase = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'execute-phase.md'),
+      'utf-8',
+    );
+    // The step body is extracted to a reference file loaded via @-ref in execute-phase.md.
+    // Both files together constitute the execute-phase wave-boundary contract.
+    const refPath = path.join(REPO_ROOT, 'gsd-core', 'references', 'execute-phase-context-guard.md');
+    contextGuardRef = fs.existsSync(refPath) ? fs.readFileSync(refPath, 'utf-8') : '';
+  });
+
+  test('references workflow.context_guard_mode by canonical name', () => {
+    const combined = executePhase + '\n' + contextGuardRef;
+    assert.ok(
+      combined.includes('workflow.context_guard_mode'),
+      'execute-phase.md (or its @-referenced execute-phase-context-guard.md) must reference workflow.context_guard_mode so runtimes resolve the config-driven behavior',
+    );
+  });
+
+  test('defines context_guard step at wave boundaries', () => {
+    assert.ok(
+      executePhase.includes('context_guard') || executePhase.includes('context-guard'),
+      'execute-phase.md must define a context_guard step (or @-ref to it) that fires before each wave',
+    );
+  });
+
+  test('references context-budget.md tiers in the guard step', () => {
+    const combined = executePhase + '\n' + contextGuardRef;
+    assert.ok(
+      combined.includes('context-budget') || combined.includes('POOR') || combined.includes('DEGRADING'),
+      'execute-phase.md context_guard (or its @-referenced file) must reference context-budget.md degradation tiers',
+    );
+  });
+});
+
+// ─── context-budget.md contract ──────────────────────────────────────────────
+
+describe('context-budget.md documents POOR-tier trigger action', () => {
+  let contextBudget;
+
+  beforeEach(() => {
+    contextBudget = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'references', 'context-budget.md'),
+      'utf-8',
+    );
+  });
+
+  test('defines POOR tier', () => {
+    assert.ok(
+      contextBudget.includes('POOR'),
+      'context-budget.md must define the POOR tier',
+    );
+  });
+
+  test('connects POOR tier to pause-work', () => {
+    assert.ok(
+      contextBudget.includes('pause-work') || contextBudget.includes('pause_work'),
+      'context-budget.md POOR-tier rule must reference pause-work as the trigger action',
+    );
+  });
+
+  test('documents context_guard_mode values', () => {
+    assert.ok(
+      contextBudget.includes('context_guard_mode'),
+      'context-budget.md must document the workflow.context_guard_mode config key',
+    );
+  });
+});
+
+// ─── planning-config.md reference parity ─────────────────────────────────────
+
+describe('planning-config.md documents workflow.context_guard_mode', () => {
+  test('includes the key in the reference table', () => {
+    const planningConfig = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'references', 'planning-config.md'),
+      'utf-8',
+    );
+    assert.ok(
+      planningConfig.includes('workflow.context_guard_mode'),
+      'planning-config.md reference must include workflow.context_guard_mode so users know the config knob exists',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-3309-human-verify-mode.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-3309-human-verify-mode (consolidation epic #1969 B3 #1972)", () => {
+// allow-test-rule: source-text-is-the-product (see #3309)
+// Planner and verifier agent .md files ARE the runtime contract loaded by
+// the AI runtimes. Asserting that the canonical wording for the new
+// `workflow.human_verify_mode` flag is present in those files is the only
+// way to verify the agents will respect the flag at runtime.
+
+/**
+ * Enhancement #3309: workflow.human_verify_mode = end-of-phase
+ *
+ * "mid-flight" preserves the pre-#3309 behavior — the planner emits
+ * `<task type="checkpoint:human-verify">` tasks, and the executor halts at
+ * each one. Each halt costs a full executor cold-start (CLAUDE.md, MEMORY.md,
+ * STATE.md, plan re-read) because subagent context is discarded across the
+ * pause.
+ *
+ * "end-of-phase" (the new default) instructs the planner NOT to emit
+ * `checkpoint:human-verify` tasks and instead embed the verification details
+ * into the relevant `auto` task's `<verify><human-check>` block. The verifier
+ * (Step 8) harvests these blocks at end-of-phase and consolidates them into the existing
+ * `human_needed` → HUMAN-UAT.md path, restoring the v1.35-shaped behavior
+ * the reporter wanted without resurrecting the v1.35 writer.
+ */
+
+'use strict';
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+function readConfig(tmpDir) {
+  const configPath = path.join(tmpDir, '.planning', 'config.json');
+  return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+}
+
+const REPO_ROOT = path.join(__dirname, '..');
+
+// ─── Schema registration ──────────────────────────────────────────────────────
+
+describe('workflow.human_verify_mode in VALID_CONFIG_KEYS', () => {
+  test('is a recognized config key', () => {
+    const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config.cjs');
+    assert.ok(
+      VALID_CONFIG_KEYS.has('workflow.human_verify_mode'),
+      'workflow.human_verify_mode should be in VALID_CONFIG_KEYS',
+    );
+  });
+});
+
+// ─── Default value (CJS) ──────────────────────────────────────────────────────
+
+describe('workflow.human_verify_mode default value', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('defaults to end-of-phase in new project config', () => {
+    const result = runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `config-ensure-section failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(
+      config.workflow.human_verify_mode,
+      'end-of-phase',
+      'workflow.human_verify_mode should default to "end-of-phase" — the cost-control mode is the project default; opt back into the pre-#3309 mid-flight behavior with config-set',
+    );
+  });
+});
+
+// ─── Round-trip ──────────────────────────────────────────────────────────────
+
+describe('workflow.human_verify_mode config round-trip', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    runGsdTools('config-ensure-section', tmpDir, { HOME: tmpDir });
+  });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('config-set end-of-phase persists to config.json', () => {
+    const setResult = runGsdTools('config-set workflow.human_verify_mode end-of-phase', tmpDir);
+    assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.human_verify_mode, 'end-of-phase');
+  });
+
+  test('config-set mid-flight overwrites end-of-phase in config.json', () => {
+    runGsdTools('config-set workflow.human_verify_mode end-of-phase', tmpDir);
+
+    const setResult = runGsdTools('config-set workflow.human_verify_mode mid-flight', tmpDir);
+    assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.human_verify_mode, 'mid-flight');
+  });
+
+  test('persists in config.json as string', () => {
+    runGsdTools('config-set workflow.human_verify_mode end-of-phase', tmpDir);
+
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.workflow.human_verify_mode, 'end-of-phase');
+    assert.strictEqual(typeof config.workflow.human_verify_mode, 'string');
+  });
+
+  test('rejects invalid mode values', () => {
+    const result = runGsdTools('config-set workflow.human_verify_mode midflight', tmpDir);
+    assert.strictEqual(result.success, false);
+    assert.match(result.error, /Invalid workflow\.human_verify_mode 'midflight'/);
+    assert.match(result.error, /mid-flight, end-of-phase/);
+  });
+});
+
+// ─── Planner agent contract ──────────────────────────────────────────────────
+
+describe('agents/gsd-planner.md acknowledges workflow.human_verify_mode', () => {
+  let plannerSrc;
+
+  test('loads', () => {
+    plannerSrc = fs.readFileSync(path.join(REPO_ROOT, 'agents', 'gsd-planner.md'), 'utf-8');
+    assert.ok(plannerSrc.length > 0);
+  });
+
+  test('mentions workflow.human_verify_mode by canonical name', () => {
+    plannerSrc = plannerSrc || fs.readFileSync(path.join(REPO_ROOT, 'agents', 'gsd-planner.md'), 'utf-8');
+    assert.ok(
+      plannerSrc.includes('workflow.human_verify_mode'),
+      'planner must reference the flag by canonical key so the runtime can resolve config-driven behavior',
+    );
+  });
+
+  test('explains the end-of-phase behavior (do NOT emit checkpoint:human-verify)', () => {
+    plannerSrc = plannerSrc || fs.readFileSync(path.join(REPO_ROOT, 'agents', 'gsd-planner.md'), 'utf-8');
+    // The planner must instruct: when end-of-phase, do NOT emit checkpoint:human-verify
+    assert.ok(
+      /end-of-phase[\s\S]{0,400}checkpoint:human-verify/i.test(plannerSrc) ||
+      /checkpoint:human-verify[\s\S]{0,400}end-of-phase/i.test(plannerSrc),
+      'planner must couple "end-of-phase" mode with the rule that checkpoint:human-verify tasks are not emitted',
+    );
+  });
+
+  test('routes deferred verification through the <verify><human-check> block on auto tasks', () => {
+    plannerSrc = plannerSrc || fs.readFileSync(path.join(REPO_ROOT, 'agents', 'gsd-planner.md'), 'utf-8');
+    assert.ok(
+      /`?<verify>`?\s*[\s\S]{0,200}`?<human-check>`?/i.test(plannerSrc) ||
+      plannerSrc.includes('<verify><human-check>') ||
+      plannerSrc.includes('`<verify><human-check>`'),
+      'planner must document the <verify><human-check>...</human-check></verify> shape so the verifier can harvest deferred items',
+    );
+  });
+});
+
+// ─── Verifier agent contract ─────────────────────────────────────────────────
+
+describe('agents/gsd-verifier.md harvests deferred human verification items', () => {
+  test('Step 8 mentions harvesting <verify><human-check> blocks from PLAN.md', () => {
+    const verifierSrc = fs.readFileSync(path.join(REPO_ROOT, 'agents', 'gsd-verifier.md'), 'utf-8');
+    assert.ok(
+      verifierSrc.includes('<verify><human-check>') || /<verify>[\s\S]{0,200}<human-check>/i.test(verifierSrc),
+      'verifier must instruct itself to harvest <verify><human-check> blocks from PLAN.md when human_verify_mode = end-of-phase',
+    );
+    assert.ok(
+      verifierSrc.includes('human_verify_mode'),
+      'verifier must reference the flag by canonical key',
+    );
+  });
+});
+
+// ─── References doc parity ───────────────────────────────────────────────────
+
+describe('references/checkpoints.md documents the flag', () => {
+  test('mentions workflow.human_verify_mode in the human-verify section', () => {
+    const refSrc = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'references', 'checkpoints.md'),
+      'utf-8',
+    );
+    assert.ok(
+      refSrc.includes('workflow.human_verify_mode'),
+      'checkpoints reference must document the new flag so users know the cost-control alternative exists',
+    );
+  });
+});
+  });
+}

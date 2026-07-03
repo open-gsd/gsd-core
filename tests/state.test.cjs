@@ -8995,3 +8995,1140 @@ describe('flat "## Phase Details" milestone leak (#501)', () => {
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-1967-cache-invalidation.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-1967-cache-invalidation (consolidation epic #1969 B3 #1972)", () => {
+// allow-test-rule: source-text-is-the-product (see #1967)
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+/**
+ * Regression tests for #1967 cache invalidation.
+ *
+ * The disk scan cache in buildStateFrontmatter must be invalidated on
+ * writeStateMd to prevent stale reads if multiple state-mutating
+ * operations occur within the same Node process. This matters for:
+ *   - SDK callers that require() gsd-tools.cjs as a module
+ *   - Future dispatcher extensions that handle compound operations
+ *   - Tests that import state.cjs directly
+ */
+
+'use strict';
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+
+const state = require('../gsd-core/bin/lib/state.cjs');
+const { cleanup } = require('./helpers.cjs');
+
+describe('buildStateFrontmatter cache invalidation (#1967)', () => {
+  let tmpDir;
+  let planningDir;
+  let phasesDir;
+  let statePath;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1967-cache-'));
+    planningDir = path.join(tmpDir, '.planning');
+    phasesDir = path.join(planningDir, 'phases');
+    fs.mkdirSync(phasesDir, { recursive: true });
+
+    // Create a minimal config and STATE.md
+    fs.writeFileSync(
+      path.join(planningDir, 'config.json'),
+      JSON.stringify({ project_code: 'TEST' })
+    );
+
+    statePath = path.join(planningDir, 'STATE.md');
+    fs.writeFileSync(statePath, [
+      '# State',
+      '',
+      '**Current Phase:** 1',
+      '**Status:** executing',
+      '**Total Phases:** 2',
+      '',
+    ].join('\n'));
+
+    // Start with one phase directory containing one PLAN
+    const phase1 = path.join(phasesDir, '01-foo');
+    fs.mkdirSync(phase1);
+    fs.writeFileSync(path.join(phase1, '01-1-PLAN.md'), '---\nphase: 1\nplan: 1\n---\n# Plan\n');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('writeStateMd invalidates cache so subsequent reads see new disk state', () => {
+    // First write — populates cache via buildStateFrontmatter
+    const content1 = fs.readFileSync(statePath, 'utf-8');
+    state.writeStateMd(statePath, content1, tmpDir);
+
+    // Create a NEW phase directory AFTER the first write
+    // Without cache invalidation, the second write would still see only 1 phase
+    const phase2 = path.join(phasesDir, '02-bar');
+    fs.mkdirSync(phase2);
+    fs.writeFileSync(path.join(phase2, '02-1-PLAN.md'), '---\nphase: 2\nplan: 1\n---\n# Plan\n');
+    fs.writeFileSync(path.join(phase2, '02-1-SUMMARY.md'), '---\nstatus: complete\n---\n# Summary\n');
+
+    // Second write in the SAME process — must see the new phase
+    const content2 = fs.readFileSync(statePath, 'utf-8');
+    state.writeStateMd(statePath, content2, tmpDir);
+
+    // Read back and parse frontmatter to verify it reflects 2 phases, not 1
+    const result = fs.readFileSync(statePath, 'utf-8');
+    const fmMatch = result.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    assert.ok(fmMatch, 'STATE.md should have frontmatter after writeStateMd');
+
+    const fm = fmMatch[1];
+    // Should show 2 total phases (the new disk state), not 1 (stale cache)
+    const totalPhasesMatch = fm.match(/total_phases:\s*(\d+)/);
+    assert.ok(totalPhasesMatch, 'frontmatter should contain total_phases');
+    assert.strictEqual(
+      parseInt(totalPhasesMatch[1], 10),
+      2,
+      'total_phases should reflect new disk state (2), not stale cache (1)'
+    );
+
+    // Should show 1 completed phase (phase 2 has SUMMARY)
+    const completedMatch = fm.match(/completed_phases:\s*(\d+)/);
+    assert.ok(completedMatch, 'frontmatter should contain completed_phases');
+    assert.strictEqual(
+      parseInt(completedMatch[1], 10),
+      1,
+      'completed_phases should reflect new disk state (1 complete), not stale cache (0)'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3127-state-begin-phase-idempotent.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3127-state-begin-phase-idempotent (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+// allow-test-rule: reads runtime STATE.md written to temp dir — behavioral output test, not source-grep (see #3127)
+
+// Regression tests for bug #3127.
+//
+// state.begin-phase is non-idempotent: when execute-phase calls it on a phase
+// that is already mid-flight (e.g. --wave N resume), the handler unconditionally
+// overwrites execution-progress fields with stale values from the last plan-phase run:
+//   - stopped_at / Last Activity Description reset to "context gathered; ready for plan-phase"
+//   - Current Plan reset to 1 (from plan being executed, e.g. 3)
+//   - Plan: N of M body line reset to "Plan: 1 of M"
+//   - Last activity timestamp reverted to an older value
+//   - progress.percent may decrease
+//
+// Fix: read the current Status field before writing. If the phase is already
+// "Executing Phase N", skip the execution-progress fields (Current Plan, plan body
+// line, Last Activity Description) and only update fields safe to overwrite on
+// resume (Last Activity date, Status if somehow wrong).
+// A --force flag bypasses the guard for intentional full resets.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
+
+const ROOT = path.join(__dirname, '..');
+
+// Load the state.cjs module internals via the command router
+function requireStateCjs() {
+  return require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'state.cjs'));
+}
+
+function makeTempPlanning(stateContent) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3127-'));
+  const planningDir = path.join(dir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  fs.writeFileSync(path.join(planningDir, 'STATE.md'), stateContent, 'utf8');
+  return dir;
+}
+
+// A STATE.md that is mid-flight on Phase 5 (Plan 3 of 8 in progress)
+const MID_FLIGHT_STATE = `# GSD State
+
+## Configuration
+Current Phase: 5
+Current Phase Name: test-phase
+Total Plans in Phase: 8
+Current Plan: 3
+Status: Executing Phase 5
+
+## Current Position
+
+Phase: 5 (test-phase) — EXECUTING
+Plan: 3 of 8 (Plan 00 SHIPPED — wave 1 complete; Plan 01 SHIPPED; Plan 02 next)
+Status: Executing Phase 5
+Last activity: 2026-05-05 -- Plan 02 SHIPPED wave 2 GREEN
+
+## Progress
+
+progress:
+  total_phases: 10
+  completed_phases: 4
+  percent: 89
+
+stopped_at: Phase 5 Plan 02 SHIPPED — Wave 2 GREEN detailed narrative here; ready for Plan 03
+`;
+
+// A STATE.md that is NOT yet executing (plan-phase just ran)
+const PRE_EXECUTE_STATE = `# GSD State
+
+## Configuration
+Current Phase: 5
+Current Phase Name: test-phase
+Total Plans in Phase: 8
+Current Plan: 1
+Status: Ready to execute
+
+## Current Position
+
+Phase: 5 (test-phase) — READY
+Plan: 1 of 8
+Status: Ready to execute
+Last activity: 2026-05-04 -- context gathered; ready for plan-phase
+
+stopped_at: Phase 5 context gathered; ready for plan-phase
+`;
+
+describe('bug #3127: state.begin-phase idempotency guard', () => {
+  test('begin-phase on a mid-flight phase does not reset Current Plan', () => {
+    const stateModule = requireStateCjs();
+    const { cmdStateBeginPhase } = stateModule;
+    if (!cmdStateBeginPhase) {
+      // Skip if not exported — the guard may be inside a private function
+      return;
+    }
+    const dir = makeTempPlanning(MID_FLIGHT_STATE);
+    try {
+      cmdStateBeginPhase(dir, '5', 'test-phase', 8, false);
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      // Current Plan must not have been reset to 1
+      const planMatch = after.match(/^Current Plan:\s*(\S+)/m);
+      if (planMatch) {
+        assert.notStrictEqual(planMatch[1], '1',
+          'begin-phase reset Current Plan to 1 on a mid-flight phase — idempotency guard not applied');
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('begin-phase on a mid-flight phase does not overwrite stopped_at narrative', () => {
+    const stateModule = requireStateCjs();
+    const { cmdStateBeginPhase } = stateModule;
+    if (!cmdStateBeginPhase) return;
+    const dir = makeTempPlanning(MID_FLIGHT_STATE);
+    try {
+      cmdStateBeginPhase(dir, '5', 'test-phase', 8, false);
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      // The rich stopped_at narrative must be preserved
+      assert.ok(
+        after.includes('Plan 02 SHIPPED') || after.includes('Wave 2 GREEN'),
+        'begin-phase overwrote stopped_at narrative on a mid-flight phase',
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('begin-phase on a NOT-yet-executing phase sets Current Plan to 1 (normal path)', () => {
+    const stateModule = requireStateCjs();
+    const { cmdStateBeginPhase } = stateModule;
+    if (!cmdStateBeginPhase) return;
+    const dir = makeTempPlanning(PRE_EXECUTE_STATE);
+    try {
+      cmdStateBeginPhase(dir, '5', 'test-phase', 8, false);
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      // Normal path: Current Plan should become 1 (or stay 1)
+      const planMatch = after.match(/^Current Plan:\s*(\S+)/m);
+      if (planMatch) {
+        assert.strictEqual(planMatch[1], '1',
+          'begin-phase should set Current Plan to 1 on a fresh phase');
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('begin-phase always updates Last Activity date (safe on resume, pinned via GSD_NOW_MS)', () => {
+    const stateModule = requireStateCjs();
+    const { cmdStateBeginPhase } = stateModule;
+    if (!cmdStateBeginPhase) return;
+    const dir = makeTempPlanning(MID_FLIGHT_STATE);
+
+    const PINNED_MS = Date.parse('2020-11-25T09:00:00.000Z');
+    const PINNED_DATE = '2020-11-25';
+    // Pin the in-process clock via env vars before calling the function directly.
+    const origTestMode = process.env.GSD_TEST_MODE;
+    const origNowMs = process.env.GSD_NOW_MS;
+    process.env.GSD_TEST_MODE = '1';
+    process.env.GSD_NOW_MS = String(PINNED_MS);
+    try {
+      cmdStateBeginPhase(dir, '5', 'test-phase', 8, false);
+      const after = fs.readFileSync(path.join(dir, '.planning', 'STATE.md'), 'utf8');
+      assert.ok(
+        after.includes(PINNED_DATE),
+        `begin-phase must update Last Activity date to the pinned date ${PINNED_DATE} even on resume (safe field)`,
+      );
+    } finally {
+      // Restore env vars before cleanup to avoid leaking state to other tests.
+      if (origTestMode === undefined) delete process.env.GSD_TEST_MODE;
+      else process.env.GSD_TEST_MODE = origTestMode;
+      if (origNowMs === undefined) delete process.env.GSD_NOW_MS;
+      else process.env.GSD_NOW_MS = origNowMs;
+      cleanup(dir);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1445-999x-backlog-excluded-from-total-phases.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1445-999x-backlog-excluded-from-total-phases (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+/**
+ * Regression test for bug #1445:
+ * 999.x backlog phases must not be counted toward total_phases.
+ *
+ * Root cause:
+ *   deriveProgressFromRoadmap (phase-lifecycle.cts) counted ALL data rows
+ *   matching /^\|\s*\d+/ in the progress table, including 999.x backlog rows.
+ *   Similarly, state.cts's roadmapPhaseCount loop (via extractCurrentMilestone)
+ *   counted 999.x phase headings because it only checked /\d/.test(m[1]).
+ *
+ * Fix:
+ *   Both sites now test /^999(?:\.|$)/.test(token) and skip matching rows.
+ *   Mirrors the existing init.cts /^999(?:\.|$)/ filter.
+ *
+ * Scenarios:
+ *   A. deriveProgressFromRoadmap with a progress table containing a 999.x row.
+ *   B. state json total_phases via extractCurrentMilestone / roadmapPhaseCount.
+ *
+ * Follow-up #1580: the same `^999` (and Phase 0) sentinel exclusion was missing
+ * in two more code paths — `milestone complete`'s unstarted-phase guard
+ * (src/milestone.cts) and `roadmap analyze`'s next_phase routing + phase_count
+ * (src/roadmap.cts). Scenarios C and D below cover those.
+ *
+ *   C. milestone complete is NOT blocked by a Phase 999 backlog heading.
+ *   D. roadmap analyze never routes next_phase to 999 / never counts it.
+ */
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { deriveProgressFromRoadmap } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
+
+// ─── Scenario A: deriveProgressFromRoadmap unit test ────────────────────────
+
+describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
+  test('3 real phases + 1 999.x backlog row → total_phases: 3, not 4', () => {
+    const roadmap = [
+      '## Milestone v1.0: Test',
+      '',
+      '| Phase | Plans | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 1. Alpha | 2/2 | Complete | ✅ |',
+      '| 2. Beta | 1/2 | In Progress | |',
+      '| 3. Gamma | 0/1 | Planned | |',
+      '| 999.1 Backlog: Future Idea | 0/0 | Backlog | |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(
+      result.totalPhases,
+      3,
+      `total_phases must be 3 (not 4) — 999.1 backlog row must be excluded. Got ${result.totalPhases}`,
+    );
+    assert.equal(
+      result.completedPhases,
+      1,
+      `completed_phases must be 1. Got ${result.completedPhases}`,
+    );
+  });
+
+  test('999 exact (no dot) row is also excluded', () => {
+    const roadmap = [
+      '## Milestone v1.0: Test',
+      '',
+      '| Phase | Plans | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 1. Alpha | 1/1 | Complete | ✅ |',
+      '| 2. Beta | 1/1 | Complete | ✅ |',
+      '| 999 Backlog | 0/0 | Backlog | |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(
+      result.totalPhases,
+      2,
+      `total_phases must be 2 (not 3) — 999 row must be excluded. Got ${result.totalPhases}`,
+    );
+    assert.equal(
+      result.completedPhases,
+      2,
+      `completed_phases must be 2. Got ${result.completedPhases}`,
+    );
+  });
+
+  test('all-backlog table yields null total_phases (no real phases)', () => {
+    const roadmap = [
+      '## Milestone v1.0: Test',
+      '',
+      '| Phase | Plans | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 999.1 Future A | 0/0 | Backlog | |',
+      '| 999.2 Future B | 0/0 | Backlog | |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(
+      result.totalPhases,
+      null,
+      `total_phases must be null when the only rows are 999.x backlog. Got ${result.totalPhases}`,
+    );
+  });
+});
+
+// ─── Scenario B: state json total_phases via roadmapPhaseCount ───────────────
+
+describe('bug #1445 — state json excludes 999.x phase headings from total_phases', () => {
+  let tmpDir;
+
+  const ROADMAP = [
+    '## Milestone v1.0: Test Milestone',
+    '',
+    '### Phase 01: Alpha',
+    '**Goal:** first',
+    '',
+    '### Phase 02: Beta',
+    '**Goal:** second',
+    '',
+    '### Phase 03: Gamma',
+    '**Goal:** third',
+    '',
+    '### Phase 999.1: Backlog Item A',
+    '**Goal:** future idea, not counted',
+    '',
+    '### Phase 999.2: Backlog Item B',
+    '**Goal:** another future idea',
+  ].join('\n');
+
+  beforeEach(() => {
+    tmpDir = createTempProject('bug-1445-');
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), ROADMAP, 'utf-8');
+    fs.writeFileSync(
+      path.join(planning, 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0',
+        'status: executing',
+        '---',
+        '',
+        '# GSD State',
+        '',
+        '## Configuration',
+        'Current Phase: 1',
+        'Status: Executing Phase 1',
+        'Last Activity: 2026-01-01',
+      ].join('\n'),
+      'utf-8',
+    );
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+
+    for (const d of ['01-alpha', '02-beta', '03-gamma']) {
+      const dir = path.join(planning, 'phases', d);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+    }
+    // 999.x dirs should exist on disk but must not inflate total_phases
+    for (const d of ['999.1-backlog-a', '999.2-backlog-b']) {
+      fs.mkdirSync(path.join(planning, 'phases', d), { recursive: true });
+    }
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('state json total_phases is 3, not 5 (999.x dirs and headings excluded)', () => {
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const state = JSON.parse(result.output);
+    assert.ok(state.progress, 'state json must return a progress block');
+    assert.equal(
+      state.progress.total_phases,
+      3,
+      `total_phases must be 3 (not 5). 999.x backlog phases must be excluded. Got ${state.progress.total_phases}`,
+    );
+  });
+});
+
+// ─── Scenario C: milestone complete not blocked by a 999 backlog heading ─────
+
+describe('fix #1580 — milestone complete ignores the 999 backlog sentinel', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('fix-1580-mc-');
+    const planning = path.join(tmpDir, '.planning');
+    // One real, on-disk phase + a directory-less Phase 999 backlog heading.
+    fs.writeFileSync(
+      path.join(planning, 'ROADMAP.md'),
+      [
+        '# Roadmap v1.0',
+        '## v1.0 Milestone',
+        '## Phases',
+        '- [x] **Phase 1: Foundation**',
+        '## Phase Details',
+        '### Phase 1: Foundation',
+        '**Goal:** build it',
+        '### Phase 999: Backlog / Someday',
+        '**Goal:** deferred, never executed',
+      ].join('\n'),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(planning, 'STATE.md'),
+      `---\nmilestone: v1.0\n---\n# State\n\n**Status:** In progress\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`,
+      'utf-8',
+    );
+    const dir = path.join(planning, 'phases', '01-foundation');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('completes WITHOUT --force despite a Phase 999 backlog heading', () => {
+    const result = runGsdTools(
+      ['milestone', 'complete', 'v1.0', '--name', 'Regression'],
+      tmpDir,
+    );
+    assert.ok(
+      result.success,
+      `milestone complete must not be blocked by the 999 sentinel; got error: ${result.error}`,
+    );
+    assert.ok(
+      !/Cannot mark milestone complete/.test(result.error || ''),
+      `the unstarted-phase guard must not fire on Phase 999. Got: ${result.error}`,
+    );
+  });
+});
+
+// ─── Scenario D: roadmap analyze never routes/ counts the 999 sentinel ────────
+
+describe('fix #1580 — roadmap analyze excludes the 999 backlog sentinel', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('fix-1580-ra-');
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(
+      path.join(planning, 'ROADMAP.md'),
+      [
+        '# Roadmap v1.0',
+        '## v1.0 Milestone',
+        '## Phases',
+        '- [x] **Phase 1: Foundation**',
+        '## Phase Details',
+        '### Phase 1: Foundation',
+        '**Goal:** build it',
+        '### Phase 999: Backlog / Someday',
+        '**Goal:** deferred, never executed',
+      ].join('\n'),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(planning, 'STATE.md'),
+      `---\nmilestone: v1.0\n---\n# State\n`,
+      'utf-8',
+    );
+    const dir = path.join(planning, 'phases', '01-foundation');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n', 'utf-8');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('next_phase is never 999 and phase_count excludes the sentinel', () => {
+    const result = runGsdTools(['roadmap', 'analyze', '--raw'], tmpDir);
+    assert.ok(result.success, `roadmap analyze failed: ${result.error}`);
+    const analysis = JSON.parse(result.output);
+    assert.notEqual(
+      String(analysis.next_phase),
+      '999',
+      `next_phase must never route to the 999 backlog sentinel. Got ${analysis.next_phase}`,
+    );
+    assert.equal(
+      analysis.phase_count,
+      1,
+      `phase_count must exclude the 999 sentinel (expected 1). Got ${analysis.phase_count}`,
+    );
+    assert.ok(
+      !(analysis.phases || []).some(p => String(p.number) === '999'),
+      'the phases array must not include the 999 backlog sentinel',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1446-total-phases-corrects-downward.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1446-total-phases-corrects-downward (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+/**
+ * Regression test for bug #1446:
+ * total_phases must correct downward when re-derived; shouldPreserveExistingProgress
+ * must NOT include total_phases in its ratchet check.
+ *
+ * Root cause:
+ *   shouldPreserveExistingProgress (state-document.cts) returned true when
+ *   existingProgress.total_phases > derivedProgress.total_phases, making the
+ *   stored value sticky even when it was wrong (e.g. counted backlog phases).
+ *
+ * Fix:
+ *   total_phases is removed from the "existing exceeds derived" check.
+ *   Only completed_phases, total_plans, and completed_plans keep ratchet behaviour.
+ *
+ * Scenarios:
+ *   A. shouldPreserveExistingProgress unit test — returns false when only total_phases differs.
+ *   B. state sync re-derives a lower total_phases and writes the new value.
+ */
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { shouldPreserveExistingProgress } = require('../gsd-core/bin/lib/state-document.cjs');
+
+// ─── Scenario A: unit test ───────────────────────────────────────────────────
+
+describe('bug #1446 — shouldPreserveExistingProgress does not ratchet total_phases', () => {
+  test('existing total_phases:10 > derived total_phases:7 → returns false (no ratchet)', () => {
+    const existing = { total_phases: 10, completed_phases: 3, total_plans: 6, completed_plans: 3 };
+    const derived  = { total_phases: 7,  completed_phases: 3, total_plans: 6, completed_plans: 3 };
+    assert.equal(
+      shouldPreserveExistingProgress(existing, derived),
+      false,
+      'total_phases downward correction must NOT trigger shouldPreserveExistingProgress',
+    );
+  });
+
+  test('existing completed_phases:5 > derived completed_phases:2 → returns true (ratchet still active)', () => {
+    const existing = { total_phases: 7, completed_phases: 5, total_plans: 6, completed_plans: 3 };
+    const derived  = { total_phases: 7, completed_phases: 2, total_plans: 6, completed_plans: 3 };
+    assert.equal(
+      shouldPreserveExistingProgress(existing, derived),
+      true,
+      'completed_phases ratchet must still work',
+    );
+  });
+
+  test('existing total_phases:10 > derived:7 AND completed_phases matches → false (total_phases alone does not preserve)', () => {
+    const existing = { total_phases: 10, completed_phases: 3 };
+    const derived  = { total_phases: 7,  completed_phases: 3 };
+    assert.equal(
+      shouldPreserveExistingProgress(existing, derived),
+      false,
+      'only-total_phases discrepancy must not trigger preservation',
+    );
+  });
+
+  test('all derived values equal existing → returns false', () => {
+    const existing = { total_phases: 7, completed_phases: 3, total_plans: 6, completed_plans: 3 };
+    const derived  = { total_phases: 7, completed_phases: 3, total_plans: 6, completed_plans: 3 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false);
+  });
+});
+
+// ─── Scenario B: end-to-end state sync overwrites inflated total_phases ──────
+
+describe('bug #1446 — state sync writes corrected (lower) total_phases', () => {
+  let tmpDir;
+
+  // ROADMAP has 3 real phases only (no 999.x).
+  const ROADMAP = [
+    '## Milestone v1.0: Test',
+    '',
+    '### Phase 01: Alpha',
+    '**Goal:** alpha',
+    '',
+    '### Phase 02: Beta',
+    '**Goal:** beta',
+    '',
+    '### Phase 03: Gamma',
+    '**Goal:** gamma',
+  ].join('\n');
+
+  beforeEach(() => {
+    tmpDir = createTempProject('bug-1446-');
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), ROADMAP, 'utf-8');
+
+    // STATE.md has a stale inflated total_phases:10 in frontmatter.
+    fs.writeFileSync(
+      path.join(planning, 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'milestone: v1.0',
+        'status: executing',
+        'progress:',
+        '  total_phases: 10',
+        '  completed_phases: 2',
+        '  total_plans: 6',
+        '  completed_plans: 4',
+        '  percent: 40',
+        '---',
+        '',
+        '# GSD State',
+        '',
+        '## Configuration',
+        'Current Phase: 3',
+        'Status: Executing Phase 3',
+        'Last Activity: 2026-01-01',
+        'Progress: [████░░░░░░] 40%',
+      ].join('\n'),
+      'utf-8',
+    );
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+
+    for (const d of ['01-alpha', '02-beta', '03-gamma']) {
+      const dir = path.join(planning, 'phases', d);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+      // Mark 01 and 02 as complete (2 summaries)
+      if (d !== '03-gamma') {
+        fs.writeFileSync(path.join(dir, 'PLAN-SUMMARY.md'), '# Summary\n', 'utf-8');
+      }
+    }
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('state sync corrects total_phases from 10 to 3', () => {
+    const syncResult = runGsdTools(['state', 'sync'], tmpDir);
+    assert.ok(syncResult.success, `state sync failed: ${syncResult.error}`);
+
+    const jsonResult = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(jsonResult.success, `state json failed: ${jsonResult.error}`);
+    const state = JSON.parse(jsonResult.output);
+
+    assert.ok(state.progress, 'state json must return a progress block');
+    assert.equal(
+      state.progress.total_phases,
+      3,
+      `total_phases must be corrected to 3 (derived), not kept at 10 (stale). Got ${state.progress.total_phases}`,
+    );
+    // completed_phases ratchet still works: existing 2 ≥ disk-derived → keep 2
+    assert.ok(
+      state.progress.completed_phases >= 2,
+      `completed_phases must be at least 2 (ratchet). Got ${state.progress.completed_phases}`,
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1514-retired-phase-excluded-from-total-phases.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1514-retired-phase-excluded-from-total-phases (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+/**
+ * Regression test for bug #1514:
+ * A retired/folded phase (struck through in ROADMAP, marked `[x]`, with a
+ * directory but no completion artifact) must NOT be counted in
+ * progress.total_phases. Otherwise it inflates the denominator without ever
+ * satisfying the numerator (no SUMMARY → never "completed"), freezing a
+ * fully-shipped milestone below 100%.
+ *
+ * Root cause:
+ *   buildStateFrontmatter (state.cts) derived total_phases from
+ *   max(phaseDirs.length, roadmapPhaseCount) — both of which counted the
+ *   retired phase (its directory and its `### Phase NN:` heading) — while
+ *   completed_phases came from a disk SUMMARY scan that the retired phase
+ *   can never satisfy. Same counting family as #549 / #500 / #1445.
+ *
+ * Fix:
+ *   buildStateFrontmatter now extracts retired phase numbers from the GFM
+ *   strikethrough in the current-milestone ROADMAP scope and excludes them
+ *   from BOTH the disk phase-dir set and the heading count, so a retired
+ *   phase counts toward neither denominator nor numerator.
+ *
+ * Why integration (state json) not a unit test: the bug only manifests in the
+ * assembled progress block a shipped milestone actually writes to STATE.md, so
+ * the test reproduces that artifact rather than a helper in isolation.
+ */
+
+const { describe, test, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const fc = require('./helpers/fast-check-setup.cjs');
+const { _extractRetiredPhaseNumbers } = require('../gsd-core/bin/lib/state.cjs');
+const { normalizePhaseName } = require('../gsd-core/bin/lib/phase-id.cjs');
+
+// Six phases, all shipped, except Phase 04 which is retired/folded into 05.
+// Phases 01-03,05,06 have PLAN+SUMMARY (complete); Phase 04 keeps a directory
+// but no work (retired). `complete` flags which dirs get PLAN+SUMMARY.
+function seedProject(prefix, roadmap, completeDirs) {
+  const tmpDir = createTempProject(prefix);
+  const planning = path.join(tmpDir, '.planning');
+  fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmap, 'utf-8');
+  fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+  fs.writeFileSync(
+    path.join(planning, 'STATE.md'),
+    [
+      '---',
+      'gsd_state_version: 1.0',
+      'milestone: v1.0',
+      'status: executing',
+      '---',
+      '',
+      '# GSD State',
+      '',
+      '## Configuration',
+      'Current Phase: 6',
+      'Status: shipped',
+      'Last Activity: 2026-06-01',
+    ].join('\n'),
+    'utf-8',
+  );
+  const allDirs = ['01-alpha', '02-beta', '03-gamma', '04-delta', '05-epsilon', '06-zeta'];
+  for (const d of allDirs) {
+    const dir = path.join(planning, 'phases', d);
+    fs.mkdirSync(dir, { recursive: true });
+    if (completeDirs.includes(d)) {
+      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n', 'utf-8');
+    }
+  }
+  return tmpDir;
+}
+
+const PHASE_DETAILS = [
+  '### Phase 01: Alpha', '**Goal:** a', '',
+  '### Phase 02: Beta', '**Goal:** b', '',
+  '### Phase 03: Gamma', '**Goal:** c', '',
+  '### Phase 04: Delta', '**Goal:** GOAL_04', '',
+  '### Phase 05: Epsilon', '**Goal:** e', '',
+  '### Phase 06: Zeta', '**Goal:** f',
+];
+
+function roadmap(checklist04, goal04) {
+  return [
+    '## Milestone v1.0: Repro',
+    '',
+    '### Phases',
+    '- [x] **Phase 01: Alpha** — done',
+    '- [x] **Phase 02: Beta** — done',
+    '- [x] **Phase 03: Gamma** — done',
+    checklist04,
+    '- [x] **Phase 05: Epsilon** — done',
+    '- [x] **Phase 06: Zeta** — done',
+    '',
+    ...PHASE_DETAILS.map((l) => (l === '**Goal:** GOAL_04' ? `**Goal:** ${goal04}` : l)),
+  ].join('\n');
+}
+
+const ALL_COMPLETE = ['01-alpha', '02-beta', '03-gamma', '05-epsilon', '06-zeta'];
+
+describe('bug #1514 — retired/folded phase excluded from progress.total_phases', () => {
+  let tmpDir;
+  afterEach(() => {
+    if (tmpDir) cleanup(tmpDir);
+    tmpDir = undefined;
+  });
+
+  test('struck `[x] ~~Phase 04~~ — folded into Phase 05` → 5/5, percent 100 (not 5/6, 83)', () => {
+    const rm = roadmap(
+      '- [x] ~~**Phase 04: Delta**~~ — folded into Phase 05; number retired',
+      'folded into Phase 05',
+    );
+    tmpDir = seedProject('bug-1514-a-', rm, ALL_COMPLETE);
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 5, `total_phases must exclude the retired phase. Got ${progress.total_phases}`);
+    assert.equal(progress.completed_phases, 5, `completed_phases must be 5. Got ${progress.completed_phases}`);
+    assert.equal(progress.percent, 100, `shipped milestone must reach 100%. Got ${progress.percent}`);
+  });
+
+  test('fold TARGET is not retired: a struck goal line `~~folded into Phase 05~~` must not drop Phase 05', () => {
+    // Phase 04 retired via checklist; Phase 04 *goal* also struck and mentions
+    // the fold target. The target (Phase 05) must remain a counted phase.
+    const rm = roadmap(
+      '- [x] ~~**Phase 04: Delta**~~ — folded into Phase 05; number retired',
+      '~~folded into Phase 05; retired~~',
+    );
+    tmpDir = seedProject('bug-1514-b-', rm, ALL_COMPLETE);
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 5, `only Phase 04 is retired; Phase 05 must still count. Got ${progress.total_phases}`);
+    assert.equal(progress.completed_phases, 5, `completed_phases must be 5. Got ${progress.completed_phases}`);
+    assert.equal(progress.percent, 100, `Got ${progress.percent}`);
+  });
+
+  test('regression: no strikethrough → all 6 phases counted (6/6, 100)', () => {
+    const rm = roadmap('- [x] **Phase 04: Delta** — done', 'd');
+    tmpDir = seedProject('bug-1514-c-', rm, [...ALL_COMPLETE, '04-delta']);
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 6, `no retired phase: all 6 counted. Got ${progress.total_phases}`);
+    assert.equal(progress.completed_phases, 6, `Got ${progress.completed_phases}`);
+    assert.equal(progress.percent, 100, `Got ${progress.percent}`);
+  });
+
+  // `state sync --verify` is the SECOND counting path (cmdStateSync). Before the
+  // fix it re-derived the same inflated denominator and reported "no drift",
+  // so a manual STATE edit was the only recourse (#1514). It must now agree
+  // with state json and drive the stuck 83% Progress field to 100%.
+  test('state sync --verify drives a stuck 83% Progress to 100% (cmdStateSync path)', () => {
+    const rm = roadmap(
+      '- [x] ~~**Phase 04: Delta**~~ — folded into Phase 05; number retired',
+      'folded into Phase 05',
+    );
+    tmpDir = seedProject('bug-1514-sync-', rm, ALL_COMPLETE);
+    // Seed a stuck Progress line that the inflated denominator would "agree" with.
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.appendFileSync(statePath, '\nProgress: [████████░░] 83%\n', 'utf-8');
+    const result = runGsdTools(['state', 'sync', '--verify'], tmpDir);
+    assert.ok(result.success, `state sync --verify failed: ${result.error}`);
+    const { changes } = JSON.parse(result.output);
+    const progressChange = (changes || []).find((c) => /Progress:/.test(c));
+    assert.ok(progressChange, `expected a Progress drift, got changes: ${JSON.stringify(changes)}`);
+    assert.match(progressChange, /-> .*100%/, `sync must want 100%, got: ${progressChange}`);
+  });
+});
+
+// ─── Generic seeder for non-canonical phase shapes ──────────────────────────
+
+/**
+ * Seed a project from explicit phase specs so project-code, decimal,
+ * no-directory, and shipped-then-retired shapes can be exercised.
+ * spec: { id, retired?, dir?, shipped? }
+ *   id      — ROADMAP phase id (e.g. '04', '05.1', 'PROJ-42')
+ *   retired — strike the checklist entry (folded/retired)
+ *   dir     — directory name to create (omit → no directory)
+ *   shipped — write PLAN+SUMMARY into the directory (complete)
+ */
+function seedFromSpecs(prefix, specs) {
+  const tmpDir = createTempProject(prefix);
+  const planning = path.join(tmpDir, '.planning');
+  const checklist = specs.map((s) =>
+    s.retired
+      ? `- [x] ~~**Phase ${s.id}: P${s.id}**~~ — retired`
+      : `- [x] **Phase ${s.id}: P${s.id}** — done`,
+  );
+  const details = specs.flatMap((s) => [`### Phase ${s.id}: P${s.id}`, '**Goal:** g', '']);
+  const roadmapText = ['## Milestone v1.0: Specs', '', '### Phases', ...checklist, '', ...details].join('\n');
+  fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmapText, 'utf-8');
+  fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+  fs.writeFileSync(
+    path.join(planning, 'STATE.md'),
+    ['---', 'gsd_state_version: 1.0', 'milestone: v1.0', 'status: executing', '---', '', '# GSD State', '', '## Configuration', 'Current Phase: 1'].join('\n'),
+    'utf-8',
+  );
+  for (const s of specs) {
+    if (!s.dir) continue;
+    const dir = path.join(planning, 'phases', s.dir);
+    fs.mkdirSync(dir, { recursive: true });
+    if (s.shipped) {
+      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n', 'utf-8');
+    }
+  }
+  return tmpDir;
+}
+
+describe('bug #1514 — retired exclusion across phase shapes', () => {
+  let tmpDir;
+  afterEach(() => {
+    if (tmpDir) cleanup(tmpDir);
+    tmpDir = undefined;
+  });
+
+  test('project-code retired phase is dropped from the denominator (Phase PROJ-42)', () => {
+    // Project-code dirs are not milestone-mapped for completion counts (a
+    // separate pre-existing limitation), so assert only the total_phases
+    // denominator, which #1514 governs: the struck PROJ-42 heading must not
+    // be counted, while PROJ-41 / PROJ-43 still are.
+    tmpDir = seedFromSpecs('bug-1514-pc-', [
+      { id: 'PROJ-41', dir: 'PROJ-41-a', shipped: true },
+      { id: 'PROJ-42', retired: true, dir: 'PROJ-42-d' },
+      { id: 'PROJ-43', dir: 'PROJ-43-c', shipped: true },
+    ]);
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 2, `retired project-code phase must be excluded. Got ${progress.total_phases}`);
+  });
+
+  test('decimal, multiple, shipped-then-retired, and no-directory retired phases all excluded', () => {
+    // Retired: 02 (executed → has SUMMARY, then folded), 04 (no work),
+    // 05.1 (decimal, no directory at all). Live: 01, 03, 06.
+    tmpDir = seedFromSpecs('bug-1514-multi-', [
+      { id: '01', dir: '01-a', shipped: true },
+      { id: '02', retired: true, dir: '02-b', shipped: true },
+      { id: '03', dir: '03-c', shipped: true },
+      { id: '04', retired: true, dir: '04-d' },
+      { id: '05.1', retired: true },
+      { id: '06', dir: '06-f', shipped: true },
+    ]);
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 3, `3 retired of 6 → total 3. Got ${progress.total_phases}`);
+    assert.equal(progress.completed_phases, 3, `live phases 01/03/06 complete. Got ${progress.completed_phases}`);
+    assert.equal(progress.percent, 100, `Got ${progress.percent}`);
+  });
+
+  test('boundary: every phase retired (k === n) → total_phases 0', () => {
+    tmpDir = seedFromSpecs('bug-1514-all-', [
+      { id: '01', retired: true, dir: '01-a' },
+      { id: '02', retired: true, dir: '02-b' },
+      { id: '03', retired: true, dir: '03-c' },
+    ]);
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 0, `all phases retired → denominator 0. Got ${progress.total_phases}`);
+    assert.equal(progress.completed_phases, 0, `Got ${progress.completed_phases}`);
+  });
+
+  test('strikethrough in a non-checklist/heading line (a goal) does NOT retire that phase', () => {
+    // Detection is scoped to checklist/heading lines, so a struck GOAL line
+    // that begins with a phase reference must not retire it.
+    const tmp = createTempProject('bug-1514-prose-');
+    const planning = path.join(tmp, '.planning');
+    const roadmapText = [
+      '## Milestone v1.0: Prose',
+      '',
+      '### Phases',
+      '- [x] **Phase 01: A** — done',
+      '- [x] **Phase 02: B** — done',
+      '- [x] **Phase 03: C** — done',
+      '',
+      '### Phase 01: A', '**Goal:** g',
+      '### Phase 02: B', '**Goal:** ~~Phase 02 was renamed from an earlier plan~~',
+      '### Phase 03: C', '**Goal:** g',
+    ].join('\n');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), roadmapText, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+    fs.writeFileSync(
+      path.join(planning, 'STATE.md'),
+      ['---', 'gsd_state_version: 1.0', 'milestone: v1.0', 'status: executing', '---', '', '# GSD State', '', '## Configuration', 'Current Phase: 3'].join('\n'),
+      'utf-8',
+    );
+    for (const d of ['01-a', '02-b', '03-c']) {
+      const dir = path.join(planning, 'phases', d);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan\n', 'utf-8');
+      fs.writeFileSync(path.join(dir, 'SUMMARY.md'), '# Summary\n', 'utf-8');
+    }
+    tmpDir = tmp;
+    const result = runGsdTools(['state', 'json'], tmpDir);
+    assert.ok(result.success, `state json failed: ${result.error}`);
+    const { progress } = JSON.parse(result.output);
+    assert.equal(progress.total_phases, 3, `struck prose in a goal line must not retire Phase 02. Got ${progress.total_phases}`);
+    assert.equal(progress.completed_phases, 3, `Got ${progress.completed_phases}`);
+  });
+});
+
+// ─── Property: the strikethrough parser extracts exactly the struck set ──────
+
+// extractRetiredPhaseNumbers is the parsing/transformation core of the fix, so
+// per RULESET.TESTS.property-based-testing it carries a fast-check property:
+// for a roadmap with k of n checklist phases struck, the parser must return
+// exactly the canonical keys of those k phases — no more, no fewer — across
+// randomized phase counts and numeric/zero-padded/project-code ID forms. This
+// underpins the `total_phases === n - k` guarantee the integration tests assert.
+describe('bug #1514 — extractRetiredPhaseNumbers property: returns exactly the struck set', () => {
+  const idForm = (num, form) =>
+    form === 'padded' ? String(num).padStart(2, '0')
+      : form === 'project' ? `PROJ-${num}`
+        : String(num);
+  const keyOf = (num, form) => normalizePhaseName(idForm(num, form)).toUpperCase();
+
+  test('k-of-n struck phases → exactly k canonical keys, for any n/form', () => {
+    fc.assert(
+      fc.property(
+        // Distinct phase numbers so canonical keys don't collide within a run.
+        fc.uniqueArray(fc.integer({ min: 1, max: 98 }), { minLength: 1, maxLength: 10 }),
+        fc.array(fc.boolean(), { minLength: 1, maxLength: 10 }),
+        fc.constantFrom('plain', 'padded', 'project'),
+        (nums, flagsRaw, form) => {
+          const lines = ['## Milestone v1.0: M', '', '### Phases'];
+          const struck = [];
+          nums.forEach((num, i) => {
+            const id = idForm(num, form);
+            if (flagsRaw[i]) {
+              lines.push(`- [x] ~~**Phase ${id}: P${num}**~~ — folded; retired`);
+              struck.push(num);
+            } else {
+              lines.push(`- [x] **Phase ${id}: P${num}** — done`);
+            }
+          });
+
+          const got = _extractRetiredPhaseNumbers(lines.join('\n'));
+          const expected = new Set(struck.map((num) => keyOf(num, form)));
+
+          assert.equal(got.size, expected.size, `size: got ${got.size}, expected ${expected.size}`);
+          for (const k of expected) assert.ok(got.has(k), `missing struck key ${k}`);
+          for (const k of got) assert.ok(expected.has(k), `extra (non-struck) key ${k}`);
+        },
+      ),
+    );
+  });
+});
+  });
+}
