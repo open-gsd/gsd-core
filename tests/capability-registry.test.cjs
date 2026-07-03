@@ -6428,3 +6428,468 @@ describe('enh-1055 descriptor-drive: finishPermissionWriter passthrough', () => 
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-1592-plan-drift-precheck.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-1592-plan-drift-precheck (consolidation epic #1969 B6 #1975)", () => {
+'use strict';
+// allow-test-rule: source-text-is-the-product see #1592
+// The plan-phase.md host-dispatch assertions below read the workflow .md file — its text IS the
+// deployed contract the runtime loads (CONTRIBUTING.md exemption category). The registry assertions
+// are behavioral: they build the registry from the REAL capabilities/drift declaration via the
+// generator, so they fail if the plan:pre gate is ever removed or mutated.
+
+/**
+ * Enhancement (#1592): plan-time codebase-map freshness pre-check.
+ *
+ * The `drift` capability gains a non-blocking `plan:pre` codebase-drift gate so a stale codebase map is
+ * flagged BEFORE planning, instead of being discovered mid-execution by the existing
+ * `execute:wave:post` codebase-drift gate. Warn-only at `plan:pre` (no mapper-agent spawn): the
+ * capability's `drift_action: auto-remap` stays at `execute:wave:post`, so plan time never pays
+ * speculative mapper-agent cost.
+ *
+ * Per maintainer review on #1592 (mod 1a), the plan:pre gate is gated on a DEDICATED
+ * `workflow.plan_drift_precheck` toggle (default true) rather than reusing `workflow.schema_drift_gate`,
+ * so autonomous/CI runs can silence the plan-time advisory without disabling the execute-time gates.
+ * The gate declaration conforms to ADR-857 (`plan:pre` is an enumerated, additive-only loop point).
+ *
+ * Issue: #1592 (open-gsd/gsd-core).
+ */
+
+const { describe, test, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadAndValidate, buildRegistry } = require('../scripts/gen-capability-registry.cjs');
+const { cleanup } = require('./helpers.cjs');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const DRIFT_CAP = JSON.parse(
+  fs.readFileSync(path.join(REPO_ROOT, 'capabilities', 'drift', 'capability.json'), 'utf8'),
+);
+const PLAN_PHASE = fs.readFileSync(
+  path.join(REPO_ROOT, 'gsd-core', 'workflows', 'plan-phase.md'),
+  'utf8',
+);
+
+// Track every temp dir created so the suite can remove them on teardown — leaked
+// mkdtemp dirs have been a flake source here before (per #1592 review).
+const tempCapDirs = [];
+
+function makeTempCapDir(capabilities) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enh-1592-'));
+  tempCapDirs.push(tmpDir);
+  for (const [id, cap] of Object.entries(capabilities)) {
+    const subDir = path.join(tmpDir, id);
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(path.join(subDir, 'capability.json'), JSON.stringify(cap), 'utf8');
+  }
+  return tmpDir;
+}
+
+after(() => {
+  for (const dir of tempCapDirs) {
+    cleanup(dir);
+  }
+});
+
+function planPreDriftGate() {
+  const capDir = makeTempCapDir({ drift: DRIFT_CAP });
+  const { capMap, errors } = loadAndValidate(new Set(), capDir);
+  assert.deepEqual(errors, [], 'drift capability should validate cleanly: ' + JSON.stringify(errors));
+  const registry = buildRegistry(capMap);
+  const planPreGates = registry.byLoopPoint['plan:pre'].gates;
+  assert.ok(Array.isArray(planPreGates), 'plan:pre.gates should be an array');
+  return planPreGates.find(
+    (g) => g.capId === 'drift' && g.check && g.check.query === 'verify.codebase-drift',
+  );
+}
+
+describe('#1592 — drift plan:pre codebase-drift gate (registry, behavioral)', () => {
+  test('the real drift capability registers a non-blocking plan:pre codebase-drift gate', () => {
+    const driftGate = planPreDriftGate();
+    assert.ok(driftGate, 'plan:pre.gates must contain the drift codebase-drift gate');
+    assert.strictEqual(driftGate.blocking, false, 'plan-time drift gate must be NON-blocking');
+    assert.strictEqual(driftGate.onError, 'skip', 'must fail-soft (skip) — never halt planning');
+  });
+
+  test('the plan:pre gate is gated on the dedicated plan_drift_precheck toggle (mod 1a)', () => {
+    const driftGate = planPreDriftGate();
+    assert.strictEqual(
+      driftGate.when,
+      'workflow.plan_drift_precheck',
+      'plan:pre drift gate must use the dedicated toggle so CI/autonomous runs can silence it ' +
+        'without disabling the execute-time gates',
+    );
+  });
+
+  test('the execute:wave:post codebase-drift gate is preserved and keeps its OWN toggle (no regression)', () => {
+    const capDir = makeTempCapDir({ drift: DRIFT_CAP });
+    const { capMap } = loadAndValidate(new Set(), capDir);
+    const registry = buildRegistry(capMap);
+
+    const execGates = registry.byLoopPoint['execute:wave:post'].gates;
+    const stillThere = execGates.find(
+      (g) => g.capId === 'drift' && g.check && g.check.query === 'verify.codebase-drift',
+    );
+    assert.ok(stillThere, 'execute:wave:post codebase-drift gate must remain after adding the plan:pre gate');
+    assert.strictEqual(stillThere.blocking, false, 'execute codebase-drift gate stays non-blocking');
+    assert.strictEqual(
+      stillThere.when,
+      'workflow.schema_drift_gate',
+      'the execute-time gate keeps schema_drift_gate — the plan-time toggle is separable from it',
+    );
+  });
+
+  test('plan_drift_precheck is a separate toggle from schema_drift_gate (silencing is independent)', () => {
+    const planWhen = planPreDriftGate().when;
+    assert.notStrictEqual(
+      planWhen,
+      'workflow.schema_drift_gate',
+      'silencing the plan-time advisory must not require disabling the execute-time gates',
+    );
+  });
+
+  test('plan_drift_precheck is declared as a boolean defaulting to true', () => {
+    const cfg = DRIFT_CAP.config['workflow.plan_drift_precheck'];
+    assert.ok(cfg, 'workflow.plan_drift_precheck must be declared in the drift capability config');
+    assert.strictEqual(cfg.type, 'boolean', 'plan_drift_precheck must be a boolean');
+    assert.strictEqual(cfg.default, true, 'plan_drift_precheck must default to true (on by default)');
+  });
+
+  test('exactly one new config key is introduced (the dedicated plan_drift_precheck toggle)', () => {
+    const keys = Object.keys(DRIFT_CAP.config).sort();
+    assert.deepStrictEqual(
+      keys,
+      [
+        'workflow.drift_action',
+        'workflow.drift_threshold',
+        'workflow.plan_drift_precheck',
+        'workflow.schema_drift_gate',
+      ],
+      'the plan:pre gate adds exactly the dedicated plan_drift_precheck toggle — no other new keys',
+    );
+  });
+});
+
+describe('#1592 — plan-phase host dispatches the drift plan:pre gate before planning', () => {
+  const SECTION = PLAN_PHASE.slice(
+    PLAN_PHASE.indexOf('5.65. Codebase Map Freshness Pre-Check'),
+    PLAN_PHASE.indexOf('## 6. Check Existing Plans'),
+  );
+
+  test('§5.65 invokes the verify codebase-drift check', () => {
+    assert.match(PLAN_PHASE, /5\.65\. Codebase Map Freshness Pre-Check/, 'plan-phase must declare §5.65');
+    assert.match(PLAN_PHASE, /gsd_run verify codebase-drift/, '§5.65 must invoke `verify codebase-drift`');
+  });
+
+  test('the drift pre-check runs BEFORE the planner spawn (load-bearing ordering)', () => {
+    const preCheckIdx = PLAN_PHASE.indexOf('5.65. Codebase Map Freshness Pre-Check');
+    const plannerIdx = PLAN_PHASE.indexOf('## 8. Spawn gsd-planner Agent');
+    assert.ok(preCheckIdx > 0, '§5.65 must exist');
+    assert.ok(plannerIdx > 0, '§8 planner spawn must exist');
+    assert.ok(
+      preCheckIdx < plannerIdx,
+      'the drift map-freshness pre-check must run before the planner is spawned — the whole point of #1592',
+    );
+  });
+
+  test('§5.65 is documented as non-blocking and warn-only (no spawn)', () => {
+    assert.match(SECTION, /non-blocking/i, '§5.65 must state the gate is non-blocking');
+    assert.match(SECTION, /never blocks, never spawns/i, '§5.65 must state it never spawns the mapper at plan time');
+  });
+
+  test('§5.65 gates on the dedicated plan_drift_precheck toggle (mod 1a)', () => {
+    assert.match(
+      SECTION,
+      /workflow\.plan_drift_precheck/,
+      '§5.65 must dispatch on the dedicated plan_drift_precheck toggle, not schema_drift_gate',
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/fix-1464-docs-manifest-validation.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:fix-1464-docs-manifest-validation (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: source-text-is-the-product see #1464
+// Tutorial docs are the product surface users follow. Reading JSON code blocks
+// from them and validating through validateCapability is behavioral, not
+// source-grep — it proves the manifests work, not just that they "mention" a term.
+
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { validateCapability } = require('../scripts/gen-capability-registry.cjs');
+
+const ROOT = path.join(__dirname, '..');
+
+// ─── Extractor ───────────────────────────────────────────────────────────────
+
+// Required top-level fields that distinguish a complete capability manifest
+// from a partial output snippet (list-entry, install-result, etc.).
+// Partial output snippets have id+role but lack steps/contributions/gates/config.
+const MANIFEST_REQUIRED_KEYS = new Set([
+  'id', 'role', 'title', 'description', 'tier',
+  'requires', 'runtimeCompat', 'skills', 'agents',
+  'config', 'steps', 'contributions', 'gates',
+]);
+
+/**
+ * Extract JSON code blocks from markdown that are complete capability manifests.
+ * A complete manifest has ALL keys in MANIFEST_REQUIRED_KEYS.
+ * Partial output snippets (list-entries, install-results) have only id+role and are skipped.
+ */
+function extractManifests(mdContent) {
+  const manifests = [];
+  const fenceRe = /```json\s*\r?\n([\s\S]*?)```/g;
+  let match;
+  while ((match = fenceRe.exec(mdContent)) !== null) {
+    let parsed;
+    try {
+      parsed = JSON.parse(match[1]);
+    } catch {
+      continue;
+    }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const keys = new Set(Object.keys(parsed));
+      if ([...MANIFEST_REQUIRED_KEYS].every((k) => keys.has(k))) {
+        manifests.push(parsed);
+      }
+    }
+  }
+  return manifests;
+}
+
+// ─── Suite 1: tutorial manifests validate ────────────────────────────────────
+
+describe('docs tutorial manifests pass validateCapability (#1464 regression)', () => {
+  test('build-your-first-capability.md: every manifest passes', () => {
+    const content = fs.readFileSync(
+      path.join(ROOT, 'docs', 'tutorials', 'build-your-first-capability.md'),
+      'utf8',
+    );
+    const manifests = extractManifests(content);
+    assert.ok(
+      manifests.length > 0,
+      'expected at least one capability manifest in build tutorial',
+    );
+    for (const cap of manifests) {
+      const errors = validateCapability(cap, cap.id);
+      assert.deepStrictEqual(
+        errors,
+        [],
+        `build tutorial manifest id="${cap.id}" failed validateCapability:\n  ${errors.join('\n  ')}`,
+      );
+    }
+  });
+
+  test('install-your-first-capability.md: every manifest passes', () => {
+    const content = fs.readFileSync(
+      path.join(ROOT, 'docs', 'tutorials', 'install-your-first-capability.md'),
+      'utf8',
+    );
+    const manifests = extractManifests(content);
+    assert.ok(
+      manifests.length > 0,
+      'expected at least one capability manifest in install tutorial',
+    );
+    for (const cap of manifests) {
+      const errors = validateCapability(cap, cap.id);
+      assert.deepStrictEqual(
+        errors,
+        [],
+        `install tutorial manifest id="${cap.id}" failed validateCapability:\n  ${errors.join('\n  ')}`,
+      );
+    }
+  });
+
+  test('capability-manifest.md reference example passes', () => {
+    const content = fs.readFileSync(
+      path.join(ROOT, 'docs', 'reference', 'capability-manifest.md'),
+      'utf8',
+    );
+    const manifests = extractManifests(content);
+    assert.ok(
+      manifests.length > 0,
+      'expected at least one capability manifest in reference doc',
+    );
+    for (const cap of manifests) {
+      const errors = validateCapability(cap, cap.id);
+      assert.deepStrictEqual(
+        errors,
+        [],
+        `reference manifest id="${cap.id}" failed validateCapability:\n  ${errors.join('\n  ')}`,
+      );
+    }
+  });
+});
+
+// ─── Suite 2: adversarial — #1464 failure modes caught ───────────────────────
+//
+// These are the EXACT failure shapes from issue #1464.
+// They must fail validateCapability — proving this test would have caught the bug.
+
+describe('validateCapability catches original #1464 bug shapes', () => {
+  // #1464 high-1: step missing ref → validateStep rejects it
+  test('step without ref fails (the original broken tutorial step)', () => {
+    const cap = {
+      id: 'hello-note',
+      role: 'feature',
+      version: '0.1.0',
+      title: 'Hello Note',
+      description: 'Test fixture for #1464 regression.',
+      tier: 'standard',
+      requires: [],
+      engines: { gsd: '>=1.6.0' },
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [],
+      agents: [],
+      config: {},
+      steps: [
+        {
+          // Missing ref — this was the #1464 high-1 bug in the original tutorial
+          point: 'plan:pre',
+          produces: ['HELLO.md'],
+          consumes: [],
+          onError: 'skip',
+        },
+      ],
+      contributions: [],
+      gates: [],
+    };
+    const errors = validateCapability(cap, 'hello-note');
+    assert.ok(errors.length > 0, 'expected validation errors for step without ref');
+    assert.ok(
+      errors.some((e) => /ref/.test(e)),
+      `expected an error mentioning "ref"; got: ${errors.join('; ')}`,
+    );
+  });
+
+  // #1464 shape: id must match folder name (folderId contract)
+  test('id not matching folderId fails', () => {
+    const cap = {
+      id: 'hello-note',
+      role: 'feature',
+      version: '0.1.0',
+      title: 'Hello Note',
+      description: 'Test fixture for id/folderId mismatch.',
+      tier: 'standard',
+      requires: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [],
+      agents: [],
+      config: {},
+      steps: [],
+      contributions: [],
+      gates: [],
+    };
+    const errors = validateCapability(cap, 'wrong-folder');
+    assert.ok(errors.length > 0, 'expected id/folderId mismatch to fail validation');
+    assert.ok(
+      errors.some((e) => /folder/.test(e) || /equal/.test(e) || /id/.test(e)),
+      `expected error about id/folderId mismatch; got: ${errors.join('; ')}`,
+    );
+  });
+
+  // Corrected shape: contribution with fragment + into (the PR #1495 fix)
+  test('contribution with fragment.path + into passes (the PR #1495 fix shape)', () => {
+    const cap = {
+      id: 'hello-note',
+      role: 'feature',
+      version: '0.1.0',
+      title: 'Hello Note',
+      description: 'Injects a greeting note at plan:pre and produces HELLO.md.',
+      tier: 'standard',
+      requires: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [],
+      agents: [],
+      config: {},
+      steps: [],
+      contributions: [
+        {
+          point: 'plan:pre',
+          into: 'planner',
+          fragment: { path: 'fragments/plan-pre.md' },
+          produces: ['HELLO.md'],
+          consumes: [],
+          onError: 'skip',
+        },
+      ],
+      gates: [],
+    };
+    const errors = validateCapability(cap, 'hello-note');
+    assert.deepStrictEqual(
+      errors,
+      [],
+      `corrected contribution manifest has unexpected errors: ${errors.join('; ')}`,
+    );
+  });
+});
+
+// ─── Suite 3: extractManifests helper ────────────────────────────────────────
+
+describe('extractManifests helper unit tests', () => {
+  test('returns empty array for plain text with no JSON fences', () => {
+    assert.deepStrictEqual(extractManifests('No code blocks here.'), []);
+  });
+
+  test('skips JSON blocks without all required manifest keys', () => {
+    // Partial list-entry block — only has id, role, version but not steps/contributions/etc.
+    const md = '```json\n{"id":"x","role":"feature","version":"1.0.0"}\n```';
+    assert.deepStrictEqual(extractManifests(md), []);
+  });
+
+  function makeCompleteManifest(overrides) {
+    return {
+      id: 'test-cap', role: 'feature', title: 'T', description: 'D',
+      tier: 'standard', requires: [], runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [], agents: [], config: {}, steps: [], contributions: [], gates: [],
+      ...overrides,
+    };
+  }
+
+  test('extracts a complete manifest (all required keys present)', () => {
+    const cap = makeCompleteManifest({ id: 'x' });
+    const md = '```json\n' + JSON.stringify(cap, null, 2) + '\n```';
+    const result = extractManifests(md);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, 'x');
+  });
+
+  test('skips malformed JSON blocks silently', () => {
+    const complete = makeCompleteManifest({ id: 'y' });
+    const md = '```json\n{bad json here\n```\n```json\n' + JSON.stringify(complete) + '\n```';
+    const result = extractManifests(md);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, 'y');
+  });
+
+  test('extracts multiple complete manifests from one doc', () => {
+    const a = makeCompleteManifest({ id: 'cap-a' });
+    const b = makeCompleteManifest({ id: 'cap-b' });
+    const md = [
+      '```json\n' + JSON.stringify(a) + '\n```',
+      '```json\n' + JSON.stringify(b) + '\n```',
+    ].join('\n');
+    const result = extractManifests(md);
+    assert.strictEqual(result.length, 2);
+  });
+});
+  });
+}

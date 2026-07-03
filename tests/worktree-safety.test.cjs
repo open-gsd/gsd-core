@@ -2660,3 +2660,1610 @@ describe('bug #3384: adjacent worktree data-loss guards', () => {
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-260-worktree-path-guard.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-260-worktree-path-guard (consolidation epic #1969 B6 #1975)", () => {
+/**
+ * Regression tests for bug #260 — gsd-worktree-path-guard.js
+ *
+ * Executor agents spawned with isolation="worktree" sometimes issue Edit/Write
+ * calls with absolute paths rooted at the MAIN repository instead of the
+ * worktree. The prose guard in gsd-executor.md step 0b is skipped under load,
+ * so we enforce the constraint at the tooling layer with a PreToolUse hook.
+ *
+ * This file verifies all guard behaviours:
+ *   1. No-op in the main repo (.git is a directory)
+ *   2. Relative path always passes
+ *   3. Non-Edit/Write tools always pass
+ *   4. Absolute path inside worktree root passes
+ *   5. Absolute path outside worktree root is BLOCKED (exit 2)
+ *   6. Sibling path that merely shares a prefix is BLOCKED (/ boundary check)
+ *   7. install.js has an fs.existsSync guard for gsd-worktree-path-guard.js
+ */
+
+'use strict';
+
+const { describe, test, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync, execFileSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
+
+const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-worktree-path-guard.js');
+const INSTALL_SRC = path.join(__dirname, '..', 'bin', 'install.js');
+// ADR-857 phase 5f-1b: settings-json hook registration moved to runtime-hooks-surface.cts.
+const HOOKS_SURFACE_SRC = path.join(__dirname, '..', 'src', 'runtime-hooks-surface.cts');
+
+/**
+ * Resolve symlinks in a path so that we compare the same canonical form
+ * that `git rev-parse --show-toplevel` returns. On macOS /tmp is a symlink
+ * to /private/tmp, which causes path prefix checks to fail without this.
+ */
+function realp(p) {
+  try { return fs.realpathSync(p); } catch { return p; }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/**
+ * Create a plain git repo (main repo — .git is a directory).
+ */
+function makeMainRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-main-'));
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 'test@example.com']);
+  git(dir, ['config', 'user.name', 'Test User']);
+  git(dir, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, 'README.md'), '# test\n');
+  git(dir, ['add', 'README.md']);
+  git(dir, ['commit', '-q', '-m', 'chore: init']);
+  return dir;
+}
+
+/**
+ * Create a worktree off mainRepo and return its path.
+ * In the worktree, .git is a FILE (the gitdir pointer).
+ * @param {string} mainRepo - path to the main repo
+ * @param {string} [branchName] - branch name to use (default: 'worktree-agent-test')
+ */
+function makeWorktree(mainRepo, branchName) {
+  const branch = branchName || 'worktree-agent-test';
+  const wtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-wt-'));
+  fs.rmdirSync(wtDir); // git worktree add creates the dir itself
+  git(mainRepo, ['worktree', 'add', '-q', '-b', branch, wtDir]);
+  return wtDir;
+}
+
+/**
+ * Run the hook with a given payload, returning the spawnSync result.
+ */
+function runHook(cwd, payload) {
+  return spawnSync(process.execPath, [HOOK_PATH], {
+    cwd,
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fixture lifecycle
+// ---------------------------------------------------------------------------
+
+let mainRepo;
+let worktreeDir;
+
+before(() => {
+  mainRepo = realp(makeMainRepo());
+  worktreeDir = realp(makeWorktree(mainRepo));
+});
+
+after(() => {
+  // Remove worktree registration before deleting the directory
+  try { git(mainRepo, ['worktree', 'remove', '--force', worktreeDir]); } catch { /* ignore */ }
+  cleanup(mainRepo);
+  cleanup(worktreeDir);
+});
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('bug #260: gsd-worktree-path-guard.js', () => {
+
+  // 1. No-op in main repo
+  describe('no-op in main repo', () => {
+    test('Edit call in main repo (.git is a directory) exits 0', () => {
+      const payload = {
+        cwd: mainRepo,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(mainRepo, 'src', 'foo.ts') },
+      };
+      const result = runHook(mainRepo, payload);
+      assert.strictEqual(result.status, 0, `Expected exit 0 in main repo, got ${result.status}. stderr: ${result.stderr}`);
+      assert.strictEqual(result.stdout, '', 'Expected no stdout in main repo no-op');
+    });
+
+    test('Write call in main repo exits 0', () => {
+      const payload = {
+        cwd: mainRepo,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(mainRepo, 'out.txt') },
+      };
+      const result = runHook(mainRepo, payload);
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    });
+  });
+
+  // 2. Relative path always passes
+  describe('relative path', () => {
+    test('Edit with relative file_path exits 0 even in worktree', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/foo.ts' },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0, `Relative path should always pass. stderr: ${result.stderr}`);
+      assert.strictEqual(result.stdout, '');
+    });
+
+    test('Write with relative file_path exits 0 in worktree', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Write',
+        tool_input: { file_path: 'dist/bundle.js' },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    });
+  });
+
+  // 3. Non-Edit/Write tools always pass
+  describe('non-Edit/Write tools', () => {
+    test('Bash tool exits 0', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Bash',
+        tool_input: { command: 'ls' },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0);
+    });
+
+    test('Read tool exits 0', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Read',
+        tool_input: { file_path: path.join(mainRepo, 'README.md') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0);
+    });
+
+    test('Grep tool exits 0', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Grep',
+        tool_input: { pattern: 'foo', path: mainRepo },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0);
+    });
+  });
+
+  // 4. Absolute path inside worktree passes
+  describe('path inside worktree', () => {
+    test('Edit with absolute path inside worktree root exits 0', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(worktreeDir, 'src', 'foo.ts') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0, `Path inside worktree should pass. stderr: ${result.stderr}`);
+      assert.strictEqual(result.stdout, '');
+    });
+
+    test('Edit targeting exactly the worktree root exits 0', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: worktreeDir },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0);
+    });
+  });
+
+  // 5. Absolute path outside worktree is BLOCKED
+  describe('path outside worktree is blocked', () => {
+    test('Edit targeting main repo root exits 2 with block decision', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 2, `Expected exit 2 (block), got ${result.status}. stderr: ${result.stderr}`);
+      let parsed;
+      assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+      assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+    });
+
+    test('Write targeting main repo root exits 2 with block decision', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Write',
+        tool_input: { file_path: path.join(mainRepo, 'out.txt') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 2);
+      const parsed = JSON.parse(result.stdout);
+      assert.strictEqual(parsed.decision, 'block');
+    });
+
+    test('block output includes the offending path in reason', () => {
+      const offendingPath = path.join(mainRepo, 'src', 'leak.ts');
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: offendingPath },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 2);
+      const parsed = JSON.parse(result.stdout);
+      assert.ok(
+        parsed.reason && parsed.reason.includes(offendingPath),
+        `block reason should include the offending path. Got: ${parsed.reason}`
+      );
+    });
+  });
+
+  // 6. Sibling directory path is BLOCKED (validates the '/' boundary check AND prefix-overlap)
+  describe('sibling path is blocked', () => {
+    test('path that shares prefix with worktree root but is a sibling exits 2', () => {
+      // This test exercises BOTH the prefix-overlap boundary check AND the different-git-root block:
+      //   worktree  = <base>/wt
+      //   sibling   = <base>/wt-sibling   ← shares "wt" prefix with the worktree root
+      //   target    = <base>/wt-sibling/file.ts
+      //
+      // A naive startsWith(wtRoot) check would wrongly classify "<base>/wt-sibling/..." as inside
+      // the worktree (it doesn't include the '/' boundary). The hook resolves the sibling's git
+      // toplevel (a different repo) so the different-git-root block fires regardless.
+      // (#1342: paths outside all git repos now fail open; only different-git-root blocks.)
+      const base = realp(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-260-sib-base-')));
+      const wtDir = path.join(base, 'wt');
+      const siblingRepoDir = path.join(base, 'wt-sibling');
+      // We need a genuine linked worktree at <base>/wt and a separate git repo at <base>/wt-sibling.
+      // Create a fresh main repo to host this worktree (the fixture worktree is already allocated).
+      const sibMainRepo = realp(makeMainRepo());
+      try {
+        fs.mkdirSync(base, { recursive: true });
+        // Create linked worktree at <base>/wt (using sibMainRepo as its host).
+        git(sibMainRepo, ['worktree', 'add', '-q', '-b', 'worktree-agent-sib-test', wtDir]);
+        // Create a separate git repo at <base>/wt-sibling (shares "wt" prefix).
+        fs.mkdirSync(siblingRepoDir, { recursive: true });
+        git(siblingRepoDir, ['init', '-q']);
+        git(siblingRepoDir, ['config', 'user.email', 'test@example.com']);
+        git(siblingRepoDir, ['config', 'user.name', 'Test User']);
+        git(siblingRepoDir, ['config', 'commit.gpgsign', 'false']);
+        fs.writeFileSync(path.join(siblingRepoDir, 'README.md'), '# sibling\n');
+        git(siblingRepoDir, ['add', 'README.md']);
+        git(siblingRepoDir, ['commit', '-q', '-m', 'chore: sibling init']);
+
+        // Confirm prefix-overlap: siblingRepoDir starts with wtDir (without trailing sep).
+        assert.ok(
+          siblingRepoDir.startsWith(wtDir),
+          `Sibling "${siblingRepoDir}" must share a string prefix with worktree "${wtDir}" for this test to be meaningful`
+        );
+        // Confirm they are genuinely distinct (different toplevel).
+        assert.notStrictEqual(
+          realp(siblingRepoDir), realp(wtDir),
+          'sibling and worktree must be different directories'
+        );
+
+        const siblingPath = path.join(realp(siblingRepoDir), 'file.ts');
+        const payload = {
+          cwd: realp(wtDir),
+          tool_name: 'Edit',
+          tool_input: { file_path: siblingPath },
+        };
+        const result = runHook(realp(wtDir), payload);
+        assert.strictEqual(result.status, 2,
+          `Path inside a prefix-sibling git repo "${siblingPath}" must be blocked (exit 2), got ${result.status}. ` +
+          `This validates both the prefix-overlap boundary and the different-git-root block. stderr: ${result.stderr}`
+        );
+        const parsed = JSON.parse(result.stdout);
+        assert.strictEqual(parsed.decision, 'block');
+      } finally {
+        try { git(sibMainRepo, ['worktree', 'remove', '--force', wtDir]); } catch { /* ignore */ }
+        cleanup(sibMainRepo);
+        cleanup(base);
+      }
+    });
+  });
+
+  // 7. Adversarial: subdirectory cwd still guards correctly (Codex finding #2)
+  describe('subdirectory cwd', () => {
+    test('hook fires when cwd is a subdirectory of the worktree, not just its root', () => {
+      // The orchestrator may set cwd to a subdirectory. The hook must still
+      // detect the worktree context via git rev-parse --git-dir and block.
+      const subDir = path.join(worktreeDir, 'src');
+      fs.mkdirSync(subDir, { recursive: true });
+      const payload = {
+        cwd: subDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+      };
+      const result = runHook(subDir, payload);
+      assert.strictEqual(result.status, 2,
+        `Hook must block even when cwd is a subdirectory of the worktree. ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+      const parsed = JSON.parse(result.stdout);
+      assert.strictEqual(parsed.decision, 'block');
+    });
+
+    test('path inside worktree passes even when cwd is a subdirectory', () => {
+      const subDir = path.join(worktreeDir, 'src');
+      fs.mkdirSync(subDir, { recursive: true });
+      const payload = {
+        cwd: subDir,
+        tool_name: 'Edit',
+        tool_input: { file_path: path.join(worktreeDir, 'src', 'foo.ts') },
+      };
+      const result = runHook(subDir, payload);
+      assert.strictEqual(result.status, 0,
+        `Absolute path inside worktree should pass regardless of cwd. ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+    });
+  });
+
+  // 8. Adversarial: `..` traversal is normalised before the containment check (Codex finding #1)
+  describe('dot-dot traversal is blocked', () => {
+    test('path with .. that escapes the worktree is blocked', () => {
+      // Construct the traversal target inside a SEPARATE git repo that is
+      // guaranteed to be outside the worktree on every platform (no symlink
+      // ambiguity).  The hook finds the external dir's git toplevel (a different
+      // repo → different-git-root block).
+      // (#1342: paths outside all git repos now fail open; only different-git-root blocks,
+      // so externalDir must be inside a real different git repo to exercise the block.)
+      const externalDir = realp(makeMainRepo());
+      try {
+        // Sanity: the external directory must not be inside the worktree.
+        assert.ok(
+          !externalDir.startsWith(worktreeDir + path.sep) && externalDir !== worktreeDir,
+          `externalDir "${externalDir}" must be outside worktreeDir "${worktreeDir}"`
+        );
+
+        // Build a traversal path that uses ../ segments to climb out of the
+        // worktree and into externalDir.  path.resolve() will normalise it to
+        // externalDir/file.ts, which is outside the worktree by construction.
+        // We compute the number of segments needed to reach the filesystem root
+        // from worktreeDir so the traversal always lands at the right level
+        // regardless of how deep the worktree path is.
+        // Build a file_path containing literal `..` segments that climb out of the
+        // worktree into externalDir. path.relative() yields a ..-laden relative path
+        // between two same-drive absolute paths (both live under os.tmpdir()); we
+        // re-anchor it at worktreeDir via STRING CONCAT (NOT path.join, which would
+        // normalise the `..` away) so the hook's path.resolve() must collapse it.
+        // Windows-safe: avoids the drive-letter doubling that
+        // path.join(worktreeDir, '..', absolutePath) produces on win32 (#1342).
+        const externalTarget = path.join(externalDir, 'file.ts');
+        const traversalPath = worktreeDir + path.sep + path.relative(worktreeDir, externalTarget);
+
+        // Confirm the resolved path is truly outside the worktree (test integrity guard).
+        const resolved = path.resolve(traversalPath);
+        assert.ok(
+          !resolved.startsWith(worktreeDir + path.sep) && resolved !== worktreeDir,
+          `Traversal resolved to "${resolved}" which is still inside worktreeDir "${worktreeDir}". ` +
+          `This means the test itself is broken, not a production bug.`
+        );
+
+        const payload = {
+          cwd: worktreeDir,
+          tool_name: 'Edit',
+          tool_input: { file_path: traversalPath },
+        };
+        const result = runHook(worktreeDir, payload);
+        assert.strictEqual(result.status, 2,
+          `Traversal path "${traversalPath}" resolves to "${resolved}" which is outside the worktree. ` +
+          `Must be blocked (exit 2). Got exit ${result.status}. stderr: ${result.stderr}`
+        );
+        const parsed = JSON.parse(result.stdout);
+        assert.strictEqual(parsed.decision, 'block',
+          `Expected decision:"block", got: ${JSON.stringify(parsed)}`
+        );
+      } finally {
+        cleanup(externalDir);
+      }
+    });
+  });
+
+  // 9. MultiEdit is also guarded (Codex finding #5)
+  describe('MultiEdit tool is guarded', () => {
+    test('MultiEdit with outside absolute path is blocked', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'MultiEdit',
+        tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 2,
+        `MultiEdit targeting outside path must be blocked. Got ${result.status}. stderr: ${result.stderr}`
+      );
+      const parsed = JSON.parse(result.stdout);
+      assert.strictEqual(parsed.decision, 'block');
+    });
+
+    test('MultiEdit with inside absolute path passes', () => {
+      const payload = {
+        cwd: worktreeDir,
+        tool_name: 'MultiEdit',
+        tool_input: { file_path: path.join(worktreeDir, 'src', 'foo.ts') },
+      };
+      const result = runHook(worktreeDir, payload);
+      assert.strictEqual(result.status, 0,
+        `MultiEdit inside worktree should pass. Got ${result.status}. stderr: ${result.stderr}`
+      );
+    });
+  });
+
+});
+
+// ---------------------------------------------------------------------------
+// #1342 — GSD-activity gate + fail-open for no-repo targets
+// ---------------------------------------------------------------------------
+
+describe('#1342 — GSD-activity gate + fail-open for no-repo targets', () => {
+  // Fixtures: one non-agent linked worktree (plain user branch) + one agent worktree
+  let mainRepo1342;
+  let nonAgentWorktree;   // on branch 'feature-x' — non-GSD
+  let agentWorktree;       // on branch 'worktree-agent-foo' — GSD-managed
+
+  before(() => {
+    mainRepo1342 = realp(makeMainRepo());
+    nonAgentWorktree = realp(makeWorktree(mainRepo1342, 'feature-x'));
+    agentWorktree    = realp(makeWorktree(mainRepo1342, 'worktree-agent-foo'));
+  });
+
+  after(() => {
+    try { git(mainRepo1342, ['worktree', 'remove', '--force', nonAgentWorktree]); } catch { /* ignore */ }
+    try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktree]); } catch { /* ignore */ }
+    cleanup(mainRepo1342);
+    cleanup(nonAgentWorktree);
+    cleanup(agentWorktree);
+  });
+
+  // Test 1 — reporter repro: non-agent worktree writing outside all git repos → exit 0
+  test('(1) non-agent linked worktree: Write to a path outside all git repos exits 0 (no block)', () => {
+    // Simulates Claude Code plan-mode writing ~/.claude/plans/<slug>.md from a
+    // manually-created linked worktree that is NOT on a worktree-agent-* branch.
+    const plansDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1342-plans-'));
+    try {
+      const targetPath = path.join(plansDir, 'my-plan.md');
+      const payload = {
+        cwd: nonAgentWorktree,
+        tool_name: 'Write',
+        tool_input: { file_path: targetPath },
+      };
+      const result = runHook(nonAgentWorktree, payload);
+      assert.strictEqual(result.status, 0,
+        `Non-agent linked worktree writing outside git repos must exit 0 (reporter repro). ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+      assert.strictEqual(result.stdout, '', 'Expected no block output');
+    } finally {
+      cleanup(plansDir);
+    }
+  });
+
+  // Test 2 — non-agent linked worktree: Edit targeting MAIN repo root → exit 0 (gate no-op)
+  test('(2) non-agent linked worktree: Edit targeting main repo root exits 0 (gate no-op, not #260 block)', () => {
+    const payload = {
+      cwd: nonAgentWorktree,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(mainRepo1342, 'src', 'index.ts') },
+    };
+    const result = runHook(nonAgentWorktree, payload);
+    assert.strictEqual(result.status, 0,
+      `Non-agent linked worktree must exit 0 (GSD-activity gate fires before #260 check). ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    assert.strictEqual(result.stdout, '', 'Expected no block output');
+  });
+
+  // Test 3 — GSD-managed worktree (worktree-agent-foo): Edit targeting main repo root → exit 2 (block)
+  test('(3) GSD-managed worktree: Edit targeting main repo root exits 2 with block decision', () => {
+    const payload = {
+      cwd: agentWorktree,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(mainRepo1342, 'src', 'index.ts') },
+    };
+    const result = runHook(agentWorktree, payload);
+    assert.strictEqual(result.status, 2,
+      `GSD-managed worktree targeting main repo root must be blocked (exit 2). ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+    assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+  });
+
+  // Test 4 — GSD-managed worktree: absolute target INSIDE the active worktree → exit 0
+  test('(4) GSD-managed worktree: absolute target inside the active worktree exits 0', () => {
+    const payload = {
+      cwd: agentWorktree,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(agentWorktree, 'src', 'foo.ts') },
+    };
+    const result = runHook(agentWorktree, payload);
+    assert.strictEqual(result.status, 0,
+      `GSD-managed worktree targeting its own subtree must pass. ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    assert.strictEqual(result.stdout, '', 'Expected no block output');
+  });
+
+  // Test 5 — GSD-managed worktree: target OUTSIDE all git repos (tmpdir) → exit 0 (fail open)
+  test('(5) GSD-managed worktree: target outside all git repos exits 0 (fail open, not #260 vector)', () => {
+    // Create a temp dir that is NOT a git repository (no .git).
+    // This is the ~/.claude/plans/ scenario — a path that has a real ancestor
+    // directory but is outside every git repo.
+    // IMPORTANT: this dir must NOT be inside any .git directory — it must be a plain tempdir
+    // so the fail-open path (truly outside all repos) is exercised, not the .git-internals block.
+    const externalDir = realp(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1342-ext-')));
+    try {
+      const targetPath = path.join(externalDir, 'notes.md');
+      const payload = {
+        cwd: agentWorktree,
+        tool_name: 'Write',
+        tool_input: { file_path: targetPath },
+      };
+      const result = runHook(agentWorktree, payload);
+      assert.strictEqual(result.status, 0,
+        `GSD-managed worktree writing to a path outside all git repos must fail open (exit 0). ` +
+        `Only the different-git-root vector (#260) blocks; no-repo targets are not that vector. ` +
+        `Got exit ${result.status}. stderr: ${result.stderr}`
+      );
+      assert.strictEqual(result.stdout, '', 'Expected no block output');
+    } finally {
+      cleanup(externalDir);
+    }
+  });
+
+  // Test 6 — GSD-managed worktree: Write to .git/config of the MAIN repo → exit 2 (block)
+  test('(6) blocks absolute writes into the main repo .git internals from a GSD worktree (#1342)', () => {
+    // A target like /main-repo/.git/config or /main-repo/.git/hooks/pre-commit causes
+    // `git rev-parse --show-toplevel` to FAIL (a .git dir is not a work tree), so the
+    // "file not in any git repo" branch fires. Previously that branch failed open — but
+    // writing into repository internals via an absolute path is still a #260-class escape
+    // (and dangerous, e.g. injecting a git hook). The fix checks --is-inside-git-dir and
+    // blocks when true.
+    const gitConfigPath = path.join(mainRepo1342, '.git', 'config');
+    const payload = {
+      cwd: agentWorktree,
+      tool_name: 'Write',
+      tool_input: { file_path: gitConfigPath },
+    };
+    const result = runHook(agentWorktree, payload);
+    assert.strictEqual(result.status, 2,
+      `GSD-managed worktree targeting .git/config of another repo must be blocked (exit 2). ` +
+      `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+    assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+    assert.ok(
+      parsed.reason && parsed.reason.includes('.git'),
+      `Block reason should mention .git internals. Got: ${parsed.reason}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Static analysis: install.js guard
+// ---------------------------------------------------------------------------
+
+describe('install.js guard for gsd-worktree-path-guard.js', () => {
+  let src;
+
+  before(() => {
+    // ADR-857 phase 5f-1b: hook registration moved to runtime-hooks-surface.cts.
+    // Concatenate both sources so structural assertions find patterns in either file.
+    const installSrc = fs.readFileSync(INSTALL_SRC, 'utf-8');
+    let hooksSurfaceSrc = '';
+    try { hooksSurfaceSrc = fs.readFileSync(HOOKS_SURFACE_SRC, 'utf-8'); } catch { /* ok */ }
+    src = installSrc + '\n' + hooksSurfaceSrc;
+  });
+
+  test('install.js has hasWorktreePathGuardHook variable', () => {
+    assert.ok(
+      src.includes('hasWorktreePathGuardHook'),
+      'hasWorktreePathGuardHook variable not found in install.js'
+    );
+  });
+
+  test('install.js checks fs.existsSync before registering gsd-worktree-path-guard.js', () => {
+    const anchorIdx = src.indexOf('hasWorktreePathGuardHook');
+    assert.ok(anchorIdx !== -1, 'hasWorktreePathGuardHook not found in install.js');
+
+    const blockStart = anchorIdx;
+    const blockEnd = Math.min(src.length, anchorIdx + 1200);
+    const block = src.slice(blockStart, blockEnd);
+
+    assert.ok(
+      block.includes('fs.existsSync') || block.includes('existsSync'),
+      'install.js must call fs.existsSync on the target path before registering ' +
+      'gsd-worktree-path-guard.js in settings.json. Without this guard, the hook ' +
+      'is registered even when the .js file was never copied (root cause of #1754).'
+    );
+  });
+
+  test('install.js emits a skip warning when gsd-worktree-path-guard.js is missing', () => {
+    const anchorIdx = src.indexOf('hasWorktreePathGuardHook');
+    assert.ok(anchorIdx !== -1, 'hasWorktreePathGuardHook not found in install.js');
+
+    const block = src.slice(anchorIdx, Math.min(src.length, anchorIdx + 1200));
+
+    assert.ok(
+      block.includes('Skipped') && block.includes('gsd-worktree-path-guard'),
+      'install.js must emit a skip warning mentioning gsd-worktree-path-guard when the file is not found'
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-261-worktree-force-add-guard.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-261-worktree-force-add-guard (consolidation epic #1969 B6 #1975)", () => {
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync, spawnSync } = require('node:child_process');
+
+const { cleanup } = require('./helpers.cjs');
+
+const HOOK_PATH = path.join(__dirname, '..', 'hooks', 'gsd-workflow-guard.js');
+
+function git(cwd, args) {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+function makeRepo(branch) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bug-261-'));
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.email', 'test@example.com']);
+  git(dir, ['config', 'user.name', 'Test User']);
+  git(dir, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(dir, 'README.md'), '# test\n');
+  git(dir, ['add', 'README.md']);
+  git(dir, ['commit', '-q', '-m', 'chore: init']);
+  git(dir, ['checkout', '-q', '-b', branch]);
+  return dir;
+}
+
+function setWorkflowGuard(dir, enabled) {
+  const planningDir = path.join(dir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(planningDir, 'config.json'),
+    JSON.stringify({ hooks: { workflow_guard: enabled } }, null, 2)
+  );
+}
+
+function runHookInput(cwd, input) {
+  return spawnSync(process.execPath, [HOOK_PATH], {
+    cwd,
+    encoding: 'utf8',
+    input: JSON.stringify({ cwd, ...input }),
+  });
+}
+
+function runBashHook(cwd, command) {
+  return runHookInput(cwd, {
+    tool_name: 'Bash',
+    tool_input: { command },
+  });
+}
+
+describe('bug #261: workflow guard blocks forced git add on worktree-agent branches', () => {
+  test('blocks git add -f on worktree-agent branch when workflow guard is enabled', () => {
+    const dir = makeRepo('worktree-agent-a1');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, 'git add -f .planning/phases/01/01-01-SUMMARY.md');
+      assert.strictEqual(result.status, 2);
+      const envelope = JSON.parse(result.stdout);
+      assert.strictEqual(envelope.decision, 'block');
+      assert.strictEqual(envelope.code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('blocks git add --force with git global options on worktree-agent branch', () => {
+    const dir = makeRepo('worktree-agent-b2');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, `git -C "${dir}" add --force .planning/SUMMARY.md`);
+      assert.strictEqual(result.status, 2);
+      assert.strictEqual(JSON.parse(result.stdout).code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('allows ordinary git add on worktree-agent branch', () => {
+    const dir = makeRepo('worktree-agent-c3');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, 'git add .planning/SUMMARY.md');
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('allows pathspecs named like force flags after git add -- terminator', () => {
+    const dir = makeRepo('worktree-agent-d4');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, 'git add -- -f');
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('allows git add -f outside worktree-agent branches', () => {
+    const dir = makeRepo('feature-docs');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, 'git add -f .planning/SUMMARY.md');
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('allows git add -f on worktree-agent branch when workflow guard is disabled', () => {
+    const dir = makeRepo('worktree-agent-e5');
+    try {
+      setWorkflowGuard(dir, false);
+      const result = runBashHook(dir, 'git add -f .planning/SUMMARY.md');
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('allows git add -f on worktree-agent branch when no GSD config exists', () => {
+    const dir = makeRepo('worktree-agent-f6');
+    try {
+      const result = runBashHook(dir, 'git add -f .planning/SUMMARY.md');
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, '');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test('applies the advisory path to MultiEdit when workflow guard is enabled', () => {
+    const dir = makeRepo('feature-multiedit');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runHookInput(dir, {
+        tool_name: 'MultiEdit',
+        tool_input: {
+          file_path: path.join(dir, 'src.js'),
+          edits: [],
+        },
+      });
+      assert.strictEqual(result.status, 0);
+      const envelope = JSON.parse(result.stdout);
+      assert.match(
+        envelope.hookSpecificOutput.additionalContext,
+        /WORKFLOW ADVISORY/
+      );
+    } finally {
+      cleanup(dir);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2772-gitmodules-path-intersection.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2772-gitmodules-path-intersection (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: source-text-is-the-product (see #2772)
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+/**
+ * Regression test for #2772: worktree isolation is unconditionally disabled
+ * when `.gitmodules` exists in the repo, even when the plan does not touch
+ * any submodule path.
+ *
+ * Behavioral test: the bash decision pipeline from
+ * gsd-core/workflows/execute-phase.md is extracted verbatim into an
+ * executable snippet here, then run via execFileSync('bash', ...) against
+ * real fixture projects built with `createTempGitProject()`. We assert
+ * the resulting USE_WORKTREES_FOR_PLAN value (printed on the final line
+ * of stdout) and the presence/absence of the [worktree] log line for each
+ * scenario.
+ *
+ * If execute-phase.md's bash gate is ever rewritten so the extracted
+ * snippet stops matching real behavior, this test must be updated to
+ * track the new pipeline — never replaced with a source grep.
+ *
+ * In addition to the per-plan gate behavior, this file also asserts:
+ *   - The workflow markdown actually wires USE_WORKTREES_FOR_PLAN into
+ *     each of the four dispatch sites (worktree-mode gate, sequential-mode
+ *     gate, "worktrees disabled" prose, post-wave cleanup gate). Without
+ *     this, the per-plan computation would be dead code (the original
+ *     #2772 fix shipped in this state — CodeRabbit caught it).
+ *   - The quick.md executor prompt injects SUBMODULE_PATHS and a fail-loud
+ *     pre-commit guard, and the guard actually aborts when staged paths
+ *     fall inside a submodule.
+ */
+
+const { describe, test, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { execFileSync } = require('child_process');
+const { createTempGitProject, cleanup } = require('./helpers.cjs');
+
+// Bash snippet extracted from execute-phase.md (the SUBMODULE_PATHS parse +
+// per-plan intersection logic with normalization + bidirectional matching).
+// Inputs come from env vars: PLAN_FILES (whitespace-separated) and plan_id.
+// Output: log lines on stdout, then a final line
+// `USE_WORKTREES_FOR_PLAN=<true|false>` for the test to parse.
+const GATE_SNIPPET = [
+  'set -e',
+  'USE_WORKTREES="${USE_WORKTREES:-true}"',
+  'if [ -f .gitmodules ]; then',
+  "  SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp '^submodule\\..*\\.path$' 2>/dev/null | awk '{print $2}')",
+  'else',
+  '  SUBMODULE_PATHS=""',
+  'fi',
+  'USE_WORKTREES_FOR_PLAN="$USE_WORKTREES"',
+  'if [ -n "$SUBMODULE_PATHS" ] && [ "$USE_WORKTREES_FOR_PLAN" != "false" ]; then',
+  '  if [ -z "$PLAN_FILES" ]; then',
+  '    echo "[worktree] Plan ${plan_id}: files_modified missing/unparseable — disabling worktree isolation as a safety fallback (submodule project)"',
+  '    USE_WORKTREES_FOR_PLAN=false',
+  '  else',
+  '    INTERSECT=""',
+  '    set -f',
+  '    for sm_raw in $SUBMODULE_PATHS; do',
+  '      sm="${sm_raw#./}"',
+  '      sm="${sm%/}"',
+  '      [ -z "$sm" ] && continue',
+  '      for pf_raw in $PLAN_FILES; do',
+  '        pf="${pf_raw#./}"',
+  '        pf="${pf%/}"',
+  '        [ -z "$pf" ] && continue',
+  '        matched=0',
+  '        case "$pf" in',
+  '          "$sm"|"$sm"/*) matched=1 ;;',
+  '        esac',
+  '        if [ "$matched" -eq 0 ]; then',
+  '          case "$sm" in',
+  '            "$pf"|"$pf"/*) matched=1 ;;',
+  '          esac',
+  '        fi',
+  '        if [ "$matched" -eq 0 ]; then',
+  '          case "$pf" in',
+  "            *'*'*|*'?'*|*'['*)",
+  '              prefix="${pf%%[*?[]*}"',
+  '              prefix="${prefix%/}"',
+  '              if [ -n "$prefix" ]; then',
+  '                case "$sm" in',
+  '                  "$prefix"|"$prefix"/*) matched=1 ;;',
+  '                esac',
+  '                if [ "$matched" -eq 0 ]; then',
+  '                  case "$prefix" in',
+  '                    "$sm"|"$sm"/*) matched=1 ;;',
+  '                  esac',
+  '                fi',
+  '              fi',
+  '              ;;',
+  '        esac',
+  '        fi',
+  '        if [ "$matched" -eq 1 ]; then',
+  '          INTERSECT="$INTERSECT $pf_raw"',
+  '        fi',
+  '      done',
+  '    done',
+  '    set +f',
+  '    if [ -n "$INTERSECT" ]; then',
+  '      echo "[worktree] Plan ${plan_id}: planned paths intersect submodule paths (${INTERSECT# }) — disabling worktree isolation for this plan"',
+  '      USE_WORKTREES_FOR_PLAN=false',
+  '    fi',
+  '  fi',
+  'fi',
+  'echo "USE_WORKTREES_FOR_PLAN=$USE_WORKTREES_FOR_PLAN"',
+].join('\n');
+
+function runGate(cwd, env) {
+  const out = execFileSync('bash', ['-c', GATE_SNIPPET], {
+    cwd,
+    encoding: 'utf-8',
+    env: { ...process.env, ...env },
+  });
+  const lines = out.trim().split('\n');
+  const last = lines[lines.length - 1];
+  const m = last.match(/^USE_WORKTREES_FOR_PLAN=(true|false)$/);
+  assert.ok(
+    m,
+    `expected final line to be USE_WORKTREES_FOR_PLAN=<bool>, got: ${last}\nfull stdout:\n${out}`
+  );
+  return { decision: m[1], stdout: out, logLines: lines.slice(0, -1) };
+}
+
+function writeGitmodulesWithSubmodule(repo, submodulePath) {
+  const content = [
+    `[submodule "${submodulePath}"]`,
+    `\tpath = ${submodulePath}`,
+    `\turl = https://example.invalid/${submodulePath}.git`,
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(repo, '.gitmodules'), content);
+}
+
+describe('Submodule worktree-isolation gate intersects planned paths (#2772)', () => {
+  let repo;
+
+  beforeEach(() => {
+    repo = createTempGitProject('gsd-test-2772-');
+  });
+
+  afterEach(() => {
+    cleanup(repo);
+  });
+
+  test('plan touching only src/ in a submodule project keeps worktree isolation ENABLED', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, logLines } = runGate(repo, {
+      PLAN_FILES: 'src/index.ts src/lib/util.ts',
+      plan_id: 'plan-001',
+    });
+
+    assert.equal(decision, 'true');
+    assert.equal(logLines.filter((l) => l.startsWith('[worktree]')).length, 0);
+  });
+
+  test('plan touching vendor/foo/bar.ts in a submodule project DISABLES worktree isolation', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, stdout } = runGate(repo, {
+      PLAN_FILES: 'src/index.ts vendor/foo/bar.ts',
+      plan_id: 'plan-002',
+    });
+
+    assert.equal(decision, 'false');
+    assert.match(stdout, /\[worktree\] Plan plan-002: planned paths intersect submodule paths/);
+    assert.match(stdout, /vendor\/foo\/bar\.ts/);
+  });
+
+  test('plan whose path equals the submodule root (vendor/foo) DISABLES worktree isolation', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, stdout } = runGate(repo, {
+      PLAN_FILES: 'vendor/foo',
+      plan_id: 'plan-003',
+    });
+
+    assert.equal(decision, 'false');
+    assert.match(stdout, /\[worktree\] Plan plan-003: planned paths intersect submodule paths/);
+  });
+
+  test('missing files_modified in a submodule project falls back to DISABLE with a logged reason', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, stdout } = runGate(repo, {
+      PLAN_FILES: '',
+      plan_id: 'plan-004',
+    });
+
+    assert.equal(decision, 'false');
+    assert.match(stdout, /\[worktree\] Plan plan-004: files_modified missing\/unparseable/);
+    assert.match(stdout, /safety fallback/);
+  });
+
+  test('repo with no .gitmodules at all keeps worktree isolation ENABLED regardless of plan paths', () => {
+    const { decision, logLines } = runGate(repo, {
+      PLAN_FILES: 'vendor/foo/bar.ts src/index.ts',
+      plan_id: 'plan-005',
+    });
+
+    assert.equal(decision, 'true');
+    assert.equal(logLines.filter((l) => l.startsWith('[worktree]')).length, 0);
+  });
+
+  test('multiple submodules, plan touches only one of them — DISABLE with that path in the log', () => {
+    const gitmodules = [
+      '[submodule "vendor/foo"]',
+      '\tpath = vendor/foo',
+      '\turl = https://example.invalid/foo.git',
+      '[submodule "third_party/bar"]',
+      '\tpath = third_party/bar',
+      '\turl = https://example.invalid/bar.git',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(repo, '.gitmodules'), gitmodules);
+
+    const { decision, stdout } = runGate(repo, {
+      PLAN_FILES: 'src/a.ts third_party/bar/b.ts',
+      plan_id: 'plan-006',
+    });
+
+    assert.equal(decision, 'false');
+    assert.match(stdout, /third_party\/bar\/b\.ts/);
+  });
+
+  test('planned path that merely shares a prefix with a submodule (vendor/foobar) does NOT count as intersection', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, logLines } = runGate(repo, {
+      PLAN_FILES: 'vendor/foobar/x.ts',
+      plan_id: 'plan-007',
+    });
+
+    assert.equal(decision, 'true');
+    assert.equal(logLines.filter((l) => l.startsWith('[worktree]')).length, 0);
+  });
+
+  // ---- Path-normalization & glob coverage (CodeRabbit MAJOR finding) ----
+
+  test('planned path with leading "./" normalizes and DISABLES isolation when inside a submodule', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, stdout } = runGate(repo, {
+      PLAN_FILES: './vendor/foo/bar.c',
+      plan_id: 'plan-norm-1',
+    });
+
+    assert.equal(decision, 'false', './vendor/foo/bar.c must normalize and intersect vendor/foo');
+    assert.match(stdout, /vendor\/foo\/bar\.c/);
+  });
+
+  test('planned path with trailing slash equal to submodule DISABLES isolation', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision } = runGate(repo, {
+      PLAN_FILES: 'vendor/foo/',
+      plan_id: 'plan-norm-2',
+    });
+
+    assert.equal(decision, 'false', 'trailing slash must not defeat the submodule-root match');
+  });
+
+  test('globby planned path "vendor/**/*.c" DISABLES isolation when submodule sits inside vendor/', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, stdout } = runGate(repo, {
+      PLAN_FILES: 'vendor/**/*.c',
+      plan_id: 'plan-norm-3',
+    });
+
+    assert.equal(
+      decision,
+      'false',
+      'glob whose literal prefix "vendor" contains submodule vendor/foo must intersect'
+    );
+    assert.match(stdout, /vendor\/\*\*\/\*\.c/);
+  });
+
+  test('plan declares a parent directory of the submodule (e.g. "vendor") — DISABLES isolation', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision } = runGate(repo, {
+      PLAN_FILES: 'vendor',
+      plan_id: 'plan-norm-4',
+    });
+
+    assert.equal(
+      decision,
+      'false',
+      'planned path that contains the submodule must intersect (bidirectional matching)'
+    );
+  });
+
+  test('submodule path declared with leading "./" in .gitmodules still matches a plain planned path', () => {
+    const gitmodules = [
+      '[submodule "vendor/foo"]',
+      '\tpath = ./vendor/foo',
+      '\turl = https://example.invalid/foo.git',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(repo, '.gitmodules'), gitmodules);
+
+    const { decision } = runGate(repo, {
+      PLAN_FILES: 'vendor/foo/bar.ts',
+      plan_id: 'plan-norm-5',
+    });
+
+    assert.equal(
+      decision,
+      'false',
+      'submodule "./vendor/foo" must normalize and match plain planned path vendor/foo/bar.ts'
+    );
+  });
+
+  test('globby planned path that does NOT overlap the submodule keeps isolation ENABLED', () => {
+    writeGitmodulesWithSubmodule(repo, 'vendor/foo');
+
+    const { decision, logLines } = runGate(repo, {
+      PLAN_FILES: 'src/**/*.ts',
+      plan_id: 'plan-norm-6',
+    });
+
+    assert.equal(decision, 'true');
+    assert.equal(logLines.filter((l) => l.startsWith('[worktree]')).length, 0);
+  });
+});
+
+// ---- Workflow-markdown wiring assertions (CodeRabbit CRITICAL finding) ----
+//
+// The original PR computed USE_WORKTREES_FOR_PLAN but never read it at the
+// dispatch sites — the dispatch still branched on the project-level
+// USE_WORKTREES, so the per-plan decision was dead code. Assert the markdown
+// actually wires the variable into the four dispatch sites.
+
+describe('execute-phase.md dispatch wires USE_WORKTREES_FOR_PLAN (#2772)', () => {
+  const workflowPath = path.join(
+    __dirname,
+    '..',
+    'gsd-core',
+    'workflows',
+    'execute-phase.md'
+  );
+  const gatePath = path.join(
+    __dirname,
+    '..',
+    'gsd-core',
+    'workflows',
+    'execute-phase',
+    'steps',
+    'per-plan-worktree-gate.md'
+  );
+
+  test('workflow file exists and is readable', () => {
+    assert.ok(fs.existsSync(workflowPath), `expected ${workflowPath} to exist`);
+  });
+
+  test('per-plan worktree gate steps file exists and is readable', () => {
+    assert.ok(fs.existsSync(gatePath), `expected ${gatePath} to exist`);
+  });
+
+  test('Worktree-mode dispatch gate reads USE_WORKTREES_FOR_PLAN, not USE_WORKTREES', () => {
+    const md = fs.readFileSync(workflowPath, 'utf-8');
+    assert.match(
+      md,
+      /\*\*Worktree mode\*\*\s*\(`USE_WORKTREES_FOR_PLAN`/,
+      'Worktree-mode header must gate on USE_WORKTREES_FOR_PLAN per-plan'
+    );
+  });
+
+  test('Sequential-mode dispatch gate reads USE_WORKTREES_FOR_PLAN', () => {
+    const md = fs.readFileSync(workflowPath, 'utf-8');
+    assert.match(
+      md,
+      /\*\*Sequential mode\*\*\s*\(`USE_WORKTREES_FOR_PLAN`/,
+      'Sequential-mode header must gate on USE_WORKTREES_FOR_PLAN per-plan'
+    );
+  });
+
+  test('"Worktrees disabled" sequential rule is documented per-plan, not project-level', () => {
+    const md = fs.readFileSync(workflowPath, 'utf-8');
+    assert.match(
+      md,
+      /worktrees are disabled for a plan/i,
+      'sequential-execution rule must be expressed per-plan'
+    );
+  });
+
+  test('execute-phase.md hooks the per-plan gate steps file at sub-step 2.5', () => {
+    const md = fs.readFileSync(workflowPath, 'utf-8');
+    assert.match(md, /Per-plan worktree decision/, 'sub-step header must exist in execute_waves');
+    assert.match(
+      md,
+      /execute-phase\/steps\/per-plan-worktree-gate\.md/,
+      'execute-phase.md must reference the extracted gate file'
+    );
+  });
+
+  test('per-plan gate file documents PLAN_FILES extraction from plan_json', () => {
+    const md = fs.readFileSync(gatePath, 'utf-8');
+    assert.match(
+      md,
+      /jq -r '\.files_modified \/\/ \[\] \| join\(" "\)' <<<"\$plan_json"/,
+      'PLAN_FILES extraction from plan_json must be documented in the gate file'
+    );
+  });
+
+  test('per-plan gate file uses bidirectional case + glob-prefix handling + set -f discipline', () => {
+    const md = fs.readFileSync(gatePath, 'utf-8');
+    assert.match(md, /set -f/, 'matcher must disable globbing while iterating');
+    assert.match(md, /set \+f/, 'matcher must re-enable globbing after iteration');
+    const pfFirst = md.match(/case "\$pf" in\s+"\$sm"\|"\$sm"\/\*\)/);
+    const smFirst = md.match(/case "\$sm" in\s+"\$pf"\|"\$pf"\/\*\)/);
+    assert.ok(pfFirst, 'matcher must check pf inside sm');
+    assert.ok(smFirst, 'matcher must check sm inside pf (bidirectional)');
+    assert.match(md, /sm="\$\{sm_raw#\.\/\}"/, 'submodule path must strip leading ./');
+    assert.match(md, /pf="\$\{pf_raw#\.\/\}"/, 'planned path must strip leading ./');
+    assert.match(md, /sm="\$\{sm%\/\}"/, 'submodule path must strip trailing /');
+    assert.match(md, /pf="\$\{pf%\/\}"/, 'planned path must strip trailing /');
+  });
+
+  test('Post-wave worktree-cleanup gate is per-plan, not blanket project-level', () => {
+    const md = fs.readFileSync(workflowPath, 'utf-8');
+    assert.match(
+      md,
+      /WAVE_WORKTREE_PLANS/,
+      'post-wave cleanup must track which plans actually used worktrees'
+    );
+  });
+});
+
+// ---- quick.md SUBMODULE_PATHS executor guard (CodeRabbit CRITICAL #3) ----
+//
+// Quick mode does NOT have a pre-declared files_modified list. The fail-loud
+// guard must (a) be present in the markdown of the executor prompt, and
+// (b) actually abort when run against a fixture that stages a submodule path.
+
+describe('quick.md executor pre-commit submodule guard (#2772)', () => {
+  const quickPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'quick.md');
+
+  test('quick.md executor prompt injects SUBMODULE_PATHS', () => {
+    const md = fs.readFileSync(quickPath, 'utf-8');
+    assert.match(
+      md,
+      /SUBMODULE_PATHS for this project: \$\{SUBMODULE_PATHS\}/,
+      'executor prompt must inline SUBMODULE_PATHS so the agent can run the guard'
+    );
+  });
+
+  test('quick.md executor prompt contains a fail-loud pre-commit guard with ABORT message', () => {
+    const md = fs.readFileSync(quickPath, 'utf-8');
+    assert.match(md, /<submodule_commit_guard>/, 'guard block must exist');
+    assert.match(
+      md,
+      /git diff --cached --name-only/,
+      'guard must inspect staged paths before commit'
+    );
+    assert.match(
+      md,
+      /ABORT: staged path/,
+      'guard must surface a fail-loud ABORT message on intersection'
+    );
+    assert.match(
+      md,
+      /workflow\.use_worktrees=false/,
+      'guard must tell the user how to recover (re-run without worktrees)'
+    );
+  });
+
+  // Behavioral: extract the guard logic and run it against a fixture repo.
+  // We simulate the executor's commit-time guard and assert it aborts when a
+  // staged path falls inside a SUBMODULE_PATHS entry, and passes otherwise.
+  const QUICK_GUARD_SNIPPET = [
+    'set +e',
+    'STAGED=$(git diff --cached --name-only)',
+    'if [ -n "$SUBMODULE_PATHS" ]; then',
+    '  for sm_raw in $SUBMODULE_PATHS; do',
+    '    sm="${sm_raw#./}"',
+    '    sm="${sm%/}"',
+    '    [ -z "$sm" ] && continue',
+    '    for f_raw in $STAGED; do',
+    '      f="${f_raw#./}"',
+    '      f="${f%/}"',
+    '      case "$f" in',
+    '        "$sm"|"$sm"/*)',
+    '          echo "ABORT: staged path $f_raw falls inside submodule $sm — re-run with workflow.use_worktrees=false" >&2',
+    '          exit 1 ;;',
+    '      esac',
+    '    done',
+    '  done',
+    'fi',
+    'echo "OK"',
+  ].join('\n');
+
+  test('guard ABORTs when a staged path falls inside a submodule', () => {
+    const repo = createTempGitProject('gsd-test-2772-quick-abort-');
+    try {
+      // Create a file inside the submodule path and stage it.
+      fs.mkdirSync(path.join(repo, 'vendor', 'foo'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'vendor', 'foo', 'bar.ts'), 'export {};\n');
+      execFileSync('git', ['add', 'vendor/foo/bar.ts'], { cwd: repo });
+
+      let err;
+      try {
+        execFileSync('bash', ['-c', QUICK_GUARD_SNIPPET], {
+          cwd: repo,
+          encoding: 'utf-8',
+          env: { ...process.env, SUBMODULE_PATHS: 'vendor/foo' },
+        });
+      } catch (e) {
+        err = e;
+      }
+      assert.ok(err, 'guard must exit non-zero when staged path is inside submodule');
+      assert.equal(err.status, 1, 'guard must exit with status 1');
+      const stderr = err.stderr ? err.stderr.toString() : '';
+      assert.match(stderr, /ABORT: staged path vendor\/foo\/bar\.ts/);
+      assert.match(stderr, /vendor\/foo/);
+    } finally {
+      cleanup(repo);
+    }
+  });
+
+  test('guard passes when no staged path falls inside a submodule', () => {
+    const repo = createTempGitProject('gsd-test-2772-quick-pass-');
+    try {
+      fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'src', 'index.ts'), 'export {};\n');
+      execFileSync('git', ['add', 'src/index.ts'], { cwd: repo });
+
+      const out = execFileSync('bash', ['-c', QUICK_GUARD_SNIPPET], {
+        cwd: repo,
+        encoding: 'utf-8',
+        env: { ...process.env, SUBMODULE_PATHS: 'vendor/foo' },
+      });
+      assert.match(out, /OK/);
+    } finally {
+      cleanup(repo);
+    }
+  });
+
+  test('guard normalizes leading "./" on staged paths and still ABORTs', () => {
+    const repo = createTempGitProject('gsd-test-2772-quick-norm-');
+    try {
+      fs.mkdirSync(path.join(repo, 'vendor', 'foo'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'vendor', 'foo', 'bar.ts'), 'export {};\n');
+      execFileSync('git', ['add', 'vendor/foo/bar.ts'], { cwd: repo });
+
+      let err;
+      try {
+        // Submodule path declared with ./ prefix — must still match.
+        execFileSync('bash', ['-c', QUICK_GUARD_SNIPPET], {
+          cwd: repo,
+          encoding: 'utf-8',
+          env: { ...process.env, SUBMODULE_PATHS: './vendor/foo' },
+        });
+      } catch (e) {
+        err = e;
+      }
+      assert.ok(err, 'guard must abort even when SUBMODULE_PATHS uses ./ prefix');
+      assert.equal(err.status, 1);
+    } finally {
+      cleanup(repo);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3542-executor-git-stash-prohibition.test.cjs — consolidation epic #1969 (B6 #1975)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3542-executor-git-stash-prohibition (consolidation epic #1969 B6 #1975)", () => {
+// allow-test-rule: source-text-is-the-product (see #3542)
+// Bug #3542 — Worktree stash storage is shared across agent worktrees;
+// `git stash pop` from an executor agent contaminates its isolation.
+//
+// Git stores stashes at `refs/stash` (plus the stash reflog) inside the
+// PARENT `.git/` directory. Every linked worktree shares that ref, so a
+// `git stash push` in any worktree (or in the main checkout) is visible —
+// and poppable — from every other worktree. From inside a worktree,
+// `git stash list` shows the shared list with no indication that an entry
+// originated elsewhere.
+//
+// Incident: an executor agent ran `git stash` (printed "No local changes
+// to save" — nothing pushed), then `git stash pop`, which yanked a stash
+// from a prior worktree-agent session. Result: 21 files in UU/UD state,
+// 16 phantom untracked files, ~12 minutes of recovery work. This breaks
+// the `isolation="worktree"` invariant documented in the executor agent.
+//
+// Two test cases:
+//
+//   A. The agent prompt content asserts the `git stash` family is
+//      prohibited and documents an alternative. The prompt content IS
+//      the runtime contract for the agent — source-text-is-the-product
+//      (per CONTEXT.md `RULESET.TESTS.no-source-grep.exemption`).
+//
+//   B. A behavioural test that pins the git invariant the prohibition
+//      defends against: a stash pushed in the main checkout is visible in
+//      a linked worktree's `git stash list`, proving stash storage is
+//      shared and cannot be relied on for worktree-scoped isolation.
+
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
+
+const EXECUTOR_PATH = path.join(__dirname, '..', 'agents', 'gsd-executor.md');
+
+// ─── Test A — prompt content asserts the prohibition ───────────────────────
+
+test('bug-3542: gsd-executor.md prohibits `git stash` family inside worktrees', () => {
+  const content = fs.readFileSync(EXECUTOR_PATH, 'utf-8');
+
+  // The prohibition must call out `git stash` explicitly. Just listing
+  // "stash" isn't enough — the existing post-wave-hook helper script
+  // legitimately mentions stash, so we look for the specific forbidden
+  // commands the agent must never run on its own.
+  assert.match(
+    content,
+    /`git stash`/,
+    'gsd-executor.md must explicitly forbid `git stash` (bare push) — see #3542',
+  );
+  assert.match(
+    content,
+    /`git stash pop`/,
+    'gsd-executor.md must explicitly forbid `git stash pop` — the load-bearing footgun (#3542)',
+  );
+  assert.match(
+    content,
+    /`git stash apply`/,
+    'gsd-executor.md must explicitly forbid `git stash apply` — same shared-stack hazard as pop (#3542)',
+  );
+  assert.match(
+    content,
+    /`git stash drop`/,
+    'gsd-executor.md must explicitly forbid `git stash drop` — mutates the shared stack (#3542)',
+  );
+
+  // The prohibition must explain WHY (shared storage across worktrees) so
+  // the agent understands the failure mode rather than treating it as an
+  // arbitrary rule.
+  assert.match(
+    content,
+    /shared|share[d]?\s+(across|between)/i,
+    'gsd-executor.md must document that stash storage is shared across worktrees (#3542)',
+  );
+
+  // The prohibition must document at least one alternative the agent CAN
+  // use to inspect or move work between refs without touching `refs/stash`.
+  // The triage brief proposes commit-to-throwaway-branch OR read-only
+  // `git show <ref>:<path>` / `git diff <ref> -- <path>`.
+  const hasThrowawayBranch = /throwaway[- ]branch|temp(?:orary)?[- ]?branch|scratch[- ]branch/i.test(
+    content,
+  );
+  const hasGitShow = /`git show /i.test(content);
+  const hasGitDiffRef = /`git diff [^`]*\$?\{?ref\}?|`git diff [A-Z]+:/i.test(content);
+  assert.ok(
+    hasThrowawayBranch || hasGitShow || hasGitDiffRef,
+    'gsd-executor.md must document an alternative to `git stash` ' +
+      '(commit-to-throwaway-branch, or read-only `git show <ref>:<path>` / ' +
+      '`git diff <ref> -- <path>`) so the agent has a sanctioned escape path (#3542)',
+  );
+
+  // The issue number must appear so future readers can trace the rule to
+  // its incident.
+  assert.match(
+    content,
+    /#3542/,
+    'gsd-executor.md must reference issue #3542 next to the stash prohibition for traceability',
+  );
+});
+
+// ─── Test B — behavioural pin of the git invariant ─────────────────────────
+
+test('bug-3542: stash pushed in main checkout is visible inside a linked worktree', () => {
+  const tmpRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bug-3542-stash-')));
+  const mainRepo = path.join(tmpRoot, 'main');
+  const linkedWorktree = path.join(tmpRoot, 'wt');
+
+  try {
+    // Set up a normal repo with one commit.
+    fs.mkdirSync(mainRepo);
+    const gitOpts = { cwd: mainRepo, stdio: 'pipe' };
+    execSync('git init -q', gitOpts);
+    execSync('git config user.email "test@test.com"', gitOpts);
+    execSync('git config user.name "Test"', gitOpts);
+    execSync('git config commit.gpgsign false', gitOpts);
+    fs.writeFileSync(path.join(mainRepo, 'a.txt'), 'initial\n');
+    execSync('git add a.txt', gitOpts);
+    execSync('git commit -q -m initial', gitOpts);
+
+    // Create a linked worktree on a separate branch — this is what the
+    // executor agent runs inside.
+    execSync(`git worktree add -q "${linkedWorktree}" -b wt-branch`, gitOpts);
+
+    // Push a stash from the MAIN checkout (simulating a prior session).
+    fs.writeFileSync(path.join(mainRepo, 'a.txt'), 'wip in main\n');
+    execSync('git stash push -q -u -m "from-main-checkout"', gitOpts);
+
+    // Sanity check: the stash exists in the main checkout's view.
+    const mainList = execSync('git stash list', { cwd: mainRepo }).toString();
+    assert.match(
+      mainList,
+      /from-main-checkout/,
+      'pre-condition: main checkout must see its own stash entry',
+    );
+
+    // The load-bearing assertion: the linked worktree sees the same
+    // stash entry, even though it was pushed from a different working
+    // tree. This is the invariant that makes `git stash pop` inside an
+    // executor agent's worktree an isolation violation.
+    const worktreeList = execSync('git stash list', {
+      cwd: linkedWorktree,
+    }).toString();
+    assert.match(
+      worktreeList,
+      /from-main-checkout/,
+      'bug #3542 invariant: stash entries pushed from any worktree (or the ' +
+        'main checkout) are visible in every linked worktree, because ' +
+        '`refs/stash` lives in the shared parent .git directory. If this ' +
+        'assertion ever stops holding (e.g. git introduces per-worktree ' +
+        'stash storage in a future release), the executor agent prohibition ' +
+        'in agents/gsd-executor.md can be relaxed.',
+    );
+
+    // Stronger pin: a `git stash pop` inside the worktree must actually
+    // pop the stash pushed from main — proving cross-worktree mutation,
+    // not just visibility. We pop into a clean working tree on a
+    // different branch, so any applied content is the contamination.
+    execSync('git stash pop -q', { cwd: linkedWorktree, stdio: 'pipe' });
+    // On Windows autocrlf=true, git rewrites stashed content with CRLF on
+    // checkout. Strip \r before content compare — the test pins git's
+    // shared-stash behavior, not line endings.
+    const popped = fs.readFileSync(path.join(linkedWorktree, 'a.txt'), 'utf-8').replace(/\r\n/g, '\n');
+    assert.strictEqual(
+      popped,
+      'wip in main\n',
+      'bug #3542 invariant: `git stash pop` inside a linked worktree applies ' +
+        'a stash pushed in the main checkout — proving the shared-stack ' +
+        'contamination the executor prohibition exists to prevent.',
+    );
+  } finally {
+    cleanup(tmpRoot);
+  }
+});
+  });
+}
