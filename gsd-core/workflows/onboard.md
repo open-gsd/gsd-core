@@ -74,6 +74,21 @@ Then rerun /gsd:onboard from the same worktree root.
 
 Exit. If the user skips mapping:
 
+- If `planning_exists && (!project_exists || !requirements_exists || !roadmap_exists || !state_exists)`, route the skip to the partial planning guard instead:
+
+```text
+Skipping codebase mapping may give downstream steps weaker context, but project planning exists and is incomplete.
+
+PROJECT.md: {project_exists ? "present" : "missing"}
+REQUIREMENTS.md: {requirements_exists ? "present" : "missing"}
+ROADMAP.md: {roadmap_exists ? "present" : "missing"}
+STATE.md: {state_exists ? "present" : "missing"}
+
+Run the appropriate lower-level command to fill the missing planning artifact(s), then rerun /gsd:onboard.
+```
+
+Exit.
+
 - If `has_docs_candidates && !project_exists`, route the skip to docs ingest instead:
 
 ```text

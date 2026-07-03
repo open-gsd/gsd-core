@@ -375,9 +375,21 @@ describe('/gsd:onboard command contract', () => {
       content.includes('Exit. If the user skips mapping:'),
       'skip mapping must hand off explicitly instead of falling through to summary creation',
     );
+    const partialPlanningSkipGuard =
+      'If `planning_exists && (!project_exists || !requirements_exists || !roadmap_exists || !state_exists)`, route the skip to the partial planning guard instead:';
+    const docsIngestSkipGuard =
+      'If `has_docs_candidates && !project_exists`, route the skip to docs ingest instead:';
     assert.ok(
-      content.includes('If `has_docs_candidates && !project_exists`, route the skip to docs ingest instead:'),
+      content.includes(partialPlanningSkipGuard),
+      'skip mapping must preserve the partial-planning guard when incomplete planning artifacts are present',
+    );
+    assert.ok(
+      content.includes(docsIngestSkipGuard),
       'skip mapping must preserve the docs-ingest gate when planning docs are present',
+    );
+    assert.ok(
+      content.indexOf(partialPlanningSkipGuard) < content.indexOf(docsIngestSkipGuard),
+      'skip mapping must check partial planning before docs ingest',
     );
     assert.ok(
       content.includes('/gsd:ingest-docs'),
