@@ -28,8 +28,54 @@ const path = require('node:path');
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const m = require('../gsd-core/bin/lib/external-job.cjs');
 
-const SUBMIT_TIMEOUT_MS = Number(process.env.GSD_SLURM_SUBMIT_TIMEOUT_MS || 30000);
-const POLL_TIMEOUT_MS = Number(process.env.GSD_SLURM_POLL_TIMEOUT_MS || 15000);
+// #1164 refinements B + C: the adapter now resolves external_job.* settings
+// through the canonical capability-config seam (resolveConfigKey in
+// capability-activation.cjs), which walks loadConfig -> workstream config.json
+// -> root config.json -> registry configSchema default. Env vars remain the
+// top-precedence override so cluster operators can tune without editing config.
+const { resolveConfigKey } = require('../gsd-core/bin/lib/capability-activation.cjs');
+const FALLBACK_SUBMIT_TIMEOUT_MS = 30000;
+const FALLBACK_POLL_TIMEOUT_MS = 15000;
+const FALLBACK_ARTIFACT_DIR = 'Artifacts/jobs';
+
+/**
+ * Resolve the external_job.* runtime settings. Pure given {config, env,
+ * registry}; degrades to hardcoded fallbacks if the registry/config are absent
+ * so the adapter never unbounds a subprocess (CLAUDE.md bounded-subprocess).
+ *
+ * Precedence: env override > nested config value > registry default > fallback.
+ */
+function resolveExternalJobSettings({ cwd, env, config, registry } = {}) {
+    const reg = registry || {};
+    let cfg = config;
+    if (cfg === undefined) {
+        try {
+            cfg = require('../gsd-core/bin/lib/config-loader.cjs').loadConfig(cwd);
+        } catch {
+            cfg = {}; // resolveConfigKey still falls back to the registry default
+        }
+    }
+    const e = env || {};
+    const submitEnv = e.GSD_SLURM_SUBMIT_TIMEOUT_MS;
+    const pollEnv = e.GSD_SLURM_POLL_TIMEOUT_MS;
+    const artifactEnv = e.GSD_EXTERNAL_JOB_ARTIFACT_DIR;
+    const submit = submitEnv ? Number(submitEnv)
+        : _num(resolveConfigKey('external_job.submit_timeout_ms', { config: cfg, cwd, registry: reg }), FALLBACK_SUBMIT_TIMEOUT_MS);
+    const poll = pollEnv ? Number(pollEnv)
+        : _num(resolveConfigKey('external_job.poll_timeout_ms', { config: cfg, cwd, registry: reg }), FALLBACK_POLL_TIMEOUT_MS);
+    const artifactDir = artifactEnv
+        || _str(resolveConfigKey('external_job.artifact_dir', { config: cfg, cwd, registry: reg }), FALLBACK_ARTIFACT_DIR);
+    return { submitTimeoutMs: submit, pollTimeoutMs: poll, artifactDir };
+}
+
+function _num(res, fallback) {
+    const v = res && res.found ? res.value : undefined;
+    return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+}
+function _str(res, fallback) {
+    const v = res && res.found ? res.value : undefined;
+    return typeof v === 'string' && v.length > 0 ? v : fallback;
+}
 
 function usage() {
   return [
@@ -82,11 +128,18 @@ function cmdSubmit(flags) {
   const resume = flags.resume || ('/gsd:execute-phase ' + phase);
   if (!verify) throw new ExitError(1, 'submit requires --verify (the command that verifies job output)');
 
+  // Resolve settings from config/env before any subprocess (env > config > default).
+  const planningDir = findPlanningDir();
+  const settings = resolveExternalJobSettings({
+    cwd: path.dirname(planningDir),
+    env: process.env,
+  });
+
   let stdout;
   try {
     stdout = execFileSync(sbatchCmd[0], sbatchCmd.slice(1), {
       encoding: 'utf8',
-      timeout: SUBMIT_TIMEOUT_MS,
+      timeout: settings.submitTimeoutMs,
       maxBuffer: 1024 * 1024,
     });
   } catch (e) {
@@ -107,13 +160,13 @@ function cmdSubmit(flags) {
     verification_command: verify,
     resume_command: resume,
   });
-  const planningDir = findPlanningDir();
   const res = m.writeManifest(manifest, planningDir);
   if (!res.ok) {
     throw new ExitError(1, 'writeManifest refused (' + res.kind + '): ' + res.message);
   }
   process.stdout.write('submitted job ' + parsed.job_id + ' for plan ' + plan + '\n');
   process.stdout.write('manifest: ' + res.path + '\n');
+  process.stdout.write('artifact_dir: ' + settings.artifactDir + '\n');
   process.stdout.write('state: external_job_waiting (SUMMARY deferred)\n');
 }
 
@@ -121,6 +174,10 @@ function cmdPoll(flags) {
   const jobId = flags.job;
   if (!jobId) throw new ExitError(1, 'poll requires --job <job_id>\n' + usage());
   const planningDir = findPlanningDir();
+  const settings = resolveExternalJobSettings({
+    cwd: path.dirname(planningDir),
+    env: process.env,
+  });
   const manifestFile = m.manifestPath(planningDir, jobId);
   if (!fs.existsSync(manifestFile)) {
     throw new ExitError(1, 'no manifest for job ' + jobId + ' at ' + manifestFile);
@@ -130,7 +187,7 @@ function cmdPoll(flags) {
   let rawState = null;
   try {
     const out = execFileSync('squeue', ['-h', '-j', jobId, '-o', '%i %T'], {
-      encoding: 'utf8', timeout: POLL_TIMEOUT_MS, maxBuffer: 1024 * 1024,
+      encoding: 'utf8', timeout: settings.pollTimeoutMs, maxBuffer: 1024 * 1024,
     }).trim();
     const line = out.split('\n')[0];
     const parsed = m.parseSqueueLine(line || '');
@@ -139,7 +196,7 @@ function cmdPoll(flags) {
   if (!rawState) {
     try {
       const out = execFileSync('sacct', ['-X', '-P', '-j', jobId, '-o', 'JobID,State'], {
-        encoding: 'utf8', timeout: POLL_TIMEOUT_MS, maxBuffer: 1024 * 1024,
+        encoding: 'utf8', timeout: settings.pollTimeoutMs, maxBuffer: 1024 * 1024,
       }).trim();
       for (const line of out.split('\n').slice(1)) {
         const parsed = m.parseSacctRow(line.split('|'));
@@ -161,6 +218,22 @@ function cmdPoll(flags) {
   process.stdout.write(JSON.stringify({ job_id: jobId, slurm_state: rawState, manifest_status: mapped, path: res.path }) + '\n');
 }
 
+function formatShowReport(manifest) {
+  const lines = [];
+  lines.push('job ' + manifest.job_id + ' (plan ' + manifest.plan_id + ', backend ' + manifest.backend + ')');
+  lines.push('status: ' + manifest.status);
+  if (manifest.terminal_details) {
+    lines.push('terminal_details: ' + JSON.stringify(manifest.terminal_details));
+  }
+  // Trust boundary: surface commands for confirmation, never auto-run.
+  lines.push('');
+  lines.push('Manifest commands (UNTRUSTED — confirm before running):');
+  lines.push('  submit_command:       ' + manifest.submit_command);
+  lines.push('  verification_command: ' + manifest.verification_command);
+  lines.push('  resume_command:       ' + manifest.resume_command);
+  return lines.join('\n') + '\n';
+}
+
 function cmdShow(flags) {
   const jobId = flags.job;
   if (!jobId) throw new ExitError(1, 'show requires --job <job_id>\n' + usage());
@@ -170,16 +243,7 @@ function cmdShow(flags) {
     throw new ExitError(1, 'no manifest for job ' + jobId + ' at ' + manifestFile);
   }
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
-  process.stdout.write('job ' + manifest.job_id + ' (plan ' + manifest.plan_id + ', backend ' + manifest.backend + ')\n');
-  process.stdout.write('status: ' + manifest.status + '\n');
-  if (manifest.terminal_details) {
-    process.stdout.write('terminal_details: ' + JSON.stringify(manifest.terminal_details) + '\n');
-  }
-  // Trust boundary: surface commands for confirmation, never auto-run.
-  process.stdout.write('\nManifest commands (UNTRUSTED — confirm before running):\n');
-  process.stdout.write('  submit_command:       ' + manifest.submit_command + '\n');
-  process.stdout.write('  verification_command: ' + manifest.verification_command + '\n');
-  process.stdout.write('  resume_command:       ' + manifest.resume_command + '\n');
+  process.stdout.write(formatShowReport(manifest));
 }
 
 function main() {
@@ -192,4 +256,14 @@ function main() {
   return 0;
 }
 
-runMain(main);
+if (require.main === module) {
+  runMain(main);
+}
+
+module.exports = {
+  parseFlags,
+  findPlanningDir,
+  resolveExternalJobSettings,
+  formatShowReport,
+  ExitError,
+};
