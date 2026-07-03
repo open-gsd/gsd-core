@@ -2,15 +2,26 @@
   "name": "gsd-core-vscode",
   "displayName": "GSD Core",
   "description": "GSD orchestration engine embedded in VS Code (ADR-1239 IDE profile).",
-  "version": "1.7.0-rc.1",
+  "version": "1.7.0-rc.2",
   "publisher": "opengsd",
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other"],
-  "activationPoints": { "onCommand": ["gsd.invoke"] },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationPoints": {
+    "onCommand": [
+      "gsd.invoke"
+    ]
+  },
   "main": "./extension.js",
   "contributes": {
     "commands": [
-      { "command": "gsd.invoke", "title": "GSD: Invoke Command" }
+      {
+        "command": "gsd.invoke",
+        "title": "GSD: Invoke Command"
+      }
     ]
   }
 }
