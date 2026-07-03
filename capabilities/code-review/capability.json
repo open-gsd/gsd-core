@@ -1,7 +1,7 @@
 {
   "id": "code-review",
   "role": "feature",
-  "version": "1.7.0-rc.1",
+  "version": "1.7.0-rc.2",
   "title": "Code review",
   "description": "Source-file code review and review-fix workflow support for completed execution work.",
   "tier": "full",
