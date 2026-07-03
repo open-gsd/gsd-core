@@ -4,7 +4,7 @@
 - **Date:** 2026-07-03
 - **Issue:** #1787
 - **Implementation:** PR #1798 (`feat(#1787): add /gsd:next smart entry workflow`)
-- **Supersedes context:** the removal of the flat `/gsd-next` command (#3054)
+- **Supersedes context:** the removal of the flat `gsd-next` command (#3054)
 
 ## Context
 
@@ -17,7 +17,7 @@ gsd-core is a markdown prompt framework installed into AI agents, not a Node app
 
 Two facts constrain the design:
 
-1. **A `/gsd-next` command already existed and was deliberately removed (#3054),**
+1. **A `gsd-next` command already existed and was deliberately removed (#3054),**
    with `/gsd-progress --next` established as the canonical "advance to the next
    logical step" engine. `tests/bug-3054-stale-gsd-next-references.test.cjs`
    guards against user-facing surfaces re-referencing the removed flat command.
@@ -37,7 +37,7 @@ The initial implementation of the new `smart-entry` classifier
 (`src/smart-entry.cts`) re-derived in-project forward routing itself. For the
 `executing` situation it recommended dispatching `/gsd:execute-phase` **directly**,
 bypassing Route 0 and Gates 1–3. That reproduced exactly the duplication that got
-`/gsd-next` removed — two front doors that can route the *same* in-project state
+`gsd-next` removed — two front doors that can route the *same* in-project state
 to *different* phases — and introduced a correctness hazard (executing the
 recorded current phase while an earlier phase is silently incomplete). A
 maintainer (davesienkowski) flagged the overlap on PR #1798.
