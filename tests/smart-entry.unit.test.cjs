@@ -351,6 +351,30 @@ describe('smart-entry: in-project advancement delegates to the gated engine', ()
   }
 });
 
+describe('smart-entry: per-situation action invariants (all 11)', () => {
+  // Lock the action-set contract for EVERY situation, not just the 6 sampled by
+  // the JSON-shape test: exactly one recommended, 1-4 actions, unique ids, and
+  // /gsd:* command forms. Guards the reconciliation (and future edits) against
+  // silently breaking these for a less-common situation.
+  const sampleSignals = {
+    current_phase: 2, total_phases: 5, status: 'executing', progress: 60,
+    has_planning: true, has_roadmap: true, git_dirty: false, git_unpushed: false,
+    paused: false, blockers: [], has_git: true, verify_failed: false, stale_activity: false,
+  };
+  for (const situation of SITUATIONS) {
+    test(`${situation}: exactly one recommended, 1-4 unique-id /gsd:* actions`, () => {
+      const actions = smartEntry.actionsFor(situation, sampleSignals);
+      assert.ok(actions.length >= 1 && actions.length <= 4, `${situation}: 1-4 actions (got ${actions.length})`);
+      assert.equal(actions.filter((a) => a.recommended).length, 1, `${situation}: exactly one recommended`);
+      const ids = actions.map((a) => a.id);
+      assert.equal(new Set(ids).size, ids.length, `${situation}: action ids are unique`);
+      for (const a of actions) {
+        assert.ok(a.command.startsWith('/gsd:'), `${situation}/${a.id}: command is a /gsd: slash form`);
+      }
+    });
+  }
+});
+
 describe('smart-entry: JSON shape invariants', () => {
   afterEach(removeAll);
 

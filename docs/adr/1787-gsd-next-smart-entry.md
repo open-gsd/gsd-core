@@ -18,7 +18,7 @@ gsd-core is a markdown prompt framework installed into AI agents, not a Node app
 Two facts constrain the design:
 
 1. **A `gsd-next` command already existed and was deliberately removed (#3054),**
-   with `/gsd-progress --next` established as the canonical "advance to the next
+   with `/gsd:progress --next` established as the canonical "advance to the next
    logical step" engine. `tests/bug-3054-stale-gsd-next-references.test.cjs`
    guards against user-facing surfaces re-referencing the removed flat command.
    Re-introducing a `next` entry point re-opens a settled question: it must not
