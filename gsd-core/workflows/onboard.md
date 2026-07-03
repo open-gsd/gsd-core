@@ -38,14 +38,15 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Parse JSON fields: `planning_exists`, `project_exists`, `requirements_exists`,
 `roadmap_exists`, `state_exists`, `has_existing_code`, `has_package_file`,
-`is_brownfield`, `has_codebase_map`, `has_fast_codebase_map`,
+`is_brownfield`, `fast_mode`, `has_codebase_map`, `has_fast_codebase_map`,
 `codebase_map_files_present`, `missing_codebase_map_files`, `missing_fast_codebase_map_files`,
 `has_docs_candidates`,
 `doc_candidate_count`, `onboarding_summary_exists`, `text_mode`, `commit_docs`, `agents_installed`,
 `missing_agents`, `has_git`, `git_worktree_root`, `in_nested_subdir`.
 
+Set `FAST_MODE=fast_mode` from INIT.
 Set `TEXT_MODE=true` if `--text` is present OR `text_mode` from INIT is true.
-Set `CODEBASE_MAP_READY=has_fast_codebase_map` when `--fast` is present; otherwise set
+Set `CODEBASE_MAP_READY=has_fast_codebase_map` when `FAST_MODE` is true; otherwise set
 `CODEBASE_MAP_READY=has_codebase_map`.
 
 **Text mode (`workflow.text_mode: true` in config or `--text` flag):** When `TEXT_MODE` is active, replace every `AskUserQuestion` call in this workflow with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available and would otherwise render as an inert code block.
@@ -225,6 +226,18 @@ If the user chooses to keep the existing summary, skip to Step 7 without writing
 If `onboarding_summary_exists` is false or the user confirms an update, write the summary
 using the template below.
 
+Before rendering summary and final status, derive map status values:
+
+- If `has_codebase_map` is true:
+  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (complete)`
+  - `CODEBASE_MAP_FINAL_STATUS=(complete)`
+- Else if `fast_mode && has_fast_codebase_map` is true:
+  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (fast/partial-but-accepted codebase map)`
+  - `CODEBASE_MAP_FINAL_STATUS=(fast/partial-but-accepted; required fast files present)`
+- Else:
+  - `CODEBASE_MAP_SUMMARY_STATUS=.planning/codebase/ (incomplete or skipped)`
+  - `CODEBASE_MAP_FINAL_STATUS=(incomplete or skipped; missing: {missing_codebase_map_files})`
+
 Summary contents:
 
 ```markdown
@@ -239,7 +252,7 @@ Summary contents:
 - Requirements: .planning/REQUIREMENTS.md
 - Roadmap: .planning/ROADMAP.md
 - State: .planning/STATE.md
-- Codebase map: {has_codebase_map ? ".planning/codebase/ (complete)" : ".planning/codebase/ (incomplete or skipped)"}
+- Codebase map: {CODEBASE_MAP_SUMMARY_STATUS}
 
 ## Codebase Map
 
@@ -252,6 +265,13 @@ Confirmed files:
 - TESTING.md
 - INTEGRATIONS.md
 - CONCERNS.md
+{else if fast_mode && has_fast_codebase_map}
+Accepted fast map files:
+- STACK.md
+- INTEGRATIONS.md
+- ARCHITECTURE.md
+- STRUCTURE.md
+Context strength: fast/partial-but-accepted codebase map; not all seven map files are present.
 {else}
 Present files: {codebase_map_files_present}
 Missing files: {missing_codebase_map_files}
@@ -283,7 +303,7 @@ Print:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Created / confirmed / status:
-- .planning/codebase/ {has_codebase_map ? "(complete)" : "(incomplete or skipped; missing: {missing_codebase_map_files})"}
+- .planning/codebase/ {CODEBASE_MAP_FINAL_STATUS}
 - .planning/PROJECT.md
 - .planning/REQUIREMENTS.md {requirements_exists ? "(present)" : "(missing; onboarding incomplete)"}
 - .planning/ROADMAP.md

@@ -278,6 +278,16 @@ describe('/gsd:onboard command contract', () => {
       /gsd_run --cwd "\$ONBOARDING_ROOT" query commit "docs: create onboarding summary" --files \.planning\/onboarding\/SUMMARY\.md/,
       'workflow must commit the root-relative summary path from onboarding root',
     );
+    assert.match(
+      content,
+      /CODEBASE_MAP_SUMMARY_STATUS=\.planning\/codebase\/ \(fast\/partial-but-accepted codebase map\)/,
+      'workflow summary must label fast accepted maps without implying a complete map',
+    );
+    assert.match(
+      content,
+      /CODEBASE_MAP_FINAL_STATUS=\(fast\/partial-but-accepted; required fast files present\)/,
+      'final status must distinguish complete maps from accepted fast maps',
+    );
     assert.match(content, /overwrite|idempotent|do not overwrite/i, 'workflow must protect existing planning');
     assert.ok(content.includes('requirements_exists'), 'workflow must parse requirements existence');
     assert.match(content, /REQUIREMENTS\.md: \{requirements_exists \? "present" : "missing"\}/, 'workflow must report missing requirements in partial planning');
