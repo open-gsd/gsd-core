@@ -136,6 +136,22 @@ function collectAgentFiles() {
   return results;
 }
 
+/**
+ * A workflow/agent file "delegates to the shared resolver" when it pulls the
+ * canonical gsd_run preamble in from gsd-core/references/gsd-run-resolver.md via
+ * an @-include instead of inlining the snippet (see onboard.md / issue #1990).
+ *
+ * Such files are exempt from the inline-preamble parity checks (B / G / H and the
+ * runtime-home propagation checks): they intentionally do NOT inline the preamble
+ * — onboard-command.test.cjs even asserts the absence of the inline form. Their
+ * resolver correctness is guaranteed transitively by:
+ *   (1) onboard-command.test.cjs asserting the @-include is present, and
+ *   (2) the "resolver reference stays byte-equal to the snippet" guard (B2) below.
+ */
+function delegatesToResolverReference(content) {
+  return content.includes('references/gsd-run-resolver.md');
+}
+
 describe('runtime-launcher-parity (#373)', () => {
   // ─── (A) No retired GSD_SDK token ────────────────────────────────────────
   test('(A) no GSD_SDK token in any workflow .md file', () => {
@@ -170,6 +186,9 @@ describe('runtime-launcher-parity (#373)', () => {
     for (const f of files) {
       const rel = path.relative(WORKFLOWS_DIR, f);
       const content = fs.readFileSync(f, 'utf8');
+      // Files that delegate to the shared resolver reference (@-include) do not
+      // inline the preamble — exempt them (see delegatesToResolverReference / (B2)).
+      if (delegatesToResolverReference(content)) continue;
       const blocks = extractShellBlocks(content);
 
       // Collect all block lines in document order for flat analysis
@@ -223,6 +242,30 @@ describe('runtime-launcher-parity (#373)', () => {
       [],
       'Files with gsd_run calls have wrong preamble count or ordering:\n' +
         violations.join('\n---\n'),
+    );
+  });
+
+  // ─── (B2) Shared resolver reference stays byte-equal to the snippet ───────
+  // Workflows may delegate to gsd-core/references/gsd-run-resolver.md instead of
+  // inlining the preamble (see delegatesToResolverReference). That delegation is
+  // only safe if the reference's bash block is byte-equal to the canonical
+  // snippet — otherwise a delegating workflow (e.g. onboard.md) would silently
+  // ship a drifted resolver. This guard replaces the inline-preamble checks for
+  // those files.
+  test('(B2) references/gsd-run-resolver.md preamble is byte-equal to the canonical snippet', () => {
+    const preambleStr = expectedPreamble().join('\n');
+    const refPath = path.join(__dirname, '..', 'gsd-core', 'references', 'gsd-run-resolver.md');
+    const refContent = fs.readFileSync(refPath, 'utf8');
+    const refPreamble = extractShellBlocks(refContent)
+      .map((b) => b.lines.join('\n'))
+      .join('\n')
+      .trim();
+    assert.equal(
+      refPreamble,
+      preambleStr,
+      'gsd-core/references/gsd-run-resolver.md must contain the canonical gsd_run preamble ' +
+        'byte-equal to _runtime-launcher.snippet.sh. Re-copy the snippet into the reference so ' +
+        'workflows that delegate to it via @-include ship the current resolver.',
     );
   });
 
@@ -402,6 +445,7 @@ describe('runtime-launcher-parity (#373)', () => {
       const content = fs.readFileSync(f, 'utf8');
       const blocks = extractShellBlocks(content);
       const allBlockLines = blocks.flatMap((b) => b.lines);
+      if (delegatesToResolverReference(content)) continue;
       const fileHasGsdRun = allBlockLines.some((l) => /\bgsd_run\b/.test(l));
       if (!fileHasGsdRun) continue;
       const allContent = allBlockLines.join('\n');
@@ -433,6 +477,7 @@ describe('runtime-launcher-parity (#373)', () => {
       const content = fs.readFileSync(f, 'utf8');
       const blocks = extractShellBlocks(content);
       const allBlockLines = blocks.flatMap((b) => b.lines);
+      if (delegatesToResolverReference(content)) continue;
       const fileHasGsdRun = allBlockLines.some((l) => /\bgsd_run\b/.test(l));
       if (!fileHasGsdRun) continue;
       if (!allBlockLines.join('\n').includes(CODEX_HOME_PROBE)) {
@@ -1346,6 +1391,7 @@ describe('bug-891: non-Claude runtime home fallback arms', () => {
       const content = fs.readFileSync(f, 'utf8');
       const blocks = extractShellBlocks(content);
       const allBlockLines = blocks.flatMap((b) => b.lines);
+      if (delegatesToResolverReference(content)) continue;
       const fileHasGsdRun = allBlockLines.some((l) => /\bgsd_run\b/.test(l));
       if (!fileHasGsdRun) continue;
       const allContent = allBlockLines.join('\n');
