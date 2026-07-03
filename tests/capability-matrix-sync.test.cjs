@@ -1,41 +1,28 @@
 'use strict';
 
 /**
- * capability-matrix-sync.test.cjs — ADR-1244 Phase 6 (D9) drift guard.
+ * capability-matrix-sync.test.cjs — ADR-1244 Phase 6 (D9) content invariants.
  *
- * Asserts the committed docs/reference/capability-matrix.md is exactly what
- * scripts/gen-capability-matrix.cjs would generate from the current registry.
- * If a capability is added/removed or its tier/role/engines/extension-points/
- * hook-kinds change without regenerating the matrix, this fails — the same
- * pattern that keeps docs/INVENTORY-MANIFEST.json and capability-registry.cjs honest.
+ * The committed docs/reference/capability-matrix.md FRESHNESS guard
+ * (`gen-capability-matrix.cjs --check` + byte-for-byte) moved to
+ * `npm run lint:generated-sync`, where it runs against the committed file in
+ * both local and CI lint lanes — instead of being masked by gsd-test's
+ * `npm run build` leg regenerating artifacts. What remains here are the
+ * architectural CONTENT invariants the matrix must satisfy regardless of how
+ * freshness is enforced: every first-party capability appears as a row, and
+ * the rendered extension points reflect the registry (not placeholders).
  */
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const GENERATOR = path.join(ROOT, 'scripts', 'gen-capability-matrix.cjs');
 const MATRIX = path.join(ROOT, 'docs', 'reference', 'capability-matrix.md');
-const { buildMatrix } = require('../scripts/gen-capability-matrix.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
-describe('capability-matrix drift guard (ADR-1244 Phase 6)', () => {
-  test('the committed matrix is in sync with the registry (`gen-capability-matrix.cjs --check` exits 0)', () => {
-    // execFileSync throws if the generator exits non-zero (i.e. the committed file is stale).
-    assert.doesNotThrow(() => {
-      execFileSync(process.execPath, [GENERATOR, '--check'], { cwd: ROOT, stdio: 'pipe' });
-    }, 'committed capability-matrix.md is stale — run: node scripts/gen-capability-matrix.cjs --write');
-  });
-
-  test('buildMatrix(registry) equals the committed file byte-for-byte (modulo line endings)', () => {
-    const generated = buildMatrix(registry).replace(/\r\r?\n/g, '\n').replace(/\r?\n+$/, '\n');
-    const committed = fs.readFileSync(MATRIX, 'utf8').replace(/\r\r?\n/g, '\n').replace(/\r?\n+$/, '\n');
-    assert.equal(committed, generated);
-  });
-
+describe('capability-matrix content invariants (ADR-1244 Phase 6)', () => {
   test('every first-party capability in the registry appears as a matrix row', () => {
     const md = fs.readFileSync(MATRIX, 'utf8');
     for (const cap of Object.values(registry.capabilities)) {

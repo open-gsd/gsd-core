@@ -388,30 +388,17 @@ describe('buildContract cross-check drift guard', () => {
 
 // ─── 6. --check: CRLF-agnostic + committed-file staleness guard ──────────────
 
-describe('normalizeLineEndings and committed-file staleness', () => {
+describe('normalizeLineEndings', () => {
   test('normalizeLineEndings strips CR characters', () => {
     const crlf = 'line1\r\nline2\r\nline3';
     const lf = 'line1\nline2\nline3';
     assert.strictEqual(normalizeLineEndings(crlf), lf);
     assert.strictEqual(normalizeLineEndings(lf), lf);
   });
-
-  test('committed loop-host-contract.cjs is up to date (--check passes)', () => {
-    // Build the live contract from the real workflows
-    const contract = buildContract();
-    const live = serializeContract(contract);
-
-    // Read the committed file
-    const committed = fs.readFileSync(CONTRACT_PATH, 'utf8');
-
-    // FIX 4: Full-content comparison — no generated-by-line stripping needed
-    // because the serializer has no nondeterministic content (no timestamp).
-    assert.strictEqual(
-      normalizeLineEndings(committed),
-      normalizeLineEndings(live),
-      'committed loop-host-contract.cjs is stale — run: node scripts/gen-loop-host-contract.cjs --write',
-    );
-  });
+  // The committed-loop-host-contract.cjs freshness guard moved to
+  // `npm run lint:generated-sync` (gen-loop-host-contract.cjs --check), where it
+  // runs against the committed file in both local and CI lint lanes — instead of
+  // being masked by gsd-test's `npm run build` leg regenerating the artifact.
 });
 
 // ─── 7. STEP_WORKFLOWS and CANONICAL_POINTS exported constants ────────────────
