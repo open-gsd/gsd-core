@@ -4094,8 +4094,21 @@ const ROOT = path.join(__dirname, '..');
 // Point HOME at a temp dir so configureOpencodePermissions can't write to
 // the real ~/.config/opencode/ even if the guard is missing.
 const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-130-test-'));
-process.env.HOME = FAKE_HOME;
-process.env.USERPROFILE = FAKE_HOME;
+// Consolidation #1969: scope the HOME/USERPROFILE mutation to before/after so it
+// does not leak into sibling folded suites (was process-isolated when standalone).
+const { before: __foldBefore, after: __foldAfter } = require('node:test');
+const __savedHome = process.env.HOME;
+const __savedUserProfile = process.env.USERPROFILE;
+__foldBefore(() => {
+  process.env.HOME = FAKE_HOME;
+  process.env.USERPROFILE = FAKE_HOME;
+});
+__foldAfter(() => {
+  if (__savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = __savedHome;
+  if (__savedUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = __savedUserProfile;
+});
 
 // The opencode config dir that configureOpencodePermissions would use for a
 // global install when configDir=null: <HOME>/.config/opencode/
@@ -4183,8 +4196,21 @@ const ROOT = path.join(__dirname, '..');
 // finishInstall's path.join(os.homedir(), '.gsd') resolves into FAKE_HOME
 // on every platform. Node docs: https://nodejs.org/docs/latest-v22.x/api/os.html#oshomedir
 const FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-410-test-'));
-process.env.HOME = FAKE_HOME;
-process.env.USERPROFILE = FAKE_HOME;
+// Consolidation #1969: scope the HOME/USERPROFILE mutation to before/after so it
+// does not leak into sibling folded suites (was process-isolated when standalone).
+const { before: __foldBefore, after: __foldAfter } = require('node:test');
+const __savedHome = process.env.HOME;
+const __savedUserProfile = process.env.USERPROFILE;
+__foldBefore(() => {
+  process.env.HOME = FAKE_HOME;
+  process.env.USERPROFILE = FAKE_HOME;
+});
+__foldAfter(() => {
+  if (__savedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = __savedHome;
+  if (__savedUserProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = __savedUserProfile;
+});
 
 // The path that finishInstall would write to for a non-Claude runtime.
 const GSD_DIR = path.join(FAKE_HOME, '.gsd');
