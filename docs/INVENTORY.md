@@ -67,7 +67,7 @@ These six routers are descriptor-only entries that the model picks first; the bo
 
 | Command | Role | Source |
 |---------|------|--------|
-| `/gsd-workflow` | Phase pipeline router — discuss / plan / execute / verify / phase / progress. | [commands/gsd/ns-workflow.md](../commands/gsd/ns-workflow.md) |
+| `/gsd-workflow` | Phase pipeline router — discuss / plan / execute / verify / phase / progress / next. | [commands/gsd/ns-workflow.md](../commands/gsd/ns-workflow.md) |
 | `/gsd-project` | Project lifecycle router — milestones, audits, summary. | [commands/gsd/ns-project.md](../commands/gsd/ns-project.md) |
 | `/gsd-quality` | Quality-gate router — code review, debug, audit, security, eval, ui. | [commands/gsd/ns-review.md](../commands/gsd/ns-review.md) |
 | `/gsd-context` | Codebase-intelligence router — map, graphify, docs, learnings. | [commands/gsd/ns-context.md](../commands/gsd/ns-context.md) |
@@ -123,6 +123,7 @@ These six routers are descriptor-only entries that the model picks first; the bo
 
 | Command | Role | Source |
 |---------|------|--------|
+| `/gsd:next` | State-aware smart-entry launcher — reads project state, shows a contextual menu, and dispatches one existing GSD command. | [commands/gsd/next.md](../commands/gsd/next.md) |
 | `/gsd-progress` | Check project progress, show context, and route to next action; use `--next` to advance automatically or `--do` to run a freeform task. | [commands/gsd/progress.md](../commands/gsd/progress.md) |
 | `/gsd-capture` | Capture ideas, tasks, notes, and seeds — todo (default), `--note`, `--backlog`, `--seed`, or `--list` pending todos. | [commands/gsd/capture.md](../commands/gsd/capture.md) |
 | `/gsd-stats` | Display project statistics — phases, plans, requirements, git metrics, timeline. | [commands/gsd/stats.md](../commands/gsd/stats.md) |

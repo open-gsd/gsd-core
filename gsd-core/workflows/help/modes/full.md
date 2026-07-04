@@ -13,6 +13,20 @@ Display the complete GSD Core command reference. Output ONLY the reference conte
 2. `/gsd:plan-phase 1` - Create detailed plan for first phase
 3. `/gsd:execute-phase 1` - Execute the phase
 
+Not sure where to start? `/gsd:next` reads your project state and routes you to the right next action.
+
+### Smart Entry
+
+**`/gsd:next`**
+The state-aware front door. Detects your current situation and presents a short menu of the right next actions.
+
+- Reads `.planning/STATE.md`, git state, and verification signals via `gsd-tools smart-entry`
+- Classifies your situation (no-project, paused, blocked, planning, executing, needs-verify, idle, complete, …)
+- Shows a situation-appropriate menu with one recommended action, then dispatches
+- Launcher/router only — it never does the work itself; falls back to `/gsd:progress` if detection is unavailable
+
+Usage: `/gsd:next`
+
 ## Staying Updated
 
 GSD evolves fast. Update periodically:

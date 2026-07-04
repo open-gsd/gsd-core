@@ -520,7 +520,9 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     fs.writeFileSync(badFixture, 'this subject contains FORBIDDEN content\n');
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
-      { kind: 'node-test', target: tf, failFirst: true, violationFixture: badFixture },
+      // #1906: the node-test causation control is mandatory — supply the clean control subject the
+      // test already writes so the honest content-dependent path proves fail-first and greens.
+      { kind: 'node-test', target: tf, failFirst: true, violationFixture: badFixture, cleanFixture: cleanSubject },
       { cwd: dir, runCheck: () => ({ passed: true }) },
     );
     assert.equal(result.status, 'green', 'a real negative test proven fail-first + clean pass must green');
@@ -614,6 +616,67 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     );
     assert.notEqual(result.status, 'green',
       'a supplied clean fixture that does not exist cannot run the control -> fail-closed');
+  });
+
+  // ─── #1906: the causation control is now MANDATORY for the node-test kind ───
+  // Supersedes #1346's opt-in (ADR-1606 Decision 4; ADR-550 2026-06-21 addendum). Without a clean
+  // fixture the causation control cannot run, so a node-test that reds merely BECAUSE
+  // GSD_PROHIB_SUBJECT is set (ignoring the subject's CONTENT) would pass the fail-first proof. A
+  // node-test descriptor that omits `cleanFixture` is therefore treated as UN-PROVABLE (fail-closed),
+  // never accepted under the weaker proof. The lint-rule kind is unchanged (its subject IS the linted
+  // file; no GSD_PROHIB_SUBJECT indirection, so the "reds because the env var is set" gap can't exist).
+  test('a DECEPTIVE content-independent red is NOT proven fail-first when NO clean fixture is supplied (#1906 regression)', (t) => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const dir = createTempDir('prohib-deceptive-noclean-');
+    t.after(() => cleanup(dir));
+    // Deceptive: reds whenever a subject is PRESENT, regardless of its content. Goes RED against the
+    // bad fixture (looks fail-first) — pre-#1906 this GREENED because no clean control ran. Now the
+    // mandatory control's absence makes the check un-provable -> fail-closed.
+    const tf = path.join(dir, 'neg.test.cjs');
+    fs.writeFileSync(tf,
+      "const { test } = require('node:test');\n" +
+      "const assert = require('node:assert');\n" +
+      "test('reds whenever a subject is present (deceptive, content-independent)', () => {\n" +
+      "  assert.ok(!process.env.GSD_PROHIB_SUBJECT, 'fails whenever a subject is set');\n" +
+      "});\n");
+    const badFixture = path.join(dir, 'bad-subject.txt');
+    fs.writeFileSync(badFixture, 'this subject contains FORBIDDEN content\n');
+    const result = enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      // NO cleanFixture — pre-#1906 the causation control was skipped and this greened.
+      { kind: 'node-test', target: tf, failFirst: true, violationFixture: badFixture },
+      { cwd: dir, runCheck: () => ({ passed: true }) },
+    );
+    assert.notEqual(result.status, 'green',
+      'a node-test that omits the mandatory clean control is un-provable -> fail-closed (#1906)');
+    assert.equal(result.located, true, 'the check is still located; it just cannot be proven fail-first');
+  });
+
+  test('even an HONEST content-dependent node-test hard-gates when NO clean fixture is supplied (#1906 mandatory)', (t) => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const dir = createTempDir('prohib-honest-noclean-');
+    t.after(() => cleanup(dir));
+    // Honest: reds ONLY when the subject's CONTENT contains FORBIDDEN. Pre-#1906 this greened on the
+    // violation alone. Post-#1906 the control is required, so an honest test with no clean fixture is
+    // un-provable — the author must supply a clean control subject to earn the green.
+    const tf = path.join(dir, 'neg.test.cjs');
+    fs.writeFileSync(tf,
+      "const { test } = require('node:test');\n" +
+      "const assert = require('node:assert');\n" +
+      "const fs = require('node:fs');\n" +
+      "test('rejects the forbidden content (content-dependent)', () => {\n" +
+      "  const subject = fs.readFileSync(process.env.GSD_PROHIB_SUBJECT, 'utf-8');\n" +
+      "  assert.ok(!subject.includes('FORBIDDEN'), 'subject must not contain FORBIDDEN');\n" +
+      "});\n");
+    const badFixture = path.join(dir, 'bad-subject.txt');
+    fs.writeFileSync(badFixture, 'this subject contains FORBIDDEN content\n');
+    const result = enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      { kind: 'node-test', target: tf, failFirst: true, violationFixture: badFixture },
+      { cwd: dir, runCheck: () => ({ passed: true }) },
+    );
+    assert.notEqual(result.status, 'green',
+      'the node-test causation control is mandatory (#1906); no clean fixture -> un-provable -> fail-closed');
   });
 
   test('a HANGING node-test fails closed via the bounded timeout (B2: no unbounded subprocess)', (t) => {
@@ -779,7 +842,9 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     fs.writeFileSync(badFixture, 'this subject contains FORBIDDEN content\n');
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
-      { kind: 'node-test', target: negTest, violationFixture: badFixture },
+      // #1906: the node-test causation control is mandatory — supply the clean control subject the
+      // test already writes so the honest content-dependent path greens.
+      { kind: 'node-test', target: negTest, violationFixture: badFixture, cleanFixture: path.join(dir, 'clean-subject.txt') },
       { cwd: dir },
     );
     assert.equal(result.status, 'green', 'real node-test proven RED on the bad subject + clean pass must green');
@@ -819,14 +884,16 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     assert.equal(result.evidence.length, 0, 'no enforcement evidence on a hard-gate');
   });
 
-  test('COMPOSE (#1346): a prohibition projected WITH check_violation_fixture greens end-to-end through the DEFAULT prover+runner (zero hand-authoring)', (t) => {
+  test('COMPOSE (#1906): a node-test prohibition projected WITHOUT check_clean_fixture hard-gates — the mandatory causation control is absent', (t) => {
     const enforce = require(ENFORCEMENT_LIB);
     const pc = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'probe-core.cjs'));
-    const dir = createTempDir('prohib-compose-1346-');
+    const dir = createTempDir('prohib-compose-1906-');
     t.after(() => cleanup(dir));
-    // The #1278 deterministic-locate path + the #1279 machine-proof now COMPOSE: a prohibition item
-    // authored with the four flat scalars projects -> reads back into a descriptor that ALREADY carries
-    // violationFixture -> the default prover greens it with NO hand-supplied fixture in the request.
+    // #1906: the #1278 locate + #1279 proof compose, but for the node-test kind the causation control
+    // (#1346's clean fixture) is now MANDATORY. A prohibition authored with only the four scalars
+    // (violation fixture, no clean fixture) round-trips a descriptor that carries violationFixture but
+    // NO cleanFixture -> the default prover cannot run the required control -> hard-gate. The five-scalar
+    // (WITH check_clean_fixture) green path is covered by the sibling COMPOSE (#1346 clean) test below.
     const negTest = path.join(dir, 'neg.test.cjs');
     fs.writeFileSync(negTest,
       "const { test } = require('node:test');\n" +
@@ -847,11 +914,14 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     ])[0];
     const descriptor = enforce.descriptorFromProjection(projected);
     assert.equal(descriptor.violationFixture, 'bad-subject.txt', 'the projected fixture survived the round-trip');
-    // NO failFirst, NO hand-supplied violationFixture beyond what the projection carried.
+    assert.equal(descriptor.cleanFixture, undefined, 'no clean fixture was authored -> none round-trips');
+    // NO failFirst, NO hand-supplied fixture beyond what the projection carried.
     const result = enforce.runProhibitionEnforcement(projected, descriptor, { cwd: dir });
-    assert.equal(result.status, 'green',
-      'the fully-projected prohibition greens through the default prover+runner — #1278 + #1279 compose');
-    assert.equal(result.evidence[0].failFirstProof, 'violation-fixture', 'green carries the machine-proof method');
+    assert.notEqual(result.status, 'green',
+      'a node-test projected without the mandatory clean control hard-gates through the default prover (#1906)');
+    assert.equal(result.flagged, true, 'the un-provable node-test miss is flagged');
+    assert.equal(result.located, true, 'the descriptor was located; it just could not be proven fail-first');
+    assert.equal(result.evidence.length, 0, 'no enforcement evidence on a hard-gate');
   });
 
   test('COMPOSE (#1346 clean): a prohibition projected WITH check_clean_fixture proves content-dependence end-to-end (deceptive vs honest)', (t) => {
@@ -977,8 +1047,12 @@ describe('prohibition-enforcement defaultProveFailFirst REAL prover (#1279)', ()
       "});\n");
     const badFixture = path.join(dir, 'bad-subject.txt');
     fs.writeFileSync(badFixture, 'this subject contains FORBIDDEN content\n');
+    // #1906: the causation control is mandatory for node-test — supply a KNOWN-CLEAN control subject
+    // so the honest content-dependent test proves fail-first (RED on bad AND non-vacuous GREEN on clean).
+    const cleanFixture = path.join(dir, 'clean-subject.txt');
+    fs.writeFileSync(cleanFixture, 'this subject is clean\n');
     const proof = enforce.defaultProveFailFirst(
-      { kind: 'node-test', target: negTest, violationFixture: badFixture },
+      { kind: 'node-test', target: negTest, violationFixture: badFixture, cleanFixture },
       dir,
     );
     assert.equal(proof.provenFailFirst, true,
@@ -1071,8 +1145,10 @@ describe('prohibition-enforcement defaultProveFailFirst REAL prover (#1279)', ()
       "  assert.ok(!subject.includes('FORBIDDEN'), 'subject is clean');\n" +
       "});\n");
     fs.writeFileSync(path.join(dir, 'bad-subject.txt'), 'this subject contains FORBIDDEN content\n');
+    // #1906: mandatory clean control, also named RELATIVELY so both runs exercise the cwd-relative guard.
+    fs.writeFileSync(path.join(dir, 'clean-subject.txt'), 'this subject is clean\n');
     const proof = enforce.defaultProveFailFirst(
-      { kind: 'node-test', target: negTest, violationFixture: 'bad-subject.txt' }, // RELATIVE to cwd
+      { kind: 'node-test', target: negTest, violationFixture: 'bad-subject.txt', cleanFixture: 'clean-subject.txt' }, // RELATIVE to cwd
       dir,
     );
     assert.equal(proof.provenFailFirst, true,

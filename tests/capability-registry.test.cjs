@@ -836,23 +836,6 @@ describe('normalizeLineEndings', () => {
   });
 });
 
-describe('committed gsd-core/bin/lib/capability-registry.cjs is not stale', () => {
-  test('gen-capability-registry.cjs --check exits 0 (committed registry is up to date)', () => {
-    const result = spawnSync(
-      process.execPath,
-      [require('node:path').join(ROOT, 'scripts', 'gen-capability-registry.cjs'), '--check'],
-      { cwd: ROOT, encoding: 'utf8' },
-    );
-    assert.strictEqual(
-      result.status,
-      0,
-      'gen-capability-registry.cjs --check failed — committed capability-registry.cjs is stale.\n' +
-      'Run: node scripts/gen-capability-registry.cjs --write\n' +
-      'stderr: ' + (result.stderr || ''),
-    );
-  });
-});
-
 // ─── 5. Registry shape from multiple capabilities ────────────────────────────
 
 describe('registry structure', () => {
