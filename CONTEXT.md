@@ -387,7 +387,7 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 `PROHIB.enforce.green-rule=passed iff provenFailFirst===true && run.passed===true (runProhibitionEnforcement); every miss/fail/un-provable HARD-GATES both modes via dispositionForProhibition's fail-closed default`
 `PROHIB.enforce.kinds=node-test (non-vacuous red via isNonVacuousNodeTestRed; pass-side vacuity via isNonVacuousNodeTestPass) | lint-rule (eslint --format json filtered by ruleId)`
 `PROHIB.enforce.failfirst=MACHINE-PROVEN against an author-supplied violation fixture (#1279); caller failFirst attestation DEMOTED to a non-authoritative hint (FF-08)`
-`PROHIB.enforce.causation=opt-in clean-fixture control proves the red is content-caused not env-var-set (#1346); absent=documented residual`
+`PROHIB.enforce.causation=clean-fixture control proves the red is content-caused not env-var-set; MANDATORY for node-test (#1906 supersedes #1346 opt-in) — absent clean-fixture ⇒ node-test un-provable/fail-closed; lint-rule needs none (its subject IS the linted file)`
 `PROHIB.descriptor.shape=5 FLAT scalars (check_kind,check_target,check_rule,check_violation_fixture,check_clean_fixture) — NEVER a nested check:{} (parseMustHavesBlock is a flat parser, src/frontmatter.cts)`
 `PROHIB.rail=core verify rail, non-toggleable (ADR-857 verification-substrate boundary / decision #6); the verifier<->predicate contract is NOT an off-by-default capability`
 `PROHIB.judgment-tier=never-silent / never-hard-halt soft gate; autonomous emits "unverified-prohibition — human review recommended" (exogenous grading, ADR-550 D4)`
