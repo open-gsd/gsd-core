@@ -49,7 +49,6 @@ const RUNTIME_META = {
   codex:        { localDir: '.codex',            globalSuffix: '.codex' },
   copilot:      { localDir: '.github',           globalSuffix: '.copilot' },
   cursor:       { localDir: '.cursor',           globalSuffix: '.cursor' },
-  gemini:       { localDir: '.gemini',           globalSuffix: '.gemini' },
   hermes:       { localDir: '.hermes',           globalSuffix: '.hermes' },
   kimi:         { localDir: '.kimi-code',        globalSuffix: path.join('.config', 'agents') },
   kilo:         { localDir: '.kilo',             globalSuffix: path.join('.config', 'kilo') },
@@ -61,7 +60,7 @@ const RUNTIME_META = {
 
 // Runtimes that emit per-skill files under skills/ (not rules-based or commands-based)
 const SKILL_RUNTIMES = [
-  'claude', 'opencode', 'gemini', 'kilo', 'codex', 'copilot', 'antigravity',
+  'claude', 'opencode', 'kilo', 'codex', 'copilot', 'antigravity',
   'cursor', 'augment', 'trae', 'qwen', 'codebuddy',
 ];
 
@@ -112,7 +111,7 @@ function runMinimalInstall({ runtime, scope, extraArgs = [] }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-${runtime}-${scope}-`));
   try {
     const LOCAL_DIR_NAME = {
-      claude: '.claude', opencode: '.opencode', gemini: '.gemini', kilo: '.kilo',
+      claude: '.claude', opencode: '.opencode', kilo: '.kilo',
       codex: '.codex', copilot: '.github', antigravity: '.agents', cursor: '.cursor',
       windsurf: '.windsurf', augment: '.augment', trae: '.trae', qwen: '.qwen',
       codebuddy: '.codebuddy', cline: '.',

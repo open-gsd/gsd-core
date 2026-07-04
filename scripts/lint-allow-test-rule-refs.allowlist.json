@@ -88,7 +88,6 @@
   "tests/ios-scaffold-safety.test.cjs :: source-text-is-the-product",
   "tests/issue-2639-codex-toml-neutralization.test.cjs :: source-text-is-the-product",
   "tests/issue-429-comment-text-gate.test.cjs :: source-text-is-the-product",
-  "tests/issue-498-package-identity.test.cjs :: architectural-invariant",
   "tests/issue-498-update-backup-runtime-dir.test.cjs :: structural assertion on the deployed update.md backup bash;",
   "tests/issue-57-runtime-install-no-drift.test.cjs :: delegation-presence guard. Catches wholesale removal of the registry",
   "tests/issue-57-runtime-install-no-drift.test.cjs :: structural guard over bin/install.js source. Behavioral assertions",

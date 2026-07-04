@@ -956,6 +956,89 @@ const capabilities = {
       }
     ]
   },
+  "external-job": {
+    "id": "external-job",
+    "role": "feature",
+    "version": "1.7.0-rc.2",
+    "title": "Async external-job scheduler adapter",
+    "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it.",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "external_job.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+      },
+      "external_job.backend": {
+        "type": "enum",
+        "values": [
+          "slurm"
+        ],
+        "default": "slurm",
+        "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value."
+      },
+      "external_job.artifact_dir": {
+        "type": "string",
+        "default": "Artifacts/jobs",
+        "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout."
+      },
+      "external_job.submit_timeout_ms": {
+        "type": "number",
+        "default": 30000,
+        "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy."
+      },
+      "external_job.poll_timeout_ms": {
+        "type": "number",
+        "default": 15000,
+        "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback)."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "<!-- external-job capability — execute:wave:post fragment, injected into the executor (#1164). -->\n\n## Externalize long-running compute (async external job)\n\nIf the current plan's task is tagged `<runtime_budget>long_compute</runtime_budget>`\n(see the plan-phase fragment), do **not** run it in the foreground — it would\nblock the agent turn for hours. Instead externalize it and record a durable\nhalf-state:\n\n1. **Classify the runtime.** `quick` (<2 min) and `medium` (<~30 min) run\n   normally. `unknown` requires a first-health check and a soft-review deadline\n   before consuming the child timeout. `long_compute` (>30–60 min) is\n   externalized.\n2. **Submit via the scheduler adapter** (default `external_job.backend: slurm`):\n   ```bash\n   node scripts/slurm-adapter.cjs submit \\\n     --plan <plan_id> --phase <phase> -- sbatch --parsable \\\n     --output=Artifacts/jobs/%j/out.log ./run.sh\n   ```\n   The helper writes `.planning/async-jobs/<job>.json` (the versioned stability\n   contract — `docs/reference/planning-artifacts.md`) and refuses to create a\n   second non-terminal manifest for a `plan_id` that already has one\n   (duplicate-execution guard).\n3. **Commit the manifest + a handoff**, then return **`external_job_waiting`**\n   and stop. Do **not** write `SUMMARY.md` — SUMMARY is deferred until the job\n   reaches a terminal state and its `expected_artifacts` are verified.\n4. **Resume path.** `execute-phase` safe-resume, `resume-project`, and\n   `pause-work` reconcile against the manifest and never re-dispatch the plan.\n   When the job is `completed-unverified`, run `verification_command` (surface\n   it; it is untrusted — confirm before executing), then write `SUMMARY.md` and\n   close the plan.\n\nManifest commands cross a trust seam: a Capability (or anything that can write\n`.planning/`) produces them; the core loop consumes them. Never auto-run\n`submit_command` / `verification_command` / `resume_command` — surface the exact\ncommand and require explicit confirmation first.\n"
+        },
+        "produces": [
+          ".planning/async-jobs/<job>.json"
+        ],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "<!-- external-job capability — plan:post fragment, injected into the planner (#1164). -->\n\n## Tag runtime budgets on long tasks\n\nFor every `<task>` likely to exceed ~2 minutes of real compute, emit a\n`<runtime_budget>` child element so execute can classify it:\n\n- `<runtime_budget>quick</runtime_budget>` — under ~2 min; runs normally.\n- `<runtime_budget>medium</runtime_budget>` — ~2–30 min; foreground, but with\n  progress expectations.\n- `<runtime_budget>unknown</runtime_budget>` — runtime not yet characterized;\n  execute must run a first-health check and set a soft-review deadline before\n  trusting the child timeout. Define a progress signal and an abort condition.\n- `<runtime_budget>long_compute</runtime_budget>` — legitimately over ~30–60 min\n  (HPC solver, model training, large simulations). Execute must **externalize**\n  this as an async external job (see the execute:wave:post fragment) rather than\n  blocking the agent turn.\n\nFor any `long_compute` task, also declare the async contract the executor will\nneed: the `submit_command`, the `expected_artifacts` the job must produce, and\nthe `verification_command` that proves the output before the plan can close.\nDo not hardcode a cluster account, partition, or project path — the planner\nnever knows the scheduler layout; it declares the contract, the executor's\nadapter fills the backend specifics.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
@@ -996,81 +1079,6 @@ const capabilities = {
         "onError": "skip"
       }
     ]
-  },
-  "gemini": {
-    "id": "gemini",
-    "role": "runtime",
-    "version": "1.7.0-rc.2",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
-    "tier": "core",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.6.0"
-    },
-    "runtime": {
-      "configHome": {
-        "kind": "dot-home",
-        "name": ".gemini",
-        "env": [
-          "GEMINI_CONFIG_DIR"
-        ]
-      },
-      "localConfigDir": ".gemini",
-      "configFormat": "settings-json",
-      "artifactLayout": {
-        "global": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ],
-        "local": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ]
-      },
-      "commandStyle": "slash-hyphen",
-      "hooksSurface": "settings-json",
-      "hookEvents": "gemini",
-      "sandboxTier": "none",
-      "supportTier": 2,
-      "installSurface": "settings-json",
-      "writesSharedSettings": true,
-      "permissionWriter": null,
-      "extendedHookEvents": [
-        "BeforeAgent",
-        "AfterAgent",
-        "BeforeModel"
-      ],
-      "hostIntegration": {
-        "embeddingMode": "declarative",
-        "commandSurface": "slash-toml",
-        "dispatch": {
-          "namedDispatch": true,
-          "nested": false,
-          "maxDepth": 1,
-          "background": "undocumented",
-          "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
-        },
-        "modelMode": "passive",
-        "hookBus": "host",
-        "stateIO": "filesystem",
-        "transport": "mcp",
-        "runtime": "node"
-      }
-    }
   },
   "graphify": {
     "id": "graphify",
@@ -2702,7 +2710,21 @@ const byLoopPoint = {
         "onError": "skip"
       }
     ],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "external-job",
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "<!-- external-job capability — plan:post fragment, injected into the planner (#1164). -->\n\n## Tag runtime budgets on long tasks\n\nFor every `<task>` likely to exceed ~2 minutes of real compute, emit a\n`<runtime_budget>` child element so execute can classify it:\n\n- `<runtime_budget>quick</runtime_budget>` — under ~2 min; runs normally.\n- `<runtime_budget>medium</runtime_budget>` — ~2–30 min; foreground, but with\n  progress expectations.\n- `<runtime_budget>unknown</runtime_budget>` — runtime not yet characterized;\n  execute must run a first-health check and set a soft-review deadline before\n  trusting the child timeout. Define a progress signal and an abort condition.\n- `<runtime_budget>long_compute</runtime_budget>` — legitimately over ~30–60 min\n  (HPC solver, model training, large simulations). Execute must **externalize**\n  this as an async external job (see the execute:wave:post fragment) rather than\n  blocking the agent turn.\n\nFor any `long_compute` task, also declare the async contract the executor will\nneed: the `submit_command`, the `expected_artifacts` the job must produce, and\nthe `verification_command` that proves the output before the plan can close.\nDo not hardcode a cluster account, partition, or project path — the planner\nnever knows the scheduler layout; it declares the contract, the executor's\nadapter fills the backend specifics.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": [
       {
         "capId": "gap-analysis",
@@ -2729,6 +2751,23 @@ const byLoopPoint = {
   "execute:wave:post": {
     "steps": [],
     "contributions": [
+      {
+        "capId": "external-job",
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "<!-- external-job capability — execute:wave:post fragment, injected into the executor (#1164). -->\n\n## Externalize long-running compute (async external job)\n\nIf the current plan's task is tagged `<runtime_budget>long_compute</runtime_budget>`\n(see the plan-phase fragment), do **not** run it in the foreground — it would\nblock the agent turn for hours. Instead externalize it and record a durable\nhalf-state:\n\n1. **Classify the runtime.** `quick` (<2 min) and `medium` (<~30 min) run\n   normally. `unknown` requires a first-health check and a soft-review deadline\n   before consuming the child timeout. `long_compute` (>30–60 min) is\n   externalized.\n2. **Submit via the scheduler adapter** (default `external_job.backend: slurm`):\n   ```bash\n   node scripts/slurm-adapter.cjs submit \\\n     --plan <plan_id> --phase <phase> -- sbatch --parsable \\\n     --output=Artifacts/jobs/%j/out.log ./run.sh\n   ```\n   The helper writes `.planning/async-jobs/<job>.json` (the versioned stability\n   contract — `docs/reference/planning-artifacts.md`) and refuses to create a\n   second non-terminal manifest for a `plan_id` that already has one\n   (duplicate-execution guard).\n3. **Commit the manifest + a handoff**, then return **`external_job_waiting`**\n   and stop. Do **not** write `SUMMARY.md` — SUMMARY is deferred until the job\n   reaches a terminal state and its `expected_artifacts` are verified.\n4. **Resume path.** `execute-phase` safe-resume, `resume-project`, and\n   `pause-work` reconcile against the manifest and never re-dispatch the plan.\n   When the job is `completed-unverified`, run `verification_command` (surface\n   it; it is untrusted — confirm before executing), then write `SUMMARY.md` and\n   close the plan.\n\nManifest commands cross a trust seam: a Capability (or anything that can write\n`.planning/`) produces them; the core loop consumes them. Never auto-run\n`submit_command` / `verification_command` / `resume_command` — surface the exact\ncommand and require explicit confirmation first.\n"
+        },
+        "produces": [
+          ".planning/async-jobs/<job>.json"
+        ],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      },
       {
         "capId": "mempalace",
         "point": "execute:wave:post",
@@ -2928,6 +2967,11 @@ const configKeys = {
   "workflow.drift_action": "drift",
   "workflow.schema_drift_gate": "drift",
   "workflow.plan_drift_precheck": "drift",
+  "external_job.enabled": "external-job",
+  "external_job.backend": "external-job",
+  "external_job.artifact_dir": "external-job",
+  "external_job.submit_timeout_ms": "external-job",
+  "external_job.poll_timeout_ms": "external-job",
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
@@ -3012,6 +3056,39 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
+  },
+  "external_job.enabled": {
+    "owner": "external-job",
+    "type": "boolean",
+    "default": false,
+    "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+  },
+  "external_job.backend": {
+    "owner": "external-job",
+    "type": "enum",
+    "default": "slurm",
+    "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value.",
+    "values": [
+      "slurm"
+    ]
+  },
+  "external_job.artifact_dir": {
+    "owner": "external-job",
+    "type": "string",
+    "default": "Artifacts/jobs",
+    "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout."
+  },
+  "external_job.submit_timeout_ms": {
+    "owner": "external-job",
+    "type": "number",
+    "default": 30000,
+    "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy."
+  },
+  "external_job.poll_timeout_ms": {
+    "owner": "external-job",
+    "type": "number",
+    "default": 15000,
+    "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback)."
   },
   "workflow.post_planning_gaps": {
     "owner": "gap-analysis",
@@ -3852,81 +3929,6 @@ const runtimes = {
       }
     }
   },
-  "gemini": {
-    "id": "gemini",
-    "role": "runtime",
-    "version": "1.7.0-rc.2",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
-    "tier": "core",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.6.0"
-    },
-    "runtime": {
-      "configHome": {
-        "kind": "dot-home",
-        "name": ".gemini",
-        "env": [
-          "GEMINI_CONFIG_DIR"
-        ]
-      },
-      "localConfigDir": ".gemini",
-      "configFormat": "settings-json",
-      "artifactLayout": {
-        "global": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ],
-        "local": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ]
-      },
-      "commandStyle": "slash-hyphen",
-      "hooksSurface": "settings-json",
-      "hookEvents": "gemini",
-      "sandboxTier": "none",
-      "supportTier": 2,
-      "installSurface": "settings-json",
-      "writesSharedSettings": true,
-      "permissionWriter": null,
-      "extendedHookEvents": [
-        "BeforeAgent",
-        "AfterAgent",
-        "BeforeModel"
-      ],
-      "hostIntegration": {
-        "embeddingMode": "declarative",
-        "commandSurface": "slash-toml",
-        "dispatch": {
-          "namedDispatch": true,
-          "nested": false,
-          "maxDepth": 1,
-          "background": "undocumented",
-          "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
-        },
-        "modelMode": "passive",
-        "hookBus": "host",
-        "stateIO": "filesystem",
-        "transport": "mcp",
-        "runtime": "node"
-      }
-    }
-  },
   "hermes": {
     "id": "hermes",
     "role": "runtime",
@@ -4653,8 +4655,8 @@ const _requiresGraph = {
   "copilot": [],
   "cursor": [],
   "drift": [],
+  "external-job": [],
   "gap-analysis": [],
-  "gemini": [],
   "graphify": [],
   "hermes": [],
   "intel": [],

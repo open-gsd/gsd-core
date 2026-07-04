@@ -12,7 +12,7 @@
  *      IN-PROCESS to install-engine's `installRuntimeArtifacts` /
  *      `uninstallRuntimeArtifacts` with the EXACT args passed through. Because
  *      the adapter calls the SAME engine functions `bin/install.js` uses, its
- *      output is byte-identical to today's install — the 16-runtime byte
+ *      output is byte-identical to today's install — the 15-runtime byte
  *      identity is gated by `tests/golden-install-parity.test.cjs` (which
  *      exercises these engine functions end-to-end). Asserting the delegation
  *      link here proves the adapter never diverges from the reference path.
@@ -32,8 +32,8 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const RUNTIMES = Object.keys(registry.runtimes);
 
-test('declarative adapter: kind === "declarative" + runtime echoed, for all 16 runtimes', () => {
-  assert.ok(RUNTIMES.length >= 16, `expected ≥16 runtimes in registry, got ${RUNTIMES.length}`);
+test('declarative adapter: kind === "declarative" + runtime echoed, for all 15 runtimes', () => {
+  assert.ok(RUNTIMES.length >= 15, `expected ≥15 runtimes in registry, got ${RUNTIMES.length}`);
   for (const r of RUNTIMES) {
     const adapter = createDeclarativeAdapter({ runtime: r });
     assert.strictEqual(adapter.kind, 'declarative', `${r}: kind must be 'declarative'`);

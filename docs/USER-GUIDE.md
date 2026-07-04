@@ -31,14 +31,13 @@ execute → verify → review → ship loop using existing GSD primitives.
 
 ---
 
-## Slash-command forms (hyphen vs colon)
+## Slash-command form
 
-GSD ships **the same set of skills** to every supported runtime, but two slash-form spellings are in play:
+GSD ships **the same set of skills** to every supported runtime, using the hyphen slash-form spelling:
 
 - **Hyphen form** — `/gsd-command-name` — used by Claude Code, Copilot, OpenCode, Kilo, Cursor, Windsurf, Augment, Antigravity, and Trae.
-- **Colon form** — `/gsd:command-name` — used by **Gemini CLI only**. Gemini namespaces every plugin's commands under the plugin id, so the install path rewrites every body-text reference and command file to the colon form during `--gemini` install.
 
-You don't need to choose — the installer writes the correct form into the command directory of each runtime you target. When following a walkthrough on a Gemini terminal, replace the hyphen after `gsd` with a colon as you read each slash command.
+The installer writes this form into the command directory of each runtime you target.
 
 ## Namespace routing primer (`gsd-ns-*`, v1.40+)
 
@@ -732,7 +731,7 @@ Each disabled server removes its schema from every subsequent turn. Trimming MCP
 
 For the full audit, harness reference, and the composition note with `model_profile`, see [MCP Tool Schema Cost](../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) in the bundled `context-budget.md` reference.
 
-### Using Non-Claude Runtimes (Codex, OpenCode, Gemini CLI, Kilo)
+### Using Non-Claude Runtimes (Codex, OpenCode, Antigravity CLI, Kilo)
 
 > **Codex CLI minimum supported version: `0.130.0`** (issue [#3562](https://github.com/open-gsd/gsd-core/issues/3562)).
 
@@ -776,7 +775,6 @@ See [Runtime-Aware Profiles](CONFIGURATION.md#runtime-aware-profiles-2517).
 
 When generating artifacts, the installer adapts GSD commands to each runtime's native command schema:
 
-- **Gemini CLI** — generated TOML commands use Gemini's `{{args}}` placeholder (translated from Claude's `$ARGUMENTS`) so typed arguments interpolate into the prompt, and `/gsd:progress` injects live project state via a fixed `!{cat .planning/STATE.md 2>/dev/null}` shell block (no interpolated input, so no injection risk; Gemini shows its standard confirmation dialog).
 - **Qwen Code** — main-loop skills carry Qwen's numeric `priority` field so the most-used workflows (e.g. `new-project`, `plan-phase`, `execute-phase`) sort first in the `/skills` list; utility skills are left unset. Higher values sort earlier; the field affects only the `/skills` list order.
 
 See [How to install GSD Core on your runtime](how-to/install-on-your-runtime.md) for the full per-runtime details.
@@ -817,43 +815,6 @@ GSD installs four surfaces for CodeBuddy: `/gsd-*` slash commands in `~/.codebud
 npx @opengsd/gsd-core --qwen --global
 ```
 
-### Installing as a Gemini CLI extension (#775)
-
-GSD ships a `gemini-extension.json` extension manifest at the repository root, so
-Gemini CLI users can install, update, and remove GSD through Gemini's own
-extension lifecycle — and have it show up in `gemini extensions list`:
-
-```bash
-# Install (Gemini clones the repo and copies the extension)
-gemini extensions install https://github.com/open-gsd/gsd-core
-
-# Update to the latest released manifest version
-gemini extensions update gsd-core
-
-# Remove
-gemini extensions uninstall gsd-core
-```
-
-For local development against a checkout, symlink it instead of copying:
-
-```bash
-gemini extensions link /path/to/gsd-core
-```
-
-**What the extension delivers today:** it loads GSD's operating context
-(`GEMINI.md`) into every Gemini session in the project, and gives you the
-discoverable install/update/remove lifecycle above. The `/gsd:*` slash commands,
-agents, and hooks are still installed via the dedicated installer:
-
-```bash
-npx @opengsd/gsd-core --gemini --global
-```
-
-The two paths are complementary and additive — installing the extension does not
-change or replace the `npx gsd-core --gemini` install, and either can be used on
-its own. (Slash-command/agent/hook projection into the extension package itself
-is a planned follow-up.)
-
 ### Installing for Prerelease Editions
 
 Set the runtime's `*_CONFIG_DIR` env var to the prerelease directory before running the installer:
@@ -867,7 +828,6 @@ WINDSURF_CONFIG_DIR=~/.codeium/windsurf-next npx @opengsd/gsd-core@latest --wind
 | Runtime | Stable default | Override env var |
 |---|---|---|
 | Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` |
-| Gemini CLI | `~/.gemini` | `GEMINI_CONFIG_DIR` |
 | OpenCode | `XDG_CONFIG_HOME/opencode` | `OPENCODE_CONFIG_DIR` |
 | Codex | (per Codex CLI) | `--config-dir` flag |
 | Copilot | `~/.copilot` | `COPILOT_CONFIG_DIR` (or `COPILOT_HOME`) |

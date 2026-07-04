@@ -22,7 +22,6 @@ const {
 
 const EXPECTED_TABLE = [
   { runtime: 'claude',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'gemini',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
   { runtime: 'antigravity', installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
   { runtime: 'augment',     installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
   { runtime: 'qwen',        installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
@@ -179,8 +178,8 @@ describe('installSurface correctness', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('kimi').installSurface, 'profile-marker-only');
   });
 
-  test('the 7 passthroughs + opencode + kilo -> "settings-json"', () => {
-    const settingsJsonRuntimes = ['claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy', 'opencode', 'kilo'];
+  test('the 6 passthroughs + opencode + kilo -> "settings-json"', () => {
+    const settingsJsonRuntimes = ['claude', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy', 'opencode', 'kilo'];
     for (const runtime of settingsJsonRuntimes) {
       assert.strictEqual(
         resolveRuntimeConfigIntent(runtime).installSurface,
@@ -212,15 +211,15 @@ describe('resolveRuntimeConfigIntent — fresh object each call', () => {
 // ---------------------------------------------------------------------------
 
 describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_16 = new Set([
-    'claude', 'gemini', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
+  const EXPECTED_15 = new Set([
+    'claude', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
     'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae',
     'kimi',
   ]);
 
-  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 16 expected runtimes', () => {
+  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 15 expected runtimes', () => {
     const runtimeSet = new Set(ALLOWED_CONFIG_RUNTIMES);
-    assert.deepStrictEqual(runtimeSet, EXPECTED_16);
+    assert.deepStrictEqual(runtimeSet, EXPECTED_15);
   });
 
   test('every member of ALLOWED_CONFIG_RUNTIMES resolves without throwing', () => {
@@ -229,8 +228,8 @@ describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
     }
   });
 
-  test('ALLOWED_CONFIG_RUNTIMES has exactly 16 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 16);
+  test('ALLOWED_CONFIG_RUNTIMES has exactly 15 entries', () => {
+    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 15);
   });
 });
 
@@ -317,7 +316,7 @@ describe('resolveInstallPlan — hooksSurface is descriptor-owned', () => {
 /**
  * Golden-master test for resolveInstallPlan — ADR-857 phase 5g capstone.
  *
- * Pins the exact InstallPlan shape for all 16 runtimes to guard against
+ * Pins the exact InstallPlan shape for all 15 runtimes to guard against
  * descriptor drift. Derived from actual resolveInstallPlan output at the time
  * the seam was introduced (2026-06-11). Behavioral: calls the exported
  * function and asserts on typed fields — no source-grep.
@@ -359,16 +358,6 @@ const EXPECTED = {
     finishPermissionWriter: null,
     hookEvents: 'gemini',
     extendedHookEvents: [],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  gemini: {
-    runtime: 'gemini',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'gemini',
-    extendedHookEvents: ['BeforeAgent', 'AfterAgent', 'BeforeModel'],
     hooksSurface: 'settings-json',
     sandboxTier: 'none',
   },
@@ -497,8 +486,8 @@ const EXPECTED = {
 const ALL_RUNTIMES = Object.keys(EXPECTED);
 
 describe('resolveInstallPlan — ADR-857 phase 5g golden master', () => {
-  it('covers exactly 16 runtimes', () => {
-    assert.strictEqual(ALL_RUNTIMES.length, 16);
+  it('covers exactly 15 runtimes', () => {
+    assert.strictEqual(ALL_RUNTIMES.length, 15);
   });
 
   for (const runtime of ALL_RUNTIMES) {

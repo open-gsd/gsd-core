@@ -476,6 +476,10 @@ const KNOWN_SKILLS = new Set([
   'mvp-phase.md',
   'new-milestone.md',
   'new-project.md',
+  // `next.md` was legitimately reclaimed (#1787): the old workflow-advance
+  // command stays absorbed into `progress.md --next`, while the current
+  // `/gsd:next` is a different state-aware smart-entry launcher.
+  'next.md',
   'pause-work.md',
   'phase.md',
   'plan-phase.md',
@@ -591,7 +595,10 @@ describe('absorbed skills are removed', () => {
     ['scan', 'absorbed into map-codebase.md'],
     ['intel', 'absorbed into map-codebase.md'],
     ['code-review-fix', 'absorbed into code-review.md'],
-    ['next', 'absorbed into progress.md'],
+    // NOTE: `next` is intentionally absent here — the workflow-advance behavior
+    // stays absorbed into `progress.md --next`, but `/gsd:next` was reintroduced
+    // (#1787) as a distinct state-aware smart-entry launcher, so `next.md` is a
+    // KNOWN_SKILL again rather than an absorbed/removed command.
     ['do', 'absorbed into progress.md'],
   ];
 
@@ -832,7 +839,7 @@ describe('skill set', () => {
       current: currentBasenames,
       known: KNOWN_SKILLS,
       fail: assert.fail,
-      pruneHint: 'edit KNOWN_SKILLS in tests/enh-2790-skill-consolidation.test.cjs',
+      pruneHint: 'edit KNOWN_SKILLS in tests/skill-frontmatter-contract.test.cjs',
     });
   });
 });

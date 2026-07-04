@@ -35,7 +35,7 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const { getRuntimeLabel, getRuntimeNewProjectCommand } = runtimeNamePolicy;
 
-// Golden oracle: hardcoded expected map of all 16 runtime ids to their short
+// Golden oracle: hardcoded expected map of all 15 runtime ids to their short
 // install/uninstall display label. A pinned expected value in a TEST is correct
 // — the test IS the oracle (non-circular). Only PRODUCTION code should derive
 // dynamically. If this map diverges from getRuntimeLabel output, either the
@@ -44,7 +44,6 @@ const { getRuntimeLabel, getRuntimeNewProjectCommand } = runtimeNamePolicy;
 const GOLDEN_LABEL_MAP = {
   claude: 'Claude Code',
   opencode: 'OpenCode',
-  gemini: 'Gemini',
   kilo: 'Kilo',
   codex: 'Codex',
   copilot: 'Copilot',
@@ -60,7 +59,7 @@ const GOLDEN_LABEL_MAP = {
   cline: 'Cline',
 };
 
-test('getRuntimeLabel: golden map matches for all 16 known runtime ids', () => {
+test('getRuntimeLabel: golden map matches for all 15 known runtime ids', () => {
   for (const [id, expected] of Object.entries(GOLDEN_LABEL_MAP)) {
     const actual = getRuntimeLabel(id);
     assert.strictEqual(
@@ -108,15 +107,14 @@ test('getRuntimeLabel fallback: alias is NOT auto-expanded (raw id match only)',
 // ---------------------------------------------------------------------------
 
 const GOLDEN_COMMAND_MAP = {
-  // 4 real overrides (the rest use the default):
-  gemini: '/gsd:new-project',
+  // 3 real overrides (the rest use the default):
   codex: '$gsd-new-project',
   cursor: 'gsd-new-project (mention the skill name)',
   kimi: '/skill:gsd-new-project',
 };
 const DEFAULT_CMD = '/gsd-new-project';
 
-test('getRuntimeNewProjectCommand: the 4 overrides + the default for the other 12 runtimes', () => {
+test('getRuntimeNewProjectCommand: the 3 overrides + the default for the other 12 runtimes', () => {
   for (const [id, expected] of Object.entries(GOLDEN_COMMAND_MAP)) {
     assert.strictEqual(getRuntimeLabel ? getRuntimeNewProjectCommand(id) : null, expected, `override ${id}`);
   }

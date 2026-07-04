@@ -1,7 +1,7 @@
 # How to connect a host to the GSD companion MCP server
 
 This guide shows you how to make a MCP-capable host (Claude Code, Codex,
-OpenCode, VS Code, Gemini CLI, Cursor, Cline, Hermes) drive GSD — run GSD
+OpenCode, VS Code, Antigravity CLI, Cursor, Cline, Hermes) drive GSD — run GSD
 commands and read/write `.planning/` state — through the companion MCP server,
 with no bespoke plugin.
 
@@ -29,7 +29,7 @@ host.
 - **Claude Code / Codex / OpenCode / Cursor / Cline / Hermes** — under the
   host's `mcpServers` object (project or user config).
 - **VS Code** — in the workspace MCP servers list.
-- **Gemini CLI** — under its `mcpServers` block.
+- **Antigravity CLI** — under its `mcpServers` block.
 
 Set `cwd` to the project whose `.planning/` you want GSD to manage — the server
 resolves state paths against it.

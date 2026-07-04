@@ -338,17 +338,9 @@ describe('E: stageManifests — non-git dir is a no-op, not a throw', () => {
 });
 
 // ─── D: CLI --check exits 0 when in sync ─────────────────────────────────────
-describe('D: CLI --check exits 0 when manifests are in sync', () => {
-
-  test('node scripts/sync-manifest-versions.cjs --check exits 0', () => {
-    // Will throw if exit code != 0
-    execFileSync(
-      process.execPath,
-      [path.join(ROOT, 'scripts', 'sync-manifest-versions.cjs'), '--check'],
-      { cwd: ROOT }
-    );
-  });
-});
+// Moved to `npm run lint:generated-sync` (sync-manifest-versions.cjs --check),
+// which runs against the committed manifests in both local and CI lint lanes
+// instead of being masked by gsd-test's `npm run build` leg.
 
 // ─── F: version script includes capability-registry regen (#1498) ─────────────
 //

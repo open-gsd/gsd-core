@@ -3,7 +3,7 @@
 /**
  * Equivalence proof for ADR-857 phase 5b: descriptor-driven getGlobalConfigDir.
  *
- * For every runtime in the 16-entry capability registry, plus grok and unknown
+ * For every runtime in the 15-entry capability registry, plus grok and unknown
  * runtime, this test asserts that getGlobalConfigDir() produces exactly the
  * same path that the old hardcoded switch produced (golden expected values
  * captured from the switch BEFORE any edits). All assertions are byte-identical.
@@ -55,7 +55,7 @@ function withEnv(overrides, fn) {
 
 // All env vars for all runtimes — cleared in each test that calls getGlobalConfigDir directly
 const ALL_ENV_KEYS = [
-  'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'CODEX_HOME',
   'GROK_AGENTS_HOME', 'COPILOT_CONFIG_DIR', 'COPILOT_HOME', 'ANTIGRAVITY_CONFIG_DIR',
   'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR', 'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR',
   'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'KIMI_CONFIG_DIR',
@@ -88,7 +88,6 @@ function restoreEnvKeys(saved) {
 const GOLDEN_DEFAULTS = {
   claude:      path.join(HOME, '.claude'),
   cursor:      path.join(HOME, '.cursor'),
-  gemini:      path.join(HOME, '.gemini'),
   codex:       path.join(HOME, '.codex'),
   grok:        path.join(HOME, '.agents'),
   copilot:     path.join(HOME, '.copilot'),
@@ -144,7 +143,6 @@ describe('descriptor-driven equivalence: env-var overrides', () => {
   const cases = [
     { runtime: 'claude',    envKey: 'CLAUDE_CONFIG_DIR',    value: '/custom/claude' },
     { runtime: 'cursor',    envKey: 'CURSOR_CONFIG_DIR',    value: '/custom/cursor' },
-    { runtime: 'gemini',    envKey: 'GEMINI_CONFIG_DIR',    value: '/custom/gemini' },
     { runtime: 'codex',     envKey: 'CODEX_HOME',           value: '/custom/codex' },
     { runtime: 'grok',      envKey: 'GROK_AGENTS_HOME',     value: '/custom/grok' },
     { runtime: 'augment',   envKey: 'AUGMENT_CONFIG_DIR',   value: '/custom/augment' },
@@ -841,9 +839,9 @@ describe('descriptor-driven global skills base', () => {
   });
 });
 
-// ── GOLDEN PARITY: getGlobalConfigDir via process.env for all 16 registry runtimes ──
+// ── GOLDEN PARITY: getGlobalConfigDir via process.env for all 15 registry runtimes ──
 
-describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-vars = golden defaults', () => {
+describe('descriptor-driven parity: 13 non-probe registry runtimes × no-env-vars = golden defaults', () => {
   // This is the hardest assertion: it drives getGlobalConfigDir() (which calls
   // the registry internally) and compares against GOLDEN_DEFAULTS captured from
   // the old switch. Any discrepancy means a regression.
@@ -927,7 +925,6 @@ describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
   const defaults = [
     ['claude',      path.join(os.homedir(), '.claude')],
     ['cursor',      path.join(os.homedir(), '.cursor')],
-    ['gemini',      path.join(os.homedir(), '.gemini')],
     ['codex',       path.join(os.homedir(), '.codex')],
     ['copilot',     path.join(os.homedir(), '.copilot')],
     ['antigravity', path.join(os.homedir(), '.gemini', 'antigravity')],

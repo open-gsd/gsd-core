@@ -562,9 +562,19 @@ function main() {
   const MAX_CMDLINE_CHARS = process.env.RUN_TESTS_MAX_CMDLINE_CHARS
     ? Number(process.env.RUN_TESTS_MAX_CMDLINE_CHARS)
     : 28000; // headroom below the 32,767 Windows ceiling
+  // A full-lane shard (~171 files) fit in ONE chunk at the old cap of 180, so the
+  // entire shard's wall-clock ran against a single per-chunk timeout. On the slow
+  // Windows runner the install-heavy files in a shard (e.g. install-minimal-hooks
+  // .test.cjs alone runs ~250 cases doing dozens of real installs) push that single
+  // chunk past the 600s per-chunk backstop — killed mid-run while still making slow
+  // progress (verified: no leaked handle / hang; --test-force-exit exits leaks
+  // cleanly, so the timeout was pure slowness, NOT the leak the kill message guesses).
+  // The per-chunk timeout is sized for a "healthy chunk (~4-5 min)"; keep chunks at
+  // roughly half a shard so each gets its own fresh 600s budget and a fresh node
+  // process (also relieving per-process memory pressure from 170+ files at once).
   const MAX_FILES_PER_CHUNK = process.env.RUN_TESTS_MAX_FILES_PER_CHUNK
     ? Number(process.env.RUN_TESTS_MAX_FILES_PER_CHUNK)
-    : 180;
+    : 90;
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
@@ -630,9 +640,12 @@ function main() {
       if (timedOut) {
         console.error(
           `run-tests: chunk ${i + 1}/${chunks.length} exceeded the per-chunk timeout ` +
-            `of ${chunkTimeoutMs}ms and was killed — a test in this chunk is likely leaking ` +
+            `of ${chunkTimeoutMs}ms and was killed. Two possible causes: (1) a test leaks ` +
             `an open handle (un-terminated Worker, un-killed child process, or ref'd timer) ` +
-            `so node --test never exits. Files: ${chunks[i]
+            `so node --test never exits — but --test-force-exit already guards that, so if it ` +
+            `is enabled suspect (2) the chunk is legitimately too slow for the budget (too ` +
+            `many/too-heavy files packed together). Check whether output kept flowing until ` +
+            `the kill (slow) vs stopped early (hang) before assuming a leak. Files: ${chunks[i]
               .map(f => f.split(/[\\/]/).pop())
               .join(' ')}`,
         );

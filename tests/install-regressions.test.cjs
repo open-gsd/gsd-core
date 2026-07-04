@@ -527,13 +527,13 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       'settings.json permissions.deny must include Read(.env)');
   });
 
-  test('non-claude runtime (gemini) does NOT write GSD allow/deny permissions to settings.json', (t) => {
-    const root = createTempDir('gsd-gemini-perm-install-');
+  test('non-claude runtime (antigravity) does NOT write GSD allow/deny permissions to settings.json', (t) => {
+    const root = createTempDir('gsd-antigravity-perm-install-');
     t.after(() => cleanup(root));
 
     const result = spawnSync(
       process.execPath,
-      [INSTALL_SCRIPT, '--gemini', '--global', '--config-dir', root],
+      [INSTALL_SCRIPT, '--antigravity', '--global', '--config-dir', root],
       { encoding: 'utf8', env: { ...process.env, HOME: root, USERPROFILE: root } },
     );
 
@@ -546,7 +546,7 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
       const allow = settings.permissions?.allow ?? [];
       assert.ok(!allow.includes('Bash(npx gsd-core *)'),
-        'Gemini settings.json must NOT include Bash(npx gsd-core *) in permissions.allow');
+        'Antigravity settings.json must NOT include Bash(npx gsd-core *) in permissions.allow');
     }
   });
 

@@ -4,11 +4,11 @@
  * of truth for the runtime → global config-home path-fragment mapping used by
  * `getConfigDirFromHome` in bin/install.js for hook path.join() codegen.
  *
- * Collapses the prior 14-branch `if (runtime === 'x') return "'...'"` chain
+ * Collapses the prior branch `if (runtime === 'x') return "'...'"` chain
  * (install.js ~514-543) into one table — ADR-1239 Phase B / #1679, AC2 slice 2.
  *
  * Invariants pinned here:
- *   1. Each of the 14 table runtimes returns its exact verbatim source fragment
+ *   1. Each of the 13 table runtimes returns its exact verbatim source fragment
  *      (byte-identical to the prior chain — golden install parity asserts the
  *      generated hook output is unchanged).
  *   2. claude + unknown + empty fall back to the default "'.claude'" fragment.
@@ -35,7 +35,6 @@ const { getGlobalConfigHomeFragment } = runtimeNamePolicy;
 const GOLDEN_FRAGMENT_MAP = {
   copilot:   "'.copilot'",
   opencode:  "'.config', 'opencode'",
-  gemini:    "'.gemini'",
   kilo:      "'.config', 'kilo'",
   codex:     "'.codex'",
   cursor:    "'.cursor'",
@@ -53,7 +52,7 @@ const GOLDEN_FRAGMENT_MAP = {
 // resolved dynamically by the caller (resolveAntigravityGlobalDir + path.relative).
 const SPECIAL_CASED = new Set(['claude', 'antigravity']);
 
-test('getGlobalConfigHomeFragment: golden map matches for all 14 table runtimes', () => {
+test('getGlobalConfigHomeFragment: golden map matches for all 13 table runtimes', () => {
   for (const [id, expected] of Object.entries(GOLDEN_FRAGMENT_MAP)) {
     const actual = getGlobalConfigHomeFragment(id);
     assert.strictEqual(

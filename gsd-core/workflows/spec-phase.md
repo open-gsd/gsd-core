@@ -371,11 +371,13 @@ For each Requirement gathered so far, run the two-stage recall→precision pass:
          against to **machine-prove fail-first**; rides BOTH kinds. Capture it to let the item green
          end-to-end with zero hand-authoring at verify time; for `node-test` the negative test should
          read its subject from the `GSD_PROHIB_SUBJECT` env var so the prover can inject this fixture.
-       - `check_clean_fixture` (#1346) — **optional** path to a KNOWN-CLEAN control subject. When
-         captured, the `node-test` prover also runs the check against it and requires GREEN — proving
-         the violation's RED is caused by the subject's *content*, not by `GSD_PROHIB_SUBJECT` merely
-         being set. Capture it for a stronger guarantee; omit it and the check still proves fail-first
-         on the violation alone (the content-causation residual stays documented for that case).
+       - `check_clean_fixture` (#1346; **REQUIRED for `node-test` as of #1906**) — path to a
+         KNOWN-CLEAN control subject. The `node-test` prover runs the check against it and requires
+         GREEN — proving the violation's RED is caused by the subject's *content*, not by
+         `GSD_PROHIB_SUBJECT` merely being set. For a `node-test` this is **mandatory**: omit it and
+         the check is un-provable (fail-closed), never proven on the violation alone — so a deceptive
+         content-independent test cannot pass. (`lint-rule` needs no clean fixture: its subject IS the
+         linted file, no `GSD_PROHIB_SUBJECT` indirection.)
        This is a **SOFT capture (CHK-04): a `test`-tier prohibition WITHOUT a descriptor is still
        allowed** — if the author cannot yet name the wired check, leave the descriptor empty and
        proceed. It is NOT a hard authoring block; the item simply stays fail-closed/flagged
