@@ -205,6 +205,48 @@ describe('init onboard public CLI projection', () => {
     assert.deepStrictEqual(parsed.next_action.missing, ['PROJECT.md']);
   });
 
+  test('fast mode leaves a fully set-up project at write-summary instead of the complete-map gate (regression #1990: fast map gate misroute)', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
+    for (const name of ['STACK', 'INTEGRATIONS', 'ARCHITECTURE', 'STRUCTURE']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'codebase', `${name}.md`), `# ${name}\n`);
+    }
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"fixture"}\n');
+    for (const name of ['PROJECT', 'REQUIREMENTS', 'ROADMAP', 'STATE']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', `${name}.md`), `# ${name}\n`);
+    }
+
+    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.map_readiness, 'fast');
+    assert.strictEqual(parsed.project_exists, true);
+    // Once project setup is complete, a fast map must not misroute back to the
+    // pre-new-project complete-map handoff; onboarding advances to the summary.
+    assert.strictEqual(parsed.next_action.kind, 'write-summary');
+    assert.strictEqual(parsed.next_action.summary_path, '.planning/onboarding/SUMMARY.md');
+  });
+
+  test('fast mode routes incomplete planning to partial-planning before the complete-map gate (regression #1990: fast map gate misroute)', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
+    for (const name of ['STACK', 'INTEGRATIONS', 'ARCHITECTURE', 'STRUCTURE']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'codebase', `${name}.md`), `# ${name}\n`);
+    }
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"fixture"}\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '# State\n');
+
+    const result = runGsdTools(['init', 'onboard', '--fast', '--raw'], tmpDir, { HOME: tmpDir });
+    assert.ok(result.success, `init onboard should succeed: ${result.error}`);
+
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(parsed.map_readiness, 'fast');
+    // Incomplete planning must surface before the fast-map complete-map handoff.
+    assert.strictEqual(parsed.next_action.kind, 'partial-planning');
+    assert.deepStrictEqual(parsed.next_action.missing, ['REQUIREMENTS.md']);
+  });
+
   test('projects the next action for code, docs, greenfield, partial planning, and summary states', () => {
     fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'src', 'server.ts'), 'export const server = true;\n');
