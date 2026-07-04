@@ -18,7 +18,6 @@
     "agents",
     ".claude-plugin",
     ".opencode",
-    "gemini-extension.json",
     "GEMINI.md",
     "hooks",
     "scripts"
@@ -30,8 +29,6 @@
     "meta-prompting",
     "context-engineering",
     "spec-driven-development",
-    "gemini",
-    "gemini-cli",
     "codex",
     "codex-cli"
   ],

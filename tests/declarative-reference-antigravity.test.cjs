@@ -74,9 +74,7 @@ test('a real Antigravity install emits a gsd command/skill surface (invocable)',
   const { describe: __foldDescribe } = require('node:test');
   __foldDescribe("folded:bug-3608-antigravity-update-runtime-classification (consolidation epic #1969 B3 #1972)", () => {
 /**
- * Bug #3608: /gsd:update must model Antigravity as a first-class runtime, so an
- * Antigravity install (~/.gemini/antigravity*) is not misclassified as base
- * Gemini.
+ * Bug #3608: /gsd:update must model Antigravity as a first-class runtime.
  *
  * The installer (bin/install.js) and SDK already treat Antigravity as a distinct
  * runtime with its own config dirs, env var (ANTIGRAVITY_CONFIG_DIR), and CLI
@@ -87,12 +85,14 @@ test('a real Antigravity install emits a gsd command/skill surface (invocable)',
  * `gsd-core/bin/lib/update-context.cjs` (resolveUpdateContext). The
  * antigravity-first-class contract now lives there as data + behavior, so this
  * test asserts it on the projection. The only piece still authored in update.md
- * is the execution_context path classification (prose the agent applies), which
- * this test still checks for antigravity-before-gemini ordering.
+ * is the execution_context path classification (prose the agent applies).
  *
- * Order matters: every probe list / env ladder that contains a Gemini entry
- * MUST place the more-specific Antigravity entry first, else an install with
- * both signals present falls through to gemini.
+ * #1928: Gemini CLI was sunset by Google on 2026-06-18 and the `gemini` runtime
+ * was removed from GSD entirely (Antigravity CLI is the successor). Antigravity
+ * still resolves under the shared `.gemini/antigravity*` dirs (it runs on the
+ * Gemini 3 backend), so those probe entries and the ANTIGRAVITY_CONFIG_DIR env
+ * var remain — but there is no longer a competing bare-`gemini` runtime to
+ * disambiguate against.
  */
 
 'use strict';
@@ -120,13 +120,12 @@ function firstIndex(arr, token) {
 }
 
 describe('bug #3608 / #498: update-context models Antigravity as a first-class runtime', () => {
-  test('RUNTIME_DIRS lists antigravity before gemini', () => {
+  test('RUNTIME_DIRS lists antigravity (no gemini runtime remains — #1928)', () => {
     const order = runtimeOrder();
     const antIdx = firstIndex(order, 'antigravity');
-    const gemIdx = firstIndex(order, 'gemini');
     assert.notStrictEqual(antIdx, -1, 'RUNTIME_DIRS missing antigravity');
-    assert.notStrictEqual(gemIdx, -1, 'RUNTIME_DIRS missing gemini');
-    assert.ok(antIdx < gemIdx, `antigravity (@${antIdx}) must precede gemini (@${gemIdx}) — first match wins`);
+    assert.strictEqual(firstIndex(order, 'gemini'), -1,
+      'gemini runtime was removed (#1928) — RUNTIME_DIRS must not list it');
   });
 
   test('RUNTIME_DIRS includes antigravity 2.x (ide/cli) + legacy dirs', () => {
@@ -134,28 +133,27 @@ describe('bug #3608 / #498: update-context models Antigravity as a first-class r
     assert.ok(dirs.includes('.gemini/antigravity-ide'), 'missing .gemini/antigravity-ide');
     assert.ok(dirs.includes('.gemini/antigravity-cli'), 'missing .gemini/antigravity-cli');
     assert.ok(dirs.includes('.gemini/antigravity'), 'missing legacy .gemini/antigravity fallback');
-    // All antigravity dirs precede the .gemini probe.
+    // The bare .gemini probe (former gemini-runtime dir) no longer exists (#1928).
     const order = RUNTIME_DIRS.map(([, d]) => d);
-    const gemIdx = order.indexOf('.gemini');
-    for (const d of dirs) {
-      assert.ok(order.indexOf(d) < gemIdx, `${d} must precede .gemini in the probe order`);
-    }
+    assert.strictEqual(order.indexOf('.gemini'), -1,
+      'bare .gemini probe entry was removed with the gemini runtime (#1928)');
   });
 
-  test('env inference recognizes ANTIGRAVITY_CONFIG_DIR before GEMINI_CONFIG_DIR', () => {
+  test('env inference recognizes ANTIGRAVITY_CONFIG_DIR', () => {
     const rt = inferPreferredRuntime({
       fs: { exists: () => false },
-      env: { ANTIGRAVITY_CONFIG_DIR: '/x', GEMINI_CONFIG_DIR: '/y' },
+      env: { ANTIGRAVITY_CONFIG_DIR: '/x' },
       preferredConfigDir: '',
     });
-    assert.equal(rt, 'antigravity', 'both env vars set must resolve to antigravity, not gemini');
+    assert.equal(rt, 'antigravity');
   });
 
-  test('envRuntimeDirs emits an antigravity entry (before gemini) when ANTIGRAVITY_CONFIG_DIR is set', () => {
-    const entries = envRuntimeDirs({ env: { ANTIGRAVITY_CONFIG_DIR: '/x/ag', GEMINI_CONFIG_DIR: '/x/gem' }, home: '/home/u' });
+  test('envRuntimeDirs emits an antigravity entry when ANTIGRAVITY_CONFIG_DIR is set', () => {
+    const entries = envRuntimeDirs({ env: { ANTIGRAVITY_CONFIG_DIR: '/x/ag' }, home: '/home/u' });
     const order = entries.map(([rt]) => rt);
     assert.ok(order.includes('antigravity'), 'expected an antigravity env candidate');
-    assert.ok(order.indexOf('antigravity') < order.indexOf('gemini'), 'antigravity env candidate must precede gemini');
+    assert.strictEqual(order.indexOf('gemini'), -1,
+      'GEMINI_CONFIG_DIR is no longer recognized (#1928) — no gemini env candidate should ever appear');
   });
 
   test('behavioral: an Antigravity install resolves to runtime "antigravity", not "gemini"', () => {
@@ -175,13 +173,12 @@ describe('bug #3608 / #498: update-context models Antigravity as a first-class r
     assert.equal(normKey(r.gsdDir), normKey(agDir));
   });
 
-  test('update.md execution_context classification still lists antigravity paths before /.gemini/', () => {
+  test('update.md execution_context classification lists antigravity paths and no longer classifies bare /.gemini/ as gemini (#1928)', () => {
     const content = fs.readFileSync(UPDATE_MD, 'utf-8');
     const antIde = content.indexOf('/.gemini/antigravity-ide/');
-    const gemBare = content.indexOf('`/.gemini/` -> `gemini`');
     assert.notStrictEqual(antIde, -1, 'update.md must document the antigravity-ide execution_context path');
-    assert.notStrictEqual(gemBare, -1, 'update.md must document the bare /.gemini/ -> gemini classification');
-    assert.ok(antIde < gemBare, 'antigravity path classification must precede the bare /.gemini/ rule');
+    assert.strictEqual(content.indexOf('`/.gemini/` -> `gemini`'), -1,
+      'gemini runtime was removed (#1928) — update.md must not classify bare /.gemini/ as gemini');
   });
 });
   });

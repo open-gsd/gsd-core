@@ -75,11 +75,11 @@ describe('resolveUpdateContext: scope cascade', () => {
   });
 
   test('runtime detected but VERSION missing -> 0.0.0, keep scope/runtime', () => {
-    const fs = fakeFs({ [marker(`${HOME}/.gemini`)]: 'x' });
+    const fs = fakeFs({ [marker(`${HOME}/.codex`)]: 'x' });
     const r = resolveUpdateContext({ home: HOME, cwd: CWD, env: {}, fs });
     assert.equal(r.installedVersion, '0.0.0');
     assert.equal(r.scope, 'GLOBAL');
-    assert.equal(r.runtime, 'gemini');
+    assert.equal(r.runtime, 'codex');
   });
 
   test('no install anywhere -> UNKNOWN / claude / empty gsdDir', () => {

@@ -680,7 +680,7 @@ describe('installCodexConfig sandboxTier threading seam', () => {
 // same process. The throw path is verified at the type level (tsc) and by the
 // build passing, and the happy-path coverage (claude.sandboxTier === 'none' and
 // codex.sandboxTier === 'codex-agent-sandbox') confirms the real registry has
-// valid values for all 16 runtimes.
+// valid values for all 15 runtimes.
 
 // ─── CODEX_AGENT_SANDBOX mapping ────────────────────────────────────────────────
 

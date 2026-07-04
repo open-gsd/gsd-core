@@ -155,7 +155,7 @@ Every attempt uses `tier_models[default_tier]` regardless of outcome — useful 
 
 ## Using GSD on non-Anthropic runtimes
 
-If you installed GSD for Codex, OpenCode, Gemini CLI, or Kilo, the installer already set `resolve_model_ids: "omit"` in your config. This tells GSD to skip Anthropic model ID resolution and let the runtime choose its own default model. No manual setup is needed for the basic case.
+If you installed GSD for Codex, OpenCode, Antigravity CLI, or Kilo, the installer already set `resolve_model_ids: "omit"` in your config. This tells GSD to skip Anthropic model ID resolution and let the runtime choose its own default model. No manual setup is needed for the basic case.
 
 **If you want tiered models on Codex:**
 

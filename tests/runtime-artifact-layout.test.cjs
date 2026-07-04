@@ -87,19 +87,6 @@ describe('resolveRuntimeArtifactLayout — cursor', () => {
   });
 });
 
-describe('resolveRuntimeArtifactLayout — gemini', () => {
-  test('returns correct layout for gemini', () => {
-    const layout = resolveRuntimeArtifactLayout('gemini', FAKE_DIR);
-    assert.strictEqual(layout.runtime, 'gemini');
-    assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'commands/gsd');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
-  });
-});
-
 describe('resolveRuntimeArtifactLayout — codex', () => {
   test('returns correct layout for codex', () => {
     const layout = resolveRuntimeArtifactLayout('codex', FAKE_DIR);
@@ -367,12 +354,6 @@ describe('resolveRuntimeArtifactLayout edge-cases', () => {
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-'); // #947: bare-stem prefix='' reversed
   });
 
-  test('gemini has one commands kind', () => {
-    const layout = resolveRuntimeArtifactLayout('gemini', '/tmp/x');
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'commands');
-  });
-
   test('claude local has both commands and agents kinds', () => {
     const layout = resolveRuntimeArtifactLayout('claude', '/tmp/x', 'local');
     const kindNames = layout.kinds.map(k => k.kind);
@@ -440,22 +421,6 @@ const CORE_AGENTS = new Set(['gsd-planner']);
 const PROFILE_CORE = { skills: CORE_SKILLS, agents: CORE_AGENTS };
 const PROFILE_FULL = { skills: '*', agents: new Set() };
 const FAKE_STAGE_DIR = '/tmp/fake-config-dir-stage';
-
-describe('stage — commands kind (gemini)', () => {
-  test('stage returns a directory containing only the selected skill .md files', () => {
-    const layout = resolveRuntimeArtifactLayout('gemini', FAKE_STAGE_DIR);
-    const commandsKind = layout.kinds.find(k => k.kind === 'commands');
-    assert.ok(commandsKind, 'should have a commands kind');
-
-    const stagedDir = commandsKind.stage(PROFILE_CORE);
-    const entries = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
-    for (const entry of entries) {
-      const stem = entry.slice(0, -3);
-      assert.ok(CORE_SKILLS.has(stem), `unexpected skill staged: ${stem}`);
-    }
-    assert.ok(entries.length >= 1, 'at least one skill file should be staged');
-  });
-});
 
 describe('stage — agents kind (claude local)', () => {
   test('stage returns a valid directory for the agents kind', () => {

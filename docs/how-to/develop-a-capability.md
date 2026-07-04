@@ -1,6 +1,6 @@
 # Develop a Capability for GSD 1.5+
 
-This guide shows you how to add or change a first-party GSD Capability after the ADR-857 cutover. In GSD terms, the extension unit is a **Capability**. A plugin is a packaging or host-runtime term, for example a Claude Code plugin or Gemini extension, not the unit that owns a GSD feature.
+This guide shows you how to add or change a first-party GSD Capability after the ADR-857 cutover. In GSD terms, the extension unit is a **Capability**. A plugin is a packaging or host-runtime term, for example a Claude Code plugin, not the unit that owns a GSD feature.
 
 A Capability is right when the feature can be toggled as one unit and owns its own skills, agents, hooks, config keys, or command family. Keep verifier predicate contracts, the five-step loop spine, and shared infrastructure in core unless the ADRs explicitly move that boundary.
 

@@ -17,11 +17,6 @@
       "sonnet": { "model": "gpt-5.4", "reasoning_effort": "medium" },
       "haiku": { "model": "gpt-5.4-mini", "reasoning_effort": "medium" }
     },
-    "gemini": {
-      "opus": { "model": "gemini-3.1-pro-preview" },
-      "sonnet": { "model": "gemini-3-flash" },
-      "haiku": { "model": "gemini-2.5-flash-lite" }
-    },
     "qwen": {
       "opus": { "model": "qwen3-max-2026-01-23" },
       "sonnet": { "model": "qwen3-coder-plus" },

@@ -642,33 +642,10 @@ describe('issue #2517: RUNTIME_PROFILE_MAP single source of truth (finding #16)'
   });
 });
 
-// ─── Issue #2612: gemini runtime tier resolution ─────────────────────────────
-describe('issue #2612: runtime "gemini" — Gemini tier resolution', () => {
-  let tmpDir;
-  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
-  afterEach(() => { cleanup(tmpDir); restoreHome(); });
-
-  test('opus tier -> gemini-3.1-pro-preview', () => {
-    writeConfig(tmpDir, { runtime: 'gemini', model_profile: 'quality' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gemini-3.1-pro-preview');
-  });
-
-  test('sonnet tier -> gemini-3-flash', () => {
-    writeConfig(tmpDir, { runtime: 'gemini', model_profile: 'balanced' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'gemini-3-flash');
-  });
-
-  test('haiku tier -> gemini-2.5-flash-lite', () => {
-    writeConfig(tmpDir, { runtime: 'gemini', model_profile: 'budget' });
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gemini-2.5-flash-lite');
-  });
-
-  test('gemini: effort resolves universally but render param is null (no wire param)', () => {
-    writeConfig(tmpDir, { runtime: 'gemini', model_profile: 'quality' });
-    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
-    assert.strictEqual(renderEffortForRuntime('gemini', eff).param, null);
-  });
-});
+// #1928: the "gemini" runtime tier-resolution suite was removed with the
+// sunset Gemini CLI runtime. The gemini-3.x models remain in the catalog for
+// Antigravity (which runs on the Gemini backend and carries its own
+// runtimeTierDefaults); Antigravity's tier resolution is covered elsewhere.
 
 // ─── Issue #2612: qwen runtime tier resolution ───────────────────────────────
 describe('issue #2612: runtime "qwen" — Qwen tier resolution', () => {
@@ -810,20 +787,6 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
   let tmpDir;
   beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
   afterEach(() => { cleanup(tmpDir); restoreHome(); });
-
-  test('gemini.opus override wins; sonnet and haiku use built-in defaults', () => {
-    writeConfig(tmpDir, {
-      runtime: 'gemini',
-      model_profile: 'quality',
-      model_profile_overrides: {
-        gemini: { opus: 'gemini-3-ultra' },
-      },
-    });
-    // opus is overridden
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'gemini-3-ultra');
-    // sonnet not overridden — built-in default (quality -> sonnet for gsd-codebase-mapper)
-    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'gemini-3-flash');
-  });
 
   test('qwen.opus override wins; sonnet and haiku use built-in defaults', () => {
     writeConfig(tmpDir, {

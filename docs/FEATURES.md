@@ -1011,7 +1011,7 @@ fix(03-01): correct auth token expiry
 **Purpose:** Run GSD across multiple AI coding agent runtimes.
 
 **Requirements:**
-- REQ-RUNTIME-01: System MUST support Claude Code, OpenCode, Gemini CLI, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code, CodeBuddy, Qwen Code
+- REQ-RUNTIME-01: System MUST support Claude Code, OpenCode, Kilo, Codex, Copilot, Antigravity, Trae, Cline, Augment Code, CodeBuddy, Qwen Code
 - REQ-RUNTIME-02: Installer MUST transform content per runtime (tool names, paths, frontmatter)
 - REQ-RUNTIME-03: Installer MUST support interactive and non-interactive (`--claude --global`) modes
 - REQ-RUNTIME-04: Installer MUST support both global and local installation
@@ -1022,13 +1022,13 @@ fix(03-01): correct auth token expiry
 
 **Runtime Transformations:**
 
-| Aspect | Claude Code | OpenCode | Gemini | Kilo | Codex | Copilot | Antigravity | Cursor | Trae | Cline | Augment | CodeBuddy | Qwen Code |
-|--------|------------|----------|--------|-------|-------|---------|-------------|--------|------|-------|---------|-----------|-----------|
-| Commands | Slash commands | Slash commands | Slash commands (`{{args}}`) | Slash commands | Skills (TOML) | Slash commands | Skills | Skills + Slash commands | Skills | Rules | Skills + Slash commands | Slash commands | Skills |
-| Agent format | Claude native | `mode: subagent` | Claude native | `mode: subagent` | Skills | Tool mapping | Skills | Skills | Skills | Rules | Skills | Skills | Skills |
-| Skills emission | N/A | On-demand SKILL.md (1.4.0) | N/A | On-demand SKILL.md (1.4.0) | `/skills` picker (1.4.0) | N/A | N/A | SKILL.md | N/A | On-demand SKILL.md (1.4.0) | N/A | N/A | N/A |
-| Hook events | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact`, `FileChanged` | N/A | `SessionStart`, `BeforeTool`, `AfterTool`, `BeforeAgent`, `AfterAgent`, `BeforeModel` | N/A | `SessionStart`, `SubagentStart`, `Stop`, `PostToolUse` | `sessionStart` | N/A | `sessionStart`, `postToolUse` | N/A | `PreToolUse` | N/A | N/A | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact` |
-| Config | `settings.json` | `opencode.json(c)` | `settings.json` | `kilo.json(c)` | TOML | Instructions | Config | Config | Config | `.clinerules` | Config | Config | Config |
+| Aspect | Claude Code | OpenCode | Kilo | Codex | Copilot | Antigravity | Cursor | Trae | Cline | Augment | CodeBuddy | Qwen Code |
+|--------|------------|----------|-------|-------|---------|-------------|--------|------|-------|---------|-----------|-----------|
+| Commands | Slash commands | Slash commands | Slash commands | Skills (TOML) | Slash commands | Skills | Skills + Slash commands | Skills | Rules | Skills + Slash commands | Slash commands | Skills |
+| Agent format | Claude native | `mode: subagent` | `mode: subagent` | Skills | Tool mapping | Skills | Skills | Skills | Rules | Skills | Skills | Skills |
+| Skills emission | N/A | On-demand SKILL.md (1.4.0) | On-demand SKILL.md (1.4.0) | `/skills` picker (1.4.0) | N/A | N/A | SKILL.md | N/A | On-demand SKILL.md (1.4.0) | N/A | N/A | N/A |
+| Hook events | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact`, `FileChanged` | N/A | N/A | `SessionStart`, `SubagentStart`, `Stop`, `PostToolUse` | `sessionStart` | N/A | `sessionStart`, `postToolUse` | N/A | `PreToolUse` | N/A | N/A | `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `PreCompact` |
+| Config | `settings.json` | `opencode.json(c)` | `kilo.json(c)` | TOML | Instructions | Config | Config | Config | `.clinerules` | Config | Config | Config |
 
 **Cursor artifact surfaces:** `gsd install --cursor` writes two artifact kinds:
 - `~/.cursor/skills/gsd-<name>/SKILL.md` — rich skills with YAML frontmatter, Cursor tool-name mapping, and adapter context header (existing surface)
@@ -1046,7 +1046,6 @@ fix(03-01): correct auth token expiry
 
 **Cross-runtime lifecycle hooks (1.4.0):** Each supported runtime registers lifecycle hook events for per-turn context-headroom tracking and workflow state management. Notable registrations:
 - **Claude Code:** `SubagentStop`, `Stop`, `PreCompact` (context-headroom warnings), `FileChanged` (hot-reloads `.planning/config.json` mid-session)
-- **Gemini:** `BeforeAgent`, `AfterAgent`, `BeforeModel`
 - **Qwen Code:** `SubagentStop`, `Stop`, `PreCompact`
 - **Codex:** `SubagentStart`, `Stop`, `PostToolUse` (new in 1.4.0); on Windows the `SessionStart` hook entry gains a `commandWindows` field so the `.cmd` shim is used for native execution
 - **Cline:** `PreToolUse`
@@ -1055,11 +1054,9 @@ fix(03-01): correct auth token expiry
 
 **Runtime-specific enrichments (1.4.0):**
 - Codex emits `service_tier: flex` for light-tier agents; GSD skills appear in the Codex `/skills` picker via `SKILL.md` (no `agents/openai.yaml` sidecar is emitted — doing so caused duplicate autocomplete entries, #1326)
-- Gemini commands use native `{{args}}` interpolation
 
 **Native packaging:**
 - **Claude Code:** GSD Core ships a `.claude-plugin/plugin.json` manifest, enabling installation and lifecycle management via `claude plugin install|enable|disable|update gsd-core`. Commands load under the `/gsd-core:` namespace (e.g. `/gsd-core:plan-phase`), avoiding slash-command collisions with the classic npm installer which uses `/gsd:`. Always-on guard and update hooks are wired automatically via `hooks/hooks.json`. The plugin path is additive — the npm installer (`npx @opengsd/gsd-core`) remains fully supported.
-- **Gemini CLI:** Ships `gemini-extension.json`, enabling installation and lifecycle management via `gemini extensions install|update|uninstall|link`.
 
 ---
 
@@ -1481,7 +1478,7 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 **Purpose:** Select multiple runtimes in a single interactive install session.
 
 **Requirements:**
-- REQ-MULTI-RT-01: Interactive prompt MUST support multi-select (e.g., Claude Code + Gemini)
+- REQ-MULTI-RT-01: Interactive prompt MUST support multi-select (e.g., Claude Code + Antigravity)
 - REQ-MULTI-RT-02: CLI flags MUST continue to work for non-interactive installs
 
 **Process:**
@@ -1722,13 +1719,13 @@ Test suite that scans all agent, workflow, and command files for embedded inject
 **Requirements:**
 - REQ-SKILLS-01: Installer MUST write `skills/gsd-*/SKILL.md` for Claude Code 2.1.88+
 - REQ-SKILLS-02: Installer MUST auto-clean legacy `commands/gsd/` directory
-- REQ-SKILLS-03: Installer MUST maintain backward compatibility with older Claude Code versions via Gemini path
+- REQ-SKILLS-03: Installer MUST maintain backward compatibility with older Claude Code versions via the legacy `commands/gsd/` path
 
 **Process:**
 1. **Detect** — Check Claude Code version to determine skills support
 2. **Migrate** — Write `skills/gsd-*/SKILL.md` files for each GSD command
 3. **Clean** — Remove legacy `commands/gsd/` directory if skills are installed
-4. **Fallback** — Maintain Gemini path compatibility for older Claude Code versions
+4. **Fallback** — Maintain legacy `commands/gsd/` path compatibility for older Claude Code versions
 
 ---
 
@@ -2997,7 +2994,7 @@ explicit reviewer flags -> --all -> review.default_reviewers -> all detected rev
 
 **Requirements:**
 - REQ-QUOTA-01: Quota failures MUST NOT offer immediate retry as the primary recovery.
-- REQ-QUOTA-02: Classification MUST cover Claude, Copilot, Codex, Gemini, and generic provider sentinels.
+- REQ-QUOTA-02: Classification MUST cover Claude, Copilot, Codex, and generic provider sentinels.
 - REQ-QUOTA-03: Non-quota failures MUST continue through the normal execution failure path.
 
 **Reference:** [Provider Rate Limit Signals](research/provider-rate-limit-signals.md)

@@ -119,38 +119,6 @@ Documentation gaps:
 
 ---
 
-## gemini
-
-| Axis | Value | Source | Evidence |
-|---|---|---|---|
-| embeddingMode | declarative | https://github.com/google-gemini/gemini-cli/blob/main/packages/sdk/SDK_DESIGN.md | "This feature is currently not implemented. (repeated for both extension and subagent SDK APIs; all actual integration is via files: TOML com" |
-| commandSurface | slash-toml | https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/custom-commands.md | "Custom commands in Gemini CLI are defined in TOML format with the .toml file extension … Commands are invoked as slash commands in the CLI." |
-| modelMode | passive | https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md | "BeforeModel Hook: Fires before sending a request to the LLM … hookSpecificOutput.llm_request (object) — An object that overrides parts of th" |
-| hookBus | host | https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md | "Hooks function as host-fired events … The CLI fires events at predetermined lifecycle points [BeforeAgent, AfterAgent, BeforeTool, AfterTool" |
-| stateIO | filesystem | https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md | "Local access by default with gitignore/geminiignore respect … Set to a boolean to enable or disable the sandbox" |
-| transport | mcp | https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md | "Configure a Node.js MCP server using stdio … { \"mcpServers\": { \"nodeServer\": { \"command\": \"node\", \"args\": [\"dist/server.js\"] } } }" |
-| runtime | node | https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md | "References to node-pty and child_process indicate JavaScript/Node.js execution environment" |
-| dispatch.namedDispatch | true | https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md | "Example of a custom subagent definition file (.gemini/agents/security-auditor.md) … name: security-auditor" |
-| dispatch.nested | false | https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md | "Each subagent operates in an isolated context loop … This isolation also includes recursion protection, preventing subag" |
-| dispatch.maxDepth | 1 | https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md | "To prevent infinite loops and excessive token usage, subagents cannot call other subagents. … The architecture enforces" |
-| dispatch.background | undocumented | no authoritative doc — searched: https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md, /google-gemini/gemini-cli (Context7 library) | — |
-| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md, /google-gemini/gemini-cli (Context7 library) | — |
-| dispatch.backgroundDispatch | false | https://raw.githubusercontent.com/google-gemini/gemini-cli/main/docs/core/subagents.md | "To prevent infinite loops and excessive token usage, subagents cannot call other subagents." Additionally: "If a subagent is granted the `*` tool wildcard, it will still be unable to see or invoke ot |
-
-Sources consulted:
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/custom-commands.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/core/subagents.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md
-- https://github.com/google-gemini/gemini-cli/blob/main/packages/sdk/SDK_DESIGN.md
-- /google-gemini/gemini-cli (Context7 library)
-
-Documentation gaps:
-- dispatch.background — docs describe subagents as operating in isolated context loops but do not state whether they execute synchronously or asynchronously.
-- dispatch.subagentToolkit — subagents have a configurable tool grant model but no single fixed value of 'full' or 'read-only' is stated as the architecture-level constraint.
-
----
 
 ## opencode
 

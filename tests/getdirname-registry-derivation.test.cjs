@@ -21,7 +21,7 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const { getDirName } = runtimeNamePolicy;
 
-// Golden oracle: hardcoded expected map of all 16 runtime ids to their local config dir.
+// Golden oracle: hardcoded expected map of all 15 runtime ids to their local config dir.
 // A pinned expected value in a TEST is correct — the test IS the oracle (non-circular).
 // Only PRODUCTION code should derive dynamically from the registry.
 // If this map diverges from getDirName output, either the formula is wrong
@@ -30,7 +30,6 @@ const GOLDEN_DIR_MAP = {
   claude:      '.claude',
   copilot:     '.github',
   opencode:    '.opencode',
-  gemini:      '.gemini',
   kilo:        '.kilo',
   codex:       '.codex',
   antigravity: '.agents',
@@ -45,7 +44,7 @@ const GOLDEN_DIR_MAP = {
   cline:       '.cline',
 };
 
-test('getDirName: golden map matches for all 16 known runtime ids', () => {
+test('getDirName: golden map matches for all 15 known runtime ids', () => {
   for (const [id, expected] of Object.entries(GOLDEN_DIR_MAP)) {
     const actual = getDirName(id);
     assert.strictEqual(

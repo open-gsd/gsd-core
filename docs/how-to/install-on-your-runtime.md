@@ -8,7 +8,7 @@ Install GSD Core (`@opengsd/gsd-core`) into the AI coding runtime you use every 
 
 ## Why the installer is required
 
-GSD Core ships agent and command files in Claude Code's native frontmatter format. Each supported runtime expects a different schema, directory layout, and command-invocation syntax. The installer performs the necessary transformations — for example, converting tool lists and colour values for OpenCode, writing TOML agent entries for Codex, and rewriting every command body from hyphen form (`/gsd-update`) to colon form (`/gsd:update`) for Gemini CLI.
+GSD Core ships agent and command files in Claude Code's native frontmatter format. Each supported runtime expects a different schema, directory layout, and command-invocation syntax. The installer performs the necessary transformations — for example, converting tool lists and colour values for OpenCode and writing TOML agent entries for Codex.
 
 **Do not copy files from `agents/` or `commands/` directly.** Doing so bypasses the transformations and produces schema-validation errors or missing commands.
 
@@ -110,57 +110,6 @@ GSD Core also ships a `.claude-plugin/marketplace.json` marketplace manifest (si
 2. GSD Core appears in the catalog and can be installed directly from the UI.
 
 This path is **additive** and changes nothing about the Claude Code plugin install above (`.claude-plugin/plugin.json` is unchanged). The marketplace entry's `source` is `./`, so it reuses `plugin.json`'s `commands` / `skills` / `hooks` mapping. The catalog version tracks `package.json` (it lives at `plugins[0].version` and is stamped by the release version-sync), so the version you see in the marketplace matches the npm release.
-
----
-
-### Gemini CLI
-
-```bash
-npx @opengsd/gsd-core@latest --gemini --global
-```
-
-Skills land in `~/.gemini/`. The installer rewrites all command bodies to Gemini's colon namespace (`/gsd:update`, `/gsd:config`, etc.). Restart Gemini CLI after install.
-
-The installer also enriches the generated TOML commands with two native Gemini custom-command features:
-
-- **`{{args}}` interpolation** — every command that references arguments inline is emitted with Gemini's `{{args}}` placeholder (translated from Claude's `$ARGUMENTS`), so flags and free-text you type after the command name are interpolated into the prompt body rather than ignored.
-- **`!{...}` live-state injection** — `/gsd:progress` injects the current contents of `.planning/STATE.md` via a fixed `!{cat .planning/STATE.md 2>/dev/null}` shell block, giving Gemini live project state without relying on session memory. The shell block contains no interpolated input, so there is no injection risk; Gemini still shows its standard confirmation dialog the first time the command runs in a session.
-
-**Override the install directory:**
-
-```bash
-GEMINI_CONFIG_DIR=~/.gemini-alt npx @opengsd/gsd-core@latest --gemini --global
-```
-
-**Hook coverage**
-
-GSD registers the following hook events automatically on install:
-
-| Event | Hook | Purpose |
-|---|---|---|
-| `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
-| `BeforeTool` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
-| `AfterTool` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
-| `BeforeAgent` | `gsd-context-monitor.js` | Context headroom awareness before the agent begins planning each prompt |
-| `AfterAgent` | `gsd-context-monitor.js` | Context headroom tracking after each agent turn's final response |
-| `BeforeModel` | `gsd-context-monitor.js` | Per-turn context injection before each LLM call |
-
-> **`hooksConfig.enabled: false` warning.** If your Gemini `settings.json` contains `hooksConfig.enabled: false`, the Gemini CLI silently disables all hook execution — GSD hooks are registered but will never run. The installer detects this and emits a warning. To enable hooks, set `hooksConfig.enabled: true` in `~/.gemini/settings.json` (or the directory matching your `GEMINI_CONFIG_DIR`).
-
----
-
-### Gemini CLI — native extension install (#775)
-
-GSD also ships a `gemini-extension.json` extension manifest, so you can manage GSD through Gemini's own extension lifecycle and see it in `gemini extensions list`:
-
-```bash
-gemini extensions install https://github.com/open-gsd/gsd-core   # install
-gemini extensions update gsd-core                                # update
-gemini extensions uninstall gsd-core                             # remove
-gemini extensions link /path/to/gsd-core                         # dev: symlink a checkout
-```
-
-The extension loads GSD's operating context (`GEMINI.md`) into every session and gives you the discoverable install/update/remove lifecycle. The `/gsd:*` slash commands, agents, and hooks are installed separately by `npx @opengsd/gsd-core --gemini --global` (above). The two paths are complementary and additive — neither replaces the other, and slash-command projection into the extension is a planned follow-up.
 
 ---
 

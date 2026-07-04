@@ -333,14 +333,19 @@ describe('bug #1906: local hook commands use $CLAUDE_PROJECT_DIR', () => {
 /**
  * Bug #2557: Gemini CLI local hook commands must NOT use $CLAUDE_PROJECT_DIR.
  *
- * $CLAUDE_PROJECT_DIR is a Claude Code-specific env variable. Gemini CLI does
+ * $CLAUDE_PROJECT_DIR is a Claude Code-specific env variable. Gemini CLI did
  * not set it. On Windows, Gemini's own variable-substitution + path-join logic
  * produced a doubled path like `D:\Projects\GSD\'D:\Projects\GSD'`, causing
  * every local project hook to fail at SessionStart.
  *
- * Fix: localPrefix is now runtime-conditional. Gemini/Antigravity use bare
+ * Fix: localPrefix was made runtime-conditional. Gemini/Antigravity used bare
  * dirName (relative path) since they always run project hooks with the project
  * dir as cwd. Claude Code and others still use "$CLAUDE_PROJECT_DIR"/ (#1906).
+ *
+ * #1928: Google sunset Gemini CLI (2026-06-18) and the `gemini` runtime was
+ * removed from GSD entirely. `projectLocalHookPrefix` now special-cases only
+ * `antigravity` — an unrecognized runtime string like the former `'gemini'`
+ * falls through to the default $CLAUDE_PROJECT_DIR-anchored prefix.
  */
 
 const { describe, test } = require('node:test');
@@ -350,24 +355,21 @@ const path = require('node:path');
 const projection = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 const { projectLocalHookPrefix, projectShellCommandText } = projection;
 
-describe('bug #2557: Gemini/Antigravity local hooks use relative paths (not $CLAUDE_PROJECT_DIR)', () => {
-  test('Gemini local prefix is bare dirName', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'gemini', dirName: '.gemini' }), '.gemini');
-  });
-
+describe('bug #2557: Antigravity local hooks use relative paths (not $CLAUDE_PROJECT_DIR); gemini runtime removed (#1928)', () => {
   test('Antigravity local prefix is bare dirName', () => {
     assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
   });
 
-  test('non-Gemini local prefix remains $CLAUDE_PROJECT_DIR anchored', () => {
+  test('non-Antigravity local prefix remains $CLAUDE_PROJECT_DIR anchored', () => {
     assert.equal(
       projectLocalHookPrefix({ runtime: 'claude', dirName: '.claude' }),
       '"$CLAUDE_PROJECT_DIR"/.claude',
     );
   });
 
-  test('Gemini local command projection does not contain "$CLAUDE_PROJECT_DIR"', () => {
+  test('an unrecognized runtime string (e.g. the former "gemini") falls through to $CLAUDE_PROJECT_DIR anchoring (#1928)', () => {
     const prefix = projectLocalHookPrefix({ runtime: 'gemini', dirName: '.gemini' });
+    assert.equal(prefix, '"$CLAUDE_PROJECT_DIR"/.gemini');
     const command = projectShellCommandText({
       runnerToken: '"/usr/local/bin/node"',
       argTokens: [`${prefix}/hooks/gsd-check-update.js`],
@@ -375,8 +377,8 @@ describe('bug #2557: Gemini/Antigravity local hooks use relative paths (not $CLA
       platform: 'linux',
     });
     assert.ok(
-      !command.includes('$CLAUDE_PROJECT_DIR'),
-      'Gemini local command must not include $CLAUDE_PROJECT_DIR',
+      command.includes('$CLAUDE_PROJECT_DIR'),
+      'an unrecognized runtime must use the default anchored prefix, not the retired Gemini-only bare-path carve-out',
     );
   });
 });
@@ -413,14 +415,18 @@ const {
 const { buildHookCommand, rewriteLegacyManagedNodeHookCommands } = install;
 
 describe('bug #3413: Shell Command Projection Module uses runtime-aware hook policy', () => {
-  test('Gemini on Windows requires PowerShell call operator', () => {
+  test('#1928: no current runtime needs the PowerShell call operator (seam inert after gemini removal)', () => {
+    // Gemini CLI was the only runtime that needed `& ` on Windows; it was
+    // removed (#1928, Google sunset 2026-06-18). Antigravity — the Gemini-backend
+    // successor — never matched the old check, so it stays prefix-free. Lock the
+    // now-inert contract so a future re-enable is a deliberate change.
     assert.equal(
-      hookCommandNeedsPowerShellCallOperator({ platform: 'win32', runtime: 'gemini' }),
-      true,
+      hookCommandNeedsPowerShellCallOperator({ platform: 'win32', runtime: 'antigravity' }),
+      false,
     );
     assert.equal(
-      formatHookCommandForRuntime('"C:/node.exe" "C:/hook.js"', { platform: 'win32', runtime: 'gemini' }),
-      '& "C:/node.exe" "C:/hook.js"',
+      formatHookCommandForRuntime('"C:/node.exe" "C:/hook.js"', { platform: 'win32', runtime: 'antigravity' }),
+      '"C:/node.exe" "C:/hook.js"',
     );
   });
 
@@ -492,22 +498,30 @@ describe('bug #3439: shell projection module owns managed-hook policy and legacy
   });
 
   test('projectLegacySettingsHookCommand normalizes Windows managed paths and runtime wrapper policy', () => {
+    // #1928: gemini runtime removed — the PowerShell call-operator seam is now
+    // inert for every runtime (including the former 'gemini' string and its
+    // Gemini-backend successor 'antigravity'). No `& ` prefix is ever added.
     const command = projectLegacySettingsHookCommand({
       absoluteRunner: '"C:/nvm4w/nodejs/node.exe"',
       scriptPath: 'C:\\Users\\me\\.gemini\\hooks\\gsd-prompt-guard.js',
       scriptToken: "'C:\\Users\\me\\.gemini\\hooks\\gsd-prompt-guard.js'",
       platform: 'win32',
-      runtime: 'gemini',
+      runtime: 'antigravity',
     });
-    assert.equal(command, '& "C:/nvm4w/nodejs/node.exe" "C:/Users/me/.gemini/hooks/gsd-prompt-guard.js"');
+    assert.equal(command, '"C:/nvm4w/nodejs/node.exe" "C:/Users/me/.gemini/hooks/gsd-prompt-guard.js"');
   });
 
   test('projectLocalHookPrefix centralizes runtime-specific project-dir interpolation policy', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'gemini', dirName: '.gemini' }), '.gemini');
     assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
     assert.equal(
       projectLocalHookPrefix({ runtime: 'claude', dirName: '.claude' }),
       '"$CLAUDE_PROJECT_DIR"/.claude',
+    );
+    // #1928: gemini runtime removed — an unrecognized runtime string falls
+    // through to the default $CLAUDE_PROJECT_DIR-anchored prefix.
+    assert.equal(
+      projectLocalHookPrefix({ runtime: 'gemini', dirName: '.gemini' }),
+      '"$CLAUDE_PROJECT_DIR"/.gemini',
     );
   });
 

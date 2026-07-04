@@ -385,8 +385,7 @@ describe('applySurface', () => {
   // command-naming logic.
   //
   // Matrix: opencode/kilo = flat command/ + prefix gsd-;
-  //         cursor/augment = flat commands/ + prefix gsd-;
-  //         gemini = namespaced commands/gsd/ (no file prefix — dir is namespace).
+  //         cursor/augment = flat commands/ + prefix gsd-.
   // For each runtime we: run install into installDir, run applySurface into
   // surfaceDir (same 'standard' profile both sides), then compare sorted .md
   // filename sets in the commands dest dir. On a fresh dir (no superseded files)
@@ -400,7 +399,7 @@ describe('applySurface', () => {
     // the same skill set so any filename difference is purely a naming bug.
     const resolvedProfile = resolveProfile({ modes: ['standard'], manifest });
 
-    const PARITY_RUNTIMES = ['opencode', 'cursor', 'augment', 'kilo', 'gemini'];
+    const PARITY_RUNTIMES = ['opencode', 'cursor', 'augment', 'kilo'];
 
     for (const runtime of PARITY_RUNTIMES) {
       // Create two independent temp dirs — one for install, one for surface.
