@@ -921,7 +921,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
 
    **If `activeHooks` is empty or absent:** Skip silently to step 5.8.
 
-   **For each active entry where `kind == "gate"`** (process in array order), run the gate check:
+   **For each active entry where `kind == "gate"`** (process in array order), run the gate check — for a `predicate` gate (ADR-2008 / #2008) substitute `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-number "${PHASE_NUMBER}" --raw` for the `check.query` form:
 
    ```bash
    GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
@@ -1198,15 +1198,14 @@ Code review found issues. Consider running:
 
 **Error handling:** If the Skill invocation fails or throws, catch the error, display "Code review encountered an error (non-blocking): {error}" and proceed to gate dispatch. Review failures must never block execution.
 
-**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`:
+**Execute:post gate hook dispatch.** After code review, dispatch all active gate hooks from `EXECUTE_POST_HOOKS_JSON` where `kind == "gate"`. For each, run `gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw`, or — for a `predicate` gate (ADR-2008 / #2008) — `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-number "${PHASE_NUMBER}" --raw`:
 
-For each active gate hook:
 ```bash
 GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_NUMBER}" --raw)
 CHECK_EXIT=$?
 ```
 
-**Gate evaluation** uses the same two-step contract as `execute:wave:post` above: **Step 1** — if the check command failed (non-zero `CHECK_EXIT`, empty/unparseable output), `onError == "halt"` stops and surfaces the error, `onError == "skip"` warns and continues to the next hook (do not read `block`). **Step 2** (command succeeded) — a blocking gate (`hook.blocking == true`) halts on `GATE_RESULT.block == true` with its message/table (never bypassed by `onError`); an advisory gate (`hook.blocking == false`) shows its `table`/summary when `block == true` or `message` is non-empty, then continues; a blocking gate with `block == false` continues silently.
+**Gate evaluation** uses the same two-step contract as `execute:wave:post` above (Step 1: command-failure → `onError`; Step 2: `block == true` halts a blocking gate; an advisory gate shows its `message`/`table` and continues).
 
 **TDD review escalation (overrides the advisory default for the `tdd.review-checkpoint` gate only).** The tdd `execute:post` gate is declared `blocking: false`, so by the generic contract above it displays its `message`/table and continues. There is ONE documented exception (see `~/.claude/gsd-core/references/execute-mvp-tdd.md`): when `MVP_MODE=true` AND `TDD_MODE=true` AND `GATE_RESULT.block == true` (one or more TDD plans miss a RED or GREEN gate commit), the end-of-phase TDD review escalates from advisory to **blocking under MVP+TDD** — refuse to mark the phase complete and present:
 

@@ -337,6 +337,7 @@
       "federated-config.cjs",
       "frontmatter.cjs",
       "gap-checker.cjs",
+      "gate-predicate-evaluator.cjs",
       "git-base-branch.cjs",
       "graphify-command-router.cjs",
       "graphify.cjs",

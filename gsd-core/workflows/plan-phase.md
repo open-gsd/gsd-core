@@ -1468,12 +1468,19 @@ PHASE_REQ_IDS=$(gsd_run query init.plan-phase "$PHASE" --pick phase_req_ids 2>/d
 Read the `activeHooks` array from `PLAN_POST_HOOKS_JSON` in-context. If the
 `gap-analysis` gate hook is absent (capability inactive), skip this step.
 
-**For each active entry where `kind == "gate"`** (process in array order):
+**For each active entry where `kind == "gate"`** (process in array order). **Dispatch by check shape** (the registry validates exactly one of `query`/`predicate`/`agentVerdict`):
 
 ```bash
+# named-query gate:
 GATE_RESULT=$(gsd_run check ${hook.check.query} "${PHASE_DIR}" "${PHASE_REQ_IDS}" --raw)
 CHECK_EXIT=$?
 ```
+OR, for a generic `predicate` gate (ADR-2008 / #2008), inline the predicate as compact JSON (note the `--phase-dir`/`--phase-req-ids` flags feed `${PHASE_DIR}`/`${PHASE_REQ_IDS}` interpolation):
+```bash
+GATE_RESULT=$(gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --phase-req-ids "${PHASE_REQ_IDS}" --raw)
+CHECK_EXIT=$?
+```
+(Read the hook's `check` object in-context to pick the branch; a gate with neither is a malformed registry entry — skip with a warning.)
 
 **Step 1 — did the CHECK COMMAND itself succeed?**
 If the check command failed (non-zero `CHECK_EXIT`, empty output, or unparseable JSON):
