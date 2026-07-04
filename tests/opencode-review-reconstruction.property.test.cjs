@@ -27,6 +27,14 @@ function extractJqProgram(varName) {
 const TEXT_PROGRAM = extractJqProgram('OPENCODE_REVIEW'); // review reconstruction
 const DIAG_PROGRAM = extractJqProgram('OPENCODE_DIAG');    // empty-output diagnostic
 
+// The review workflow runs `jq` in its (installed) runtime, but the test host may
+// not have it — GitHub's windows-latest runners ship no `jq` (macOS/Linux do). The
+// reconstruction logic is platform-independent, so skip rather than ENOENT-fail
+// where `jq` is absent; the assertions run in full on every jq-present runner.
+let jqAvailable = false;
+try { execFileSync('jq', ['--version'], { stdio: 'ignore' }); jqAvailable = true; } catch { /* no jq on PATH */ }
+const opts = { skip: jqAvailable ? false : 'jq not on PATH (e.g. GitHub windows-latest); jq behavior is platform-independent and asserted on jq-present runners' };
+
 // Run a shipped jq program against a stream of events serialized exactly as
 // opencode emits them: one JSON value per line (jq -s slurps them into an array).
 // jq -r appends a single trailing newline to the (single) string result; strip it
@@ -73,7 +81,7 @@ const eventStream = fc.array(fc.oneof(textEvent, textEvent, nonTextEvent), {
 });
 
 describe('#1936 OpenCode review reconstruction — jq properties', () => {
-  test('review == the newline-join of every assistant text part (order preserved)', () => {
+  test('review == the newline-join of every assistant text part (order preserved)', opts, () => {
     fc.assert(
       fc.property(eventStream, (events) => {
         const expected = events
@@ -85,7 +93,7 @@ describe('#1936 OpenCode review reconstruction — jq properties', () => {
     );
   });
 
-  test('a stream with no assistant text part reconstructs to empty (drives the #1936 stub)', () => {
+  test('a stream with no assistant text part reconstructs to empty (drives the #1936 stub)', opts, () => {
     fc.assert(
       fc.property(fc.array(nonTextEvent, { minLength: 1, maxLength: 20 }), (events) => {
         // This is the exact failure the bug describes: the agent runs tool calls
@@ -96,7 +104,7 @@ describe('#1936 OpenCode review reconstruction — jq properties', () => {
     );
   });
 
-  test('text parts that are null/absent are dropped, never rendered as "null"', () => {
+  test('text parts that are null/absent are dropped, never rendered as "null"', opts, () => {
     fc.assert(
       fc.property(
         fc.array(
@@ -118,7 +126,7 @@ describe('#1936 OpenCode review reconstruction — jq properties', () => {
   // Diagnostic path (empty-output stub). The finding calls out `missing .tokens.output`
   // and no-step_finish as real edges — pin them with examples against the shipped jq.
   describe('diagnostic reconstruction (stop reason + output tokens)', () => {
-    test('reports reason and output tokens from the LAST step_finish', () => {
+    test('reports reason and output tokens from the LAST step_finish', opts, () => {
       const events = [
         { type: 'step_finish', part: { reason: 'tool_calls', tokens: { output: 5 } } },
         { type: 'tool_use', part: {} },
@@ -127,12 +135,12 @@ describe('#1936 OpenCode review reconstruction — jq properties', () => {
       assert.equal(runJq(DIAG_PROGRAM, events), 'stop reason=stop, output tokens=0');
     });
 
-    test('missing .tokens.output degrades to "?" rather than null/garbage', () => {
+    test('missing .tokens.output degrades to "?" rather than null/garbage', opts, () => {
       const events = [{ type: 'step_finish', part: { reason: 'stop', tokens: {} } }];
       assert.equal(runJq(DIAG_PROGRAM, events), 'stop reason=stop, output tokens=?');
     });
 
-    test('no step_finish at all degrades both fields to "?"', () => {
+    test('no step_finish at all degrades both fields to "?"', opts, () => {
       const events = [{ type: 'tool_use', part: { tool: 'read' } }];
       assert.equal(runJq(DIAG_PROGRAM, events), 'stop reason=?, output tokens=?');
     });
@@ -142,7 +150,7 @@ describe('#1936 OpenCode review reconstruction — jq properties', () => {
   // (e.g. an opencode crash that printed a plain-text error) jq must fail rather
   // than emit that text as a "review" — the workflow's `2>/dev/null` + empty
   // capture then routes to the diagnostic stub.
-  test('non-JSON stdout does not masquerade as a reconstructed review', () => {
+  test('non-JSON stdout does not masquerade as a reconstructed review', opts, () => {
     let threw = false;
     try {
       execFileSync('jq', ['-rs', TEXT_PROGRAM], { input: 'auth token expired\n', encoding: 'utf8' });
