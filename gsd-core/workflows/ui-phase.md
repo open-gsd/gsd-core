@@ -317,10 +317,19 @@ if [ -z "$UI_PROBE_JS" ]; then
   fi
 fi
 
-# Element extraction: read the researcher-authored UI-SPEC prose (the described surfaces — the
-# Design System / Copywriting rows and any element the researcher named) and write ONE object per
-# UI element/surface: {"id","text"} where text is the prose describing it. Populate the heredoc from
-# the UI-SPEC; the placeholder guard below fails loud on a forgotten substitution (never a no-op).
+# Element extraction (MANUAL BY DESIGN — not an oversight): the agent reads the researcher-authored
+# UI-SPEC prose (the described surfaces — the Design System / Copywriting rows and any element the
+# researcher named) and writes ONE object per UI element/surface: {"id","text"} where text is the
+# prose describing it. This mirrors spec-phase Step 5.5's edge-probe REQS_JSON step VERBATIM — a
+# hand-populated heredoc guarded by the fail-loud <replace:> check below — the established, shipped
+# pattern for feeding a probe from a prose spec. It is NOT mechanized on purpose: a UI-SPEC has no
+# single machine-parseable "elements" column — surfaces are distributed across design-token tables
+# (Design System / Typography / Color), the Copywriting section, and prose the researcher names, so a
+# regex/table parse would fail-OPEN (miss a prose-named surface, or feed a design-token row as a bogus
+# element). The agent-authored heredoc + fail-loud guard is the conservative choice, identical to the
+# requirement-side edge-probe path (RR-04). If a future UI-SPEC gains a canonical element table,
+# revisit to parse it. Populate the heredoc from the UI-SPEC; the guard below fails loud on a
+# forgotten substitution (never a no-op).
 ELEMENTS_JSON=$(mktemp "${TMPDIR:-/tmp}/ui-probe-elements-XXXXXX") && mv "$ELEMENTS_JSON" "${ELEMENTS_JSON}.json" && ELEMENTS_JSON="${ELEMENTS_JSON}.json" || exit 1
 cat > "$ELEMENTS_JSON" <<'JSON'
 [
