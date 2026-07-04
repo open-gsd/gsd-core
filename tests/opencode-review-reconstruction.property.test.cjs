@@ -27,13 +27,18 @@ function extractJqProgram(varName) {
 const TEXT_PROGRAM = extractJqProgram('OPENCODE_REVIEW'); // review reconstruction
 const DIAG_PROGRAM = extractJqProgram('OPENCODE_DIAG');    // empty-output diagnostic
 
-// The review workflow runs `jq` in its (installed) runtime, but the test host may
-// not have it — GitHub's windows-latest runners ship no `jq` (macOS/Linux do). The
-// reconstruction logic is platform-independent, so skip rather than ENOENT-fail
-// where `jq` is absent; the assertions run in full on every jq-present runner.
+// This suite shells out to `jq`. On Windows, Node's child_process argument quoting
+// mangles the jq program (it embeds quotes) — jq then raises a parse error — and
+// jq isn't guaranteed on the host regardless. The reconstruction logic is
+// platform-independent (the review workflow runs jq in its Unix-y runtime), so gate
+// the suite to jq-present non-Windows hosts, mirroring golden-install-parity's win32
+// skip. The assertions run in full on every macOS/Linux CI leg.
 let jqAvailable = false;
 try { execFileSync('jq', ['--version'], { stdio: 'ignore' }); jqAvailable = true; } catch { /* no jq on PATH */ }
-const opts = { skip: jqAvailable ? false : 'jq not on PATH (e.g. GitHub windows-latest); jq behavior is platform-independent and asserted on jq-present runners' };
+const skipReason = process.platform === 'win32'
+  ? 'jq invocation is not portable under Node child_process arg-quoting on Windows; logic is platform-independent and asserted on macOS/Linux'
+  : (jqAvailable ? false : 'jq not on PATH');
+const opts = { skip: skipReason };
 
 // Run a shipped jq program against a stream of events serialized exactly as
 // opencode emits them: one JSON value per line (jq -s slurps them into an array).
