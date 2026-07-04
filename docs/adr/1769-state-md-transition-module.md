@@ -1,7 +1,7 @@
 # ADR-1769: STATE.md Transition Module — intent-based transitions over scattered RMW callbacks
 
-- **Status:** Proposed (Phase 0); **Accepted** at Phase 7 closeout
-- **Date:** 2026-06-27 (Phase 0)
+- **Status:** Accepted (Phase 7 closeout — all 10 lifecycle/maintenance transitions migrated; bug cluster #1760/#1761/#1743/#1695/#1264/#1255/#1257/#3242 retired)
+- **Date:** 2026-06-27 (Phase 0); Phase 7 closeout 2026-06-27
 - **Issue:** [#1769](https://github.com/open-gsd/gsd-core/issues/1769) — epic
 - **Supersedes:** the policy portions of `syncStateFrontmatter` (`src/state.cts:1667–1743`),
   `readModifyWriteStateMd`'s post-sync preservation block (`src/state.cts:2008–2119`), and
@@ -208,10 +208,45 @@ alongside, leave callbacks — parallel worlds don't converge (ADR-857's failure
 | Phase | Scope | Closes issue | Bug coverage |
 |---|---|---|---|
 | 0 | ADR + CONTEXT.md update | #1769 | — |
-| 1 | Substrate + `beginPhase` | TBD | #1255, #1257, #3242 |
-| 2 | `advancePlan` | TBD | — |
-| 3 | `completePhase` + `phase.cts:1770` | TBD | — |
-| 4 | `plannedPhase` + `milestoneSwitch` | TBD | — |
-| 5 | `milestoneComplete` + `milestone.cts:352` | TBD | — |
-| 6 | `patch` | TBD | #1743, #1695 |
-| 7 | `sync`, `prune`, `update` | TBD | #1760, #1761 |
+| 1 | Substrate + `beginPhase` | #1771 | #1255, #1257, #3242 |
+| 2 | `advancePlan` | #1782 | — |
+| 3 | `completePhase` + `phase.cts:1770` | #1784 | — |
+| 4 | `plannedPhase` + `milestoneSwitch` | #1786 | — |
+| 5 | `milestoneComplete` + `milestone.cts:352` | #1789 | — |
+| 6 | `patch` | #1791 | #1743, #1695 |
+| 7 | `sync`, `prune`, `update` | #1793 | #1760, #1761 |
+
+## Amendments
+
+### #1796 — Finish the preservation consolidation (Path A)
+
+**Date:** 2026-06-28 · **Status:** Accepted
+
+Surfaced by an `/adr-phase-coverage` audit of this ADR (issue #1796): the
+Consequences claim that the module *"Absorbs … `readModifyWriteStateMd`'s
+post-sync preservation block"* was **not** realized by Phases 0–7. The block
+stayed inline in `readModifyWriteStateMd` (`state.cts`); only
+`current_phase_name`'s preservation was table-driven. `#1264` was fixed by a
+call-site `shouldResync` guard rather than the field-classification table, so the
+bug *class* was not "killed structurally" as the Consequences (line 161) claimed.
+
+**Resolution — Path A ("finish the consolidation"):** the post-sync preservation
+block is now the pure, field-classification-table-driven `applyStatePreservation`
+in `src/state-transition.cts`, consulted via `getFieldClassification` for **all
+four** preserved fields — `progress`, `status`, `stopped_at`, `current_phase_name`
+(previously only the last was table-driven). `readModifyWriteStateMd` calls it.
+This makes the CONTEXT.md "Absorbs … post-sync preservation block" claim accurate
+and routes the `#1264` preservation policy through the single field-classification
+table (one policy source, not three drifting encodings).
+
+Behavior is byte-identical to the pre-amendment inline block (Hyrum-safe — 15
+callers' observable preservation is unchanged); the full state / frontmatter /
+transition regression suite (847 tests, including the `#1264`, `#1743`, `#1695`,
+`#1760`, `#1761`, `#3242`, `#1230` characterization blocks) passes unmodified.
+A codex (gpt-5.5 / high) adversarial review returned CLEAN — no behavior drift
+across a 58,564-case equivalence sweep, no security surface introduced.
+
+The `shouldResync` call-site guard remains — it is the transition's declaration
+of "am I re-deriving from disk?" What changed is that the *preservation policy*
+it feeds is now centralized and table-driven rather than re-encoded per writer,
+which is the consolidation this ADR originally specified.

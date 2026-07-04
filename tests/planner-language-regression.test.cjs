@@ -336,3 +336,349 @@ describe('gsd-plan-checker.md — scope reduction detection includes time/comple
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3805-fast-md-log-to-state-schema.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3805-fast-md-log-to-state-schema (consolidation epic #1969 B4 #1973)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #3805)
+// Reads gsd-core/workflows/fast.md whose deployed text IS the product —
+// the workflow markdown is executed verbatim by LLM runtimes.
+
+/**
+ * #3805 — fast.md log_to_state appends a schema-blind 4-column row to the
+ * 5-column "Quick Tasks Completed" table created by quick.md Step 7.
+ *
+ * quick.md Step 7 creates the table with 5 columns:
+ *   | # | Description | Date | Commit | Directory |
+ *
+ * Before this fix, fast.md's log_to_state step appended a hardcoded 4-cell
+ * row unconditionally:
+ *   echo "| $(date +%Y-%m-%d) | fast | $TASK | ✅ |" >> .planning/STATE.md
+ *
+ * This produces malformed Markdown when the existing table has a different
+ * column count.
+ *
+ * Covers:
+ *   - fast.md does NOT contain the hardcoded 4-cell echo template
+ *   - fast.md log_to_state step reads/introspects the existing table header
+ *     before appending (schema-aware insertion)
+ *   - fast.md log_to_state step matches the 5-column schema from quick.md
+ *     Step 7 when that table is present
+ *   - fast.md log_to_state step skips (does not corrupt) the STATE.md write
+ *     when the table schema is unrecognized
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const FAST_MD_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'fast.md');
+
+// The 5-column schema defined in quick.md Step 7 (non-validate mode).
+// Column count is 5: # | Description | Date | Commit | Directory
+// Named constant for traceability — mirrors quick.md Step 7's table header.
+const QUICK_MD_STEP7_COL_COUNT = 5;
+const QUICK_MD_STEP7_COLUMNS = ['#', 'Description', 'Date', 'Commit', 'Directory'];
+
+describe('bug #3805: fast.md log_to_state must be schema-aware', () => {
+  let fastMdContent;
+
+  test('fast.md workflow file exists and is readable', () => {
+    assert.ok(fs.existsSync(FAST_MD_PATH), `fast.md not found at ${FAST_MD_PATH}`);
+    fastMdContent = fs.readFileSync(FAST_MD_PATH, 'utf-8');
+  });
+
+  test('fast.md log_to_state step does NOT hardcode a 4-cell row template', () => {
+    // The old broken template: | date | fast | task | ✅ |
+    // This regex matches the exact hardcoded pattern that ignores table schema.
+    // A 4-cell row has exactly 4 pipe-delimited fields plus the surrounding pipes.
+    const hardcoded4CellPattern = /echo\s+["'][|][^|]*[|][^|]*[|][^|]*[|][^|]*[|]\s*["']/;
+    const match = fastMdContent.match(hardcoded4CellPattern);
+    assert.ok(
+      !match,
+      [
+        'fast.md log_to_state still contains the hardcoded 4-cell row template:',
+        `  "${match?.[0]}"`,
+        'This appends a malformed row to the 5-column Quick Tasks Completed table',
+        'created by quick.md Step 7.',
+        `Expected table schema (${QUICK_MD_STEP7_COL_COUNT} cols): | ${QUICK_MD_STEP7_COLUMNS.join(' | ')} |`,
+      ].join('\n')
+    );
+  });
+
+  test('fast.md log_to_state step reads the existing table header (schema introspection)', () => {
+    // The fix must inspect the existing STATE.md table header before appending.
+    // Acceptable signals: reading STATE.md content, grepping for the header line,
+    // or parsing columns from the header row.
+    const hasHeaderRead =
+      // Reads STATE.md to inspect it (awk/sed/grep on the file for header detection)
+      /grep.*Quick Tasks Completed.*STATE\.md/.test(fastMdContent) ||
+      /awk.*Quick Tasks Completed/.test(fastMdContent) ||
+      /sed.*Quick Tasks Completed/.test(fastMdContent) ||
+      // Reads the header line explicitly (head -n, sed -n, awk NR==)
+      /head\s+-n/.test(fastMdContent) && /STATE\.md/.test(fastMdContent) ||
+      // Counts pipe separators / columns from existing header
+      /col.*count|column.*count|count.*col|NF|awk.*\|/.test(fastMdContent) ||
+      // References schema detection in prose
+      /schema|header|column\s+count|existing.*table/.test(fastMdContent);
+
+    assert.ok(
+      hasHeaderRead,
+      [
+        'fast.md log_to_state step does not appear to introspect the existing table schema.',
+        'The step must read the STATE.md table header to detect column count before appending.',
+        'quick.md Step 7 uses schema-aware matching — fast.md must follow the same discipline.',
+      ].join('\n')
+    );
+  });
+
+  test('fast.md log_to_state step references the 5-column quick.md schema', () => {
+    // The fix must handle the 5-col schema: | # | Description | Date | Commit | Directory |
+    // Test that all 5 column names appear in the log_to_state step's context.
+    // Extract the log_to_state step content to scope the check.
+    const logToStateMatch = fastMdContent.match(/<step name="log_to_state">([\s\S]*?)<\/step>/);
+    assert.ok(logToStateMatch, 'fast.md must contain a <step name="log_to_state"> element');
+
+    const stepContent = logToStateMatch[1];
+
+    // All 5 column names from quick.md Step 7 must be referenced in the step.
+    for (const col of QUICK_MD_STEP7_COLUMNS) {
+      assert.ok(
+        stepContent.toLowerCase().includes(col.toLowerCase()),
+        [
+          `fast.md log_to_state step does not reference column "${col}"`,
+          `Expected all 5 columns from quick.md Step 7: ${QUICK_MD_STEP7_COLUMNS.join(', ')}`,
+          `(${QUICK_MD_STEP7_COL_COUNT}-column schema)`,
+        ].join('\n')
+      );
+    }
+  });
+
+  test('fast.md log_to_state step skips STATE.md write on unrecognized schema', () => {
+    // The fix must not blindly append when the table schema is unknown.
+    // Check for a guard that skips or logs rather than corrupting the file.
+    const logToStateMatch = fastMdContent.match(/<step name="log_to_state">([\s\S]*?)<\/step>/);
+    assert.ok(logToStateMatch, 'fast.md must contain a <step name="log_to_state"> element');
+
+    const stepContent = logToStateMatch[1];
+
+    // Must have a skip/guard path for unrecognized schemas
+    const hasSkipGuard =
+      /skip/i.test(stepContent) ||
+      /unrecognized|unknown|mismatch/i.test(stepContent) ||
+      /else\b/.test(stepContent) ||
+      /warn|log/i.test(stepContent);
+
+    assert.ok(
+      hasSkipGuard,
+      [
+        'fast.md log_to_state step does not appear to guard against unrecognized table schemas.',
+        'When the existing STATE.md table does not match an expected schema,',
+        'the step must skip the write (with a brief log) rather than append a malformed row.',
+      ].join('\n')
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2421-planner-grep-gate-hygiene.test.cjs — consolidation epic #1969 (B7 #1976)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2421-planner-grep-gate-hygiene (consolidation epic #1969 B7 #1976)", () => {
+// allow-test-rule: source-text-is-the-product (see #2421)
+// Workflow .md / agent .md / command .md / reference .md files — their text
+// IS what the runtime loads. Testing text content tests the deployed contract.
+// Per CONTRIBUTING.md exception matrix.
+
+/**
+ * Bug #2421: gsd-planner emits grep-count acceptance gates that count comment text
+ *
+ * The planner must instruct agents to use comment-aware grep patterns in
+ * <automated> verify blocks. Without this, descriptive comments in file
+ * headers count against the gate and force authors to reword them — the
+ * "self-invalidating grep gate" anti-pattern.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const PLANNER_PATH = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+
+describe('gsd-planner grep gate hygiene (#2421)', () => {
+  test('gsd-planner.md exists in agents source dir', () => {
+    assert.ok(fs.existsSync(PLANNER_PATH), 'agents/gsd-planner.md must exist');
+  });
+
+  test('gsd-planner.md contains Grep gate hygiene rule', () => {
+    const content = fs.readFileSync(PLANNER_PATH, 'utf-8');
+    assert.ok(
+      content.includes('Grep gate hygiene') || content.includes('grep gate hygiene'),
+      'gsd-planner.md must contain a "Grep gate hygiene" rule to prevent self-invalidating grep gates'
+    );
+  });
+
+  test('gsd-planner.md explains self-invalidating grep gate anti-pattern', () => {
+    const content = fs.readFileSync(PLANNER_PATH, 'utf-8');
+    assert.ok(
+      content.includes('self-invalidating'),
+      'gsd-planner.md must describe the "self-invalidating" grep gate anti-pattern'
+    );
+  });
+
+  test('gsd-planner.md provides comment-stripping grep example', () => {
+    const content = fs.readFileSync(PLANNER_PATH, 'utf-8');
+    // Must show a pattern that excludes comment lines (grep -v or grep -vE)
+    assert.ok(
+      content.includes('grep -v') || content.includes('grep -vE') || content.includes('-v '),
+      'gsd-planner.md must provide a comment-stripping grep example (grep -v or grep -vE)'
+    );
+  });
+
+  test('gsd-planner.md warns against bare zero-count grep gates on whole files', () => {
+    const content = fs.readFileSync(PLANNER_PATH, 'utf-8');
+    assert.ok(
+      content.includes('== 0') || content.includes('zero-count') || content.includes('zero count'),
+      'gsd-planner.md must warn against bare zero-count grep gates without comment exclusion'
+    );
+  });
+
+  test('gsd-planner.md grep gate hygiene rule appears after Nyquist Rule', () => {
+    const content = fs.readFileSync(PLANNER_PATH, 'utf-8');
+    const nyquistIdx = content.indexOf('Nyquist Rule');
+    const grepGateIdx = content.indexOf('grep gate hygiene') !== -1
+      ? content.indexOf('grep gate hygiene')
+      : content.indexOf('Grep gate hygiene');
+
+    assert.ok(nyquistIdx !== -1, 'Nyquist Rule must be present in gsd-planner.md');
+    assert.ok(grepGateIdx !== -1, 'Grep gate hygiene must be present in gsd-planner.md');
+    assert.ok(
+      grepGateIdx > nyquistIdx,
+      `Grep gate hygiene rule (at ${grepGateIdx}) must appear after Nyquist Rule (at ${nyquistIdx})`
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3087-planner-directive-language.test.cjs — consolidation epic #1969 (B7 #1976)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3087-planner-directive-language (consolidation epic #1969 B7 #1976)", () => {
+'use strict';
+
+// Regression guard for bug #3087.
+//
+// Between v1.38.3 and v1.38.4, agents/gsd-planner.md had 10 instances of
+// CRITICAL/MANDATORY/ALWAYS/MUST directive emphasis systematically removed.
+// The change was undocumented and conflicts with the stated intent of PR #2489
+// (the sycophancy-hardening pass that shipped in the same release). This test
+// enforces the restored directive language so the demotion cannot recur silently.
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const ROOT = path.join(__dirname, '..');
+let src;
+try {
+  src = fs.readFileSync(path.join(ROOT, 'agents', 'gsd-planner.md'), 'utf8');
+} catch (err) {
+  throw new Error(`agents/gsd-planner.md not found — was the file renamed? (${err.message})`);
+}
+
+const directives = [
+  { desc: 'User Decision Fidelity heading is CRITICAL',         pattern: /## CRITICAL: User Decision Fidelity/ },
+  { desc: 'Never Simplify heading is CRITICAL',                 pattern: /## CRITICAL: Never Simplify User Decisions/ },
+  { desc: 'Multi-Source Audit heading is MANDATORY',            pattern: /## Multi-Source Coverage Audit \(MANDATORY in every plan set\)/ },
+  { desc: 'Source audit uses "Audit ALL" imperative',           pattern: /Audit ALL four source types before finalizing/ },
+  { desc: 'Discovery is MANDATORY',                             pattern: /Discovery is MANDATORY unless/ },
+  { desc: 'Split signals use ALWAYS',                           pattern: /\*\*ALWAYS split if:\*\*/ },
+  { desc: 'requirements field doc uses MUST',                   pattern: /\*\*MUST\*\* list requirement IDs from ROADMAP/ },
+  { desc: 'Step 0 has CRITICAL requirement ID directive',       pattern: /\*\*CRITICAL:\*\* Every requirement ID MUST appear/ },
+  { desc: 'Write tool directive uses ALWAYS',                   pattern: /\*\*ALWAYS use the Write tool to create files\*\*/ },
+  { desc: 'File naming convention heading is CRITICAL',         pattern: /\*\*CRITICAL — File naming convention \(enforced\):\*\*/ },
+];
+
+for (const { desc, pattern } of directives) {
+  test(`gsd-planner.md: ${desc}`, () => {
+    assert.ok(
+      pattern.test(src),
+      `Directive enforcement missing from gsd-planner.md: "${desc}" — pattern ${pattern} not found. ` +
+      `This language was demoted in v1.38.4 (PR #2489) without documentation, conflicting with ` +
+      `the sycophancy-hardening intent of that release. See bug #3087.`,
+    );
+  });
+}
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3430-planner-phase-contract.test.cjs — consolidation epic #1969 (B7 #1976)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3430-planner-phase-contract (consolidation epic #1969 B7 #1976)", () => {
+// allow-test-rule: source-text-is-the-product (see #3430)
+// Planner markdown is the deployed planning contract; these checks lock the
+// exact canonical forms that downstream phase-plan-index accepts.
+
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const PLANNER_PATH = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+
+function readPlanner() {
+  return fs.readFileSync(PLANNER_PATH, 'utf8');
+}
+
+test('#3430: planner SUMMARY instruction uses canonical padded phase/plan form', () => {
+  const content = readPlanner();
+  assert.match(
+    content,
+    /Create `\.planning\/phases\/XX-name\/\{padded_phase\}-\{plan\}-SUMMARY\.md` when done/,
+    'planner must instruct executors to write SUMMARY files in canonical padded-phase form'
+  );
+  assert.doesNotMatch(
+    content,
+    /After completion, create `\.planning\/phases\/XX-name\/\{phase\}-\{plan\}-SUMMARY\.md`/,
+    'planner must not instruct the broken {phase}-{plan}-SUMMARY.md form'
+  );
+});
+
+test('#3430: planner depends_on docs show canonical in-phase plan ids', () => {
+  const content = readPlanner();
+  assert.match(
+    content,
+    /depends_on:[^\n]*Use `01-01`\/`01-01-auth-hardening`/,
+    'planner must document canonical depends_on examples that phase-plan-index resolves'
+  );
+  assert.doesNotMatch(
+    content,
+    /depends_on:[^\n]*01-trust\/01/,
+    'planner must not document phase-slug/plan-number depends_on examples as canonical'
+  );
+});
+  });
+}

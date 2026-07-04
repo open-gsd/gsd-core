@@ -28,7 +28,7 @@ Six namespace routers ship as the first-stage entry points in v1.40. They keep t
 
 | Command | Routes to |
 |---------|-----------|
-| `/gsd-workflow` | Phase pipeline — discuss / plan / execute / verify / phase / progress |
+| `/gsd-workflow` | Phase pipeline — discuss / plan / execute / verify / phase / progress / next |
 | `/gsd-project` | Project lifecycle — milestones, audits, summary |
 | `/gsd-quality` | Quality gates — code review, debug, audit, security, eval, ui |
 | `/gsd-context` | Codebase intelligence — map, graphify, docs, learnings |
@@ -315,6 +315,8 @@ For browser-backed UAT, use a configured browser MCP server. The current Open GS
 
 **Coverage-aware UAT routing (#1602).** When a SUMMARY.md carries a `coverage:` frontmatter block, `verify-work` classifies each deliverable deterministically instead of prompting for every prose bullet: deliverables proven by passing tests are auto-passed (recorded with `source: automated`, no prompt) and only judgment-dependent deliverables are presented for human sign-off. SUMMARYs without a `coverage:` block fall back to the previous prose-based extraction unchanged. See the [`coverage:` block reference](#summary-coverage-block) below.
 
+**Honest verifier — `insufficient_spec` abstention (#1154).** A `must_haves.truths` item carrying the `verification: backstop` marker (a *non-inferable* check the edge-probe surfaced at spec time) is graded specially: if the verifier cannot confirm it with **explicit evidence** (a passing wired held-out/property-based test, or a directly-observed behavior), it **abstains** — the item is reported `unverified — held-out test recommended` and the phase verdict becomes `human_needed` (with reason `insufficient_spec`, distinct from ordinary manual-UAT `human_needed`), **never a silent `passed`**. Autonomous runs complete with "N unverified non-inferable checks" rather than hard-halting; interactive runs route the item to the end-of-phase human checkpoint. Abstention is exogenous (driven by the `backstop` tag, never a self-judged "abstain if unsure") and an inferable truth is never abstained. Reliable on capable verifier tiers (`sonnet`+); the budget `haiku` tier degrades toward current behavior. See [Honest Verifier](../gsd-core/references/honest-verifier.md).
+
 #### SUMMARY `coverage:` block
 
 A SUMMARY.md may carry an optional `coverage:` frontmatter block — a list of per-deliverable entries that joins requirements → tests → verification status:
@@ -576,9 +578,21 @@ node gsd-tools.cjs phase uat-passed 3 --raw                  # Machine-readable 
 
 ## Navigation Commands
 
+### `/gsd:next`
+
+Open the state-aware smart-entry launcher. It reads `.planning/STATE.md`, `ROADMAP.md`, verification artifacts, and git status, classifies the current situation, shows a short menu, then dispatches exactly one existing GSD command.
+
+This is a launcher/router only — it never performs project work directly. Detection is handled by `gsd-tools smart-entry --json`; the markdown workflow presents the menu with `AskUserQuestion` or a numbered `--text` fallback.
+
+**Situations detected:** no project, paused work, blockers, failed verification, first-phase setup, planning, executing, pending verification, idle stranded work, complete milestone, or unknown state.
+
+```bash
+/gsd:next                          # Detect state and route to the best next action
+```
+
 ### `/gsd-progress`
 
-Show status, next steps, and automatically advance to the next logical workflow step. Reads project state and determines the appropriate action.
+Show status, next steps, and automatically advance to the next logical workflow step. Reads project state and determines the appropriate action. Use `/gsd:next` when you want an interactive smart-entry menu before dispatch; use `/gsd-progress --next` when you want GSD to advance directly.
 
 | Flag | Description |
 |------|-------------|
@@ -1417,6 +1431,7 @@ Reviewers are prompted to verify the plan's claims against the actual repository
 **Default reviewer behavior (no flags):**
 - If `review.default_reviewers` is **unset**, `/gsd-review` runs all detected reviewers (current default behavior).
 - If `review.default_reviewers` is **set**, `/gsd-review` runs only that subset (for example `["gemini","codex"]`).
+- `review.default_reviewers` may include names from `review.reviewer_instances`; each instance runs as its own reviewer identity using its configured adapter/model. Instance names are not CLI flags.
 - `--all` always overrides config and runs the full detected set.
 - Explicit flags (for example `--cursor`) override both `--all` and config defaults for that run.
 
@@ -1639,6 +1654,28 @@ node gsd-tools.cjs state sync --verify    # Dry-run: show changes without writin
 
 ---
 
+### `state rebuild [--dry-run] [--verbose]`
+
+Re-derive STATE.md body structure from canonical sources (frontmatter + `.planning/phases/` disk scan). Reconciles `## Current Position` prose with frontmatter, drops orphaned rows from the `**By Phase:**` table, clears template-placeholder field values, and de-duplicates `## Session Continuity Archive` blocks down to the 3 most-recent entries. Every mutation is recorded in a structured `## Rebuild Log` audit section appended to STATE.md (ADR-1817 §3).
+
+Heavier and manual counterpart to the lightweight, auto-triggered `state sync`. The two compose non-overlappingly: `sync` patches three frontmatter fields; `rebuild` reconciles body structure. Per ADR-1817 §4, `rebuild` is idempotent — running it twice on a clean file produces no change.
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Compute the rebuild and emit a structured preview, write nothing |
+| `--verbose` | Tee the audit-log entries to stderr in addition to writing them to STATE.md |
+
+**Prerequisites:** `.planning/STATE.md` exists
+**Produces:** Reconciled `STATE.md` with a `## Rebuild Log` audit entry (only when drift was reconciled)
+
+```bash
+node gsd-tools.cjs state rebuild             # Reconcile body structure
+node gsd-tools.cjs state rebuild --dry-run   # Preview the diff without writing
+node gsd-tools.cjs state rebuild --verbose   # Emit audit-log entries to stderr
+```
+
+---
+
 ### `state planned-phase`
 
 Record state transition after plan-phase completes (Planned/Ready to execute).
@@ -1694,7 +1731,7 @@ A lint gate enforces the budget:
 npm run lint:descriptions
 ```
 
-The check is also run as part of `npm test` via `tests/enh-2789-description-budget.test.cjs`.
+The check is also run as part of `npm test` via `tests/skill-frontmatter-contract.test.cjs`.
 
 ---
 

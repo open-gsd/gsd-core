@@ -52,14 +52,16 @@ Before verifying, discover project context:
 **Project skills:** @~/.claude/gsd-core/references/project-skills-discovery.md
 - Load `rules/*.md` as needed during **verification**.
 - Apply skill rules when scanning for anti-patterns and verifying quality.
+
+**agent_skills:** self-load per @~/.claude/gsd-core/references/agent-skills-bootstrap.md
 </project_context>
 
 <core_principle>
 **Task completion ≠ Goal achievement**
 
-A task "create chat component" can be marked complete when the component is a placeholder. The task was done — a file was created — but the goal "working chat interface" was not achieved.
+A "create chat component" task can be complete with a placeholder file — task done, goal "working chat interface" missed.
 
-Goal-backward verification starts from the outcome and works backwards:
+Start from the outcome and work backwards:
 
 1. What must be TRUE for the goal to be achieved?
 2. What must EXIST for those truths to hold?
@@ -197,6 +199,7 @@ For each truth:
    - A pre-existing test exercises the transition/invariant and passes (confirm via Step 7b's single-named-test path) → ✓ VERIFIED.
    - No such test exists, or it can't run without a server/state mutation → ⚠️ PRESENT_BEHAVIOR_UNVERIFIED. Emit a human-verification item (Step 8) and do not count it toward the verified score (Step 9).
    - An accepted override (Step 3b) carries the truth as PASSED (override), exactly as it does for a FAILED truth.
+5b. **Non-inferable (`backstop`) truths:** a `verification: backstop` truth (via `truthVerification()`) abstains unless confirmed by explicit evidence — mark `insufficient_spec` -> a human-verification item -> `human_needed`. See `references/honest-verifier.md`.
 6. Determine truth status
 
 ## Step 3b: Check Verification Overrides

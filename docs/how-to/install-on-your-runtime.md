@@ -102,6 +102,15 @@ The `gsd-tools` binary (installed as part of the `@opengsd/gsd-core` npm package
 
 Node.js (`node`) must also be available on your `PATH`. The plugin's always-on guard hooks (wired in `hooks/hooks.json`) are invoked as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<script>"`. Some Claude Code distributions ship as a standalone binary and do not expose a `node` executable on `PATH`; in those environments the plugin's hooks will not run. Verify with `node --version` before relying on the plugin hooks.
 
+#### Claude plugin marketplace discovery (ZCODE and compatible runtimes)
+
+GSD Core also ships a `.claude-plugin/marketplace.json` marketplace manifest (sibling to `plugin.json`). Runtimes that implement the Claude plugin marketplace contract — such as ZCODE — can discover and install GSD Core from a custom marketplace source without a manual clone:
+
+1. In your runtime's plugin UI, add a custom marketplace source pointing at `open-gsd/gsd-core` (GitHub `owner/repo` form).
+2. GSD Core appears in the catalog and can be installed directly from the UI.
+
+This path is **additive** and changes nothing about the Claude Code plugin install above (`.claude-plugin/plugin.json` is unchanged). The marketplace entry's `source` is `./`, so it reuses `plugin.json`'s `commands` / `skills` / `hooks` mapping. The catalog version tracks `package.json` (it lives at `plugins[0].version` and is stamped by the release version-sync), so the version you see in the marketplace matches the npm release.
+
 ---
 
 ### Gemini CLI
@@ -161,7 +170,9 @@ The extension loads GSD's operating context (`GEMINI.md`) into every session and
 npx @opengsd/gsd-core@latest --opencode --global
 ```
 
-The installer writes three surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `command/`, file-based subagents in `agents/`, and on-demand skills in `skills/<name>/SKILL.md`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
+The installer writes four surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `command/`, file-based subagents in `agents/`, on-demand skills in `skills/<name>/SKILL.md`, and a native plugin in `plugins/gsd-core.js`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
+
+**GSD safety hooks on OpenCode.** OpenCode does not register lifecycle hooks the way Claude Code does (its `hooksSurface` is `none`), so GSD's prompt-injection guard, read-before-edit guard, injection scanner, and context monitor would otherwise be inert. The bundled plugin (`plugins/gsd-core.js`) closes that gap: OpenCode auto-discovers `plugins/*.{ts,js}` files under its config directory at startup and the adapter bridges OpenCode's event bus (`tool.execute.before`/`after`, `session.created`, `file.edited`) onto GSD's existing hook scripts, spawning them as subprocesses. No `opencode.json` entry is needed — the plugin is loaded by directory auto-discovery (the config `plugin` array is for npm packages only). A blocking hook aborts the tool call; an advisory hook surfaces its message without blocking.
 
 **Override the install directory:**
 

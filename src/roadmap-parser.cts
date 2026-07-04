@@ -25,6 +25,7 @@ const {
   phaseMarkdownRegexSourceExact,
   stripProjectCodePrefix,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  OPTIONAL_PHASE_TAG_SOURCE,
 } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -96,7 +97,8 @@ function extractCurrentMilestone(content: string, cwd?: string): string {
         const preambleCutoff = firstMilestoneMatch ? firstMilestoneMatch.index! : detailsOpenIdx;
         const preamble = content.slice(0, preambleCutoff)
           .replace(/<details>[\s\S]*?<\/details>/gi, '')
-          .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
+          // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+          .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*(?:\s*\([^)\n]*\))?\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
           .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
         return preamble + content.slice(detailsOpenIdx, detailsEnd);
       }
@@ -176,7 +178,8 @@ function extractCurrentMilestone(content: string, cwd?: string): string {
 
   const preamble = beforeMilestones
     .replace(/<details>[\s\S]*?<\/details>/gi, '')
-    .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
+    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*(?:\s*\([^)\n]*\))?\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
     .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
 
   return detailsSection
@@ -209,19 +212,23 @@ interface RoadmapPhaseResult {
 }
 
 function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
-  const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+  // #1729: OPTIONAL_PHASE_TAG_SOURCE after the number tolerates a pre-colon ( ) tag.
+  const headingPattern = new RegExp(
+    `^(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseSource ?? phaseMarkdownRegexSource(phaseNum)}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*(.+)$`,
     'i'
   );
-  const headerMatch = content.match(phasePattern);
+  const headings = tokenizeHeadings(content);
+  const headingIndex = headings.findIndex((heading) => headingPattern.test(heading.text));
+  if (headingIndex === -1) return null;
+
+  const heading = headings[headingIndex];
+  const headerMatch = heading.text.match(headingPattern);
   if (!headerMatch) return null;
 
   const phaseName = headerMatch[1].trim();
-  const headerIndex = headerMatch.index!;
-  const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i);
-  const sectionEnd = nextHeaderMatch ? headerIndex + nextHeaderMatch.index! : content.length;
-  const section = content.slice(headerIndex, sectionEnd).trim();
+  const nextHeading = headings.slice(headingIndex + 1).find((candidate) => candidate.level <= heading.level);
+  const sectionEnd = nextHeading ? nextHeading.offset : content.length;
+  const section = content.slice(heading.offset, sectionEnd).trim();
 
   const goalMatch = section.match(/\*\*Goal(?:\*\*:|\*?\*?:\*\*)\s*([^\n]+)/i);
   const goal = goalMatch ? goalMatch[1].trim() : null;
@@ -254,6 +261,8 @@ function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
 
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
   if (!phaseNum) return null;
+  const normalizedPhase = stripProjectCodePrefix(phaseNum);
+  if (/^999(?:\.|$)/.test(normalizedPhase)) return null;
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) return null;
 
@@ -434,7 +443,8 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
 
     // Use tokenizeHeadings (fence-aware) instead of stripFencedLines + regex.
     // T4 seam migration: phase headings inside fences are excluded automatically.
-    const phaseHeadingPattern = /^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/i;
+    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phaseHeadingPattern = /^(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:/i;
     for (const h of tokenizeHeadings(roadmap)) {
       if (h.level < 2 || h.level > 4) continue;
       const pm = phaseHeadingPattern.exec(h.text);

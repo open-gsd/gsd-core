@@ -37,7 +37,7 @@ const {
 // installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
 // conversion module's rewrite engine can consume it without importing
 // bin/install.js. Re-exported below for back-compat consumers/tests.
-const { getDirName } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
+const { getDirName, getRuntimeLabel, getGlobalConfigHomeFragment, runtimeFlags, getRuntimeNewProjectCommand } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const {
   applyWorktreeBaseRef,
   readBaseRefFromSettings,
@@ -374,6 +374,7 @@ const {
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'legacy-cleanup.cjs'));
 const {
   updateCacheFileName,
+  PACKAGE_NAME,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'package-identity.cjs'));
 
 // ADR-1239 Phase B: runtime-artifact install cluster extracted to install-engine.cjs.
@@ -510,18 +511,11 @@ function getConfigDirFromHome(runtime, isGlobal) {
     // Local installs use the same dir name pattern
     return `'${getDirName(runtime)}'`;
   }
-  // Global installs - OpenCode uses XDG path structure
-  if (runtime === 'copilot') return "'.copilot'";
-  if (runtime === 'opencode') {
-    // OpenCode: ~/.config/opencode -> '.config', 'opencode'
-    // Return as comma-separated for path.join() replacement
-    return "'.config', 'opencode'";
-  }
-  if (runtime === 'gemini') return "'.gemini'";
-  if (runtime === 'kilo') return "'.config', 'kilo'";
-  if (runtime === 'codex') return "'.codex'";
+  // Global installs. antigravity's home is resolved dynamically (env-overridable,
+  // multi-segment via resolveAntigravityGlobalDir + path.relative) — not a table
+  // entry. (The prior inner `if (!isGlobal) return "'.agents'"` was unreachable:
+  // !isGlobal returns at the top of this function.)
   if (runtime === 'antigravity') {
-    if (!isGlobal) return "'.agents'";
     const antigravityDir = resolveAntigravityGlobalDir();
     const rel = path.relative(os.homedir(), antigravityDir);
     const segments = rel.split(path.sep).filter(Boolean);
@@ -532,16 +526,9 @@ function getConfigDirFromHome(runtime, isGlobal) {
     // stable legacy template so generated path.join() calls remain valid.
     return "'.gemini', 'antigravity'";
   }
-  if (runtime === 'cursor') return "'.cursor'";
-  if (runtime === 'windsurf') return "'.windsurf'";
-  if (runtime === 'augment') return "'.augment'";
-  if (runtime === 'trae') return "'.trae'";
-  if (runtime === 'qwen') return "'.qwen'";
-  if (runtime === 'hermes') return "'.hermes'";
-  if (runtime === 'codebuddy') return "'.codebuddy'";
-  if (runtime === 'cline') return "'.cline'";
-  if (runtime === 'kimi') return "'.config', 'agents'";
-  return "'.claude'";
+  // All other runtimes: single source-of-truth fragment table (ADR-1239 Phase B,
+  // #1679). claude/unknown fall through to the table's default '.claude'.
+  return getGlobalConfigHomeFragment(runtime);
 }
 
 /**
@@ -6932,19 +6919,7 @@ const GSD_UNINSTALL_HOOKS = [
  * @param {string} runtime - Target runtime ('claude', 'opencode', 'gemini', 'codex', 'copilot')
  */
 function uninstall(isGlobal, runtime = 'claude') {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCodebuddy = runtime === 'codebuddy';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -6960,21 +6935,9 @@ function uninstall(isGlobal, runtime = 'claude') {
     ? targetDir.replace(os.homedir(), '~')
     : targetDir.replace(process.cwd(), '.');
 
-  let runtimeLabel = 'Claude Code';
-  if (runtime === 'opencode') runtimeLabel = 'OpenCode';
-  if (runtime === 'gemini') runtimeLabel = 'Gemini';
-  if (runtime === 'kilo') runtimeLabel = 'Kilo';
-  if (runtime === 'codex') runtimeLabel = 'Codex';
-  if (runtime === 'copilot') runtimeLabel = 'Copilot';
-  if (runtime === 'antigravity') runtimeLabel = 'Antigravity';
-  if (runtime === 'cursor') runtimeLabel = 'Cursor';
-  if (runtime === 'windsurf') runtimeLabel = 'Windsurf';
-  if (runtime === 'augment') runtimeLabel = 'Augment';
-  if (runtime === 'trae') runtimeLabel = 'Trae';
-  if (runtime === 'qwen') runtimeLabel = 'Qwen Code';
-  if (runtime === 'hermes') runtimeLabel = 'Hermes Agent';
-  if (runtime === 'kimi') runtimeLabel = 'Kimi CLI';
-  if (runtime === 'codebuddy') runtimeLabel = 'CodeBuddy';
+  // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
+  // Phase B / #1679) — collapses the prior 15-line assignment chain.
+  const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Uninstalling GSD from ${cyan}${runtimeLabel}${reset} at ${cyan}${locationLabel}${reset}\n`);
 
@@ -7354,6 +7317,22 @@ function uninstall(isGlobal, runtime = 'claude') {
     }
   }
 
+  // 4z. Remove the OpenCode native plugin adapter (#1914). Only GSD's own
+  // plugin file is removed; the plugins/ dir is pruned only if it becomes
+  // empty, preserving any user-authored OpenCode plugins.
+  if (isOpencode) {
+    const pluginsDir = path.join(targetDir, 'plugins');
+    const pluginPath = path.join(pluginsDir, 'gsd-core.js');
+    if (fs.existsSync(pluginPath)) {
+      try {
+        fs.unlinkSync(pluginPath);
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed OpenCode plugin`);
+      } catch (_) { /* best-effort */ }
+      try { fs.rmdirSync(pluginsDir); } catch (_) { /* not empty — user plugins present */ }
+    }
+  }
+
   // 4a. Remove scripts/changeset/ and scripts/lib/ (#935)
   // GSD-managed files only: enumerate the exact set the installer writes.
   // Any file NOT in this set is user-owned and must survive uninstall.
@@ -7397,6 +7376,11 @@ function uninstall(isGlobal, runtime = 'claude') {
   // Remove scripts/fix-slash-commands.cjs (#1223) — must come before the scripts/ rmdir
   const fixSlashUninstallPath = path.join(targetDir, 'scripts', 'fix-slash-commands.cjs');
   try { fs.unlinkSync(fixSlashUninstallPath); } catch (_) { /* best-effort */ }
+
+  // Remove the capability registry generator scripts (#1920) — before the scripts/ rmdir
+  for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+    try { fs.unlinkSync(path.join(targetDir, 'scripts', gen)); } catch (_) { /* best-effort */ }
+  }
 
   // If scripts/ dir is now empty, remove it too
   const scriptsUninstallDir = path.join(targetDir, 'scripts');
@@ -7740,12 +7724,31 @@ function configureOpencodePermissions(isGlobal = true, configDir = null) {
     modified = true;
   }
 
-  // Configure external_directory permission (the safety guard for paths outside project)
+  // Configure external_directory permission (the safety guard for paths outside)
   if (!config.permission.external_directory || typeof config.permission.external_directory !== 'object') {
     config.permission.external_directory = {};
   }
   if (config.permission.external_directory[gsdPath] !== 'allow') {
     config.permission.external_directory[gsdPath] = 'allow';
+    modified = true;
+  }
+
+  // ADR-1239 Phase D / #1682 — register the companion MCP server (Phase 4) so
+  // OpenCode connects to GSD's command (point 1) + state-IO (point 5) surface
+  // with NO bespoke plugin. Idempotent + non-clobbering: only added when
+  // `mcp.gsd` is absent (a user-defined `mcp.gsd` is respected — Hyrum's Law).
+  // Local-stdio schema per OpenCode config (packages/core/src/config/mcp.ts).
+  // `-p @opengsd/gsd-core` resolves the `gsd-mcp-server` bin from this package
+  // (bin name != package name) regardless of global-install state.
+  if (!config.mcp || typeof config.mcp !== 'object') {
+    config.mcp = {};
+  }
+  if (config.mcp.gsd === undefined) {
+    config.mcp.gsd = {
+      type: 'local',
+      command: ['npx', '-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+      enabled: true,
+    };
     modified = true;
   }
 
@@ -7941,18 +7944,7 @@ function resolveInstallRelativePath(baseDir, relPath) {
  * Write file manifest after installation for future modification detection
  */
 function writeManifest(configDir, runtime = 'claude', options = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isGemini = runtime === 'gemini';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isTrae = runtime === 'trae';
-  const isCline = runtime === 'cline';
-  const isKimi = runtime === 'kimi';
-  const isHermes = runtime === 'hermes';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // commandsDir points to the old location for Gemini (which still uses commands/gsd/).
@@ -8111,6 +8103,24 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   const fixSlashInstallPath = path.join(configDir, 'scripts', 'fix-slash-commands.cjs');
   if (fs.existsSync(fixSlashInstallPath)) {
     manifest.files['scripts/fix-slash-commands.cjs'] = fileHash(fixSlashInstallPath);
+  }
+
+  // Track the capability registry generator scripts (#1920) — top-level scripts/ files
+  // not covered by the changeset/lib loops.
+  for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+    const genInstallPath = path.join(configDir, 'scripts', gen);
+    if (fs.existsSync(genInstallPath)) {
+      manifest.files['scripts/' + gen] = fileHash(genInstallPath);
+    }
+  }
+
+  // Track the OpenCode native plugin adapter (#1914) so update/drift detection
+  // and uninstall can account for it.
+  if (isOpencode) {
+    const pluginInstallPath = path.join(configDir, 'plugins', 'gsd-core.js');
+    if (fs.existsSync(pluginInstallPath)) {
+      manifest.files['plugins/gsd-core.js'] = fileHash(pluginInstallPath);
+    }
   }
 
   fs.writeFileSync(path.join(configDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
@@ -8439,21 +8449,7 @@ function reportInstallerMigrationResult(result) {
 }
 
 function install(isGlobal, runtime = 'claude', options = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isGemini = runtime === 'gemini';
-  const isKilo = runtime === 'kilo';
-  const isKimi = runtime === 'kimi';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isAntigravity = runtime === 'antigravity';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isAugment = runtime === 'augment';
-  const isTrae = runtime === 'trae';
-  const isQwen = runtime === 'qwen';
-  const isHermes = runtime === 'hermes';
-  const isCodebuddy = runtime === 'codebuddy';
-  const isCline = runtime === 'cline';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -8599,22 +8595,9 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     homeDir,
   });
 
-  let runtimeLabel = 'Claude Code';
-  if (isOpencode) runtimeLabel = 'OpenCode';
-  if (isGemini) runtimeLabel = 'Gemini';
-  if (isKilo) runtimeLabel = 'Kilo';
-  if (isCodex) runtimeLabel = 'Codex';
-  if (isCopilot) runtimeLabel = 'Copilot';
-  if (isAntigravity) runtimeLabel = 'Antigravity';
-  if (isCursor) runtimeLabel = 'Cursor';
-  if (isWindsurf) runtimeLabel = 'Windsurf';
-  if (isAugment) runtimeLabel = 'Augment';
-  if (isTrae) runtimeLabel = 'Trae';
-  if (isQwen) runtimeLabel = 'Qwen Code';
-  if (isHermes) runtimeLabel = 'Hermes Agent';
-  if (isKimi) runtimeLabel = 'Kimi';
-  if (isCodebuddy) runtimeLabel = 'CodeBuddy';
-  if (isCline) runtimeLabel = 'Cline';
+  // runtimeLabel is now the single-source getRuntimeLabel lookup (ADR-1239
+  // Phase B / #1679) — collapses the prior 16-line assignment chain.
+  const runtimeLabel = getRuntimeLabel(runtime);
 
   console.log(`  Installing for ${cyan}${runtimeLabel}${reset} to ${cyan}${locationLabel}${reset}\n`);
 
@@ -9074,6 +9057,39 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       console.log(`  ${green}✓${reset} Installed ${_skillCount} skills to skills/`);
     } else {
       failures.push('skills/gsd-*');
+    }
+
+    // OpenCode-only: install the native plugin adapter (#1914). OpenCode
+    // declares hooksSurface: 'none', so GSD's lifecycle hooks are never
+    // registered as settings.json hooks the way Claude Code does — the hook
+    // *scripts* ship to <configDir>/hooks/ but nothing invokes them. This
+    // plugin bridges OpenCode's event bus onto those existing hook scripts
+    // (prompt guard, read guard, injection scanner, context monitor, ...),
+    // spawning them as subprocesses. OpenCode auto-discovers plugin files under
+    // <configDir>/plugins/ at startup — no opencode.json registration needed
+    // (its `plugin` array is for npm packages, not local file paths).
+    //
+    // The file MUST land as `.js`: OpenCode's loader globs
+    // `{plugin,plugins}/*.{ts,js}` (verified against its source) — a `.cjs`
+    // extension would never be discovered. The config dir carries a
+    // `{"type":"commonjs"}` package.json (written above), so the `.js` file is
+    // interpreted as CommonJS, matching the adapter's module.exports/require.
+    // Kilo has no plugin surface, so this is gated to OpenCode only.
+    if (isOpencode) {
+      const pluginSrc = path.join(src, '.opencode', 'plugins', 'gsd-core.js');
+      const pluginDestDir = path.join(targetDir, 'plugins');
+      const pluginDest = path.join(pluginDestDir, 'gsd-core.js');
+      if (fs.existsSync(pluginSrc)) {
+        fs.mkdirSync(pluginDestDir, { recursive: true });
+        fs.copyFileSync(pluginSrc, pluginDest);
+        if (fs.existsSync(pluginDest)) {
+          console.log(`  ${green}✓${reset} Installed OpenCode plugin (bridges GSD hooks)`);
+        } else {
+          failures.push('plugins/gsd-core.js');
+        }
+      } else {
+        failures.push('plugins/gsd-core.js');
+      }
     }
   } else if (isCline) {
     // Cline local install: rules-based only — commands are embedded in .clinerules (generated below).
@@ -9650,6 +9666,31 @@ function install(isGlobal, runtime = 'claude', options = {}) {
       fs.copyFileSync(fixSlashSrc, fixSlashDest);
       if (!verifyFileInstalled(fixSlashDest, 'scripts/fix-slash-commands.cjs')) {
         failures.push('scripts/fix-slash-commands.cjs');
+      }
+    }
+  }
+
+  // Copy scripts/gen-capability-registry.cjs + scripts/gen-loop-host-contract.cjs —
+  // required by gsd-core/bin/lib/capability-loader.cjs at overlay-composition time via
+  // require('../../../scripts/gen-capability-registry.cjs') (which itself requires
+  // gen-loop-host-contract.cjs). Without these, the loader's never-crash invariant
+  // discards EVERY third-party capability overlay and silently falls back to the frozen
+  // first-party registry, so installed capabilities are inert (#1920). Same class of
+  // gap as #1223 (fix-slash-commands.cjs) and copied unconditionally for the same reason:
+  // any runtime that installs gsd-core/ needs the capability system to compose.
+  {
+    const capGenDestDir = path.join(targetDir, 'scripts');
+    fs.mkdirSync(capGenDestDir, { recursive: true });
+    for (const gen of ['gen-capability-registry.cjs', 'gen-loop-host-contract.cjs']) {
+      const genSrc = path.join(src, 'scripts', gen);
+      const genDest = path.join(capGenDestDir, gen);
+      if (!fs.existsSync(genSrc)) {
+        failures.push(`scripts/${gen} (source missing from package — reinstall from npm)`);
+      } else {
+        fs.copyFileSync(genSrc, genDest);
+        if (!verifyFileInstalled(genDest, `scripts/${gen}`)) {
+          failures.push(`scripts/${gen}`);
+        }
       }
     }
   }
@@ -10499,14 +10540,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
  * Apply statusline config, then print completion message
  */
 function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = 'claude', isGlobal = true, configDir = null, bannerOpts = {}) {
-  const isOpencode = runtime === 'opencode';
-  const isKilo = runtime === 'kilo';
-  const isCodex = runtime === 'codex';
-  const isCopilot = runtime === 'copilot';
-  const isCursor = runtime === 'cursor';
-  const isWindsurf = runtime === 'windsurf';
-  const isTrae = runtime === 'trae';
-  const isCline = runtime === 'cline';
+  const { isOpencode, isKilo, isGemini, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !isOpencode) {
@@ -10629,37 +10663,11 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     }
   }
 
-  let program = 'Claude Code';
-  if (runtime === 'opencode') program = 'OpenCode';
-  if (runtime === 'gemini') program = 'Gemini';
-  if (runtime === 'kilo') program = 'Kilo';
-  if (runtime === 'codex') program = 'Codex';
-  if (runtime === 'copilot') program = 'Copilot';
-  if (runtime === 'antigravity') program = 'Antigravity';
-  if (runtime === 'cursor') program = 'Cursor';
-  if (runtime === 'windsurf') program = 'Windsurf';
-  if (runtime === 'augment') program = 'Augment';
-  if (runtime === 'trae') program = 'Trae';
-  if (runtime === 'cline') program = 'Cline';
-  if (runtime === 'qwen') program = 'Qwen Code';
-  if (runtime === 'hermes') program = 'Hermes Agent';
-  if (runtime === 'kimi') program = 'Kimi CLI';
-
-  let command = '/gsd-new-project';
-  if (runtime === 'opencode') command = '/gsd-new-project';
-  if (runtime === 'kilo') command = '/gsd-new-project';
-  if (runtime === 'gemini') command = '/gsd:new-project';
-  if (runtime === 'codex') command = '$gsd-new-project';
-  if (runtime === 'copilot') command = '/gsd-new-project';
-  if (runtime === 'antigravity') command = '/gsd-new-project';
-  if (runtime === 'cursor') command = 'gsd-new-project (mention the skill name)';
-  if (runtime === 'windsurf') command = '/gsd-new-project';
-  if (runtime === 'augment') command = '/gsd-new-project';
-  if (runtime === 'trae') command = '/gsd-new-project';
-  if (runtime === 'cline') command = '/gsd-new-project';
-  if (runtime === 'qwen') command = '/gsd-new-project';
-  if (runtime === 'hermes') command = '/gsd-new-project';
-  if (runtime === 'kimi') command = '/skill:gsd-new-project';
+  // program + command are now single-source lookups (ADR-1239 Phase B / #1679):
+  // program is the runtime display label; command is the per-host /gsd-new-project
+  // invocation syntax.
+  const program = getRuntimeLabel(runtime);
+  const command = getRuntimeNewProjectCommand(runtime);
 
   // Claude Code global installs use the skills/ format (CC 2.1.88+).
   // Restart is required for CC to pick up newly-installed skills, and the

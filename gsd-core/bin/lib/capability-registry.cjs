@@ -10,7 +10,7 @@ const capabilities = {
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "AI design contract",
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
@@ -63,7 +63,7 @@ const capabilities = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -141,7 +141,7 @@ const capabilities = {
   "assumption-delta": {
     "id": "assumption-delta",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Assumption-delta architecture checkpoint",
     "description": "Rarely-firing advisory checkpoint that triggers when a phase makes something plural, optional, or chosen that used to be singular, required, or derived. Surfaces one identity-model question (promote the new general representation to primary, or add it alongside?) so a silent primary-key drift does not accumulate into a later user-facing bug. Non-blocking; fires only on a detected signal.",
     "tier": "full",
@@ -187,7 +187,7 @@ const capabilities = {
   "audit": {
     "id": "audit",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Audit",
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
@@ -224,7 +224,7 @@ const capabilities = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -327,7 +327,7 @@ const capabilities = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -411,7 +411,7 @@ const capabilities = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -472,7 +472,7 @@ const capabilities = {
   "code-review": {
     "id": "code-review",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Code review",
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
@@ -533,7 +533,7 @@ const capabilities = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -636,7 +636,7 @@ const capabilities = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -707,7 +707,7 @@ const capabilities = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -778,7 +778,7 @@ const capabilities = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -881,7 +881,7 @@ const capabilities = {
   "drift": {
     "id": "drift",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Drift detection gates",
     "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
     "tier": "full",
@@ -956,10 +956,93 @@ const capabilities = {
       }
     ]
   },
+  "external-job": {
+    "id": "external-job",
+    "role": "feature",
+    "version": "1.7.0-rc.2",
+    "title": "Async external-job scheduler adapter",
+    "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it.",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "external_job.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+      },
+      "external_job.backend": {
+        "type": "enum",
+        "values": [
+          "slurm"
+        ],
+        "default": "slurm",
+        "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value."
+      },
+      "external_job.artifact_dir": {
+        "type": "string",
+        "default": "Artifacts/jobs",
+        "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout."
+      },
+      "external_job.submit_timeout_ms": {
+        "type": "number",
+        "default": 30000,
+        "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy."
+      },
+      "external_job.poll_timeout_ms": {
+        "type": "number",
+        "default": 15000,
+        "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback)."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "<!-- external-job capability — execute:wave:post fragment, injected into the executor (#1164). -->\n\n## Externalize long-running compute (async external job)\n\nIf the current plan's task is tagged `<runtime_budget>long_compute</runtime_budget>`\n(see the plan-phase fragment), do **not** run it in the foreground — it would\nblock the agent turn for hours. Instead externalize it and record a durable\nhalf-state:\n\n1. **Classify the runtime.** `quick` (<2 min) and `medium` (<~30 min) run\n   normally. `unknown` requires a first-health check and a soft-review deadline\n   before consuming the child timeout. `long_compute` (>30–60 min) is\n   externalized.\n2. **Submit via the scheduler adapter** (default `external_job.backend: slurm`):\n   ```bash\n   node scripts/slurm-adapter.cjs submit \\\n     --plan <plan_id> --phase <phase> -- sbatch --parsable \\\n     --output=Artifacts/jobs/%j/out.log ./run.sh\n   ```\n   The helper writes `.planning/async-jobs/<job>.json` (the versioned stability\n   contract — `docs/reference/planning-artifacts.md`) and refuses to create a\n   second non-terminal manifest for a `plan_id` that already has one\n   (duplicate-execution guard).\n3. **Commit the manifest + a handoff**, then return **`external_job_waiting`**\n   and stop. Do **not** write `SUMMARY.md` — SUMMARY is deferred until the job\n   reaches a terminal state and its `expected_artifacts` are verified.\n4. **Resume path.** `execute-phase` safe-resume, `resume-project`, and\n   `pause-work` reconcile against the manifest and never re-dispatch the plan.\n   When the job is `completed-unverified`, run `verification_command` (surface\n   it; it is untrusted — confirm before executing), then write `SUMMARY.md` and\n   close the plan.\n\nManifest commands cross a trust seam: a Capability (or anything that can write\n`.planning/`) produces them; the core loop consumes them. Never auto-run\n`submit_command` / `verification_command` / `resume_command` — surface the exact\ncommand and require explicit confirmation first.\n"
+        },
+        "produces": [
+          ".planning/async-jobs/<job>.json"
+        ],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "<!-- external-job capability — plan:post fragment, injected into the planner (#1164). -->\n\n## Tag runtime budgets on long tasks\n\nFor every `<task>` likely to exceed ~2 minutes of real compute, emit a\n`<runtime_budget>` child element so execute can classify it:\n\n- `<runtime_budget>quick</runtime_budget>` — under ~2 min; runs normally.\n- `<runtime_budget>medium</runtime_budget>` — ~2–30 min; foreground, but with\n  progress expectations.\n- `<runtime_budget>unknown</runtime_budget>` — runtime not yet characterized;\n  execute must run a first-health check and set a soft-review deadline before\n  trusting the child timeout. Define a progress signal and an abort condition.\n- `<runtime_budget>long_compute</runtime_budget>` — legitimately over ~30–60 min\n  (HPC solver, model training, large simulations). Execute must **externalize**\n  this as an async external job (see the execute:wave:post fragment) rather than\n  blocking the agent turn.\n\nFor any `long_compute` task, also declare the async contract the executor will\nneed: the `submit_command`, the `expected_artifacts` the job must produce, and\nthe `verification_command` that proves the output before the plan can close.\nDo not hardcode a cluster account, partition, or project path — the planner\nnever knows the scheduler layout; it declares the contract, the executor's\nadapter fills the backend specifics.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Post-planning gap analysis",
     "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
     "tier": "standard",
@@ -1000,7 +1083,7 @@ const capabilities = {
   "gemini": {
     "id": "gemini",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Gemini CLI",
     "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
     "tier": "core",
@@ -1075,7 +1158,7 @@ const capabilities = {
   "graphify": {
     "id": "graphify",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Knowledge graph",
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
@@ -1116,7 +1199,7 @@ const capabilities = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1187,7 +1270,7 @@ const capabilities = {
   "intel": {
     "id": "intel",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Codebase intelligence",
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
@@ -1239,7 +1322,7 @@ const capabilities = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -1332,7 +1415,7 @@ const capabilities = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -1406,7 +1489,7 @@ const capabilities = {
   "mempalace": {
     "id": "mempalace",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "MemPalace memory",
     "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
     "tier": "full",
@@ -1580,7 +1663,7 @@ const capabilities = {
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Nyquist validation",
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
@@ -1630,7 +1713,7 @@ const capabilities = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -1690,6 +1773,7 @@ const capabilities = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "opencode",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "settings-json",
@@ -1718,7 +1802,7 @@ const capabilities = {
   "pattern-mapper": {
     "id": "pattern-mapper",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Pattern mapping",
     "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
     "tier": "full",
@@ -1772,7 +1856,7 @@ const capabilities = {
   "profile-pipeline": {
     "id": "profile-pipeline",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Developer profiling pipeline",
     "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
     "tier": "full",
@@ -1849,7 +1933,7 @@ const capabilities = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1924,7 +2008,7 @@ const capabilities = {
   "research": {
     "id": "research",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Phase research",
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
@@ -1976,7 +2060,7 @@ const capabilities = {
   "schema-gate": {
     "id": "schema-gate",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Schema push detection gate",
     "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
     "tier": "full",
@@ -2022,7 +2106,7 @@ const capabilities = {
   "security": {
     "id": "security",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Security enforcement",
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
@@ -2121,7 +2205,7 @@ const capabilities = {
   "tdd": {
     "id": "tdd",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Test-driven development",
     "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
     "tier": "full",
@@ -2174,7 +2258,7 @@ const capabilities = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -2260,7 +2344,7 @@ const capabilities = {
   "ui": {
     "id": "ui",
     "role": "feature",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
@@ -2355,7 +2439,7 @@ const capabilities = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -2701,7 +2785,21 @@ const byLoopPoint = {
         "onError": "skip"
       }
     ],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "external-job",
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "<!-- external-job capability — plan:post fragment, injected into the planner (#1164). -->\n\n## Tag runtime budgets on long tasks\n\nFor every `<task>` likely to exceed ~2 minutes of real compute, emit a\n`<runtime_budget>` child element so execute can classify it:\n\n- `<runtime_budget>quick</runtime_budget>` — under ~2 min; runs normally.\n- `<runtime_budget>medium</runtime_budget>` — ~2–30 min; foreground, but with\n  progress expectations.\n- `<runtime_budget>unknown</runtime_budget>` — runtime not yet characterized;\n  execute must run a first-health check and set a soft-review deadline before\n  trusting the child timeout. Define a progress signal and an abort condition.\n- `<runtime_budget>long_compute</runtime_budget>` — legitimately over ~30–60 min\n  (HPC solver, model training, large simulations). Execute must **externalize**\n  this as an async external job (see the execute:wave:post fragment) rather than\n  blocking the agent turn.\n\nFor any `long_compute` task, also declare the async contract the executor will\nneed: the `submit_command`, the `expected_artifacts` the job must produce, and\nthe `verification_command` that proves the output before the plan can close.\nDo not hardcode a cluster account, partition, or project path — the planner\nnever knows the scheduler layout; it declares the contract, the executor's\nadapter fills the backend specifics.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": [
       {
         "capId": "gap-analysis",
@@ -2728,6 +2826,23 @@ const byLoopPoint = {
   "execute:wave:post": {
     "steps": [],
     "contributions": [
+      {
+        "capId": "external-job",
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "<!-- external-job capability — execute:wave:post fragment, injected into the executor (#1164). -->\n\n## Externalize long-running compute (async external job)\n\nIf the current plan's task is tagged `<runtime_budget>long_compute</runtime_budget>`\n(see the plan-phase fragment), do **not** run it in the foreground — it would\nblock the agent turn for hours. Instead externalize it and record a durable\nhalf-state:\n\n1. **Classify the runtime.** `quick` (<2 min) and `medium` (<~30 min) run\n   normally. `unknown` requires a first-health check and a soft-review deadline\n   before consuming the child timeout. `long_compute` (>30–60 min) is\n   externalized.\n2. **Submit via the scheduler adapter** (default `external_job.backend: slurm`):\n   ```bash\n   node scripts/slurm-adapter.cjs submit \\\n     --plan <plan_id> --phase <phase> -- sbatch --parsable \\\n     --output=Artifacts/jobs/%j/out.log ./run.sh\n   ```\n   The helper writes `.planning/async-jobs/<job>.json` (the versioned stability\n   contract — `docs/reference/planning-artifacts.md`) and refuses to create a\n   second non-terminal manifest for a `plan_id` that already has one\n   (duplicate-execution guard).\n3. **Commit the manifest + a handoff**, then return **`external_job_waiting`**\n   and stop. Do **not** write `SUMMARY.md` — SUMMARY is deferred until the job\n   reaches a terminal state and its `expected_artifacts` are verified.\n4. **Resume path.** `execute-phase` safe-resume, `resume-project`, and\n   `pause-work` reconcile against the manifest and never re-dispatch the plan.\n   When the job is `completed-unverified`, run `verification_command` (surface\n   it; it is untrusted — confirm before executing), then write `SUMMARY.md` and\n   close the plan.\n\nManifest commands cross a trust seam: a Capability (or anything that can write\n`.planning/`) produces them; the core loop consumes them. Never auto-run\n`submit_command` / `verification_command` / `resume_command` — surface the exact\ncommand and require explicit confirmation first.\n"
+        },
+        "produces": [
+          ".planning/async-jobs/<job>.json"
+        ],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      },
       {
         "capId": "mempalace",
         "point": "execute:wave:post",
@@ -2927,6 +3042,11 @@ const configKeys = {
   "workflow.drift_action": "drift",
   "workflow.schema_drift_gate": "drift",
   "workflow.plan_drift_precheck": "drift",
+  "external_job.enabled": "external-job",
+  "external_job.backend": "external-job",
+  "external_job.artifact_dir": "external-job",
+  "external_job.submit_timeout_ms": "external-job",
+  "external_job.poll_timeout_ms": "external-job",
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
@@ -3011,6 +3131,39 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
+  },
+  "external_job.enabled": {
+    "owner": "external-job",
+    "type": "boolean",
+    "default": false,
+    "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+  },
+  "external_job.backend": {
+    "owner": "external-job",
+    "type": "enum",
+    "default": "slurm",
+    "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value.",
+    "values": [
+      "slurm"
+    ]
+  },
+  "external_job.artifact_dir": {
+    "owner": "external-job",
+    "type": "string",
+    "default": "Artifacts/jobs",
+    "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout."
+  },
+  "external_job.submit_timeout_ms": {
+    "owner": "external-job",
+    "type": "number",
+    "default": 30000,
+    "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy."
+  },
+  "external_job.poll_timeout_ms": {
+    "owner": "external-job",
+    "type": "number",
+    "default": 15000,
+    "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback)."
   },
   "workflow.post_planning_gaps": {
     "owner": "gap-analysis",
@@ -3180,7 +3333,7 @@ const runtimes = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -3258,7 +3411,7 @@ const runtimes = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -3361,7 +3514,7 @@ const runtimes = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -3445,7 +3598,7 @@ const runtimes = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -3506,7 +3659,7 @@ const runtimes = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -3609,7 +3762,7 @@ const runtimes = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -3680,7 +3833,7 @@ const runtimes = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -3751,7 +3904,7 @@ const runtimes = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -3854,7 +4007,7 @@ const runtimes = {
   "gemini": {
     "id": "gemini",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Gemini CLI",
     "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
     "tier": "core",
@@ -3929,7 +4082,7 @@ const runtimes = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4000,7 +4153,7 @@ const runtimes = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -4093,7 +4246,7 @@ const runtimes = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -4167,7 +4320,7 @@ const runtimes = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -4227,6 +4380,7 @@ const runtimes = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "opencode",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "settings-json",
@@ -4255,7 +4409,7 @@ const runtimes = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4330,7 +4484,7 @@ const runtimes = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -4416,7 +4570,7 @@ const runtimes = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.6.0",
+    "version": "1.7.0-rc.2",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -4651,6 +4805,7 @@ const _requiresGraph = {
   "copilot": [],
   "cursor": [],
   "drift": [],
+  "external-job": [],
   "gap-analysis": [],
   "gemini": [],
   "graphify": [],

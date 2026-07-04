@@ -119,6 +119,51 @@ function ensureBuiltArtifacts(overrides = {}) {
     }
   }
 }
+
+// hooks/dist/ is gitignored (.gitignore) and NOT built by `prepare`
+// (npm run build:lib only) — only the full `build`/`prepublishOnly` scripts run
+// build:hooks. So on a clean checkout + `npm ci` (fresh CI, incl. the scoped
+// test lane) hooks/dist starts absent. Install tests (e.g.
+// bug-3683-workflow-colon-namespace-leak) spawn `install.js --<runtime> --local`
+// which copies hooks from hooks/dist/ and then verifyInstalled() hard-fails if
+// the target hooks dir is empty. build-hooks.js `build()` creates DIST_DIR
+// empty and fills it file-by-file, so the FIRST on-demand build (triggered by
+// whichever concurrent install test's before() hook runs first) exposes a
+// window where hooks/dist exists but is empty/partial. A concurrently-spawned
+// install reader observes zero hooks -> "Failed to install hooks: directory is
+// empty" -> intermittent scoped-lane failure (full lanes dodge it only by luck
+// of a hooks-builder finishing early). Building hooks/dist ONCE here — the same
+// upfront chokepoint as ensureBuiltArtifacts, single-process with no concurrent
+// readers — fully populates dist before any test runs, closing the first-build
+// empty window everywhere (CI scoped/unit shards + local). Subsequent on-demand
+// rebuilds only atomically replace individual files (per-file rename in
+// build-hooks.js) and never re-empty the dir, so they stay safe.
+function ensureBuiltHooks(overrides = {}) {
+  const { existsSync, statSync } = require('fs');
+  const root = overrides.root || join(__dirname, '..');
+  const distDir = overrides.distDir || join(root, 'hooks', 'dist');
+  const hookNames = overrides.hookNames || require('./build-hooks.js').HOOKS_TO_COPY;
+  const runBuild = overrides.runBuild || (() => {
+    execFileSync(process.execPath, [join(root, 'scripts', 'build-hooks.js')], {
+      cwd: root,
+      stdio: 'inherit',
+    });
+  });
+
+  // dist is "complete" only if every expected hook exists as a non-empty file.
+  // Absent dir, empty dir, or a missing/zero-byte hook all trigger a rebuild.
+  const complete = existsSync(distDir) && hookNames.every((hook) => {
+    const p = join(distDir, hook);
+    try {
+      return existsSync(p) && statSync(p).size > 0;
+    } catch {
+      return false;
+    }
+  });
+  if (!complete) {
+    runBuild();
+  }
+}
 const MARKED_SUITES = ['integration', 'install', 'security', 'slow'];
 
 // Recursively collect *.test.cjs files under dir, returning paths relative to dir.
@@ -454,6 +499,11 @@ function main() {
   // Build the gitignored bin/lib artifact if absent, before any test requires it.
   ensureBuiltArtifacts();
 
+  // Build the gitignored hooks/dist artifact once, before any concurrent install
+  // test spawns install.js and reads it — closes the first-build empty-dir race
+  // that intermittently failed the scoped CI lane (see ensureBuiltHooks above).
+  ensureBuiltHooks();
+
   // Hermeticity: in-process tests resolve `.planning` via planningDir(cwd), which
   // honours GSD_PROJECT/GSD_WORKSTREAM. A developer shell inside a GSD workstream
   // exports GSD_WORKSTREAM, which would redirect fixture STATE.md reads away from
@@ -512,9 +562,19 @@ function main() {
   const MAX_CMDLINE_CHARS = process.env.RUN_TESTS_MAX_CMDLINE_CHARS
     ? Number(process.env.RUN_TESTS_MAX_CMDLINE_CHARS)
     : 28000; // headroom below the 32,767 Windows ceiling
+  // A full-lane shard (~171 files) fit in ONE chunk at the old cap of 180, so the
+  // entire shard's wall-clock ran against a single per-chunk timeout. On the slow
+  // Windows runner the install-heavy files in a shard (e.g. install-minimal-hooks
+  // .test.cjs alone runs ~250 cases doing dozens of real installs) push that single
+  // chunk past the 600s per-chunk backstop — killed mid-run while still making slow
+  // progress (verified: no leaked handle / hang; --test-force-exit exits leaks
+  // cleanly, so the timeout was pure slowness, NOT the leak the kill message guesses).
+  // The per-chunk timeout is sized for a "healthy chunk (~4-5 min)"; keep chunks at
+  // roughly half a shard so each gets its own fresh 600s budget and a fresh node
+  // process (also relieving per-process memory pressure from 170+ files at once).
   const MAX_FILES_PER_CHUNK = process.env.RUN_TESTS_MAX_FILES_PER_CHUNK
     ? Number(process.env.RUN_TESTS_MAX_FILES_PER_CHUNK)
-    : 180;
+    : 90;
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
@@ -580,9 +640,12 @@ function main() {
       if (timedOut) {
         console.error(
           `run-tests: chunk ${i + 1}/${chunks.length} exceeded the per-chunk timeout ` +
-            `of ${chunkTimeoutMs}ms and was killed — a test in this chunk is likely leaking ` +
+            `of ${chunkTimeoutMs}ms and was killed. Two possible causes: (1) a test leaks ` +
             `an open handle (un-terminated Worker, un-killed child process, or ref'd timer) ` +
-            `so node --test never exits. Files: ${chunks[i]
+            `so node --test never exits — but --test-force-exit already guards that, so if it ` +
+            `is enabled suspect (2) the chunk is legitimately too slow for the budget (too ` +
+            `many/too-heavy files packed together). Check whether output kept flowing until ` +
+            `the kill (slow) vs stopped early (hang) before assuming a leak. Files: ${chunks[i]
               .map(f => f.split(/[\\/]/).pop())
               .join(' ')}`,
         );
@@ -600,4 +663,4 @@ if (require.main === module) {
   runMain(main);
 }
 
-module.exports = { suiteOf, ensureBuiltArtifacts, parseShardArg, selectShard };
+module.exports = { suiteOf, ensureBuiltArtifacts, ensureBuiltHooks, parseShardArg, selectShard };

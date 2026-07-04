@@ -53,7 +53,21 @@ const FIXTURE_DIR = path.join(__dirname, 'fixtures', 'golden-install-parity');
 // to the package's commands/gsd source tree, which is the checkout/CI workspace
 // path — NOT the temp HOME root, so it is never normalized to '<HOME>' and its
 // hash varies by environment. Excluded for the same reason as gsd-install-state.json.
-const VOLATILE_FILES = new Set(['gsd-file-manifest.json', 'gsd-install-state.json', '.gsd-source']);
+// gsd-core/CHANGELOG.md is excluded because it contains historical version strings
+// that cause hash drift between local (PKG_VERSION=1.x.x) and CI (PKG_VERSION=1.x.x-rc.N):
+// the PKG_VERSION normalization below replaces only the *current* version, but
+// CHANGELOG.md references prior-release versions, so the normalized hash diverges.
+const VOLATILE_FILES = new Set([
+  'gsd-file-manifest.json',
+  'gsd-install-state.json',
+  '.gsd-source',
+  'gsd-core/CHANGELOG.md',
+]);
+
+// The installed package version, normalized to '<VERSION>' in hash computation so
+// the golden is stable across version bumps (the rc step runs `npm version X.Y.Z-rc.N`
+// before tests, which rebakes the version into hook files and gsd-core/VERSION).
+const PKG_VERSION = require('../package.json').version;
 
 // Hook-registration config files excluded from the parity manifest. These are
 // written by the hook/permission install path (applySettingsJsonHooks /
@@ -107,10 +121,9 @@ function buildParityManifest(configDir, root) {
 
     const content = fs.readFileSync(full);
     // Normalize every occurrence of the temp root so hashes are stable across runs.
-    // The only other platform-varying content (the node-runner command form) lives
-    // exclusively in the excluded HOOK_CONFIG_FILES, so no further normalization is
-    // needed — a scan of all 16 installs confirmed no other file embeds it.
-    const normalized = content.toString('utf8').split(root).join('<HOME>');
+    // Also normalize the package version so the golden survives `npm version` bumps
+    // (the rc release step bakes the new version into hook files before running tests).
+    const normalized = content.toString('utf8').split(root).join('<HOME>').split(PKG_VERSION).join('<VERSION>');
     const hash = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
     unsorted[rel] = hash;
   }

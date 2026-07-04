@@ -45,7 +45,13 @@ process.stdin.on("end", () => {
 });
 ' 2>/dev/null || printf '\n')
 TOOL_NAME=$(printf '%s\n' "$TOOL_INFO" | sed -n '1p')
-COMMAND=$(printf '%s\n' "$TOOL_INFO" | sed -n '2p')
+# Capture the FULL command (line 2 through EOF). Agent runtimes routinely emit
+# HEAD-advancing commits as multi-line scripts (`cd /path` then `git add` then
+# `git commit …`); reading only line 2 (`sed -n '2p'`) missed a `git commit`
+# that was not on the first command line and silently no-op'd the rebuild
+# (#1772). Line 2..EOF preserves embedded newlines; the `case` glob below
+# matches the substring anywhere in the multi-line string.
+COMMAND=$(printf '%s\n' "$TOOL_INFO" | sed -n '2,$p')
 
 [ "$TOOL_NAME" = "Bash" ] || exit 0
 

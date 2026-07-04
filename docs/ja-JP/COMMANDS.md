@@ -1509,7 +1509,7 @@ GSD Discord コミュニティに参加するには、GSD README 内のリンク
 npm run lint:descriptions
 ```
 
-このチェックは `tests/enh-2789-description-budget.test.cjs` を介して `npm test` の一部としても実行されます。
+このチェックは `tests/skill-frontmatter-contract.test.cjs` を介して `npm test` の一部としても実行されます。
 
 ---
 

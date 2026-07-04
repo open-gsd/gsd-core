@@ -111,7 +111,7 @@ paused_at: null
 | **3. 마일스톤 완료** | `percent`가 `100`이거나 `completed_phases == total_phases`인 경우 | `v2.0 [██████████] 100% · milestone complete` |
 | **4. 기본 폴백** | 위 중 해당 없음 | `v1.9 Code Quality · executing · ph 1/5` (기존 형식) |
 
-**장면 우선순위:** `active_phase`와 `next_action`이 모두 채워진 경우 장면 1이 우선합니다 — 오케스트레이터가 실행 중이므로 "다음 권장 사항"은 오해의 소지가 있습니다. 이 우선순위는 `formatGsdState()`의 확인 순서로 강제되며 `tests/enh-2833-phase-lifecycle-statusline.test.cjs`의 `"scene priority"` 스위트에서 테스트됩니다.
+**장면 우선순위:** `active_phase`와 `next_action`이 모두 채워진 경우 장면 1이 우선합니다 — 오케스트레이터가 실행 중이므로 "다음 권장 사항"은 오해의 소지가 있습니다. 이 우선순위는 `formatGsdState()`의 확인 순서로 강제되며 `tests/gsd-statusline.test.cjs`의 `"scene priority"` 스위트에서 테스트됩니다.
 
 진행 막대(`[██░░░░░░░░] 20%`)는 프론트매터에 `progress.percent`가 있을 때만 마일스톤 세그먼트에 추가됩니다. 없으면 막대가 표시되지 않습니다.
 
@@ -119,7 +119,7 @@ paused_at: null
 
 ## 프론트매터 파싱 제약 사항
 
-상태 표시줄 훅은 정규식 기반 파싱을 사용합니다(YAML 라이브러리 없음). 따라서 다음 제약 사항이 적용됩니다. 이는 `tests/enh-2833-phase-lifecycle-statusline.test.cjs`에서 테스트됩니다.
+상태 표시줄 훅은 정규식 기반 파싱을 사용합니다(YAML 라이브러리 없음). 따라서 다음 제약 사항이 적용됩니다. 이는 `tests/gsd-statusline.test.cjs`에서 테스트됩니다.
 
 1. **프론트매터는 파일의 맨 첫 번째 문자에서 시작해야 합니다.** 주석을 포함한 어떤 것이든 여는 `---` 위에 있으면 매칭이 무효화됩니다. 여는 `---` 줄은 정확히 그것이어야 하며, 후행 공백이 없어야 합니다.
 
@@ -189,7 +189,7 @@ paused_at: null
 - 생명주기 필드 추가는 선택 사항입니다 — 렌더러는 필드가 없을 때 우아하게 저하됩니다.
 - 진행 막대는 `progress` 블록이 있어도 선택 사항입니다: `progress.percent`만 막대를 트리거하고, `total_phases`와 `completed_phases`만으로는 트리거되지 않습니다.
 
-`tests/enh-2833-phase-lifecycle-statusline.test.cjs`의 `formatGsdState #2833 backward compatibility` 테스트 스위트는 이 보장을 고정합니다. 레거시 `STATE.md` 렌더링을 깨는 변경 사항은 스위트에서 실패합니다.
+`tests/gsd-statusline.test.cjs`의 `formatGsdState #2833 backward compatibility` 테스트 스위트는 이 보장을 고정합니다. 레거시 `STATE.md` 렌더링을 깨는 변경 사항은 스위트에서 실패합니다.
 
 ---
 

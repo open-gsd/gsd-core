@@ -3,8 +3,8 @@
  * Keeps gsd-tools.cjs thin while preserving current CJS semantics.
  *
  * Unsupported in this router (treated as unknown):
- * - archive: `phases archive` is excluded from the subcommands list so it
- *   falls through to the unknown-subcommand error path.
+ * - archive: `phases archive` is excluded (#2684) — it is an internal
+ *   subcommand that milestone.complete forwards to, not a public surface.
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/phases-command-router.cjs
  * collapsed to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour
@@ -46,7 +46,8 @@ interface RoutePhasesCommandOptions {
 function routePhasesCommand({ phase, milestone, args, cwd, raw, error }: RoutePhasesCommandOptions): void {
   routeCjsCommandFamily({
     args,
-    // Exclude 'archive' so it hits the unknownMessage path.
+    // #2684: `phases archive` is deliberately excluded — it is an internal
+    // subcommand that milestone.complete forwards to, not a public surface.
     subcommands: PHASES_SUBCOMMANDS.filter((s) => s !== 'archive'),
     error,
     unknownMessage: (_subcommand: string, available: string[]) => `Unknown phases subcommand. Available: ${available.join(', ')}`,

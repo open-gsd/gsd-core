@@ -279,15 +279,27 @@ function _setCapabilitySourceHttpGet(fn: HttpGetFn | null): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Resolve the running GSD version; fail-closed to '0.0.0'. */
-function readHostVersion(): string {
+/**
+ * Resolve the running GSD version; fail-closed to '0.0.0'.
+ *
+ * Prefer the authoritative `gsd-core/VERSION` the installer writes for EVERY runtime
+ * (libDir = gsd-core/bin/lib/, so `../../VERSION` = gsd-core/VERSION), so installed
+ * layouts report the true version even when the walked-up `../../../package.json` is
+ * absent or belongs to the user's own project (#1920). Fall back to the runtime-root
+ * package.json (dev/source tree), then fail-closed. Mirrors resolveVersionFrom() (#1383).
+ */
+function readHostVersion(libDir: string = __dirname): string {
+  const SEMVER_PREFIX = /^\d+\.\d+\.\d+/;
+  try {
+    const v = fs.readFileSync(path.join(libDir, '..', '..', 'VERSION'), 'utf8').trim();
+    if (SEMVER_PREFIX.test(v)) return v;
+  } catch { /* not an installed tree (no gsd-core/VERSION) */ }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pkg = require('../../../package.json') as { version?: string };
-    return typeof pkg.version === 'string' && pkg.version ? pkg.version : '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
+    const pkg = require(path.join(libDir, '..', '..', '..', 'package.json')) as { version?: string };
+    if (pkg && typeof pkg.version === 'string' && SEMVER_PREFIX.test(pkg.version)) return pkg.version;
+  } catch { /* runtime root has no package.json */ }
+  return '0.0.0';
 }
 
 /** Compute sha512-<base64> integrity over a buffer. */

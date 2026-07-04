@@ -1,35 +1,17 @@
 {
   "_doc": "Baseline of modules currently exceeding the 2-test-file limit. Each entry locks in TODAY's exact test filenames as the allowlisted set (identity ratchet). Adding a NEW test file to a capped module fails (novel). Removing one requires pruning this list (stale, ratchet-down). When a cluster drops to ≤ 2, remove its entry entirely. New entries require justification in PR description.",
   "modules": {
-    "audit": {
-      "files": [
-        "audit-command-cutover.test.cjs",
-        "audit-fix-command.test.cjs",
-        "bug-2659-audit-open-crash.test.cjs",
-        "bug-2836-audit-open-summary-uat-drift.test.cjs",
-        "bug-2911-audit-open-output-shape.test.cjs"
-      ],
-      "issue": "192"
-    },
     "config": {
       "files": [
-        "bug-2943-config-get-context-window-default.test.cjs",
-        "bug-321-config-defaults-clone-strategy.test.cjs",
-        "bug-3227-config-set-model-overrides.test.cjs",
-        "bug-442-config-dir-equals-in-path.test.cjs",
         "config-field-docs.test.cjs",
         "config-get-default.test.cjs",
         "config-schema.property.test.cjs",
-        "config.test.cjs",
-        "enh-1055-config-intent-descriptor-drive.test.cjs",
-        "fix-1628-config-set-validation.test.cjs"
+        "config.test.cjs"
       ],
       "issue": "TBD"
     },
     "graphify": {
       "files": [
-        "bug-622-graphify-optional-graph-html.test.cjs",
-        "bug-974-graphify-budget-missing-value.test.cjs",
         "graphify-auto-update.slow.test.cjs",
         "graphify-command-cutover.test.cjs",
         "graphify-query.test.cjs",
@@ -38,19 +20,8 @@
       ],
       "issue": "622"
     },
-    "intel": {
-      "files": [
-        "bug-2351-intel-kilo-layout.test.cjs",
-        "bug-3290-intel-updater-layout-block.test.cjs",
-        "intel-command-cutover.test.cjs",
-        "intel.test.cjs"
-      ],
-      "issue": "TBD"
-    },
     "milestone": {
       "files": [
-        "bug-730-milestone-phase-details-scope.test.cjs",
-        "bug-978-milestone-complete-force.test.cjs",
         "milestone-archive.test.cjs",
         "milestone-helper.test.cjs",
         "milestone-prefixed-convention.test.cjs",
@@ -59,21 +30,8 @@
       ],
       "issue": "TBD"
     },
-    "phase": {
-      "files": [
-        "fix-1437-phase-list-plans.test.cjs",
-        "bug-214-phase-researcher-write-truncation-contract.test.cjs",
-        "phase-dependency-levels.test.cjs",
-        "phase.test.cjs"
-      ],
-      "issue": "597"
-    },
     "roadmap": {
       "files": [
-        "bug-2661-roadmap-sync-parallel.test.cjs",
-        "bug-3128-roadmap-plan-count-slug-layout.test.cjs",
-        "bug-3599-roadmap-get-phase-project-code-prefix.test.cjs",
-        "enh-2447-roadmap-wave-deps.test.cjs",
         "roadmap-mode-field.test.cjs",
         "roadmap-phase-fallback.test.cjs",
         "roadmap.test.cjs"
@@ -99,28 +57,16 @@
     },
     "state": {
       "files": [
-        "bug-21-state-md-template-frontmatter.test.cjs",
-        "bug-2630-state-frontmatter-milestone-switch.test.cjs",
-        "bug-3127-state-begin-phase-idempotent.test.cjs",
-        "bug-3242-state-update-progress-trample.test.cjs",
-        "bug-3286-state-write-routing.test.cjs",
-        "bug-3454-state-dollar-backreference-growth.test.cjs",
-        "bug-397-state-preserve-executor-authored.test.cjs",
-        "bug-905-state-syncstatefrontmatter-preserve-scalars.test.cjs",
-        "bug-948-state-noop-write-guard.test.cjs",
         "state-acquirestatelock-non-eexist.test.cjs",
         "state-prune.test.cjs",
+        "state-rebuild-cli.test.cjs",
+        "state-rebuild.test.cjs",
         "state.test.cjs"
       ],
       "issue": "180"
     },
     "verify": {
       "files": [
-        "bug-2969-verify-reapply-patches.test.cjs",
-        "bug-2994-verify-reapply-patches-installed-path.test.cjs",
-        "bug-3381-verify-work-workstream.test.cjs",
-        "bug-3657-verify-reapply-patches-pristine-drift.test.cjs",
-        "bug-967-verify-key-links-strict-paths.test.cjs",
         "verify-health.test.cjs",
         "verify-mvp-uat.test.cjs",
         "verify-npm-publish.test.cjs",
@@ -132,10 +78,6 @@
     },
     "install": {
       "files": [
-        "bug-410-install-defaults-test-mode-guard.test.cjs",
-        "enh-1077-install-hook-events-dialect-drive.test.cjs",
-        "enh-1082-install-plan-capstone.test.cjs",
-        "enh-776-install-gemini-hook-events.test.cjs",
         "install-minimal-hooks.test.cjs",
         "install-nested-layout.test.cjs",
         "install-path-detection.test.cjs",
@@ -146,14 +88,6 @@
         "install.test.cjs"
       ],
       "issue": "1679"
-    },
-    "validate": {
-      "files": [
-        "bug-3129-validate-commit-git-bypass.test.cjs",
-        "bug-892-validate-checklist-roadmap-phases.test.cjs",
-        "validate-context.test.cjs"
-      ],
-      "issue": "892"
     },
     "edge-probe": {
       "files": [
@@ -171,20 +105,6 @@
         "federated-config-key-removal.test.cjs"
       ],
       "issue": "TBD"
-    },
-    "external-job": {
-      "files": [
-        "external-job-waiting.test.cjs"
-      ],
-      "issue": "#1165"
-    },
-    "docs": {
-      "files": [
-        "docs-parity-live-registry.test.cjs",
-        "docs-update.test.cjs",
-        "fix-1464-docs-manifest-validation.test.cjs"
-      ],
-      "issue": "1496"
     },
     "host-integration": {
       "files": [

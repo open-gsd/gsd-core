@@ -716,3 +716,384 @@ describe('milestone complete explicit version scope (#3043)', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1911: milestone complete --ws must archive to the workstream, not root
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1911 — milestone complete --ws archives to the workstream', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  test('--ws archives roadmap/requirements into the workstream milestones dir, not root', () => {
+    const wsBase = path.join(tmpDir, '.planning', 'workstreams', 'ws1');
+    fs.mkdirSync(path.join(wsBase, 'phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(path.join(wsBase, 'STATE.md'), 'milestone: v2.0\nstatus: executing\n');
+    fs.writeFileSync(
+      path.join(wsBase, 'ROADMAP.md'),
+      '# Roadmap\n## Milestones\n- v2.0 Test (Phases 1) — IN PROGRESS\n## Phases\n### Phase 1: Foo\n**Goal:** foo\n',
+    );
+    fs.writeFileSync(path.join(wsBase, 'REQUIREMENTS.md'), '# Requirements\n- [ ] REQ-01\n');
+    fs.writeFileSync(path.join(wsBase, 'phases', '01-foo', '01-SUMMARY.md'), '---\none-liner: foo done\n---\n# Summary\n');
+    // Root milestones dir pre-exists; it must NOT receive the workstream archive.
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'milestones'), { recursive: true });
+
+    const result = runGsdTools('milestone complete v2.0 --ws ws1 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    // Archive lands inside the workstream.
+    assert.ok(
+      fs.existsSync(path.join(wsBase, 'milestones', 'v2.0-ROADMAP.md')),
+      'v2.0-ROADMAP.md should be archived into the workstream milestones dir',
+    );
+    assert.ok(
+      fs.existsSync(path.join(wsBase, 'milestones', 'v2.0-REQUIREMENTS.md')),
+      'v2.0-REQUIREMENTS.md should be archived into the workstream milestones dir',
+    );
+    // And NOT in root.
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v2.0-ROADMAP.md')),
+      'must not archive to root .planning/milestones/ in workstream mode',
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #1871: milestone complete archives phase dirs by default
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#1871 — milestone complete archives phase dirs by default', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  function seedCompletableMilestone() {
+    writeRoadmap(tmpDir, '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n- [ ] x\n');
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+  }
+
+  test('archives phase dirs by default (no --archive-phases flag needed)', () => {
+    seedCompletableMilestone();
+    const result = runGsdTools('milestone complete v1.0 --name MVP', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(out.archived.phases, 'phases should be archived by default');
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'phase dir should be archived under milestones/v1.0-phases/',
+    );
+  });
+
+  test('--no-archive-phases opts out of default archiving', () => {
+    seedCompletableMilestone();
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01-foundation');
+    const result = runGsdTools('milestone complete v1.0 --name MVP --no-archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(!out.archived.phases, 'phases should NOT be archived with --no-archive-phases');
+    assert.ok(fs.existsSync(phaseDir), 'phase dir should remain in place with --no-archive-phases');
+  });
+});
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-978-milestone-complete-force.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-978-milestone-complete-force (consolidation epic #1969 B2 #1971)", () => {
+'use strict';
+
+/**
+ * Regression test for bug #978: `gsd-tools milestone complete --force` was a
+ * dead flag.  The milestone source (src/milestone.cts) has a guard that checks
+ * `options.force` and tells users to "Re-run with --force to override", but the
+ * CLI dispatcher (gsd-core/bin/gsd-tools.cjs) never parsed `--force` and never
+ * passed it into the options object.  So `options.force` was always `undefined`
+ * and the guard could never be overridden regardless of what the user typed.
+ */
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+/**
+ * Build a fixture where the guard will fire:
+ *  - STATE.md has `milestone: <version>` so the guard's version-match check is
+ *    satisfied.
+ *  - ROADMAP.md lists a `### Phase 2: Real Work` heading for that milestone, but
+ *    there is NO on-disk phase directory for it.
+ *
+ * This guarantees "unstarted phase" detection without touching any real phases.
+ * NOTE: the unstarted phase must be a REAL phase number — Phase 0 and Phase 999
+ * are backlog/pre-milestone sentinels that are intentionally excluded from this
+ * guard (#1580), so they would not fire it.
+ */
+function makeGuardFixture(tmpDir, version) {
+  // STATE.md with frontmatter milestone field matching the version
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'STATE.md'),
+    `---\nmilestone: ${version}\n---\n# State\n\n**Status:** In progress\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`,
+  );
+
+  // ROADMAP.md — the heading must include the version so getMilestonePhaseFilter
+  // does not return missingExplicitVersion.  Phase 2 has no on-disk dir.
+  fs.writeFileSync(
+    path.join(tmpDir, '.planning', 'ROADMAP.md'),
+    `# Roadmap ${version}\n\n### Phase 2: Real Work\n**Goal:** Not started\n`,
+  );
+}
+
+describe('bug-978: milestone complete --force overrides unstarted-phase guard', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-bug-978-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('without --force the guard fires and emits the documented error message', () => {
+    makeGuardFixture(tmpDir, 'v1.0');
+
+    const result = runGsdTools(
+      ['milestone', 'complete', 'v1.0', '--name', 'Regression Test'],
+      tmpDir,
+    );
+
+    assert.strictEqual(result.success, false, 'command should fail without --force');
+    assert.ok(
+      result.error.includes('Re-run with --force to override'),
+      `expected guard error message; got: ${result.error}`,
+    );
+  });
+
+  test('with --force the guard is bypassed and the command succeeds', () => {
+    makeGuardFixture(tmpDir, 'v1.0');
+
+    const result = runGsdTools(
+      ['milestone', 'complete', 'v1.0', '--name', 'Regression Test', '--force'],
+      tmpDir,
+    );
+
+    assert.ok(
+      result.success,
+      `command should succeed with --force but failed: ${result.error}`,
+    );
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.version, 'v1.0');
+    // Milestone entry should have been created even though phase 2 has no dir
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
+      'MILESTONES.md should have been created',
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2660-one-liner-extraction.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2660-one-liner-extraction (consolidation epic #1969 B3 #1972)", () => {
+/**
+ * Bug #2660: `gsd-tools milestone complete <version>` writes MILESTONES.md
+ * bullets that read "- One-liner:" (the literal label) instead of the prose
+ * after the label.
+ *
+ * Root cause: extractOneLinerFromBody() matches the first **...** span. In
+ * `**One-liner:** prose`, the first span contains only `One-liner:` so the
+ * function returns the label instead of the prose after it.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('path');
+
+const { extractOneLinerFromBody } = require(
+  path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'core-utils.cjs')
+);
+
+describe('bug #2660: extractOneLinerFromBody', () => {
+  test('a) body-style **One-liner:** label returns prose after the label', () => {
+    const content =
+      '# Phase 2 Plan 01: Foundation Summary\n\n**One-liner:** Real prose here.\n';
+    assert.strictEqual(extractOneLinerFromBody(content), 'Real prose here.');
+  });
+
+  test('b) frontmatter-only one-liner returns null (caller handles frontmatter)', () => {
+    const content =
+      '---\none-liner: Set up project\n---\n\n# Phase 1: Foundation Summary\n\nBody prose with no bold line.\n';
+    assert.strictEqual(extractOneLinerFromBody(content), null);
+  });
+
+  test('c) no one-liner at all returns null', () => {
+    const content =
+      '# Phase 1: Foundation Summary\n\nJust some narrative, no bold line.\n';
+    assert.strictEqual(extractOneLinerFromBody(content), null);
+  });
+
+  test('d) bold spans inside the prose are preserved', () => {
+    const content =
+      '# Phase 1: Foundation Summary\n\n**One-liner:** This is **important** stuff.\n';
+    assert.strictEqual(
+      extractOneLinerFromBody(content),
+      'This is **important** stuff.'
+    );
+  });
+
+  test('e) empty prose after label returns null (no bogus bullet)', () => {
+    const empty =
+      '# Phase 1: Foundation Summary\n\n**One-liner:**\n\nRest of body.\n';
+    const whitespace =
+      '# Phase 1: Foundation Summary\n\n**One-liner:**   \n\nRest of body.\n';
+    assert.strictEqual(extractOneLinerFromBody(empty), null);
+    assert.strictEqual(extractOneLinerFromBody(whitespace), null);
+  });
+
+  test('f) legacy bare **prose** format still works (no label, no colon)', () => {
+    // Preserve pre-existing behavior: SUMMARY files historically used
+    // `**bold prose**` with no label. See tests/commands.test.cjs:366 and
+    // tests/milestone.test.cjs:451 — both assert this form.
+    const content =
+      '---\nphase: "01"\n---\n\n# Phase 1: Foundation Summary\n\n**JWT auth with refresh rotation using jose library**\n\n## Performance\n';
+    assert.strictEqual(
+      extractOneLinerFromBody(content),
+      'JWT auth with refresh rotation using jose library'
+    );
+  });
+
+  test('g) other **Label:** prefixes (e.g. Summary:) also capture prose after label', () => {
+    const content =
+      '# Phase 1: Foundation Summary\n\n**Summary:** Built the thing.\n';
+    assert.strictEqual(extractOneLinerFromBody(content), 'Built the thing.');
+  });
+
+  test('h) CRLF line endings (Windows) are handled', () => {
+    const content =
+      '---\r\nphase: "01"\r\n---\r\n\r\n# Phase 1: Foundation Summary\r\n\r\n**One-liner:** Windows-authored prose.\r\n';
+    assert.strictEqual(
+      extractOneLinerFromBody(content),
+      'Windows-authored prose.'
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-72-business-context.test.cjs — consolidation epic #1969 (B8 #1977)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-72-business-context (consolidation epic #1969 B8 #1977)", () => {
+// allow-test-rule: source-text-is-the-product (see #72)
+// The PROJECT.md template + complete-milestone workflow .md ARE the product surface
+// the runtime loads; asserting on their text tests the deployed contract directly.
+/**
+ * Enhancement #72 — optional Business Context section in the PROJECT.md template.
+ *
+ * Contract tests over the product-text surfaces (template + milestone workflow .md):
+ * the template offers a Business Context section that is explicitly OPTIONAL, capped
+ * at the four approved one-line fields, and the milestone evolution review treats it
+ * as conditional so non-business projects that deleted it are never forced to review it.
+ */
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const TEMPLATE = path.join(__dirname, '..', 'gsd-core', 'templates', 'project.md');
+const COMPLETE_MILESTONE = path.join(__dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md');
+
+function parseTemplateContract(content) {
+  const lines = content.split(/\r?\n/);
+  const lower = content.toLowerCase();
+  // The Business Context block lives between its heading and the next "## " heading.
+  const startIdx = lines.findIndex(l => l.trim() === '## Business Context');
+  let sectionBody = '';
+  if (startIdx !== -1) {
+    const rest = lines.slice(startIdx + 1);
+    const endOffset = rest.findIndex(l => l.startsWith('## '));
+    sectionBody = (endOffset === -1 ? rest : rest.slice(0, endOffset)).join('\n');
+  }
+  const fieldOf = (label) => new RegExp(`^- \\*\\*${label}\\*\\*:`, 'm').test(sectionBody);
+  return {
+    hasSection: startIdx !== -1,
+    // Optional-by-default: an HTML comment tells non-business projects to delete it.
+    hasOptionalMarker: /<!--\s*OPTIONAL/i.test(sectionBody) && /delete this section/i.test(sectionBody),
+    fields: {
+      customer: fieldOf('Customer'),
+      revenueModel: fieldOf('Revenue model'),
+      successMetric: fieldOf('Success metric'),
+      strategyNotes: fieldOf('Strategy notes'),
+    },
+    fieldCount: (sectionBody.match(/^- \*\*/gm) || []).length,
+    // Positioned between Core Value and Requirements.
+    orderedBetweenCoreValueAndRequirements:
+      lower.indexOf('## core value') < lower.indexOf('## business context') &&
+      lower.indexOf('## business context') < lower.indexOf('## requirements'),
+    hasGuidelinesEntry: /\*\*Business Context:\*\*/.test(content),
+  };
+}
+
+function parseMilestoneContract(content) {
+  const lower = content.toLowerCase();
+  const lines = content.split(/\r?\n/);
+  const reviewLine = lines.find(l =>
+    l.toLowerCase().includes('business context') &&
+    (l.toLowerCase().includes('if present') || l.toLowerCase().includes('only if')),
+  );
+  return {
+    mentionsBusinessContext: lower.includes('business context'),
+    hasConditionalReview: Boolean(reviewLine),
+  };
+}
+
+describe('enhancement #72 — Business Context template section', () => {
+  const tpl = parseTemplateContract(fs.readFileSync(TEMPLATE, 'utf-8'));
+
+  test('template includes a Business Context section', () => {
+    assert.ok(tpl.hasSection, 'template must contain a "## Business Context" section');
+  });
+
+  test('section is marked OPTIONAL with delete-for-non-business guidance', () => {
+    assert.ok(tpl.hasOptionalMarker, 'section must carry an OPTIONAL HTML comment telling non-business projects to delete it');
+  });
+
+  test('section carries exactly the four approved one-line fields', () => {
+    assert.ok(tpl.fields.customer, 'missing **Customer** field');
+    assert.ok(tpl.fields.revenueModel, 'missing **Revenue model** field');
+    assert.ok(tpl.fields.successMetric, 'missing **Success metric** field');
+    assert.ok(tpl.fields.strategyNotes, 'missing **Strategy notes** field');
+    assert.strictEqual(tpl.fieldCount, 4, 'section is capped at four fields (constraint reference, not a business plan)');
+  });
+
+  test('section is positioned between Core Value and Requirements', () => {
+    assert.ok(tpl.orderedBetweenCoreValueAndRequirements, 'Business Context must sit between Core Value and Requirements');
+  });
+
+  test('guidelines document the Business Context section', () => {
+    assert.ok(tpl.hasGuidelinesEntry, 'guidelines block must include a **Business Context:** entry');
+  });
+
+  test('milestone evolution reviews Business Context only when present', () => {
+    const ms = parseMilestoneContract(fs.readFileSync(COMPLETE_MILESTONE, 'utf-8'));
+    assert.ok(ms.mentionsBusinessContext, 'complete-milestone must mention Business Context in its review');
+    assert.ok(ms.hasConditionalReview, 'the Business Context milestone review must be conditional on the section being present');
+  });
+});
+  });
+}

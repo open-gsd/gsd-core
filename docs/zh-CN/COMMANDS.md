@@ -1509,7 +1509,7 @@ node gsd-tools.cjs state planned-phase --phase 3 --plans 2
 npm run lint:descriptions
 ```
 
-该检查也作为 `npm test` 的一部分通过 `tests/enh-2789-description-budget.test.cjs` 运行。
+该检查也作为 `npm test` 的一部分通过 `tests/skill-frontmatter-contract.test.cjs` 运行。
 
 ---
 

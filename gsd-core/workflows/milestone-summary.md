@@ -218,7 +218,7 @@ If the user is done:
 ## Step 9: Update STATE.md
 
 ```bash
-gsd_run query state.record-session "" \
-  "Milestone v${VERSION} summary generated" \
-  ".planning/reports/MILESTONE_SUMMARY-v${VERSION}.md"
+gsd_run query state.record-session \
+  --stopped-at "Milestone v${VERSION} summary generated" \
+  --resume-file ".planning/reports/MILESTONE_SUMMARY-v${VERSION}.md"
 ```

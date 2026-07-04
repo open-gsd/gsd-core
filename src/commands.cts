@@ -1514,7 +1514,8 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
     const roadmapContent = extractCurrentMilestone(roadmapRaw, cwd);
     // Matches both plain numeric (Phase 1:) and milestone-prefixed (Phase 2-01:) headings.
     // Also tolerates optional [bracket-token] scope prefix on phase headings.
-    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:\s*([^\n]+)/gi;
+    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
     let match: RegExpExecArray | null;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
       const key = normalizePhaseName(match[1]);

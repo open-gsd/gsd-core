@@ -37,7 +37,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId } = phaseIdMod;
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -1081,7 +1081,8 @@ function checkMilestonePrefixMismatches(
   }
   for (const section of sections) {
     const content = roadmapContent.slice(section.start, section.end);
-    const phaseRx = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
+    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phaseRx = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:/gi;
     let pm: RegExpExecArray | null;
     while ((pm = phaseRx.exec(content)) !== null) {
       const phaseId = pm[1];
@@ -1571,7 +1572,7 @@ function cmdValidateHealth(
       if (currentPhaseMatch) {
         const statePhase = currentPhaseMatch[1].replace(/^0+/, '');
         const phaseCheckboxRe = new RegExp(
-          `-\\s*\\[x\\].*Phase\\s+0*${escapeRegex(statePhase)}[:\\s]`,
+          `-\\s*\\[x\\].*Phase\\s+0*${escapeRegex(statePhase)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
           'i',
         );
         if (phaseCheckboxRe.test(roadmapContentFull)) {
@@ -1807,7 +1808,8 @@ function cmdValidateHealth(
       if (isMarkedComplete) {
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapRaw, cwd);
-        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+        // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
         const unstarted: string[] = [];
         let pm: RegExpExecArray | null;
         // Non-hoisted: load-order matters (circular dep guard)

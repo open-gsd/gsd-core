@@ -111,7 +111,7 @@ paused_at: null
 | **3. 里程碑完成** | `percent` 为 `100` 或 `completed_phases == total_phases` | `v2.0 [██████████] 100% · milestone complete` |
 | **4. 默认回退** | 以上均不匹配 | `v1.9 Code Quality · executing · ph 1/5`（现有格式） |
 
-**场景优先级：** 当 `active_phase` 和 `next_action` 均已填充时，场景 1 优先——编排器正在运行，显示"下一步推荐"会造成误导。此优先级由 `formatGsdState()` 中的检查顺序强制执行，并由 `tests/enh-2833-phase-lifecycle-statusline.test.cjs` 中的 `"scene priority"` 测试套件覆盖。
+**场景优先级：** 当 `active_phase` 和 `next_action` 均已填充时，场景 1 优先——编排器正在运行，显示"下一步推荐"会造成误导。此优先级由 `formatGsdState()` 中的检查顺序强制执行，并由 `tests/gsd-statusline.test.cjs` 中的 `"scene priority"` 测试套件覆盖。
 
 进度条（`[██░░░░░░░░] 20%`）仅在前置数据中存在 `progress.percent` 时才追加到里程碑段；缺失则不显示进度条。
 
@@ -119,7 +119,7 @@ paused_at: null
 
 ## 前置数据解析约束
 
-状态行钩子使用基于正则表达式的解析（无完整 YAML 库），因此以下约束适用。这些约束在 `tests/enh-2833-phase-lifecycle-statusline.test.cjs` 中经过测试。
+状态行钩子使用基于正则表达式的解析（无完整 YAML 库），因此以下约束适用。这些约束在 `tests/gsd-statusline.test.cjs` 中经过测试。
 
 1. **前置数据必须从文件的第一个字符开始。** 任何内容——包括注释——出现在开头 `---` 之前都会使匹配失效。开头的 `---` 行必须恰好如此，不能有尾随空格。
 
@@ -189,7 +189,7 @@ paused_at: null
 - 添加任何生命周期字段是可选的——当字段缺失时，渲染器会优雅降级。
 - 即使 `progress` 块存在，进度条也是可选的：只有 `progress.percent` 触发进度条；单独的 `total_phases` 和 `completed_phases` 不会触发。
 
-`tests/enh-2833-phase-lifecycle-statusline.test.cjs` 中的 `formatGsdState #2833 backward compatibility` 测试套件锁定了此保证；任何破坏旧版 `STATE.md` 渲染的变更都将导致该套件失败。
+`tests/gsd-statusline.test.cjs` 中的 `formatGsdState #2833 backward compatibility` 测试套件锁定了此保证；任何破坏旧版 `STATE.md` 渲染的变更都将导致该套件失败。
 
 ---
 

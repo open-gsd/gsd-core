@@ -114,12 +114,37 @@ function render(identity) {
 function main() {
   const fs = require('node:fs');
   const path = require('node:path');
+  const args = process.argv.slice(2);
+  const check = args.includes('--check');
   const pkg = require(path.join(__dirname, '..', 'package.json'));
   const out = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'package-identity.cjs');
-  fs.writeFileSync(out, render(deriveIdentity(pkg)));
+  const rendered = render(deriveIdentity(pkg));
+  if (check) {
+    // Compare normalized content so a CRLF checkout (Windows, no .gitattributes
+    // eol rule) does not register as stale. Mirrors the in-process check the
+    // unit suite used to perform (issue #498) and the convention used by the
+    // other gen-* --check generators.
+    const norm = (s) => s.replace(/\r\n/g, '\n');
+    let committed = '';
+    try {
+      committed = fs.readFileSync(out, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+    if (norm(committed) !== norm(rendered)) {
+      process.stderr.write('package-identity.cjs is stale — run: node scripts/generate-package-identity.cjs\n');
+      return 1;
+    }
+    return 0;
+  }
+  fs.writeFileSync(out, rendered);
   process.stdout.write(`wrote ${path.relative(path.join(__dirname, '..'), out)}\n`);
+  return 0;
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+  const code = main();
+  if (typeof code === 'number' && code !== 0) process.exitCode = code;
+}
 
 module.exports = { deriveIdentity, parseRepoSlug, slugifyPackageName, formatManualInstall, render, main };

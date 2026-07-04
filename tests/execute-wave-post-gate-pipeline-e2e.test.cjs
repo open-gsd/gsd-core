@@ -629,14 +629,15 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
       `ui.safety-gate onError must be 'halt'; got ${uiGate.onError}`);
   });
 
-  test('[happy] real registry: execute:wave:post has no steps and 1 contribution (mempalace capture-problems) — gate point with mempalace contribution', () => {
+  test('[happy] real registry: execute:wave:post has no steps and 2 contributions (mempalace capture-problems + external-job executor fragment)', () => {
     const point = realRegistry.byLoopPoint['execute:wave:post'];
     assert.strictEqual(point.steps.length, 0,
       `execute:wave:post steps must be empty; got ${point.steps.length}`);
-    assert.strictEqual(point.contributions.length, 1,
-      `execute:wave:post must have 1 contribution (mempalace); got ${point.contributions.length}`);
-    assert.strictEqual(point.contributions[0].capId, 'mempalace',
-      `execute:wave:post contribution must be from mempalace; got ${point.contributions[0].capId}`);
+    assert.strictEqual(point.contributions.length, 2,
+      `execute:wave:post must have 2 contributions (mempalace + external-job); got ${point.contributions.length}`);
+    const capIds = point.contributions.map(c => c.capId).sort();
+    assert.deepStrictEqual(capIds, ['external-job', 'mempalace'],
+      `execute:wave:post contributions must be mempalace + external-job; got ${capIds.join(',')}`);
   });
 
 });

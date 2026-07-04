@@ -111,7 +111,7 @@ Quando um comando do orquestrador está em andamento, a convenção (issue #2833
 | **3. Milestone completo** | `percent` é `100` OU `completed_phases == total_phases` | `v2.0 [██████████] 100% · milestone complete` |
 | **4. Fallback padrão** | Nenhuma das anteriores corresponde | `v1.9 Code Quality · executing · ph 1/5` (formato existente) |
 
-**Prioridade de cena:** quando `active_phase` e `next_action` estão populados, a Cena 1 prevalece — um orquestrador está em andamento, portanto uma "próxima recomendação" seria enganosa. Essa prioridade é imposta pela ordem de verificação em `formatGsdState()` e coberta pelo conjunto `"scene priority"` em `tests/enh-2833-phase-lifecycle-statusline.test.cjs`.
+**Prioridade de cena:** quando `active_phase` e `next_action` estão populados, a Cena 1 prevalece — um orquestrador está em andamento, portanto uma "próxima recomendação" seria enganosa. Essa prioridade é imposta pela ordem de verificação em `formatGsdState()` e coberta pelo conjunto `"scene priority"` em `tests/gsd-statusline.test.cjs`.
 
 A barra de progresso (`[██░░░░░░░░] 20%`) é anexada ao segmento do milestone somente quando `progress.percent` está presente no frontmatter; ausente significa sem barra.
 
@@ -119,7 +119,7 @@ A barra de progresso (`[██░░░░░░░░] 20%`) é anexada ao segm
 
 ## Restrições de análise do frontmatter
 
-O hook de linha de status usa análise baseada em regex (sem biblioteca YAML completa), portanto as seguintes restrições se aplicam. Elas são testadas em `tests/enh-2833-phase-lifecycle-statusline.test.cjs`.
+O hook de linha de status usa análise baseada em regex (sem biblioteca YAML completa), portanto as seguintes restrições se aplicam. Elas são testadas em `tests/gsd-statusline.test.cjs`.
 
 1. **O frontmatter deve começar no primeiro caractere do arquivo.** Qualquer coisa — incluindo comentários — acima do `---` de abertura invalida a correspondência. A linha `---` de abertura deve ser exatamente isso, sem espaços no final.
 
@@ -189,7 +189,7 @@ Os campos de ciclo de vida de fase (`active_phase`, `next_action`, `next_phases`
 - Adicionar qualquer campo de ciclo de vida é opt-in — o renderizador degrada graciosamente quando os campos estão ausentes.
 - A barra de progresso é opt-in mesmo quando o bloco `progress` existe: somente `progress.percent` ativa a barra; `total_phases` e `completed_phases` sozinhos não ativam.
 
-O conjunto de testes `formatGsdState #2833 backward compatibility` em `tests/enh-2833-phase-lifecycle-statusline.test.cjs` garante essa promessa; qualquer mudança que quebre a renderização legada do `STATE.md` fará o conjunto falhar.
+O conjunto de testes `formatGsdState #2833 backward compatibility` em `tests/gsd-statusline.test.cjs` garante essa promessa; qualquer mudança que quebre a renderização legada do `STATE.md` fará o conjunto falhar.
 
 ---
 

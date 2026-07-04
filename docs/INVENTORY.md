@@ -67,7 +67,7 @@ These six routers are descriptor-only entries that the model picks first; the bo
 
 | Command | Role | Source |
 |---------|------|--------|
-| `/gsd-workflow` | Phase pipeline router — discuss / plan / execute / verify / phase / progress. | [commands/gsd/ns-workflow.md](../commands/gsd/ns-workflow.md) |
+| `/gsd-workflow` | Phase pipeline router — discuss / plan / execute / verify / phase / progress / next. | [commands/gsd/ns-workflow.md](../commands/gsd/ns-workflow.md) |
 | `/gsd-project` | Project lifecycle router — milestones, audits, summary. | [commands/gsd/ns-project.md](../commands/gsd/ns-project.md) |
 | `/gsd-quality` | Quality-gate router — code review, debug, audit, security, eval, ui. | [commands/gsd/ns-review.md](../commands/gsd/ns-review.md) |
 | `/gsd-context` | Codebase-intelligence router — map, graphify, docs, learnings. | [commands/gsd/ns-context.md](../commands/gsd/ns-context.md) |
@@ -123,6 +123,7 @@ These six routers are descriptor-only entries that the model picks first; the bo
 
 | Command | Role | Source |
 |---------|------|--------|
+| `/gsd:next` | State-aware smart-entry launcher — reads project state, shows a contextual menu, and dispatches one existing GSD command. | [commands/gsd/next.md](../commands/gsd/next.md) |
 | `/gsd-progress` | Check project progress, show context, and route to next action; use `--next` to advance automatically or `--do` to run a freeform task. | [commands/gsd/progress.md](../commands/gsd/progress.md) |
 | `/gsd-capture` | Capture ideas, tasks, notes, and seeds — todo (default), `--note`, `--backlog`, `--seed`, or `--list` pending todos. | [commands/gsd/capture.md](../commands/gsd/capture.md) |
 | `/gsd-stats` | Display project statistics — phases, plans, requirements, git metrics, timeline. | [commands/gsd/stats.md](../commands/gsd/stats.md) |
@@ -292,6 +293,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
 | `mandatory-initial-read.md` | Shared required-reading boilerplate injected into agent prompts. |
+| `agent-skills-bootstrap.md` | Shared agent_skills self-load contract (query + Read + dedup guard) injected into all 22 consumer agents. |
 | `project-skills-discovery.md` | Shared project-skills-discovery boilerplate injected into agent prompts. |
 | `research-documentation-lookup.md` | Shared documentation-lookup protocol (Context7 MCP + guarded CLI fallback) injected into all researcher agents. |
 | `research-philosophy.md` | Shared research philosophy (training-as-hypothesis, honest reporting, investigation-not-confirmation) injected into researcher agents. |
@@ -308,6 +310,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
 | `prohibition-probe.md` | Spec-phase prohibition-completeness probe — the two-stage adversarial-recall → precision protocol that surfaces the unwritten *must-NOT* constraints (values/safety/ethics), with status×verification (`test`/`judgment`) tiering and canon-referral breadcrumbs (Step 5.6); second adapter of the `probe-core` resolution model. |
+| `honest-verifier.md` | Verify-time abstention on non-inferable (`backstop`) truths — the truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): a `backstop` truth the verifier can't confirm with explicit evidence abstains → `human_needed` (reason `insufficient_spec`), never a silent pass (#1154). |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
 | `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
 | `scout-codebase.md` | Phase-type→codebase-map selection table for discuss-phase scout step (extracted via the discuss-phase/modes progressive-disclosure split, #717). |

@@ -99,11 +99,13 @@ to be made that are not derivable from the contract alone:
    optional `cleanFixture` runs the same negative test a second time with
    `GSD_PROHIB_SUBJECT=<cleanFixture>` and requires **non-vacuous GREEN**
    (`isNonVacuousNodeTestPass`) — so fail-first is proven only when the check is **RED on the
-   violation AND GREEN on the clean subject** (content-dependent red). Opt-in, not mandatory:
+   violation AND GREEN on the clean subject** (content-dependent red). ~~Opt-in, not mandatory:
    absent `cleanFixture`, behaviour matches the pre-#1346 zero-authoring compose path and the
    "reds because the env var is set" case stays a documented residual for that one author's
-   check. The lint-rule kind needs no analog (its subject *is* the linted file; no env-var
-   indirection).
+   check.~~ **MANDATORY for the node-test kind as of #1906 (2026-07-03) — absent `cleanFixture`
+   the node-test is un-provable (fail-closed), never proven on the violation alone; see the #1906
+   addendum below.** The lint-rule kind needs no analog (its subject *is* the linted file; no
+   env-var indirection).
 
 5. **Deterministic locate via five flat scalars — never a nested object.** The wired-check
    descriptor is authored at spec-phase and projected onto the `must_haves.prohibitions`
@@ -174,7 +176,46 @@ belong to the spec-phase contract and are recorded in ADR-550's "Alternatives co
 - **Mandatory causation control — REJECTED in favour of opt-in.** Requiring every node-test
   prohibition to ship a `cleanFixture` would regress the zero-authoring compose path and
   hard-gate every existing descriptor without one; the control is opt-in (Decision 4), leaving
-  one documented residual rather than breaking working checks.
+  one documented residual rather than breaking working checks. **↳ SUPERSEDED 2026-07-03 (#1906)
+  — see the addendum below.** The blast-radius premise no longer holds: there is **no in-tree
+  `node-test` consumer** (Consequences, "Open conventions"), so making the control mandatory
+  hard-gates *zero* existing checks. Decision 4 is now mandatory for the node-test kind.
+
+## Addendum (2026-07-03, #1906) — node-test causation control is now MANDATORY (supersedes Decision 4's opt-in)
+
+Decision 4 made the `cleanFixture` causation control **opt-in** to avoid regressing the #1314
+zero-authoring compose path. That trade-off left a Goodhart hole open **by default**: a node-test
+that omits `cleanFixture` is proven fail-first on the violation alone, so a deceptive
+content-independent negative test — one that reds merely *because* `GSD_PROHIB_SUBJECT` is set,
+ignoring the subject's CONTENT (`assert.ok(!process.env.GSD_PROHIB_SUBJECT)`) — passes the proof.
+The proof's observed signal (RED) thus diverges from its target (RED *caused by content*), and the
+divergence is the **default**, not an edge case an author opts into.
+
+**Decision (owner ruling on #1906, 2026-07-03):** for the `node-test` kind the causation control is
+**required**. A node-test descriptor that omits `cleanFixture` is treated as **un-provable**
+(fail-closed) — never accepted under the weaker violation-only proof. When a clean fixture is
+present, fail-first is proven exactly as before (RED on the violation subject **AND** non-vacuous
+GREEN on the clean subject); a deceptive content-independent test reds on the clean subject too, so
+the control fails and the proof does not pass.
+
+- **Why the opt-in's rationale no longer applies.** Decision 4 / the rejected-alternative above kept
+  the control opt-in to avoid hard-gating "every existing descriptor without one." Per this ADR's own
+  Consequences ("Open conventions … no in-tree `node-test` consumer"), **there are none** — the only
+  live dogfood is the lint-rule `local/no-source-grep`; node-test fail-first is exercised only by
+  synthetic temp fixtures. So the mandatory control hard-gates **zero** real checks today; its cost is
+  paid only by future node-test authors, who now must supply a clean control subject to earn a green.
+- **Scope — node-test only.** The `lint-rule` kind is unchanged (byte-identical): its subject *is* the
+  linted file, with no `GSD_PROHIB_SUBJECT` indirection, so the "reds because the env var is set" gap
+  cannot exist there. Net effect on D4's disposition is unchanged — every miss/fail/**un-provable**
+  still hard-gates; this only *tightens* what counts as proven.
+- **Breaking change (Hyrum).** A previously-green node-test prohibition with no clean fixture now
+  hard-gates. Disclosed as breaking with the ~zero in-tree blast radius noted above. `cleanFixture`
+  stays optional at the *type* level (it rides both kinds; the lint-rule kind never uses it) but is
+  *required by the node-test prover*.
+- **Mechanism.** `defaultProveFailFirst`'s node-test branch in `src/prohibition-enforcement.cts`:
+  `const clean = check.cleanFixture; if (!clean) return { provenFailFirst: false, … }` before the
+  existence + non-vacuous-GREEN control. Compiled by `build:lib`. ADR-550's 2026-06-21 (#1346)
+  addendum "Why opt-in, not required" is superseded to match.
 
 ## Cross-references
 
@@ -186,4 +227,4 @@ belong to the spec-phase contract and are recorded in ADR-550's "Alternatives co
 - **`gsd-core/references/prohibition-probe.md`** — the portable runtime reference.
 - **`docs/how-to/resolve-prohibition-findings.md`** — user-facing resolution guide.
 - Code: `src/prohibition-enforcement.cts`, `src/probe-core.cts` (`projectProhibitions`),
-  `gsd-core/workflows/verify-phase.md`. Issues: #644, #1259, #1278, #1279, #1346.
+  `gsd-core/workflows/verify-phase.md`. Issues: #644, #1259, #1278, #1279, #1346, #1906.

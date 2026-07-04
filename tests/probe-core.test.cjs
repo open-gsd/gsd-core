@@ -332,6 +332,31 @@ describe('probe-core: runProbeCli (generic I/O scaffold, injected io)', () => {
     });
     assert.deepEqual(JSON.parse(out), report);
   });
+  test('per-item garbage inside a well-shaped envelope (items:[{}]) → exits 2, writes nothing (#1907 — matches the "fails closed on adapter garbage" docstring)', () => {
+    // The container is well-shaped (items is an array, coverage has the right scalars) but an item
+    // is an empty object. Before #1907 this sailed through and stringified as green output, despite
+    // the docstring promising it fails closed. A future adapter (#644-class) returning per-item
+    // garbage inside a good envelope must fail closed, not emit garbage as valid coverage.
+    let code; let out = '';
+    pc.runProbeCli(() => ({ items: [{}], coverage: { applicable: 0, resolved: 0, unresolved: 0, byVerification: {} } }), {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, writeErr: () => {}, exit: (c) => { code = c; },
+    });
+    assert.equal(code, 2);
+    assert.equal(out, '');
+  });
+  test('a report with a fully-formed item still writes (per-item validation does not over-reject legitimate coverage)', () => {
+    let out = '';
+    const good = {
+      items: [{ requirement_id: 'R1', category: 'empty', status: 'unresolved', verification: null, resolution: null, reason: null, probe: 'edge' }],
+      coverage: { applicable: 1, resolved: 0, unresolved: 1, byVerification: {} },
+    };
+    pc.runProbeCli(() => good, {
+      usage: 'demo', argv: ['node', 'demo', '/req.json'],
+      readFile: () => '[]', write: (s) => { out += s; }, exit: () => {},
+    });
+    assert.deepEqual(JSON.parse(out), good);
+  });
 });
 
 // ─── CHK-07 (#1278): descriptor-less backward-compat byte-stability ──────────────────────────────
@@ -511,5 +536,155 @@ describe('probe-core: projectProhibitions descriptor projection (CHK-02)', () =>
     assert.ok(!('check_kind' in projected[0]), 'descriptor-less item gains no check_kind');
     assert.ok(!('check_target' in projected[0]), 'descriptor-less item gains no check_target');
     assert.ok(!('check_rule' in projected[0]), 'descriptor-less item gains no check_rule');
+  });
+});
+
+// ─── Honest verifier (#1154): truth-axis abstention — the verify-time MIRROR of #644's
+//     prohibition judgment-tier (ADR-550 D4), applied to the edge `backstop` truth tier (D7a).
+//     Per ADR-550 D5 the deterministic, CI-testable surface is the disposition helper + the
+//     projection ROUND-TRIP — NEVER the LLM verdict (a test asserting the model's judgment is
+//     vacuous and rejected). The abstain-on-unconfirmed-backstop case is the REGRESSION
+//     (trek-e review condition 5) that must fail RED on `next` before the fix.
+const FM_SCRIPT = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'frontmatter.cjs');
+const fm = require(FM_SCRIPT);
+
+// Serialize projected truths into a plan-frontmatter `must_haves.truths` block exactly as
+// plan-phase emits it — a backstop truth as a flat-scalar object (ADR-550 #1278: flat scalars,
+// NEVER a nested object), a plain inferable truth as a bare string.
+function renderTruthsBlock(projected) {
+  const lines = ['---', 'must_haves:', '  truths:'];
+  for (const t of projected) {
+    if (typeof t === 'string') {
+      lines.push(`    - ${t}`);
+    } else {
+      lines.push(`    - statement: ${t.statement}`);
+      if (t.verification) lines.push(`      verification: ${t.verification}`);
+    }
+  }
+  lines.push('---');
+  return lines.join('\n');
+}
+
+describe('probe-core: truthStatement / truthVerification normalizers (#1154, Hyrum backward-compat)', () => {
+  test('truthStatement extracts text from a plain-string truth and an object-form truth identically', () => {
+    assert.equal(pc.truthStatement('Overlapping intervals are merged'), 'Overlapping intervals are merged');
+    assert.equal(
+      pc.truthStatement({ statement: 'Adjacent intervals merge', verification: 'backstop' }),
+      'Adjacent intervals merge',
+    );
+  });
+
+  test('truthVerification returns the tier for an object-form truth and null for a plain string (no spurious tier)', () => {
+    assert.equal(pc.truthVerification({ statement: 'Adjacent intervals merge', verification: 'backstop' }), 'backstop');
+    assert.equal(pc.truthVerification('Overlapping intervals are merged'), null);
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'explicit' }), 'explicit');
+  });
+
+  test('normalizes a hand-authored marker with stray whitespace/surrounding quotes (#1905, the #1154 false-pass)', () => {
+    // A `must_haves` marker can be authored BY HAND (#1820 spec-optional predicate rail), and the
+    // frontmatter continuation-KV parser preserves stray surrounding whitespace/quotes. Failing to
+    // normalize means `'backstop '` → null → the non-inferable truth silently grades green (Postel:
+    // be liberal in what you accept).
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'backstop ' }), 'backstop', 'trailing space');
+    assert.equal(pc.truthVerification({ statement: 'x', verification: ' backstop' }), 'backstop', 'leading space');
+    assert.equal(pc.truthVerification({ statement: 'x', verification: '"backstop"' }), 'backstop', 'surrounding quotes');
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'explicit ' }), 'explicit', 'trailing space, explicit tier');
+    // An unrecoverably-corrupted marker stays unrecognized → null → graded normally (AC#3 over-abstention guard).
+    assert.equal(pc.truthVerification({ statement: 'x', verification: 'back"stop' }), null, 'an embedded quote is unrecoverable — no spurious tier');
+  });
+});
+
+describe('probe-core: dispositionForUnverifiableTruth (#1154, ADR-550 D4 truth-axis mirror)', () => {
+  test('abstain-on-unconfirmed-backstop (condition 5, REGRESSION): a backstop truth with no explicit evidence disposes insufficient_spec/unverified/flagged — never green', () => {
+    const d = pc.dispositionForUnverifiableTruth(
+      { statement: 'Adjacent/touching intervals [1,2],[2,3] merge', verification: 'backstop' },
+      { evidence: [] },
+    );
+    assert.equal(d.status, 'unverified', 'a backstop truth with no explicit evidence is unverified');
+    assert.equal(d.flagged, true, 'and flagged — never a silent pass (ADR-550 D4)');
+    assert.equal(d.tier, 'backstop', 'the backstop tier is echoed unchanged');
+    assert.equal(
+      d.reason,
+      'insufficient_spec',
+      'carries the distinguishable insufficient_spec reason code so human_needed is not conflated with ordinary manual-UAT',
+    );
+  });
+
+  test('pass-on-wired-backstop: a backstop truth WITH explicit evidence (a wired held-out/property test) disposes green — abstention is for the unconfirmable only', () => {
+    const d = pc.dispositionForUnverifiableTruth(
+      { statement: 'Adjacent/touching intervals [1,2],[2,3] merge', verification: 'backstop' },
+      { evidence: [{ test: 'tests/intervals.property.test.cjs', passed: true }] },
+    );
+    assert.equal(d.status, 'green');
+    assert.equal(d.flagged, false);
+    assert.equal(d.tier, 'backstop');
+  });
+
+  test('over-abstention guard (AC#3): a plain inferable truth is NEVER routed to abstention', () => {
+    const d = pc.dispositionForUnverifiableTruth('Overlapping intervals are merged', { evidence: [] });
+    assert.equal(d.status, 'green', 'a plain inferable truth is graded normally, never abstained');
+    assert.equal(d.flagged, false);
+  });
+
+  test('a whitespace-mangled backstop truth still ABSTAINS, never silently greens (#1905 — the #1154 false-pass)', () => {
+    const d = pc.dispositionForUnverifiableTruth(
+      { statement: 'user data is never logged', verification: 'backstop ' }, // stray trailing space
+      { evidence: [] },
+    );
+    assert.equal(d.status, 'unverified', 'a mangled backstop marker must not degrade to a silent green');
+    assert.equal(d.flagged, true);
+    assert.equal(d.tier, 'backstop');
+    assert.equal(d.reason, 'insufficient_spec');
+  });
+
+  test('END-TO-END (#1905, #1820 hand-authoring path): a HAND-AUTHORED must_haves.truths trailing-space backstop marker parses to the tier and abstains, never greens', () => {
+    // A human authors the marker directly (the #1820 spec-optional predicate rail), NOT projectTruths.
+    // The frontmatter continuation-KV parser used to preserve the stray trailing space inside the quotes,
+    // so truthVerification saw 'backstop ' → null → the non-inferable truth graded green. It must parse
+    // clean and abstain — the exact honesty regression #1154 exists to eliminate (ADR-550 D4 truth axis).
+    const doc = [
+      '---', 'must_haves:', '  truths:',
+      '    - statement: user data is never logged',
+      '      verification: "backstop "',
+      '---', 'body',
+    ].join('\n');
+    const parsed = fm.parseMustHavesBlock(doc, 'truths');
+    assert.equal(pc.truthVerification(parsed[0]), 'backstop', 'the mangled marker normalizes to the tier');
+    const d = pc.dispositionForUnverifiableTruth(parsed[0], { evidence: [] });
+    assert.equal(d.status, 'unverified', 'never a silent green (ADR-550 D4 truth-axis, #1154)');
+    assert.equal(d.reason, 'insufficient_spec');
+  });
+
+  test('over-abstention guard (AC#3): an explicit-tier truth NEVER abstains even with no evidence (only backstop triggers it)', () => {
+    const d = pc.dispositionForUnverifiableTruth({ statement: 'Symbol X is wired', verification: 'explicit' }, { evidence: [] });
+    assert.equal(d.status, 'green', 'an explicit (inferable) truth never abstains');
+    assert.equal(d.flagged, false);
+  });
+});
+
+describe('probe-core: projectTruths (#1154, conservative serializer — Postel) + round-trip parity (condition 4, ADR-550 D5b)', () => {
+  test('projectTruths emits the flat-scalar backstop marker and collapses inferable truths to plain strings', () => {
+    const projected = pc.projectTruths([
+      { statement: 'Adjacent intervals merge', verification: 'backstop' },
+      'Overlapping intervals are merged',
+      { statement: 'Symbol X is wired', verification: 'explicit' },
+    ]);
+    assert.deepEqual(projected, [
+      { statement: 'Adjacent intervals merge', verification: 'backstop' },
+      'Overlapping intervals are merged',
+      'Symbol X is wired',
+    ], 'only a backstop truth carries a structured marker; explicit/inferable truths stay bare strings (no spurious markers)');
+  });
+
+  test('round-trip parity (SPEC backstop edge → must_haves.truths marker → read-back): the marker survives as a structured field, plain truths byte-identically', () => {
+    const projected = pc.projectTruths([
+      { statement: 'Adjacent intervals merge', verification: 'backstop' },
+      'Overlapping intervals are merged',
+    ]);
+    const parsed = fm.parseMustHavesBlock(renderTruthsBlock(projected), 'truths');
+    assert.equal(pc.truthVerification(parsed[0]), 'backstop', 'the backstop marker survives the round-trip as a structured field, not prose (#1110 fragility avoided)');
+    assert.equal(pc.truthStatement(parsed[0]), 'Adjacent intervals merge');
+    assert.equal(pc.truthStatement(parsed[1]), 'Overlapping intervals are merged');
+    assert.equal(pc.truthVerification(parsed[1]), null, 'a plain truth round-trips with no marker (Hyrum byte-identity backward-compat)');
   });
 });

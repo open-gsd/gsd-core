@@ -4,6 +4,7 @@
 
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { createFixture } = require('./fixtures/index.cjs');
 
@@ -130,6 +131,7 @@ function cleanup(tmpDir) {
   if (typeof tmpDir !== 'string' || tmpDir.length === 0) return;
   const target = path.resolve(tmpDir);
   const cwd = path.resolve(process.cwd());
+  const tmpRoot = path.resolve(os.tmpdir());
   if (cwd === target || cwd.startsWith(`${target}${path.sep}`)) {
     // Windows cannot remove a directory that is the current working directory.
     process.chdir(path.dirname(target));
@@ -139,7 +141,17 @@ function cleanup(tmpDir) {
   // teardown runs. On POSIX the retry loop is a no-op (rmSync succeeds first try).
   // Budget: 20 × 250ms = 5s total — Windows Defender's deferred scan can hold
   // newly-written files for several seconds on cold runners.
-  fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  try {
+    fs.rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+  } catch (error) {
+    // After retries, Windows can still briefly hold temp dirs open after a timed-out
+    // child exits. Ignore that teardown-only flake for temp roots, but rethrow everything else.
+    const isTmpPath = target === tmpRoot || target.startsWith(`${tmpRoot}${path.sep}`);
+    const isTransientWinErr = process.platform === 'win32'
+      && isTmpPath
+      && ['EBUSY', 'ENOTEMPTY', 'EPERM'].includes(error && error.code);
+    if (!isTransientWinErr) throw error;
+  }
 }
 
 /**

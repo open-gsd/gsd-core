@@ -36,6 +36,7 @@ const {
   comparePhaseNum,
   phaseTokenMatches,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  OPTIONAL_PHASE_TAG_SOURCE,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
@@ -51,8 +52,8 @@ import frontmatterMod = require('./frontmatter.cjs');
 import stateMod = require('./state.cjs');
 import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
-import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
 import { realClock } from './clock.cjs';
+import { transitionCore } from './state-transition.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -66,7 +67,6 @@ const {
   readModifyWriteStateMd,
   stateExtractField,
   stateReplaceField,
-  stateReplaceFieldWithFallback,
   syncStateFrontmatter,
   withStateLock,
   updatePerformanceMetricsSection,
@@ -216,7 +216,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
       try {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         const phasePattern = new RegExp(
-          `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalized)}\\.(\\d+)\\s*:`,
+          `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalized)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
           'gi',
         );
         let pm: RegExpExecArray | null;
@@ -263,7 +263,7 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
   const escapedPhase = phaseMarkdownRegexSource(phaseNum);
-  const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}\\s*:`, 'i');
+  const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`, 'i');
 
   for (const content of [milestoneContent, fullContent]) {
     const headerMatch = content.match(phaseHeader);
@@ -707,7 +707,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       // (section header, roadmap bullet, or on-disk directory) is counted:
 
       // 1) Section headers: ### Phase N: / ## Phase N: / #### Phase N:
-      const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
+      // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]*\))?:/gi;
       // 2) Roadmap bullet entries: - [ ] **Phase N: ...** (all checkbox variants)
       // The lookahead accepts colon, decimal-dot, whitespace, bold-close asterisk,
       // or end-of-line so titleless forms ("- [ ] **Phase 11**", "- [ ] Phase 11")
@@ -804,7 +805,8 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
     if (config.phase_naming !== 'custom') {
-      const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
+      // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]*\))?:/gi;
       let m: RegExpExecArray | null;
       while ((m = phasePattern.exec(content)) !== null) {
         const num = parseInt(m[1], 10);
@@ -886,11 +888,11 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
 
     const normalizedAfter = normalizePhaseName(afterPhase);
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
-    const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+${afterPhaseEscaped}:`, 'i');
+    const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`, 'i');
     const headingMatch = targetPattern.test(content);
 
     const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}[:\\s]`,
+      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
       'i',
     );
     const anyHeadingPattern = /#{2,4}\s*Phase\s+\d/i;
@@ -899,7 +901,7 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
 
     if (!headingMatch && !isBulletStyle) {
       const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}[:\\s]`,
+        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -929,7 +931,7 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
     }
 
     const rmPhasePattern = new RegExp(
-      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)\\s*:`,
+      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
       'gi',
     );
     let rmMatch: RegExpExecArray | null;
@@ -952,7 +954,7 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
 
     if (isBulletStyle) {
       const boldBulletPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}:`,
+        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`,
         'i',
       );
       const useBold = boldBulletPattern.test(content);
@@ -962,7 +964,7 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
       const bulletEntry = `\n- [ ] ${phaseLabel}`;
 
       const targetBulletPattern = new RegExp(
-        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}[:\\s][^\\n]*)`,
+        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
         'i',
       );
       const bulletMatchResult = rawContent.match(targetBulletPattern);
@@ -989,7 +991,7 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
         `\n### Phase ${_decimalPhase}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** Phase ${afterPhase}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_decimalPhase} to break down)\n`;
 
       const headerPattern = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${afterPhaseEscaped}:[^\\n]*\\n)`,
+        `(#{2,4}\\s*Phase\\s+${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
         'i',
       );
       const headerMatch = rawContent.match(headerPattern);
@@ -1169,13 +1171,13 @@ function updateRoadmapAfterPhaseRemoval(
 
     content = content.replace(
       new RegExp(
-        `\\n?(?<h>#{2,4})\\s*Phase\\s+${escaped}\\s*:[\\s\\S]*?(?=\\n\\k<h>(?!#)\\s+Phase\\s+[^\\n:]+\\s*:|$)`,
+        `\\n?(?<h>#{2,4})\\s*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:[\\s\\S]*?(?=\\n\\k<h>(?!#)\\s+Phase\\s+[^\\n:]+\\s*:|$)`,
         'i',
       ),
       '',
     );
     content = content.replace(
-      new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${escaped}[:\\s][^\\n]*`, 'gi'),
+      new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gi'),
       '',
     );
     content = content.replace(
@@ -1184,8 +1186,10 @@ function updateRoadmapAfterPhaseRemoval(
     );
 
     if (!isDecimal) {
+      // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
+      // is re-emitted verbatim — a tagged later phase still gets renumbered.
       content = content.replace(
-        /(#{2,4}\s*Phase\s+)(\d+(?:\.\d+)?)(\s*:)/gi,
+        /(#{2,4}\s*Phase\s+)(\d+(?:\.\d+)?)((?:\s*\([^)\n]*\))?\s*:)/gi,
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
@@ -1355,7 +1359,7 @@ function writePlanningFileSet(writes: WriteSpec[]): void {
 function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: string | null): string | null {
   if (!roadmapContent || !phaseNum) return null;
   const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
-  const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}\\s*:\\s*([^\\n]+)`, 'im'));
+  const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:\\s*([^\\n]+)`, 'im'));
   if (!heading) return null;
   const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
   return name || null;
@@ -1444,7 +1448,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
         const checkboxPattern = new RegExp(
-          `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}[:\\s][^\\n]*)`,
+          `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
           'i',
         );
         roadmapContent = roadmapContent.replace(
@@ -1508,7 +1512,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           const phaseSectionMatch = currentMilestoneRoadmap.match(
             new RegExp(
-              `(#{2,4}\\s*Phase\\s+${phaseEsc}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`,
+              `(#{2,4}\\s*Phase\\s+${phaseEsc}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`,
               'i',
             ),
           );
@@ -1649,7 +1653,22 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (isLastPhase && roadmapContent !== null) {
         try {
           const roadmapForPhases = extractCurrentMilestone(roadmapContent, cwd);
-          const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+          // #1591: match BOTH heading-style phases (`### Phase N:`) AND
+          // checkbox-list items, INCLUDING the canonical bold form the roadmap
+          // template emits (`- [ ] **Phase N: Name**`). When the active
+          // milestone's checklist is `- [ ]` items inside a <details> block
+          // (and the next phase has no directory yet, so the disk-based
+          // resolver finds nothing), this roadmap-enumeration fallback is the
+          // only path that can find the next phase. The prior heading-only
+          // pattern missed checkbox items, and a checkbox-only broadening still
+          // missed the bold template rows → is_last_phase=true on a mid-milestone
+          // phase. Allow optional `**`/`__` emphasis after the marker and stop
+          // the name capture at emphasis so bold names slug cleanly; the number
+          // capture is unchanged.
+          // #1729: `(?:\s*\([^)\n]*\))?` after the number tolerates a pre-colon
+          // ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE) so
+          // `### Phase N (Cluster B): X` resolves. Captures are unchanged.
+          const phasePattern = /(?:#{2,4}|-\s*\[[ xX]\])\s*(?:\*\*|__)?\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n*]+)/gi;
           let pm: RegExpExecArray | null;
           while ((pm = phasePattern.exec(roadmapForPhases)) !== null) {
             if (comparePhaseNum(pm[1], phaseNum) > 0) {
@@ -1672,93 +1691,38 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const originalStateContent = platformReadSync(statePath) || '';
         let stateContent = originalStateContent;
 
-        const phaseValue = nextPhaseNum || phaseNum;
+        // ADR-1769 Phase 3: the STATE.md field-update policy (Current Phase
+        // shape/name, Status, Current Plan, Last Activity + Description, and
+        // the Completed/Total Phases + Progress percent block) now dispatches
+        // to the STATE.md Transition Module. The ~90-line inline RMW callback
+        // that lived here is the pure `completePhaseCore` in
+        // src/state-transition.cts, backed by the field-classification table.
+        // `updatePerformanceMetricsSection` + `syncStateFrontmatter` stay in
+        // this adapter: they are section-table / disk-scan concerns, not
+        // classified fields, and `syncStateFrontmatter` is the post-sync this
+        // transaction needs (it does NOT go through readModifyWriteStateMd
+        // because STATE.md is committed atomically with ROADMAP/REQUIREMENTS).
         const nextPhaseDisplayName =
           phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
           phaseDisplayNameFromSlug(nextPhaseName);
-        const existingPhaseField =
-          stateExtractField(stateContent, 'Current Phase') ||
-          stateExtractField(stateContent, 'Phase');
-        let newPhaseValue = String(phaseValue);
-        if (existingPhaseField) {
-          const totalMatch = existingPhaseField.match(/of\s+(\d+)/);
-          const nameMatch = existingPhaseField.match(/\(([^)]+)\)/);
-          if (totalMatch) {
-            const total = totalMatch[1];
-            const nameStr = nextPhaseDisplayName
-              ? ` (${nextPhaseDisplayName})`
-              : nameMatch
-                ? ` (${nameMatch[1]})`
-                : '';
-            newPhaseValue = `${phaseValue} of ${total}${nameStr}`;
-          } else if (nextPhaseDisplayName) {
-            newPhaseValue = `${phaseValue} — ${nextPhaseDisplayName}`;
-          }
-        }
-        stateContent = stateReplaceFieldWithFallback(
+        const completeResult = transitionCore(
           stateContent,
-          'Current Phase',
-          'Phase',
-          newPhaseValue,
+          {
+            kind: 'completePhase',
+            phaseNum,
+            nextPhaseNum,
+            nextPhaseName: nextPhaseDisplayName,
+            isLastPhase,
+            planCount,
+            summaryCount,
+          },
+          {
+            clock: realClock,
+            progressProvider: () => null, // completePhase derives progress from the roadmap, not disk
+            roadmapProvider: () => roadmapContent,
+          },
         );
-
-        if (nextPhaseDisplayName) {
-          stateContent =
-            stateReplaceField(stateContent, 'Current Phase Name', nextPhaseDisplayName) ||
-            stateContent;
-        }
-
-        stateContent = stateReplaceFieldWithFallback(
-          stateContent,
-          'Status',
-          null,
-          isLastPhase ? 'Milestone complete' : 'Ready to plan',
-        );
-
-        stateContent = stateReplaceFieldWithFallback(
-          stateContent,
-          'Current Plan',
-          'Plan',
-          'Not started',
-        );
-
-        const lastActivityDescription = `Phase ${phaseNum} complete${nextPhaseNum ? `, transitioned to Phase ${nextPhaseNum}` : ''}`;
-        if (/^Last activity:/m.test(stateContent)) {
-          stateContent =
-            stateReplaceField(stateContent, 'Last activity', `${today} — ${lastActivityDescription}`) ||
-            stateContent;
-        } else {
-          stateContent =
-            stateReplaceField(stateContent, 'Last Activity', today) ||
-            stateContent;
-        }
-
-        stateContent =
-          stateReplaceField(stateContent, 'Last Activity Description', lastActivityDescription) ||
-          stateContent;
-
-        const completedRaw = stateExtractField(stateContent, 'Completed Phases');
-        if (completedRaw !== null) {
-          let newCompleted = parseInt(completedRaw, 10);
-          let derivedTotalPhases: number | null = null;
-          if (roadmapContent !== null) {
-            const derived = deriveProgressFromRoadmap(roadmapContent);
-            if (derived.completedPhases !== null) newCompleted = derived.completedPhases;
-            if (derived.totalPhases !== null) derivedTotalPhases = derived.totalPhases;
-          }
-          stateContent =
-            stateReplaceField(stateContent, 'Completed Phases', String(newCompleted)) ||
-            stateContent;
-
-          const totalRaw = stateExtractField(stateContent, 'Total Phases');
-          const totalPhases = derivedTotalPhases || (totalRaw ? parseInt(totalRaw, 10) : null);
-          if (totalPhases && totalPhases > 0) {
-            const newPercent = clampPercent(newCompleted, totalPhases);
-            stateContent =
-              stateReplaceField(stateContent, 'Progress', `${newPercent}%`) || stateContent;
-            stateContent = stateContent.replace(/(percent:\s*)\d+/, `$1${newPercent}`);
-          }
-        }
+        stateContent = completeResult.content;
 
         stateContent = updatePerformanceMetricsSection(
           stateContent,

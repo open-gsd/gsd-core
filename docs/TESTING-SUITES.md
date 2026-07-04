@@ -221,8 +221,8 @@ node scripts/ci-test-scope.cjs --base origin/next --head HEAD
 ## Test strategy: #443 effort + fast_mode engine
 
 > Feature: unified cross-provider effort and fast_mode knobs (issue #443).
-> Test files: `tests/feat-443-effort-fast-mode.test.cjs` (unit),
-> `tests/feat-443-effort-fast-mode.integration.test.cjs` (integration).
+> Test files: `tests/model-resolver.test.cjs` (unit),
+> `tests/model-resolver.test.cjs` (integration).
 
 ### Testing pyramid
 
