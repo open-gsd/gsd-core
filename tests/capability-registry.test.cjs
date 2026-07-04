@@ -15,8 +15,6 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { spawnSync } = require('node:child_process');
-
 const { cleanup } = require('./helpers.cjs');
 
 const {
@@ -6009,6 +6007,118 @@ describe('fix-1628 capability validation: mempalace.memory_mode (enum)', () => {
         'stderr: ' + result.error,
       ].join('\n')
     );
+  });
+});
+
+// ─── ROUTING CONTRACT: mempalace.memory_mode wired behavior (#2007) ───────────
+//
+// memory_mode is an instruction-only contract: `augment`/`kg_backend`/`replace`
+// change how the mempalace recall/capture/curator markdown tells the agent to
+// treat the palace vs. GSD native memory. There is no code branch to unit-test,
+// so the governed surface IS the instruction text across five parallel surfaces
+// plus the capability schema. This block asserts (a) every mode is named with
+// distinct, non-forward-declared routing, and (b) the parallel surfaces stay in
+// parity so a future edit can't silently revert one to the inert state
+// (CLAUDE.md Generative Fix Divergence). Reads .md/.json only — the no-source-grep
+// rule targets .cjs/.js/.ts source reads, so no allow-test-rule exemption applies.
+
+describe('#2007 mempalace.memory_mode routing contract (instruction surfaces)', () => {
+  const MODES = ['augment', 'kg_backend', 'replace'];
+
+  // The five parallel instruction surfaces that must express per-mode routing.
+  const SURFACES = [
+    'capabilities/mempalace/fragments/recall-discuss.md',
+    'capabilities/mempalace/fragments/capture-problems.md',
+    'commands/gsd/mempalace-recall.md',
+    'commands/gsd/mempalace-capture.md',
+    'agents/gsd-mempalace-curator.md',
+  ];
+
+  // Retired forward-declaration hedges — the presence of any one means a surface
+  // reverted to the pre-#2007 inert state where the modes did nothing.
+  const RETIRED_HEDGES = [
+    'forward-declared',
+    'behave as `augment`',
+    'behaves as `augment`',
+    'not yet functional',
+    'routing seam not yet',
+    'Only `augment` is currently wired',
+    'Only `augment` is wired',
+  ];
+
+  for (const rel of SURFACES) {
+    const body = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+    test(`${rel} names all three memory modes`, () => {
+      for (const m of MODES) {
+        assert.ok(
+          body.includes('`' + m + '`'),
+          `${rel} must reference mode \`${m}\``
+        );
+      }
+    });
+
+    test(`${rel} carries no retired forward-declaration hedge`, () => {
+      for (const hedge of RETIRED_HEDGES) {
+        assert.ok(
+          !body.includes(hedge),
+          `${rel} still contains retired hedge "${hedge}" — memory_mode must describe wired per-mode routing, not a forward-declaration`
+        );
+      }
+    });
+
+    test(`${rel} expresses both halves of the routing contract (palace-primary + native-fallback)`, () => {
+      // The wired contract is a duality: kg_backend/replace make the palace
+      // primary/authoritative, AND every mode keeps native memory as a
+      // fallback/mirror so the capability stays default-resilient (an unreachable
+      // palace never loses memory). A surface that expresses only one half is a
+      // defect — this guards the exact contradiction the #2007 review surfaced.
+      assert.match(
+        body,
+        /primary|authoritative|source of truth/i,
+        `${rel} must describe kg_backend/replace treating the palace as primary/authoritative`
+      );
+      assert.match(
+        body,
+        /fallback|mirror|additive|supplement/i,
+        `${rel} must describe the native-memory fallback/mirror relationship (default-resilience)`
+      );
+      assert.ok(
+        body.includes('.planning/graphs'),
+        `${rel} must anchor the native memory surface (.planning/graphs/) that the palace augments/falls back to`
+      );
+    });
+  }
+
+  test('capability.json memory_mode schema declares the three modes and drops the not-implemented claim', () => {
+    const cap = JSON.parse(
+      fs.readFileSync(
+        path.join(ROOT, 'capabilities/mempalace/capability.json'),
+        'utf8'
+      )
+    );
+    const mode = cap.config['mempalace.memory_mode'];
+    assert.deepEqual(
+      mode.values,
+      MODES,
+      'enum values must be exactly [augment, kg_backend, replace]'
+    );
+    assert.equal(
+      mode.default,
+      'augment',
+      'default stays augment (default-resilient)'
+    );
+    for (const hedge of [
+      'forward-declared',
+      'not yet built',
+      'behave as',
+      'behaves the same as',
+    ]) {
+      assert.ok(
+        !mode.description.includes(hedge),
+        `schema description must not claim the modes are unimplemented (found "${hedge}")`
+      );
+    }
   });
 });
 

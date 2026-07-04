@@ -667,7 +667,7 @@ MemPalace is an opt-in, default-resilient memory capability. Every hook is `onEr
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `mempalace.enabled` | boolean | `false` | Master gate for the MemPalace memory capability. When `false` (the default) every recall/capture hook is inactive and the loop is unchanged. All other `mempalace.*` keys are inert while this is `false`. |
-| `mempalace.memory_mode` | enum: `augment`, `kg_backend`, `replace` | `augment` | How MemPalace relates to GSD native memory. `augment` (**implemented** — MemPalace is an additional write-mostly recall layer alongside GSD's native graphs/learnings; lowest coupling). `kg_backend` (**declared; routing seam not yet implemented** — intended to route graphify KG queries through MemPalace's temporal graph instead of `.planning/graphs/`; selecting this today behaves the same as `augment`). `replace` (**declared; not yet functional** — intended to make the palace the durable store for GSD memory reads; selecting this today behaves the same as `augment`). |
+| `mempalace.memory_mode` | enum: `augment`, `kg_backend`, `replace` | `augment` | How authoritative MemPalace is during recall/capture. `augment` (default — an additive recall layer alongside GSD's native graphs/learnings; native memory stays authoritative; lowest coupling). `kg_backend` (knowledge-graph queries resolve against MemPalace's temporal graph as the primary source, with `.planning/graphs/` as fallback; non-KG drawer recall stays additive). `replace` (recall resolves through the palace as the source of truth, native artifacts as fallback). Every mode is `onError:skip` and default-resilient: an unreachable palace degrades to native memory and GSD keeps writing `.planning/graphs/`, so no memory is lost. Cross-mode migration of existing `.planning/graphs/` into the palace is a separate, not-yet-implemented concern. |
 | `mempalace.wing` | string | `""` | Palace wing name for this project. Empty (the default) derives the wing from `project_code` or the project directory name. |
 | `mempalace.recall_on_discuss` | boolean | `true` | When `mempalace.enabled` is `true`: inject a wake-up + semantic-search recall fragment into the orchestrator at `discuss:pre`. Surfaces prior decisions, patterns, and surprises before the discussion starts. |
 | `mempalace.recall_on_plan` | boolean | `true` | When `mempalace.enabled` is `true`: run the `mempalace-recall` skill at `plan:pre` to produce `MEMORY-RECALL.md` from prior decisions, patterns, and surprises relevant to the plan. |
@@ -679,21 +679,21 @@ MemPalace is an opt-in, default-resilient memory capability. Every hook is `onEr
 
 #### Memory modes in detail
 
-| Mode | `.planning/graphs` KG | Recall source | Coupling | Status |
-|------|-----------------------|---------------|---------|--------|
-| `augment` (default) | stays native | GSD native + palace search | lowest | **Implemented** |
-| `kg_backend` | intended: routed to MemPalace temporal graph | intended: KG queries hit MemPalace | medium | **Declared — routing seam not yet implemented; behaves as `augment`** |
-| `replace` | intended: backed by palace | intended: palace is the durable store | highest | **Declared — not yet functional; behaves as `augment`** |
+| Mode | KG-query source | Recall source | Coupling |
+|------|-----------------|---------------|---------|
+| `augment` (default) | GSD native + palace (additive) | GSD native + palace search | lowest |
+| `kg_backend` | palace temporal KG primary, `.planning/graphs/` fallback | GSD native + palace search | medium |
+| `replace` | palace primary, native fallback | palace as source of truth, native fallback | highest |
 
-Mode is read at hook-render time; switching modes is a config change, not a reinstall. Only `augment` has effect today — `kg_backend` and `replace` are forward-declared for a future release.
+Mode is read at hook-render time; switching modes is a config change, not a reinstall. In every mode the palace is `onError:skip` and default-resilient — an unreachable palace degrades to native memory, and GSD keeps writing `.planning/graphs/` so no memory is lost. Switching an established project to `kg_backend`/`replace` changes how new recall/capture resolve but does not backfill existing `.planning/graphs/` into the palace (a separate, not-yet-implemented concern).
 
 #### Example
 
 ```bash
-# Enable MemPalace (augment mode — the only implemented mode today)
+# Enable MemPalace (augment is the default mode)
 gsd-tools query config-set mempalace.enabled true
 
-# Forward-declared: kg_backend/replace are not yet functional (declared for future release)
+# Optional: route knowledge-graph recall through the palace's temporal KG (native as fallback)
 # gsd-tools query config-set mempalace.memory_mode kg_backend
 
 # Enable cross-project tunnel proposals at ship:post
