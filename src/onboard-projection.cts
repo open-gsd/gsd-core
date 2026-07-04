@@ -260,19 +260,19 @@ function nextAction(params: {
     };
   }
 
-  if (params.fastMode && params.mapReadiness === 'fast') {
-    return {
-      kind: 'complete-map-before-new-project',
-      command: params.handoffCommands.map_codebase,
-      reason: 'The fast map is enough for lightweight onboarding, but project setup still requires the complete codebase map.',
-    };
-  }
-
   if (params.hasPlanningArtifacts && params.missingPlanningFiles.length > 0) {
     return {
       kind: 'partial-planning',
       missing: params.missingPlanningFiles,
       reason: 'Project planning exists but required planning files are missing.',
+    };
+  }
+
+  if (params.fastMode && params.mapReadiness === 'fast' && !params.projectExists) {
+    return {
+      kind: 'complete-map-before-new-project',
+      command: params.handoffCommands.map_codebase,
+      reason: 'The fast map is enough for lightweight onboarding, but project setup still requires the complete codebase map.',
     };
   }
 
