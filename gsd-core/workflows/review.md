@@ -302,14 +302,50 @@ coderabbit review --prompt-only 2>/dev/null > /tmp/gsd-review-coderabbit-{phase}
 ```
 
 **OpenCode (via GitHub Copilot):**
+
+OpenCode's default `build` agent is an agentic coder, not a prompt→completion API.
+On a large review prompt it may run a few `read` tool calls and then end its turn
+with **zero output tokens** (`reason:"stop"`, `output:0`), so `--format default`
+yields empty stdout and the second reviewer is silently lost (#1936). Invoke with
+`--format json` and reconstruct the review from the assistant `text` parts; if the
+agent emitted none, surface the stop `reason`, output-token count, and captured
+stderr so the failure is diagnosable instead of a generic empty stub. Runs are also
+nondeterministic in length, so bound this Bash tool call with a wall-clock timeout —
+set `timeout: 660000` on the call (same mechanism the CodeRabbit block documents).
+That bound is hard: if it fires mid-`opencode run` the tool kills the command and
+the jq reconstruction below never runs, so the reviewing agent simply proceeds
+without an OpenCode result. The completing zero-output case — the actual #1936 bug —
+is fully handled below; the timeout only backstops the rarer nondeterministic hang. A
+reviewer instance with `"agent": "review"` (see
+`gsd-core/references/reviewer-instances.md`) sidesteps the default `build` agent and
+is the durable fix when this recurs.
+
 ```bash
+# stderr → sidecar (never /dev/null) so a real error is diagnosable — mirrors the
+# Codex block. --format json is the primary invocation (not a fallback): the review
+# text lives in assistant `text` parts, which the default formatter drops when the
+# agent stops with no final message (#1936).
 if [ -n "$OPENCODE_MODEL" ] && [ "$OPENCODE_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | opencode run --model "$OPENCODE_MODEL" - 2>/dev/null > /tmp/gsd-review-opencode-{phase}.md
+  set -- --model "$OPENCODE_MODEL"
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | opencode run - 2>/dev/null > /tmp/gsd-review-opencode-{phase}.md
+  set --
 fi
-if [ ! -s /tmp/gsd-review-opencode-{phase}.md ]; then
-  echo "OpenCode review failed or returned empty output." > /tmp/gsd-review-opencode-{phase}.md
+cat /tmp/gsd-review-prompt-{phase}.md | opencode run "$@" --format json - 2>/tmp/gsd-review-opencode-{phase}.err > /tmp/gsd-review-opencode-{phase}.json
+# Reconstruct the review from the assistant text parts. Capture into a variable and
+# test its CONTENT (not the output file's size): an empty extraction still prints a
+# trailing newline, which would fool a `[ -s file ]` check into skipping the stub.
+OPENCODE_REVIEW=$(jq -rs '[.[] | select(.type=="text") | .part.text // empty] | join("\n")' /tmp/gsd-review-opencode-{phase}.json 2>/dev/null)
+if [ -n "$OPENCODE_REVIEW" ]; then
+  printf '%s\n' "$OPENCODE_REVIEW" > /tmp/gsd-review-opencode-{phase}.md
+else
+  # No assistant text (agent emitted no final message, or stdout was not valid JSON events).
+  {
+    echo "OpenCode review returned no assistant text (#1936: agent ended its turn with no final message)."
+    OPENCODE_DIAG=$(jq -rs '[.[] | select(.type=="step_finish")] | last | "stop reason=\(.part.reason // "?"), output tokens=\(.part.tokens.output // "?")"' /tmp/gsd-review-opencode-{phase}.json 2>/dev/null)
+    [ -n "$OPENCODE_DIAG" ] && echo "Diagnostic: $OPENCODE_DIAG"
+    echo "stderr:"
+    cat /tmp/gsd-review-opencode-{phase}.err
+  } > /tmp/gsd-review-opencode-{phase}.md
 fi
 ```
 

@@ -29,6 +29,9 @@ const { planningPaths, withPlanningLock, findContextMdIn } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtils = require('./core-utils.cjs');
+const { countMatchedSummaries } = coreUtils;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
 
@@ -491,7 +494,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   }
 
   const planCount = phaseInfo!.plans.length;
-  const summaryCount = phaseInfo!.summaries.length;
+  // Count only summaries that pair with a real plan (#1988): stray non-plan
+  // summaries (30-FIX-CR02-SUMMARY.md, 30-GAPCLOSURE-SUMMARY.md, …) must not
+  // inflate summary_count and silently flip the phase to Complete.
+  const summaryCount = countMatchedSummaries(phaseInfo!.plans, phaseInfo!.summaries);
 
   if (planCount === 0) {
     output({ updated: false, reason: 'No plans found', plan_count: 0, summary_count: 0 }, raw, 'no plans');
