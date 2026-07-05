@@ -758,6 +758,36 @@ describe('#1911 — milestone complete --ws archives to the workstream', () => {
       'must not archive to root .planning/milestones/ in workstream mode',
     );
   });
+
+  test('#1993 — --ws requirements archive header points at the workstream REQUIREMENTS.md, not root', () => {
+    const wsBase = path.join(tmpDir, '.planning', 'workstreams', 'ws1');
+    fs.mkdirSync(path.join(wsBase, 'phases', '01-foo'), { recursive: true });
+    fs.writeFileSync(path.join(wsBase, 'STATE.md'), 'milestone: v2.0\nstatus: executing\n');
+    fs.writeFileSync(
+      path.join(wsBase, 'ROADMAP.md'),
+      '# Roadmap\n## Milestones\n- v2.0 Test (Phases 1) — IN PROGRESS\n## Phases\n### Phase 1: Foo\n**Goal:** foo\n',
+    );
+    fs.writeFileSync(path.join(wsBase, 'REQUIREMENTS.md'), '# Requirements\n- [ ] REQ-01\n');
+    fs.writeFileSync(path.join(wsBase, 'phases', '01-foo', '01-SUMMARY.md'), '---\none-liner: foo done\n---\n# Summary\n');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'milestones'), { recursive: true });
+
+    const result = runGsdTools('milestone complete v2.0 --ws ws1 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const archivedReq = fs.readFileSync(
+      path.join(wsBase, 'milestones', 'v2.0-REQUIREMENTS.md'), 'utf-8',
+    );
+    // Header must point readers at the WORKSTREAM requirements file...
+    assert.ok(
+      archivedReq.includes('see `.planning/workstreams/ws1/REQUIREMENTS.md`'),
+      `workstream archive header must reference the workstream path; got:\n${archivedReq.split(/\r?\n/).slice(0, 6).join('\n')}`,
+    );
+    // ...and must NOT point at the root path (the #1993 bug).
+    assert.ok(
+      !/\bsee\s+`\.planning\/REQUIREMENTS\.md`\b/.test(archivedReq),
+      'workstream archive header must not hardcode the root REQUIREMENTS.md path',
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2626,8 +2626,9 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-GRAPH-03: Build runs within the configurable `graphify.build_timeout` (seconds); exceeding the timeout aborts cleanly without leaving a partial graph.
 - REQ-GRAPH-04: `graphify.cjs` falls back to `graph.links` when `graph.edges` is absent so older graph artifacts keep rendering.
 - REQ-GRAPH-05: Graphify is invoked through `gsd-tools.cjs graphify ...` command handlers.
+- REQ-GRAPH-06: The knowledge-graph location is configurable via `graphify.graph_path` (issue #1825) so one umbrella-level cross-repo graph can serve multiple sibling projects; `query`/`status`/`diff` read the configured graph (relative to project root), with a byte-identical `.planning/graphs/` default when unset.
 
-**Configuration:** `graphify.enabled`, `graphify.build_timeout`
+**Configuration:** `graphify.enabled`, `graphify.build_timeout`, `graphify.graph_path`
 **Reference files:** `commands/gsd/graphify.md`, `bin/lib/graphify.cjs`
 
 ---
@@ -3148,7 +3149,7 @@ The load-bearing wire is the `plan-phase` lift: `covered` and `backstop` edges b
 - REQ-MP-02: At `plan:pre`, skill `mempalace-recall` produces `MEMORY-RECALL.md` from prior decisions, patterns, and surprises retrieved via wake-up + semantic search + KG timeline. When MemPalace is unreachable, writes an "unavailable" stub and continues.
 - REQ-MP-03: At `discuss:post`, `plan:post`, and `verify:post`, skill `mempalace-capture` files the phase artifact verbatim into the appropriate MemPalace room (`decisions`, `planning`, `milestones`). Capture is idempotent via `mempalace_check_duplicate`.
 - REQ-MP-04: At `ship:post`, agent `gsd-mempalace-curator` writes a diary entry, proposes cross-project tunnels (when `mempalace.cross_project_tunnels: true`), and runs wing-scoped sync pruning.
-- REQ-MP-05: `mempalace.memory_mode` declares three values: `augment` (default, **implemented** — palace is an additional recall layer alongside GSD native memory), `kg_backend` (**forward-declared; routing seam not yet implemented** — selecting this today behaves identically to `augment`), `replace` (**forward-declared; not yet functional** — selecting this today behaves identically to `augment`). Only `augment` has effect in the current release.
+- REQ-MP-05: `mempalace.memory_mode` has three wired values: `augment` (default — palace is an additive recall layer alongside GSD native memory, which stays authoritative), `kg_backend` (knowledge-graph queries resolve against the palace's temporal KG as the primary source, `.planning/graphs/` as fallback; non-KG drawer recall stays additive), `replace` (recall resolves through the palace as the source of truth, native memory as fallback). Every mode is `onError:skip` and default-resilient — an unreachable palace degrades to native memory and GSD keeps writing `.planning/graphs/`, so no mode loses memory. Cross-mode migration of existing `.planning/graphs/` into the palace is out of scope (not yet implemented).
 - REQ-MP-06: Every hook is `onError: skip`. No hook carries `blocking: true`. Memory never halts or fails a phase.
 - REQ-MP-07: Interactive runs prefer MCP tools; headless/cron runs prefer the MemPalace CLI (`mempalace wake-up`, `mempalace search`, `mempalace mine`, `mempalace sync`).
 - REQ-MP-08: `mempalace.auto_capture_hooks` is **forward-declared and not yet functional**. No native Claude Code hooks (`stop`, `precompact`, `session-start`) are installed by this key; the capability's hooks array is empty. This key is reserved for the future "Connected Capability" phase. Default `false`.

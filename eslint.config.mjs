@@ -170,6 +170,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/roadmap-command-router.cjs',
       'gsd-core/bin/lib/state-command-router.cjs',
       'gsd-core/bin/lib/gap-checker.cjs',
+      'gsd-core/bin/lib/gate-predicate-evaluator.cjs',
       'gsd-core/bin/lib/config.cjs',
       'gsd-core/bin/lib/profile-output.cjs',
       'gsd-core/bin/lib/commands.cjs',

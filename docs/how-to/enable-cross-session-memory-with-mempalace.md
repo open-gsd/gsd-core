@@ -34,20 +34,22 @@ That is the only required step — `mempalace.enabled` is the master switch that
 
 ## Step 3 — Choose a memory mode
 
-The `mempalace.memory_mode` key controls how tightly MemPalace couples to GSD's native memory. **Only `augment` is implemented today.** The other modes are declared for future use — selecting them today has no additional effect beyond `augment`.
+The `mempalace.memory_mode` key controls how authoritative MemPalace is during recall and capture — how tightly it couples to GSD's native memory (`.planning/graphs/`, STATE, learnings). All three modes are wired. Every mode is `onError: skip` and default-resilient: an unreachable palace degrades to native memory, and GSD keeps writing `.planning/graphs/`, so no mode risks memory loss.
 
-| Mode | What it does | When to use it | Status |
-|------|-------------|----------------|--------|
-| `augment` (default) | MemPalace is an additional recall layer alongside `.planning/graphs/` and learnings. Lowest coupling — palace is write-mostly and never required. | Most users. Safe to enable immediately. | **Implemented** |
-| `kg_backend` | Intended to route knowledge-graph queries through MemPalace's temporal graph instead of `.planning/graphs/`. | Future use — not yet functional today. | **Declared; routing seam not yet implemented** |
-| `replace` | Intended to make the palace the durable store; GSD memory reads would resolve through it. | Future use — not yet functional today. | **Declared; not yet functional** |
+| Mode | What it does | When to use it |
+|------|-------------|----------------|
+| `augment` (default) | The palace is an *additional* recall layer alongside `.planning/graphs/` and learnings. Lowest coupling — native memory stays authoritative and the palace supplements it. | Most users. Safe to enable immediately. |
+| `kg_backend` | Knowledge-graph queries resolve against the palace's temporal KG as the *primary* source; `.planning/graphs/` becomes the fallback. Non-KG drawer recall stays additive. | You want the palace's temporal KG to drive decision recall while keeping native graphs as a safety net. |
+| `replace` | Recall resolves *through the palace as the source of truth*; native artifacts are consulted only as a fallback when the palace is unreachable. | You want the palace to be the authoritative memory store for this project. |
 
-Until `kg_backend` and `replace` are implemented, changing `memory_mode` away from `augment` has no effect. Use the default and revisit when these modes ship.
+Set the mode with:
 
 ```bash
-# memory_mode defaults to augment (the only functional mode today)
-# no change needed for most users
+# augment is the default; most users need no change.
+gsd-tools query config-set mempalace.memory_mode kg_backend   # or: replace
 ```
+
+> **Note — cross-mode migration.** Switching an established project to `kg_backend` or `replace` changes how *new* recall and capture resolve; it does **not** retro-migrate memory already written to `.planning/graphs/` into the palace. Backfilling existing native memory into the palace is a separate, not-yet-implemented concern — choose the mode you want at the start of a project for the cleanest result.
 
 ---
 
