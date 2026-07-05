@@ -343,9 +343,12 @@ function transformFile(content, preamble) {
     }
   }
 
-  // Insert preamble into the first gsd_run block only
+  // Insert preamble into the first gsd_run block only — UNLESS this file
+  // delegates to the shared resolver reference (@-include). Delegating files keep
+  // the stripped blocks (any inline preamble removed) but never get one inserted.
+  const delegates = delegatesToResolverReference(content);
   const finalBlocks = strippedBlocks.map((stripped, bi) => {
-    if (bi === firstGsdRunBlockIdx) {
+    if (!delegates && bi === firstGsdRunBlockIdx) {
       return insertPreamble(stripped, preamble);
     }
     return stripped;
@@ -372,6 +375,21 @@ function transformFile(content, preamble) {
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * A file "delegates to the shared resolver" when it pulls the canonical gsd_run
+ * preamble in from gsd-core/references/gsd-run-resolver.md via an @-include
+ * instead of inlining the snippet (see onboard.md / issue #1990).
+ *
+ * These files must NOT carry an inline preamble: the resolver reference ships the
+ * one canonical copy, and onboard-command.test.cjs asserts the inline form is
+ * absent. transformFile still STRIPS any inline preamble from them (so a stray
+ * copy is removed) but never re-inserts one — mirroring the exemption in
+ * runtime-launcher-parity.test.cjs (subtest B / B2).
+ */
+function delegatesToResolverReference(content) {
+  return content.includes('references/gsd-run-resolver.md');
 }
 
 // Main
