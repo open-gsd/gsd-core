@@ -568,6 +568,8 @@ route each write through `gsd-tools.cjs query config-set` so sibling preservatio
 the central setter.
 </step>
 
+<step name="model_policy">
+
 ### Section 8 — Model Policy
 
 This section configures the `model_policy` key in `.planning/config.json`. Model policy
