@@ -304,7 +304,7 @@
   "gsd-core/workflows/update.md": "f444a7cfcd246cfb",
   "gsd-core/workflows/validate-phase.md": "f923eac9442b6053",
   "gsd-core/workflows/verify-phase.md": "eea9b642393b6b90",
-  "gsd-core/workflows/verify-work.md": "a5bcec82bfc2da53",
+  "gsd-core/workflows/verify-work.md": "32f3af1bb0100d20",
   "hooks/gsd-session.json": "0a462834f2a28fee",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
