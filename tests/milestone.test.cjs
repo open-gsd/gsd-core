@@ -780,7 +780,7 @@ describe('#1911 — milestone complete --ws archives to the workstream', () => {
     // Header must point readers at the WORKSTREAM requirements file...
     assert.ok(
       archivedReq.includes('see `.planning/workstreams/ws1/REQUIREMENTS.md`'),
-      `workstream archive header must reference the workstream path; got:\n${archivedReq.split('\n').slice(0, 6).join('\n')}`,
+      `workstream archive header must reference the workstream path; got:\n${archivedReq.split(/\r?\n/).slice(0, 6).join('\n')}`,
     );
     // ...and must NOT point at the root path (the #1993 bug).
     assert.ok(
