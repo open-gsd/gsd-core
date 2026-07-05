@@ -372,6 +372,28 @@ reason: "{verbatim user response}"
 
 Note: Blocked tests do NOT go into the Gaps section (they aren't code issues — they're prerequisite gates).
 
+**If response indicates a deferred follow-up (NOT a current-phase blocker):**
+- "later", "future", "follow-up", "next version", "out of scope", "nice to have", "not now", "defer", "down the road", "separate phase", "phase 2"
+
+These are future-work ideas, not code issues for the current phase. Capture them WITHOUT creating a gap plan (#1921 — a deferred follow-up must never become a blocking gap or spawn a fix plan):
+
+Update Tests section:
+```
+### {N}. {name}
+expected: {expected}
+result: skipped
+reason: "Deferred follow-up: {verbatim user response}"
+```
+
+Append to UAT.md `## Deferred Follow-Ups` (create the section if absent):
+```yaml
+- test: {N}
+  idea: "{verbatim user response}"
+  deferred_at: {today}
+```
+
+Do NOT append to `## Gaps` — deferred follow-ups are not blocking gaps. Continue to the next test.
+
 **If response is anything else:**
 - Treat as issue description
 
@@ -393,7 +415,8 @@ severity: {inferred}
 
 Append to Gaps section (structured YAML for plan-phase --gaps):
 ```yaml
-- truth: "{expected behavior from test}"
+- gap_id: G-{phase}-{N}        # Stable id (phase + test number) — gap-closure plans tag it in their frontmatter so verify-work can reconcile resolved gaps on resume (#1921).
+  truth: "{expected behavior from test}"
   status: failed
   reason: "User reported: {verbatim user response}"
   severity: {inferred}
@@ -411,8 +434,34 @@ If more tests remain → Update Current Test, go to `present_test`
 If no more tests → Go to `complete_session`
 </step>
 
+<step name="reconcile_gaps">
+**Reconcile diagnosed gaps against completed gap-closure plans (#1921):**
+
+When verify-work resumes after `/gsd:execute-phase --gaps-only`, the UAT `## Gaps` entries still read `status: failed` even though their fix plans have executed. Without reconciliation verify-work re-diagnoses them as fresh blockers and spawns new gap plans — losing the verification state. This step closes the loop.
+
+Read the UAT `## Gaps` section and the phase dir `*-PLAN.md` frontmatter. For each gap with `status: failed`:
+1. Find a `*-PLAN.md` whose frontmatter `gap_ids` includes the gap's `gap_id` (`G-{phase}-{N}`).
+2. If such a plan exists AND has a matching `*-SUMMARY.md` in the phase dir (the plan was executed by `--gaps-only`), the gap is **resolved** — update its YAML in place:
+   ```yaml
+   - gap_id: G-{phase}-{N}
+     status: resolved        # was: failed
+     resolved_by: {plan basename}
+     resolved_at: {today}
+   ```
+3. If no plan references the `gap_id`, or the plan has no SUMMARY, leave the gap `status: failed` (still open).
+
+Read plan frontmatter directly in-context — do not pipe it through a shell parser. After reconciliation, announce:
+```
+Reconciled gap-closure state: {resolved_count} gap(s) resolved by executed plans, {open_count} still open.
+```
+
+Resolved gaps are NOT re-diagnosed and do NOT spawn new gap plans. If the user later reports the same behavior as still broken, treat it as a new issue (a regression) with a fresh `gap_id`.
+</step>
+
 <step name="resume_from_file">
 **Resume testing from UAT file:**
+
+**First run `reconcile_gaps`** (above) so gaps already fixed by `/gsd:execute-phase --gaps-only` are marked `resolved` before testing resumes (#1921).
 
 Read the full UAT file.
 
@@ -652,7 +701,7 @@ Display:
 
 Spawn gsd-planner in --gaps mode:
 
-```
+````
 Agent(
   prompt="""
 <planning_context>
@@ -673,13 +722,22 @@ ${AGENT_SKILLS_PLANNER}
 <downstream_consumer>
 Output consumed by /gsd:execute-phase
 Plans must be executable prompts.
+
+**Gap linkage (#1921):** each created `*-PLAN.md` MUST list the UAT gap ids it addresses in its frontmatter:
+```yaml
+---
+gap_closure: true
+gap_ids: [G-{phase}-{N}, ...]   # the ## Gaps gap_id values this plan fixes
+---
+```
+This lets `/gsd:verify-work` reconcile resolved gaps on resume (a gap whose plan has a matching `*-SUMMARY.md` is marked `status: resolved`, not re-diagnosed as a fresh blocker).
 </downstream_consumer>
 """,
   subagent_type="gsd-planner",
   model="{planner_model}",
   description="Plan gap fixes for Phase {phase}"
 )
-```
+````
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
