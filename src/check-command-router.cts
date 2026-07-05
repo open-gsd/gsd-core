@@ -32,6 +32,10 @@ const { getRoadmapPhaseWithFallback } = roadmapModule;
 import gapCheckerModule = require('./gap-checker.cjs');
 const { runGapAnalysis } = gapCheckerModule;
 import { routeProhibitionEnforcement } from './prohibition-enforcement.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import gatePredicateEval = require('./gate-predicate-evaluator.cjs');
+const { evaluatePredicate } = gatePredicateEval;
+import { execTool } from './shell-command-projection.cjs';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -882,6 +886,106 @@ interface RouteCheckCommandOptions {
   raw: boolean;
 }
 
+// ─── predicate (generic gate-predicate evaluator, #2008) ──────────────────────
+
+/**
+ * Production subprocess binding for the gate-predicate evaluator. Wraps the
+ * bounded `execTool` seam (shell-command-projection) as a `runBoundedShell`
+ * the pure evaluator consumes. `sh -c` runs the interpolated command; the
+ * subprocess inherits the process env and is killed (SIGTERM) on timeout.
+ *
+ * `timedOut` is derived from the kill signal: spawnSync sets `signal: 'SIGTERM'`
+ * when the `timeout` fires, distinct from a normal non-zero exit code. A command
+ * that self-terminates with SIGTERM is indistinguishable at this seam and is
+ * reported as a timeout — either way the gate blocks (non-zero), so the outcome
+ * is fail-closed and correct. See ADR-2008.
+ */
+function buildPredicateDeps() {
+  return {
+    runBoundedShell(opts: { command: string; cwd: string; timeoutMs: number }): {
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      signal: NodeJS.Signals | null;
+      timedOut: boolean;
+    } {
+      const r = execTool('sh', ['-c', opts.command], { cwd: opts.cwd, timeout: opts.timeoutMs });
+      return {
+        exitCode: r.exitCode,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        signal: r.signal,
+        timedOut: r.signal === 'SIGTERM',
+      };
+    },
+  };
+}
+
+/** Parse `--flag value` pairs from an args array into a map (last write wins). */
+function parsePredicateFlags(args: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a !== 'string') continue;
+    if (!a.startsWith('--')) continue;
+    const key = a.slice(2);
+    const next = args[i + 1];
+    if (key.length > 0 && typeof next === 'string' && !next.startsWith('--')) {
+      out[key] = next;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * `check predicate` — generic evaluator for capability gate `check.predicate`
+ * blocks (#2008). The workflow gate-dispatch invokes this for any gate whose
+ * `check` carries a `predicate` (instead of a `query`); the predicate object is
+ * passed as `--predicate '<json>'`. Emits the standard `{ block, message,
+ * details? }` gate contract on success. A malformed predicate / unknown kind
+ * THROWS inside the evaluator and is mapped here to `error()` (non-zero exit),
+ * which the workflow's two-step gate contract treats as a step-1 command failure
+ * routed per the gate's `onError`.
+ *
+ * Invocation:
+ *   gsd_run check predicate --predicate '<json>' \
+ *     [--phase-dir <dir>] [--phase-number <n>] [--phase-req-ids <ids>] --raw
+ *
+ * The subprocess runs at the runtime project root (the `cwd` passed to this
+ * router), inheriting the process env. Interpolation placeholders
+ * ${PHASE_NUMBER}/${PHASE_DIR}/${PHASE_REQ_IDS} are substituted from the flags.
+ */
+function cmdCheckPredicate(projectDir: string, args: string[], raw: boolean): void {
+  const flags = parsePredicateFlags(args);
+  const predicateJson = flags['predicate'];
+  if (!predicateJson) {
+    error('predicate requires --predicate <json> (the gate hook check.predicate object)', ERROR_REASON.SDK_MISSING_ARG);
+    return;
+  }
+  let predicate: unknown;
+  try {
+    predicate = JSON.parse(predicateJson);
+  } catch {
+    error('predicate --predicate value must be valid JSON', ERROR_REASON.USAGE);
+    return;
+  }
+  const ctx = {
+    cwd: projectDir,
+    phaseNumber: flags['phase-number'],
+    phaseDir: flags['phase-dir'],
+    phaseReqIds: flags['phase-req-ids'],
+  };
+  let result;
+  try {
+    result = evaluatePredicate(predicate, ctx, buildPredicateDeps());
+  } catch (e) {
+    error(`gate predicate evaluation failed: ${(e as Error).message}`, ERROR_REASON.USAGE);
+    return;
+  }
+  output(result, raw, undefined);
+}
+
 function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
   // Normalize dots to hyphens in the subcommand so both forms are accepted.
   // This makes `check.query = "ui.plan-gate"` (dotted form in capability.json gates)
@@ -934,6 +1038,15 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     cmdVerifyCodebaseDrift(cwd, raw);
     return;
   }
+  if (subcommand === 'predicate') {
+    // Generic gate-predicate evaluator (#2008). The workflow gate-dispatch calls
+    // this for any gate whose `check` carries a `predicate` (instead of a `query`),
+    // passing the predicate object as --predicate '<json>'. NOTE: unlike the
+    // `check.query` subcommands above (which take positional phase args), this
+    // subcommand parses --flag value pairs.
+    cmdCheckPredicate(cwd, args, raw);
+    return;
+  }
   if (subcommand === 'prohibition-enforcement') {
     // The deterministic test-tier prohibition PRODUCER/gate (#1259, ADR-550 D5d). Locates the
     // wired mechanical check (node-test or lint-rule), confirms fail-first, runs it, builds
@@ -942,7 +1055,7 @@ function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
     routeProhibitionEnforcement(args, raw);
     return;
   }
-  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, prohibition-enforcement, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  error('Unknown check subcommand. Available: auto-mode, decision-coverage-plan, decision-coverage-verify, gap-analysis-plan-post, predicate, prohibition-enforcement, tdd-review-checkpoint, ui-plan-gate, ui-safety-gate, verify-schema-drift, verify-codebase-drift', ERROR_REASON.SDK_UNKNOWN_COMMAND);
 }
 
 export = {
@@ -953,4 +1066,7 @@ export = {
   computeUiSafetyGate,
   cmdGapAnalysisPlanPost,
   cmdTddReviewCheckpoint,
+  cmdCheckPredicate,
+  buildPredicateDeps,
+  parsePredicateFlags,
 };
