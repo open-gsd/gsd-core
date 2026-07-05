@@ -765,6 +765,55 @@ describe('roadmap update-plan-progress command', () => {
     assert.strictEqual(output.phases[0].disk_status, 'partial');
   });
 
+  test('#1988 — stray non-plan *-SUMMARY.md files do not inflate summary_count or flip phase to Complete', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] **Phase 30: Big** - description
+
+### Phase 30: Big
+**Goal:** big goal
+**Plans:** TBD
+
+## Progress
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 30. Big | v3.0 | 0/4 | Planned | - |
+`
+    );
+
+    // 4 plans, only 1 has a real summary; plus 3 stray non-plan summaries
+    // (the exact names from the #1988 report: FIX-CR02, FIX-WR02-04, GAPCLOSURE).
+    const p = path.join(tmpDir, '.planning', 'phases', '30-big');
+    fs.mkdirSync(p, { recursive: true });
+    fs.writeFileSync(path.join(p, '30-01-PLAN.md'), '# Plan 1');
+    fs.writeFileSync(path.join(p, '30-02-PLAN.md'), '# Plan 2');
+    fs.writeFileSync(path.join(p, '30-03-PLAN.md'), '# Plan 3');
+    fs.writeFileSync(path.join(p, '30-04-PLAN.md'), '# Plan 4');
+    fs.writeFileSync(path.join(p, '30-01-SUMMARY.md'), '# Summary 1');
+    // Strays — these must NOT count:
+    fs.writeFileSync(path.join(p, '30-FIX-CR02-SUMMARY.md'), '# fix summary');
+    fs.writeFileSync(path.join(p, '30-FIX-WR02-04-SUMMARY.md'), '# fix summary');
+    fs.writeFileSync(path.join(p, '30-GAPCLOSURE-SUMMARY.md'), '# gap closure summary');
+
+    const result = runGsdTools('roadmap update-plan-progress 30', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.plan_count, 4, 'plan_count is the 4 real plans');
+    assert.strictEqual(output.summary_count, 1, 'stray summaries must not inflate the count');
+    assert.strictEqual(output.status, 'In Progress', 'must not flip to Complete');
+    assert.strictEqual(output.complete, false, 'must not be complete');
+
+    // The ROADMAP row must NOT show 4/4 Complete.
+    const roadmapContent = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmapContent.includes('1/4'), 'roadmap row must show the real 1/4 progress');
+    assert.ok(!/4\/4\s*\|\s*Complete/.test(roadmapContent), 'must not stamp 4/4 Complete');
+    assert.ok(!/\[x\] \*\*Phase 30/.test(roadmapContent), 'phase checkbox must not be checked');
+  });
+
   test('updates progress and checks checkbox on completion', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),

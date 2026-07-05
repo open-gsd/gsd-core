@@ -1622,11 +1622,19 @@ describe('bug-444: resolver finds repo-local .claude install', () => {
         `Found snippet content:\n${content.trim()}`,
     );
 
-    // Must still contain the $HOME/.claude fallback arm
-    const homeClaudeIdx = content.indexOf('$HOME/.claude/gsd-core/bin/');
+    // Must still contain the $HOME/.claude fallback arm (#1865: now carried as
+    // the ${CLAUDE_CONFIG_DIR:-$HOME/.claude} fallback, so match the stem).
+    const homeClaudeIdx = content.indexOf('$HOME/.claude');
     assert.ok(
       homeClaudeIdx !== -1,
       `Snippet must still contain the $HOME/.claude fallback arm.`,
+    );
+
+    // #1865: the Claude arm must honor CLAUDE_CONFIG_DIR (the installer writes
+    // there when it is set), with $HOME/.claude as the fallback.
+    assert.ok(
+      content.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude}/gsd-core/bin/'),
+      `Snippet's Claude arm must honor CLAUDE_CONFIG_DIR via \${CLAUDE_CONFIG_DIR:-$HOME/.claude}.`,
     );
 
     // Repo-local check must appear BEFORE $HOME/.claude check (local overrides global)

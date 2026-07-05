@@ -2626,8 +2626,9 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 - REQ-GRAPH-03: Build runs within the configurable `graphify.build_timeout` (seconds); exceeding the timeout aborts cleanly without leaving a partial graph.
 - REQ-GRAPH-04: `graphify.cjs` falls back to `graph.links` when `graph.edges` is absent so older graph artifacts keep rendering.
 - REQ-GRAPH-05: Graphify is invoked through `gsd-tools.cjs graphify ...` command handlers.
+- REQ-GRAPH-06: The knowledge-graph location is configurable via `graphify.graph_path` (issue #1825) so one umbrella-level cross-repo graph can serve multiple sibling projects; `query`/`status`/`diff` read the configured graph (relative to project root), with a byte-identical `.planning/graphs/` default when unset.
 
-**Configuration:** `graphify.enabled`, `graphify.build_timeout`
+**Configuration:** `graphify.enabled`, `graphify.build_timeout`, `graphify.graph_path`
 **Reference files:** `commands/gsd/graphify.md`, `bin/lib/graphify.cjs`
 
 ---

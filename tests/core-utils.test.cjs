@@ -529,8 +529,72 @@ describe('extractCanonicalPlanId', () => {
     // extractCanonicalPlanId operates on a filename string (not a real path).
     // The function does not sanitize slashes — it strips .md suffixes and
     // attempts to find phase tokens. The result is a string (no crash).
-    const result = coreUtils.extractCanonicalPlanId('../../../etc/passwd');
+     const result = coreUtils.extractCanonicalPlanId('../../../etc/passwd');
     assert.ok(typeof result === 'string');
     assert.ok(result.length > 0);
+  });
+});
+
+// ─── countMatchedSummaries (#1988) ───────────────────────────────────────────
+// Lives in core-utils.test.cjs (not roadmap.test.cjs) so the Stryker core-utils
+// shard — which runs only this file — actually covers the helper's mutants.
+
+describe('countMatchedSummaries — stray non-plan summaries excluded (#1988)', () => {
+  const { countMatchedSummaries } = coreUtils;
+
+  test('counts only summaries that are the PLAN→SUMMARY partner of a plan', () => {
+    const plans = ['30-01-PLAN.md', '30-02-PLAN.md', '30-10-PLAN.md'];
+    const summaries = ['30-01-SUMMARY.md', '30-FIX-CR02-SUMMARY.md', '30-GAPCLOSURE-SUMMARY.md'];
+    assert.strictEqual(countMatchedSummaries(plans, summaries), 1);
+  });
+
+  test('all plans have a partner summary → counts every plan', () => {
+    const plans = ['01-01-PLAN.md', '01-02-PLAN.md'];
+    const summaries = ['01-01-SUMMARY.md', '01-02-SUMMARY.md'];
+    assert.strictEqual(countMatchedSummaries(plans, summaries), 2);
+  });
+
+  test('nested layout pairing preserved (plans/PLAN-NN ↔ plans/SUMMARY-NN)', () => {
+    const plans = ['plans/PLAN-01.md', 'plans/PLAN-02.md'];
+    const summaries = ['plans/SUMMARY-01.md'];
+    assert.strictEqual(countMatchedSummaries(plans, summaries), 1);
+  });
+
+  test('extended layout pairing (N-PLAN-MM-slug ↔ N-MM-SUMMARY)', () => {
+    const plans = ['3-PLAN-01-setup.md', '5-PLAN-02-migrations.md'];
+    const summaries = ['3-01-SUMMARY.md', '5-02-SUMMARY.md'];
+    assert.strictEqual(countMatchedSummaries(plans, summaries), 2);
+  });
+
+  test('extended layout: only the matching plan counts (no cross-pairing)', () => {
+    const plans = ['3-PLAN-01-setup.md', '3-PLAN-02-seed.md'];
+    const summaries = ['3-01-SUMMARY.md']; // only plan 01 has a summary
+    assert.strictEqual(countMatchedSummaries(plans, summaries), 1);
+  });
+
+  test('bare PLAN.md ↔ SUMMARY.md', () => {
+    assert.strictEqual(countMatchedSummaries(['PLAN.md'], ['SUMMARY.md']), 1);
+    assert.strictEqual(countMatchedSummaries(['PLAN.md'], []), 0);
+  });
+
+  test('bare PLAN.md ↔ PLAN-SUMMARY.md (stem-suffix convention)', () => {
+    assert.strictEqual(countMatchedSummaries(['PLAN.md'], ['PLAN-SUMMARY.md']), 1);
+  });
+
+  test('legacy <N>-PLAN-<NN> ↔ <N>-PLAN-<NN>-SUMMARY', () => {
+    const plans = ['14-PLAN-01.md', '14-PLAN-02.md'];
+    const summaries = ['14-PLAN-01-SUMMARY.md', '14-PLAN-02-SUMMARY.md'];
+    assert.strictEqual(countMatchedSummaries(plans, summaries), 2);
+  });
+
+  test('stray summaries never count when no plan partners exist', () => {
+    const plans = ['30-01-PLAN.md'];
+    const strays = ['30-FIX-CR02-SUMMARY.md', '30-GAPCLOSURE-SUMMARY.md', '30-01-EXTRA-SUMMARY.md'];
+    assert.strictEqual(countMatchedSummaries(plans, strays), 0);
+  });
+
+  test('absolute path (leading slash) still pairs via the dir split', () => {
+    // Guards the lastIndexOf('/') >= 0 boundary (slash at index 0).
+    assert.strictEqual(countMatchedSummaries(['/abs/PLAN-01.md'], ['/abs/SUMMARY-01.md']), 1);
   });
 });

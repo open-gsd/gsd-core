@@ -21,6 +21,16 @@ Every executable task carries a runtime budget. Planners emit it via a
 `<runtime_budget>` element (taught by the `external-job` Capability's
 `plan:post` fragment); executors branch on it at `execute:wave:post`.
 
+> **Contribution point.** `#1164` specifies classification at
+> `execute:wave:pre`, but `execute-phase.md` only dispatches
+> `execute:wave:post` today — `wave:pre` is declared in the loop host contract
+> but not rendered. Wiring `wave:pre` dispatch is a core-loop change `#1164`
+> explicitly puts out of scope ("without touching core loop semantics"), so the
+> Capability registers at `execute:wave:post` and the executor honors the
+> classification guidance **before** running any task tagged
+> `<runtime_budget>long_compute</runtime_budget>`, whether in the current or a
+> subsequent wave.
+
 | Budget | Meaning | Execute behavior |
 |---|---|---|
 | `quick` | Under ~2 min | Run normally in the foreground. |
@@ -93,7 +103,33 @@ state→manifest-status mapping, manifest build/validate, `sbatch`/`squeue`/
 behind a single module; a new backend adds a sibling state map and parser
 without touching core.
 
-## 7. Related
+## 7. Configuration
+
+The `external-job` Capability declares its config keys in
+[`capability.json`](../../capabilities/external-job/capability.json) and the
+`slurm-adapter` resolves them through the canonical capability-config seam
+(`resolveConfigKey` in `capability-activation.cjs`). **Precedence: env override
+> nested config value > registry default.**
+
+| Key | Default | Env override | Read by |
+|---|---|---|---|
+| `external_job.enabled` | `false` | — | Capability gate (`when` on both contributions). Master toggle; default-off. |
+| `external_job.backend` | `slurm` | — | Pluggability seam (LSF/PBS/K8s future). Core never interprets it. |
+| `external_job.artifact_dir` | `Artifacts/jobs` | `GSD_EXTERNAL_JOB_ARTIFACT_DIR` | Adapter surfaces the resolved root in `submit` output. |
+| `external_job.submit_timeout_ms` | `30000` | `GSD_SLURM_SUBMIT_TIMEOUT_MS` | Adapter bounds the `sbatch` subprocess. |
+| `external_job.poll_timeout_ms` | `15000` | `GSD_SLURM_POLL_TIMEOUT_MS` | Adapter bounds the `squeue`/`sacct` subprocess. |
+
+Config keys live nested under `external_job` in `.planning/config.json`, e.g.:
+
+```json
+{ "external_job": { "enabled": true, "submit_timeout_ms": 45000 } }
+```
+
+The timeouts are load-bearing for the bounded-subprocess policy: the adapter
+never unbounds a scheduler subprocess, and a non-numeric config value falls back
+to the registry default rather than producing `NaN` (no guessing).
+
+## 8. Related
 
 - **How-To:** [`../how-to/async-external-jobs.md`](../how-to/async-external-jobs.md) — using the SLURM adapter.
 - **Contract:** [`planning-artifacts.md`](./planning-artifacts.md) — the manifest stability contract.
