@@ -22,8 +22,6 @@ const fc = require('fast-check');
 
 const {
   evaluatePredicate,
-  evaluateCommandExitZero,
-  interpolate,
   COMMAND_EXIT_ZERO_DEFAULT_TIMEOUT_MS,
   COMMAND_MAX_OUTPUT_CHARS,
   COMMAND_MAX_LENGTH,

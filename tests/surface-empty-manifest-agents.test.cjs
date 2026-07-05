@@ -13,6 +13,7 @@ const os = require('os');
 const path = require('path');
 
 const { _syncGsdDir } = require('../gsd-core/bin/lib/surface.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-surface-empty-')); }
 
@@ -26,7 +27,7 @@ describe('#2018 — empty manifest must not delete gsd-* agents', () => {
     }
     // Staged dir is EMPTY (unresolvable manifest → nothing staged)
   });
-  afterEach(() => { try { fs.rmSync(dest, { recursive: true, force: true }); } catch {} try { fs.rmSync(staged, { recursive: true, force: true }); } catch {} });
+  afterEach(() => { cleanup(dest); cleanup(staged); });
 
   test('empty manifest → agents preserved (not deleted)', () => {
     _syncGsdDir(staged, dest, 'agents', new Map());
