@@ -34,6 +34,9 @@ const { countMatchedSummaries } = coreUtils;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter, parseMustHavesBlock } = frontmatter;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import verificationMod = require('./verification.cjs');
+const { readVerificationStatus } = verificationMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -504,7 +507,13 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     return;
   }
 
-  const isComplete = summaryCount >= planCount;
+  // Verification gate (#2022): do NOT check the phase checkbox or stamp a
+  // completion date until the phase's verification status is 'passed', matching
+  // cmdPhaseComplete's gate (phase.cts:1436). Previously the checkbox fired the
+  // moment the last plan summary landed — before gsd-verifier had verified.
+  const phaseDir = path.join(cwd, phaseInfo!.directory);
+  const verificationPassed = readVerificationStatus(phaseDir).status === 'passed';
+  const isComplete = summaryCount >= planCount && verificationPassed;
   const status = isComplete ? 'Complete' : summaryCount > 0 ? 'In Progress' : 'Planned';
   const today = realClock.today();
 
