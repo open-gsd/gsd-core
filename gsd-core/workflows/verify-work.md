@@ -701,7 +701,7 @@ Display:
 
 Spawn gsd-planner in --gaps mode:
 
-```
+````
 Agent(
   prompt="""
 <planning_context>
@@ -737,7 +737,7 @@ This lets `/gsd:verify-work` reconcile resolved gaps on resume (a gap whose plan
   model="{planner_model}",
   description="Plan gap fixes for Phase {phase}"
 )
-```
+````
 
 > **ORCHESTRATOR RULE — CODEX RUNTIME**: After calling Agent() above, stop working on this task immediately. Do not read more files, edit code, or run tests related to this task while the subagent is active. Wait for the subagent to return its result. This prevents duplicate work, conflicting edits, and wasted context. Only resume when the subagent result is available.
 
