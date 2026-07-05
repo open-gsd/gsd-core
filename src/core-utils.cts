@@ -186,6 +186,45 @@ function extractCanonicalPlanId(filename: string): string {
   return base;
 }
 
+/**
+ * Count summaries that correspond to a real plan (#1988).
+ *
+ * A summary counts toward phase completion iff it pairs with an existing plan
+ * file. This excludes stray non-plan summaries — e.g. `30-FIX-CR02-SUMMARY.md`,
+ * `30-GAPCLOSURE-SUMMARY.md` — that inflate the raw `*-SUMMARY.md` count and
+ * silently flip a phase to Complete when plans are actually missing summaries.
+ *
+ * Pairing is layout-agnostic. For each plan, up to three candidate summary
+ * filenames are generated and any match suffices:
+ *   1. marker swap `PLAN`→`SUMMARY` on the basename — root padded
+ *      (`30-01-PLAN.md`↔`30-01-SUMMARY.md`), nested (`PLAN-01.md`↔
+ *      `SUMMARY-01.md`, incl. a `plans/` prefix), and bare (`PLAN.md`↔
+ *      `SUMMARY.md`);
+ *   2. `<stem>-SUMMARY.md` — bare (`PLAN.md`↔`PLAN-SUMMARY.md`) and legacy
+ *      (`14-PLAN-01.md`↔`14-PLAN-01-SUMMARY.md`);
+ *   3. extended `<n>-PLAN-<m>…`→`<n>-<m>-SUMMARY.md`
+ *      (`3-PLAN-01-setup.md`↔`3-01-SUMMARY.md`).
+ * The swap is applied to the basename only so a lowercase `plans/` dir prefix
+ * isn't corrupted to `SUMMARYs/…`.
+ */
+function countMatchedSummaries(planFiles: string[], summaryFiles: string[]): number {
+  const summarySet = new Set(summaryFiles);
+  let matched = 0;
+  for (const plan of planFiles) {
+    const slashIdx = plan.lastIndexOf('/');
+    const dir = slashIdx >= 0 ? plan.slice(0, slashIdx + 1) : '';
+    const base = (dir ? plan.slice(dir.length) : plan).replace(/\.md$/i, '');
+    const candidates: string[] = [
+      dir + base.replace(/PLAN/i, 'SUMMARY') + '.md',
+      dir + base + '-SUMMARY.md',
+    ];
+    const extended = base.match(/^(\d+)-PLAN-(\d+)/i);
+    if (extended) candidates.push(dir + extended[1] + '-' + extended[2] + '-SUMMARY.md');
+    if (candidates.some((c) => summarySet.has(c))) matched++;
+  }
+  return matched;
+}
+
 export = {
   toPosixPath,
   detectSubRepos,
@@ -198,4 +237,5 @@ export = {
   readSubdirectories,
   timeAgo,
   extractCanonicalPlanId,
+  countMatchedSummaries,
 };

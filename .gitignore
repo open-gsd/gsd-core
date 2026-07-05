@@ -179,6 +179,7 @@ build/
 /gsd-core/bin/lib/phase-command-router.cjs
 /gsd-core/bin/lib/surface.cjs
 /gsd-core/bin/lib/gap-checker.cjs
+/gsd-core/bin/lib/gate-predicate-evaluator.cjs
 /gsd-core/bin/lib/docs.cjs
 /gsd-core/bin/lib/check-command-router.cjs
 /gsd-core/bin/lib/frontmatter.cjs

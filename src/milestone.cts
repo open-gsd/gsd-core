@@ -284,7 +284,13 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // Archive REQUIREMENTS.md
   if (fs.existsSync(reqPath)) {
     const reqContent = fs.readFileSync(reqPath, 'utf-8');
-    const archiveHeader = `# Requirements Archive: ${version} ${milestoneName}\n\n**Archived:** ${today}\n**Status:** SHIPPED\n\nFor current requirements, see \`.planning/REQUIREMENTS.md\`.\n\n---\n\n`;
+    // Derive the display path from the same source the writer uses (reqPath), so a
+    // workstream archive header points at `.planning/workstreams/<ws>/REQUIREMENTS.md`
+    // instead of the hardcoded root path (#1993). Root case is byte-identical.
+    // Normalize to POSIX separators so the header is cross-platform (Windows
+    // path.relative yields backslashes; the original literal was forward-slash).
+    const reqDisplay = path.relative(cwd, reqPath).split(path.sep).join('/');
+    const archiveHeader = `# Requirements Archive: ${version} ${milestoneName}\n\n**Archived:** ${today}\n**Status:** SHIPPED\n\nFor current requirements, see \`${reqDisplay}\`.\n\n---\n\n`;
     platformWriteSync(path.join(archiveDir, `${version}-REQUIREMENTS.md`), archiveHeader + reqContent);
   }
 

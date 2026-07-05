@@ -355,3 +355,86 @@ describe('#1698 regression: codex review is captured via --output-last-message, 
 });
   });
 }
+
+
+// ────────────────────────────────────────────────────────────────────────
+// #1936: OpenCode reviewer must not silently yield an empty review
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe('#1936: OpenCode reviewer empty-output hardening', () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #1936)
+// review.md is a workflow file whose embedded bash IS the runtime contract; the
+// `opencode run` invocation on a large agentic prompt cannot be run in CI, so we
+// assert on its content.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const reviewPath = path.resolve(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+const read = () => fs.readFileSync(reviewPath, 'utf-8');
+
+// Isolate the base OpenCode reviewer block (heading -> next reviewer heading) so
+// assertions about its stderr handling don't accidentally match sibling reviewers
+// (gemini/claude/coderabbit/qwen legitimately use /dev/null).
+function openCodeBlock() {
+  const c = read();
+  const start = c.indexOf('**OpenCode (via GitHub Copilot):**');
+  assert.notStrictEqual(start, -1, 'review.md must contain the base OpenCode reviewer block');
+  const rest = c.slice(start + 1);
+  const nextHeading = rest.search(/\n\*\*[A-Z][^\n]*:\*\*/);
+  return nextHeading === -1 ? c.slice(start) : c.slice(start, start + 1 + nextHeading);
+}
+
+describe('bug #1936: OpenCode reviewer must not silently yield an empty review', () => {
+  test('captures opencode stderr to a sidecar, never /dev/null', () => {
+    const block = openCodeBlock();
+    assert.match(block, /opencode run [^\n]*2>\/tmp\/gsd-review-opencode-\{phase\}\.err/,
+      'the opencode invocation must send stderr to a .err sidecar so failures are diagnosable');
+    assert.doesNotMatch(block, /opencode run [^\n]*2>\/dev\/null/,
+      'the opencode invocation must not discard stderr to /dev/null (#1936)');
+  });
+
+  test('requests structured JSON output and reconstructs review from assistant text parts', () => {
+    const block = openCodeBlock();
+    assert.match(block, /opencode run [^\n]*--format json/,
+      'must invoke opencode with --format json so assistant text parts are recoverable');
+    assert.match(block, /select\(\.type=="text"\)\s*\|\s*\.part\.text/,
+      'must extract the assistant text parts via `.part.text` from the JSON event stream');
+  });
+
+  test('gates the empty-review stub on extracted CONTENT, not output-file size', () => {
+    // An empty jq extraction still writes a trailing newline, so a `[ -s file ]`
+    // check would treat a content-less review as populated and skip the stub. The
+    // block must test the captured text variable instead.
+    const block = openCodeBlock();
+    assert.match(block, /OPENCODE_REVIEW=\$\(jq/, 'must capture the extraction into a variable');
+    assert.match(block, /\[ -n "\$OPENCODE_REVIEW" \]/,
+      'must branch on the content of $OPENCODE_REVIEW, not on the size of the .md file');
+    assert.doesNotMatch(block, /\[ ! -s \/tmp\/gsd-review-opencode-\{phase\}\.md \]/,
+      'must not gate the stub on `[ ! -s ...opencode...md ]` (a lone newline defeats it)');
+  });
+
+  test('empty-output stub is diagnosable: references #1936, stop reason/tokens, and stderr', () => {
+    const block = openCodeBlock();
+    assert.match(block, /#1936/, 'the empty-output stub must reference the issue');
+    assert.match(block, /step_finish[\s\S]*\.part\.reason[\s\S]*\.part\.tokens\.output/,
+      'the stub must surface the stop reason and output-token count from the final step_finish');
+    assert.match(block, /cat \/tmp\/gsd-review-opencode-\{phase\}\.err/,
+      'the stub must append the captured stderr');
+  });
+
+  test('does not regress the Codex reviewer block (still captures stderr to .err)', () => {
+    // #1936 changes only the OpenCode block; the Codex block's existing
+    // stderr-to-sidecar contract must remain intact.
+    assert.match(read(), /codex exec [^\n]*2>\/tmp\/gsd-review-codex-\{phase\}\.err/,
+      'the Codex reviewer block must be left unchanged');
+  });
+});
+
+  });
+}
