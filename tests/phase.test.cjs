@@ -2530,6 +2530,53 @@ describe('phase complete command', () => {
     assert.ok(roadmap.includes('completed'), 'completion date should be added');
   });
 
+  test('#2012 — Progress row updated even when an earlier phase-numbered table precedes ## Progress', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] Phase 3: Build
+
+### Phase 3: Build
+**Goal:** Build stuff
+
+## Requirements Coverage
+
+| Phase | Requirements | Count |
+|-------|-------------|-------|
+| 3. Build | R-01 | 5 |
+
+## Progress
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 3. Build | v1.0 | 0/1 | Planned | - |
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 03\n**Status:** In progress\n**Last Activity:** 2025-01-01\n`
+    );
+
+    const p3 = path.join(tmpDir, '.planning', 'phases', '03-build');
+    fs.mkdirSync(p3, { recursive: true });
+    fs.writeFileSync(path.join(p3, '03-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p3, '03-01-SUMMARY.md'), '# Summary');
+
+    const result = runVerifiedPhaseComplete('phase complete 3', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+
+    // The Requirements coverage table row must be UNCHANGED (3 columns, not a Progress row).
+    const reqRow = roadmap.match(/^\| 3\. Build \| R-01 \| 5 \|$/m);
+    assert.ok(reqRow, 'Requirements coverage row must be untouched');
+
+    // The Progress row must be updated to Complete with a date.
+    const progressRow = roadmap.match(/^\| 3\. Build \| v1\.0 \| 1\/1 \| Complete\s+\| \d{4}-\d{2}-\d{2} \|/m);
+    assert.ok(progressRow, 'Progress row must be updated to Complete with a date');
+  });
+
   test('detects last phase in milestone', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
