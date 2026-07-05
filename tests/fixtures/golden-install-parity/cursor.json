@@ -373,7 +373,7 @@
   "gsd-core/workflows/update.md": "23e294ba707c3580",
   "gsd-core/workflows/validate-phase.md": "2df0c6e298a5f249",
   "gsd-core/workflows/verify-phase.md": "0d4ffabc1caa473a",
-  "gsd-core/workflows/verify-work.md": "74f5f7349ea9f757",
+  "gsd-core/workflows/verify-work.md": "145596b2542c457a",
   "hooks/gsd-cursor-post-tool.js": "019d503aee8b4a3f",
   "hooks/gsd-cursor-session-start.js": "c6e04ed597ea7020",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
