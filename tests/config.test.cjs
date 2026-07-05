@@ -692,6 +692,61 @@ describe('config-new-project command', () => {
   });
 });
 
+// ─── config-set silent coercion (#1581) ──────────────────────────────────────
+
+describe('config-set — no silent coercion (#1581)', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('context_window Infinity is rejected (no null-on-disk / output≠disk divergence)', () => {
+    const result = runGsdTools('config-set context_window Infinity', tmpDir);
+    assert.strictEqual(result.success, false, 'Infinity must be rejected');
+    assert.match(result.error, /context_window/i);
+    // The old bug number-coerced Infinity, then JSON.stringify rendered it as
+    // `null` on disk while the CLI echoed 'Infinity'. The fix rejects before
+    // any write, so config.json is left untouched (no null entry written).
+    assert.doesNotThrow(() => {
+      const configPath = path.join(tmpDir, '.planning', 'config.json');
+      if (!fs.existsSync(configPath)) return; // never written — the rejection path
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      assert.ok(cfg.context_window !== null && cfg.context_window !== Infinity,
+        'context_window must not be written as null/Infinity');
+    });
+  });
+
+  test('context_window 0 is rejected (must be a positive integer)', () => {
+    const result = runGsdTools('config-set context_window 0', tmpDir);
+    assert.strictEqual(result.success, false, '0 must be rejected');
+    assert.match(result.error, /positive integer/i);
+  });
+
+  test('context_window <positive integer> is accepted and persisted as a finite number', () => {
+    const result = runGsdTools('config-set context_window 200000', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.context_window, 200000);
+    assert.strictEqual(typeof config.context_window, 'number');
+    assert.ok(Number.isFinite(config.context_window), 'must be finite on disk');
+  });
+
+  test('project_code 007 persists as the string "007" (leading zero preserved, not coerced to 7)', () => {
+    const result = runGsdTools('config-set project_code 007', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.project_code, '007');
+    assert.strictEqual(typeof config.project_code, 'string',
+      'project_code is an identifier string — must not be number-coerced');
+  });
+
+  test('regression guard: numeric coercion still works for numeric keys (granularity 42)', () => {
+    const result = runGsdTools('config-set granularity 42', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(readConfig(tmpDir).granularity, 42);
+  });
+});
+
 // ─── config-set (research_before_questions and discuss_mode) ──────────────────
 
 describe('config-set research_before_questions and discuss_mode', () => {
