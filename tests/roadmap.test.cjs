@@ -814,6 +814,80 @@ describe('roadmap update-plan-progress command', () => {
     assert.ok(!/\[x\] \*\*Phase 30/.test(roadmapContent), 'phase checkbox must not be checked');
   });
 
+  test('#2022 — all summaries present but verification NOT passed → checkbox NOT checked', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] **Phase 1: Test** - description
+
+### Phase 1: Test
+**Goal:** Test goal
+**Plans:** TBD
+
+## Progress
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Test | v1.0 | 0/1 | Planned | - |
+`
+    );
+
+    // 1 plan + 1 summary (all summaries present) but NO VERIFICATION.md → the
+    // verification gate (#2022) must prevent the checkbox from being checked.
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan 1');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary 1');
+
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.complete, false, 'must NOT be complete without verification');
+    assert.strictEqual(output.status, 'In Progress', 'status should be In Progress (not Complete)');
+
+    const roadmapContent = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmapContent.includes('[ ] **Phase 1'), 'phase checkbox must remain unchecked');
+    assert.ok(!/\[x\] \*\*Phase 1/.test(roadmapContent), 'phase checkbox must NOT be checked without verification');
+    assert.ok(roadmapContent.includes('1/1'), 'plan count should still be updated');
+  });
+
+  test('#2022 — verification status NOT passed → checkbox NOT checked', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] **Phase 1: Test**
+
+### Phase 1: Test
+**Goal:** Test goal
+
+## Progress
+
+| Phase | Milestone | Plans Complete | Status | Completed |
+|-------|-----------|----------------|--------|-----------|
+| 1. Test | v1.0 | 0/1 | Planned | - |
+`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan 1');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary 1');
+    // Verification exists but status is gaps_found (not passed)
+    fs.writeFileSync(path.join(p1, '01-VERIFICATION.md'), '---\nstatus: gaps_found\n---\n# Verification\n');
+
+    const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.complete, false, 'must NOT be complete (verification gaps_found)');
+    assert.strictEqual(output.status, 'In Progress');
+    const roadmapContent = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(!roadmapContent.includes('[x]'), 'checkbox must NOT be checked (verification not passed)');
+  });
+
   test('updates progress and checks checkbox on completion', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
@@ -833,11 +907,12 @@ describe('roadmap update-plan-progress command', () => {
 `
     );
 
-    // Create phase dir with 1 plan, 1 summary (complete)
+    // Create phase dir with 1 plan, 1 summary (complete) + verification passed (#2022 gate)
     const p1 = path.join(tmpDir, '.planning', 'phases', '01-test');
     fs.mkdirSync(p1, { recursive: true });
     fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan 1');
     fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary 1');
+    fs.writeFileSync(path.join(p1, '01-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
 
     const result = runGsdTools('roadmap update-plan-progress 1', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -878,6 +953,7 @@ describe('roadmap update-plan-progress command', () => {
     fs.mkdirSync(p3, { recursive: true });
     fs.writeFileSync(path.join(p3, '03-01-PLAN.md'), '# Plan 1');
     fs.writeFileSync(path.join(p3, '03-01-SUMMARY.md'), '# Summary 1');
+    fs.writeFileSync(path.join(p3, '03-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
 
     const result = runGsdTools('roadmap update-plan-progress 03', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
@@ -959,6 +1035,7 @@ describe('roadmap update-plan-progress command', () => {
     fs.mkdirSync(p50, { recursive: true });
     fs.writeFileSync(path.join(p50, '50-01-PLAN.md'), '# Plan');
     fs.writeFileSync(path.join(p50, '50-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(p50, '50-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
 
     const result = runGsdTools('roadmap update-plan-progress 50', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
