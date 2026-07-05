@@ -8889,6 +8889,33 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     failures.push('gsd-core');
   }
 
+  // Write the .gsd-source marker so runtime source resolution succeeds at
+  // runtime (#1477). The Claude-global skills layout ships gsd-core/{bin,
+  // contexts,references,templates,workflows} but NOT the commands/gsd source
+  // tree, and _runLegacyUninstallCleanup actively removes any commands/gsd/
+  // for that scope — so findInstallSourceRoot's walk-up has nothing to find
+  // and /gsd-surface (list/status) throws. This is the writer half of the
+  // marker that runtime-artifact-layout.cjs's finders already read (the reader
+  // landed in #1476). It points at the package's own commands/gsd source.
+  // Scoped to the Claude-global layout (issue #1477) — the only install path
+  // that ships the skills layout without a commands/gsd source tree; every
+  // other runtime/scope deploys commands/gsd, so its walk-up already resolves
+  // and needs no marker. Guarded on source presence so a half-published
+  // package never writes a dangling marker.
+  if (runtime === 'claude' && isGlobal) {
+    const gsdSourceCommands = path.join(src, 'commands', 'gsd');
+    if (fs.existsSync(gsdSourceCommands)) {
+      try {
+        fs.writeFileSync(path.join(targetDir, '.gsd-source'), gsdSourceCommands + '\n', 'utf8');
+      } catch (err) {
+        // Non-fatal: install proceeds. But on the Claude-global layout walk-up
+        // also fails (no commands/gsd source tree), so a silent write failure
+        // still leaves /gsd-surface broken at runtime — warn so it's diagnosable.
+        console.warn(`  ${yellow}!${reset} Could not write .gsd-source marker (${err.message}); /gsd-surface list/status may fail`);
+      }
+    }
+  }
+
   // #1629 critical fix: Windsurf workflow wrappers (convertClaudeCommandToWindsurfWorkflow)
   // delegate to command bodies at <targetDir>/gsd-core/commands/gsd/${stem}.md via a
   // hardcoded @~/.claude/gsd-core/commands/gsd/ path that _applyRuntimeRewrites rewrites

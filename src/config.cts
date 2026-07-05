@@ -586,9 +586,20 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   let parsedValue: unknown = val;
   if (val === 'true') parsedValue = true;
   else if (val === 'false') parsedValue = false;
-  else if (!isNaN(Number(val)) && val !== '') parsedValue = Number(val);
+  // #1581: Number.isFinite (not !isNaN) so 'Infinity'/'-Infinity' are NOT
+  // coerced to non-finite numbers that JSON.stringify later renders as `null`
+  // (disk=null while the CLI echoed 'Infinity'). They fall through to the
+  // JSON branch (which rejects them) and stay strings, then per-key validators
+  // reject them with a non-zero exit.
+  else if (Number.isFinite(Number(val)) && val !== '') parsedValue = Number(val);
   else if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
     try { parsedValue = JSON.parse(val); } catch { /* keep as string */ }
+  }
+
+  // #1581: project_code is an identifier string — never number-coerce it. A
+  // leading-zero code like '007' must persist verbatim (not collapse to 7).
+  if (kp === 'project_code') {
+    parsedValue = val;
   }
 
   const VALID_CONTEXT_VALUES = ['dev', 'research', 'review'];
@@ -600,6 +611,15 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   if (kp === 'workflow.drift_threshold') {
     if (typeof parsedValue !== 'number' || !Number.isInteger(parsedValue) || parsedValue < 1) {
       error(`Invalid workflow.drift_threshold '${val}'. Must be a positive integer.`);
+    }
+  }
+
+  // #1581: context_window must be a finite positive integer. 'Infinity' is no
+  // longer number-coerced (see the parse block above) so it reaches here as a
+  // string and is rejected; '0', negatives, and non-integers are also rejected.
+  if (kp === 'context_window') {
+    if (typeof parsedValue !== 'number' || !Number.isFinite(parsedValue) || !Number.isInteger(parsedValue) || parsedValue < 1) {
+      error(`Invalid context_window '${val}'. Must be a positive integer (token count).`, ERROR_REASON.USAGE);
     }
   }
 
