@@ -195,6 +195,24 @@
 
 const fs = require('fs');
 const path = require('path');
+
+// #2002 — self-healing runtime build. The compiled ./lib/*.cjs modules this
+// entrypoint require()s below are gitignored build artifacts (ADR-457), shipped
+// prebuilt in the npm tarball. The Claude Code plugin-marketplace channel never
+// runs `npm run build:lib` or bin/install.js, so on that path they can be
+// absent and every command dies at module load. Compile them once (lock-guarded,
+// idempotent, a no-op when already built) before the ./lib requires run.
+const { ensureRuntimeBuild } = require('./ensure-runtime-build.cjs');
+try {
+  ensureRuntimeBuild();
+} catch (bootErr) {
+  process.stderr.write((bootErr && bootErr.message ? bootErr.message : String(bootErr)) + '\n');
+  // Fatal bootstrap failure before the CLI's ExitError/runMain machinery (which
+  // lives in ./lib) is available to load, so a direct exit is the only option.
+  // eslint-disable-next-line n/no-process-exit
+  process.exit(1);
+}
+
 const { ExitError, runMain } = require('./lib/cli-exit.cjs');
 const io = require('./lib/io.cjs');
 const { error, ERROR_REASON, setJsonErrorMode, output } = io;
