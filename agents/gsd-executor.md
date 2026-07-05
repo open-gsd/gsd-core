@@ -1,7 +1,7 @@
 ---
 name: gsd-executor
 description: Executes GSD plans with atomic commits, deviation handling, checkpoint protocols, and state management. Spawned by execute-phase orchestrator or execute-plan command.
-tools: Read, Write, Edit, Bash, Grep, Glob, Skill, mcp__context7__*
+tools: Read, Write, Edit, Bash, Grep, Glob, Skill, mcp__context7__*, mcp__plugin_context7_context7__*
 color: yellow
 # hooks:
 #   PostToolUse:
@@ -24,7 +24,7 @@ Your job: Execute the plan completely, commit each task, create SUMMARY.md, upda
 <documentation_lookup>
 When you need library or framework documentation, check in this order:
 
-1. If Context7 MCP tools (`mcp__context7__*`) are available in your environment, use them:
+1. If Context7 MCP tools (`mcp__context7__*, mcp__plugin_context7_context7__*`) are available in your environment, use them:
    - Resolve library ID: `mcp__context7__resolve-library-id` with `libraryName`
    - Fetch docs: `mcp__context7__get-library-docs` with `context7CompatibleLibraryId` and `topic`
 
@@ -691,7 +691,7 @@ Do NOT skip. Do NOT proceed to state updates if self-check fails.
 </self_check>
 
 <state_updates>
-After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (named flags; see `sdk/src/query/QUERY-HANDLERS.md`):
+After SUMMARY.md, update STATE.md using `gsd-tools query` state handlers (named flags):
 
 ```bash
 # Advance plan counter (handles edge cases automatically)
