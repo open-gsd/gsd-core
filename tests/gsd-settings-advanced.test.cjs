@@ -385,3 +385,435 @@ describe('gsd-settings-advanced — negative scenarios', () => {
     assert.strictEqual(stored.workflow.max_discuss_passes, 7);
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-2506-settings-profile-nonclaude-warning.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-2506-settings-profile-nonclaude-warning (consolidation epic #1969 B4 #1973)", () => {
+/**
+ * Regression test for bug #2506
+ *
+ * /gsd-settings presents Quality/Balanced/Budget model profiles without any
+ * warning that on non-Claude runtimes (Codex, Gemini CLI, etc.) these profiles
+ * select Claude model tiers and have no effect on actual agent model selection.
+ *
+ * Fix: settings.md must include a non-Claude runtime note instructing users to
+ * use "Inherit" or configure model_overrides manually, and the Inherit option
+ * description must explicitly call out non-Claude runtimes.
+ *
+ * Closes: #2506
+ */
+
+'use strict';
+
+const { describe, test, before } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const SETTINGS_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md');
+
+describe('bug #2506: settings.md non-Claude runtime warning for model profiles', () => {
+  let content;
+
+  before(() => {
+    content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+  });
+
+  test('settings.md contains a non-Claude runtime note for model profiles', () => {
+    assert.ok(
+      content.includes('non-Claude runtime') || content.includes('non-Claude runtimes'),
+      'settings.md must include a note about non-Claude runtimes and model profiles'
+    );
+  });
+
+  test('non-Claude note explains profiles are no-ops without model_overrides', () => {
+    assert.ok(
+      content.includes('model_overrides') || content.includes('no effect'),
+      'note must explain profiles have no effect on non-Claude runtimes without model_overrides'
+    );
+  });
+
+  test('Inherit option description explicitly mentions non-Claude runtimes', () => {
+    // The Inherit option in AskUserQuestion must call out non-Claude runtimes
+    const inheritOptionMatch = content.match(/label:\s*"Inherit"[^}]*description:\s*"([^"]+)"/s);
+    assert.ok(inheritOptionMatch, 'Inherit option with label/description must exist in settings.md');
+    const desc = inheritOptionMatch[1];
+    assert.ok(
+      desc.includes('non-Claude') || desc.includes('Codex') || desc.includes('Gemini'),
+      `Inherit option description must mention non-Claude runtimes; got: "${desc}"`
+    );
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3784-gsd-settings-model-profile-ui-omits-adaptive.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3784-gsd-settings-model-profile-ui-omits-adaptive (consolidation epic #1969 B4 #1973)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #3784)
+// The deployed settings.md IS the product — testing its text content tests the deployed contract.
+
+/**
+ * Regression test for bug #3784
+ *
+ * /gsd-settings model profile UI omits `adaptive`. The AskUserQuestion block
+ * for model_profile in settings.md lists only four options (Quality, Balanced,
+ * Budget, Inherit) but the settings schema registers five valid profiles:
+ * quality, balanced, budget, adaptive, inherit. The `adaptive` profile is
+ * reachable by name via `gsd:config --profile adaptive` but cannot be selected
+ * interactively through `/gsd:settings`.
+ *
+ * Root cause: the options array in the model-profile AskUserQuestion block was
+ * written before the `adaptive` profile was introduced and was never updated.
+ * Because AskUserQuestion enforces a hard 4-option cap, the fix uses a two-
+ * question split: Q1 asks "Standard tier or Adaptive?" (2 options); if the
+ * user picks Standard, Q2 asks which of the three standard profiles to use
+ * (Quality, Balanced, Budget). This keeps every call within the 4-option cap
+ * while making all five profiles reachable.
+ *
+ * Fixes: #3784
+ */
+
+const { describe, test, before } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const SETTINGS_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'settings.md');
+
+/**
+ * Extract all AskUserQuestion option labels from a text block.
+ * Returns them lowercased for case-insensitive comparison.
+ */
+function extractOptionLabels(block) {
+  const labelPattern = /label:\s*"([^"]+)"/g;
+  const labels = [];
+  let match;
+  while ((match = labelPattern.exec(block)) !== null) {
+    labels.push(match[1].toLowerCase());
+  }
+  return labels;
+}
+
+describe('bug #3784: settings.md model profile UI exposes all 5 profiles', () => {
+  let content;
+  let presentBlock;
+
+  before(() => {
+    content = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    const presentMatch = content.match(/<step name="present_settings">[\s\S]*?<\/step>/);
+    assert.ok(presentMatch, 'settings.md must have a present_settings step');
+    presentBlock = presentMatch[0];
+  });
+
+  // ── Core contract: all five valid profiles reachable via the settings UI ──
+
+  test('present_settings step includes Adaptive as a selectable option (#3784)', () => {
+    // This is the primary assertion for bug #3784 — adaptive was missing.
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'adaptive' || l.startsWith('adaptive')),
+      [
+        'Bug #3784: present_settings step must include an "Adaptive" label in',
+        'its model profile AskUserQuestion options so users can select it',
+        `interactively. Got labels: [${labels.join(', ')}]`,
+      ].join(' ')
+    );
+  });
+
+  test('present_settings step includes Quality as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'quality' || l.startsWith('quality')),
+      `present_settings step must include a "Quality" option. Got: [${labels.join(', ')}]`
+    );
+  });
+
+  test('present_settings step includes Balanced as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'balanced' || l.startsWith('balanced')),
+      `present_settings step must include a "Balanced" option. Got: [${labels.join(', ')}]`
+    );
+  });
+
+  test('present_settings step includes Budget as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'budget' || l.startsWith('budget')),
+      `present_settings step must include a "Budget" option. Got: [${labels.join(', ')}]`
+    );
+  });
+
+  test('present_settings step includes Inherit as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'inherit' || l.startsWith('inherit')),
+      `present_settings step must include an "Inherit" option. Got: [${labels.join(', ')}]`
+    );
+  });
+
+  // ── update_config step writes adaptive as a valid value ──
+
+  test('update_config step lists adaptive as a valid model_profile value', () => {
+    const updateMatch = content.match(/<step name="update_config">[\s\S]*?<\/step>/);
+    assert.ok(updateMatch, 'settings.md must have an update_config step');
+    const block = updateMatch[0];
+    assert.ok(
+      block.includes('adaptive'),
+      'update_config step must list "adaptive" as a valid model_profile value'
+    );
+  });
+
+  // ── confirm step displays adaptive as a possible profile value ──
+
+  test('confirm step table shows adaptive as a possible model profile value', () => {
+    const confirmMatch = content.match(/<step name="confirm">[\s\S]*?<\/step>/);
+    assert.ok(confirmMatch, 'settings.md must have a confirm step');
+    const block = confirmMatch[0];
+    assert.ok(
+      block.includes('adaptive'),
+      'confirm step must include "adaptive" in the Model Profile row placeholder'
+    );
+  });
+
+  // ── adaptive described with role-based routing semantics ──
+
+  test('settings.md describes adaptive profile with role-based routing semantics', () => {
+    // Adaptive uses heavy/light role tiers per routingTier.
+    // The UI description must convey role-based cost optimization and the heavy/light tier
+    // split — not just mention "Adaptive" somewhere (that word appears 6+ times in the file).
+    const lower = content.toLowerCase();
+    assert.ok(
+      lower.includes('role-based cost optimization') && lower.includes('heavy roles'),
+      'settings.md must describe the adaptive profile with "role-based cost optimization" and "heavy roles" wording so the description is meaningful across all supported runtimes'
+    );
+  });
+
+  // ── 4-option cap enforcement ──
+
+  test('each question object in present_settings AskUserQuestion blocks has at most 4 options (AskUserQuestion runtime cap)', () => {
+    // The AskUserQuestion runtime enforces a hard 4-option cap per individual question object
+    // (each { question:..., options:[...] } entry). This test guards against a naïve revert
+    // that puts all 5 profiles into a single question object instead of using the Q1/Q2 split.
+    const ASK_USER_QUESTION_OPTION_CAP = 4; // hard limit enforced by the AskUserQuestion runtime
+
+    // Extract each individual options array by finding 'options: [' and walking to the
+    // matching balanced ']', then count label: entries within that span.
+    const optionsKeyRe = /\boptions\s*:\s*\[/g;
+    let match;
+    let questionIndex = 0;
+    while ((match = optionsKeyRe.exec(presentBlock)) !== null) {
+      questionIndex++;
+      // Walk forward from the opening '[' to find the balanced close ']'.
+      let depth = 0;
+      const start = match.index + match[0].length - 1; // points at '['
+      let end = start;
+      for (let k = start; k < presentBlock.length; k++) {
+        if (presentBlock[k] === '[') { depth++; }
+        else if (presentBlock[k] === ']') {
+          depth--;
+          if (depth === 0) { end = k; break; }
+        }
+      }
+      const optionsBody = presentBlock.slice(start, end + 1);
+      const labelMatches = optionsBody.match(/label:\s*"[^"]+"/g) || [];
+      const optionCount = labelMatches.length;
+      assert.ok(
+        optionCount <= ASK_USER_QUESTION_OPTION_CAP,
+        `Question object ${questionIndex} in present_settings has ${optionCount} options — exceeds the runtime cap of ${ASK_USER_QUESTION_OPTION_CAP}. Split into multiple questions (as #3784 did for model_profile).`
+      );
+    }
+    // Sanity check: there must be at least one options array found.
+    assert.ok(questionIndex > 0, 'present_settings must contain at least one AskUserQuestion options array');
+  });
+
+  // ── Brace-balance regression (bd53925f fixed duplicate '{' from 35fc1d21) ──
+
+  test('present_settings step has balanced braces — regression: brace-balance after #3784 split', () => {
+    // commit bd53925f fixed a duplicate '{' introduced by 35fc1d21 when the model-profile
+    // AskUserQuestion was split into Q1+Q2. This test guards against a recurrence.
+    let depth = 0;
+    for (const ch of presentBlock) {
+      if (ch === '{') { depth++; }
+      if (ch === '}') { depth--; }
+    }
+    assert.strictEqual(
+      depth,
+      0,
+      `present_settings step has unbalanced braces: net depth after full scan is ${depth} (positive = extra '{', negative = extra '}'). Regression guard for bd53925f / #3784.`
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-33-settings-model-profile-adaptive.test.cjs — consolidation epic #1969 (B8 #1977)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-33-settings-model-profile-adaptive (consolidation epic #1969 B8 #1977)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #33)
+// The deployed settings.md IS the product — testing its text content tests the deployed contract.
+
+/**
+ * Regression test for issue #33
+ *
+ * model_profile UI shows 4 options, schema has 5 — `adaptive` missing from
+ * `settings.md` AskUserQuestion.
+ *
+ * The schema (gsd-core/bin/shared/model-catalog.json `profiles` array) defines 5 valid
+ * model_profile values: quality, balanced, budget, adaptive, inherit. The
+ * settings.md AskUserQuestion block for model_profile originally listed only 4
+ * options (Quality, Balanced, Budget, Inherit) — `adaptive` was missing.
+ *
+ * Fix: the model_profile selection uses a two-question split. Q1 routes between
+ * Adaptive / Standard-tier / Inherit (3 options). Q2 (only when Q1 = Standard)
+ * asks Quality / Balanced / Budget. This keeps every individual options array
+ * within the AskUserQuestion 4-option cap while making all 5 profiles reachable.
+ *
+ * Fixes: #33
+ */
+
+const { describe, test, before } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const SETTINGS_PATH = path.join(REPO_ROOT, 'gsd-core', 'workflows', 'settings.md');
+const CATALOG_PATH = path.join(REPO_ROOT, 'gsd-core', 'bin', 'shared', 'model-catalog.json');
+
+/**
+ * Collect every label: "..." value within a text block, lowercased.
+ */
+function extractOptionLabels(block) {
+  const re = /label:\s*"([^"]+)"/g;
+  const labels = [];
+  let m;
+  while ((m = re.exec(block)) !== null) {
+    labels.push(m[1].toLowerCase());
+  }
+  return labels;
+}
+
+describe('issue #33: model_profile schema and settings.md UI are in sync', () => {
+  let catalog;
+  let settingsContent;
+  let presentBlock;
+
+  before(() => {
+    catalog = JSON.parse(fs.readFileSync(CATALOG_PATH, 'utf-8'));
+    settingsContent = fs.readFileSync(SETTINGS_PATH, 'utf-8');
+    const presentMatch = settingsContent.match(/<step name="present_settings">[\s\S]*?<\/step>/);
+    assert.ok(presentMatch, 'settings.md must contain a present_settings step');
+    presentBlock = presentMatch[0];
+  });
+
+  // -- (a) Schema contract ---------------------------------------------------
+
+  test('schema includes the adaptive model_profile value', () => {
+    assert.ok(
+      Array.isArray(catalog.profiles),
+      'model-catalog.json must have a "profiles" array'
+    );
+    assert.ok(
+      catalog.profiles.includes('adaptive'),
+      'model-catalog should include the adaptive profile. Got: [' + catalog.profiles.join(', ') + ']'
+    );
+  });
+
+  test('schema includes adaptive as a model_profile value', () => {
+    assert.ok(
+      catalog.profiles.includes('adaptive'),
+      '"adaptive" must be in model-catalog.json profiles. Got: [' + catalog.profiles.join(', ') + ']'
+    );
+  });
+
+  test('schema includes all expected model_profile values', () => {
+    const expected = ['quality', 'balanced', 'budget', 'adaptive', 'inherit'];
+    for (const profile of expected) {
+      assert.ok(
+        catalog.profiles.includes(profile),
+        'Schema must include "' + profile + '" in profiles. Got: [' + catalog.profiles.join(', ') + ']'
+      );
+    }
+  });
+
+  // -- (b) UI contract — all 5 profiles reachable via present_settings -------
+
+  test('present_settings includes Adaptive as a selectable option (#33)', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'adaptive' || l.startsWith('adaptive')),
+      'Issue #33: present_settings must include an "Adaptive" label in its model_profile AskUserQuestion options so users can select it interactively. Got labels: [' + labels.join(', ') + ']'
+    );
+  });
+
+  test('present_settings includes Quality as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'quality' || l.startsWith('quality')),
+      'present_settings must include a "Quality" option. Got: [' + labels.join(', ') + ']'
+    );
+  });
+
+  test('present_settings includes Balanced as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'balanced' || l.startsWith('balanced')),
+      'present_settings must include a "Balanced" option. Got: [' + labels.join(', ') + ']'
+    );
+  });
+
+  test('present_settings includes Budget as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'budget' || l.startsWith('budget')),
+      'present_settings must include a "Budget" option. Got: [' + labels.join(', ') + ']'
+    );
+  });
+
+  test('present_settings includes Inherit as a selectable option', () => {
+    const labels = extractOptionLabels(presentBlock);
+    assert.ok(
+      labels.some(l => l === 'inherit' || l.startsWith('inherit')),
+      'present_settings must include an "Inherit" option. Got: [' + labels.join(', ') + ']'
+    );
+  });
+
+  // -- update_config and confirm steps reference adaptive --------------------
+
+  test('update_config step lists adaptive as a valid model_profile value', () => {
+    const m = settingsContent.match(/<step name="update_config">[\s\S]*?<\/step>/);
+    assert.ok(m, 'settings.md must have an update_config step');
+    assert.ok(
+      m[0].includes('adaptive'),
+      'update_config step must list "adaptive" as a valid model_profile value'
+    );
+  });
+
+  test('confirm step table shows adaptive as a possible model profile value', () => {
+    const m = settingsContent.match(/<step name="confirm">[\s\S]*?<\/step>/);
+    assert.ok(m, 'settings.md must have a confirm step');
+    assert.ok(
+      m[0].includes('adaptive'),
+      'confirm step must include "adaptive" in the Model Profile row'
+    );
+  });
+});
+  });
+}

@@ -71,6 +71,7 @@ const {
   planningPaths,
   planningDir,
   planningRoot,
+  getActiveWorkstream,
   findContextMdIn,
 } = planningWorkspace;
 
@@ -1186,7 +1187,8 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
     const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
     const currentSection = extractCurrentMilestone(roadmapRaw, cwd);
-    const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:/gi;
     let m: RegExpExecArray | null;
     while ((m = phasePattern.exec(currentSection)) !== null) {
       if (/^999(?:\.|$)/.test(m[1])) continue;
@@ -1349,7 +1351,8 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     _checkboxStates.set(_cbMatch[2], _cbMatch[1].toLowerCase() === 'x');
   }
 
-  const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+  // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+  const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
   const phases: Record<string, unknown>[] = [];
   let match: RegExpExecArray | null;
 
@@ -1683,6 +1686,31 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
   const milestone = getMilestoneInfo(cwd) as unknown as Record<string, unknown>;
   const _slashRuntime = resolveRuntime(cwd);
 
+  // #1912: fail safe in workstream mode with no active workstream. With no active
+  // workstream and no --ws, planningDir(cwd) resolves to root .planning — silently
+  // reporting a stale root milestone. Require an explicit workstream instead.
+  // Mirror planningDir's resolution (GSD_WORKSTREAM env > stored active pointer) so
+  // an explicit --ws (which sets GSD_WORKSTREAM) satisfies the check.
+  const _wsRoot = path.join(planningRoot(cwd), 'workstreams');
+  let _availableWorkstreams: string[] = [];
+  try {
+    _availableWorkstreams = fs
+      .readdirSync(_wsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    /* no workstreams dir → flat mode */
+  }
+  const _resolvedWorkstream = process.env['GSD_WORKSTREAM'] || getActiveWorkstream(cwd);
+  if (_availableWorkstreams.length > 0 && !_resolvedWorkstream) {
+    error(
+      `init.progress requires a workstream in workstream mode — no active workstream is set, so root STATE.md (likely stale) would be reported. ` +
+        `Pass --ws <name> or run ${formatGsdSlash('workstream set', _slashRuntime) as string} first. ` +
+        `Available workstreams: ${_availableWorkstreams.join(', ')}`,
+    );
+  }
+
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const phases: Record<string, unknown>[] = [];
   let currentPhase: Record<string, unknown> | null = null;
@@ -1696,7 +1724,8 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
       fs.readFileSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'utf-8'),
       cwd,
     );
-    const headingPattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const headingPattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
     let hm: RegExpExecArray | null;
     while ((hm = headingPattern.exec(roadmapContent)) !== null) {
       roadmapPhaseNums.add(hm[1]);

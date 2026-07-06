@@ -1011,3 +1011,1279 @@ describe('verify key-links command', () => {
     );
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-967-verify-key-links-strict-paths.test.cjs — consolidation epic #1969 (B2 #1971)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-967-verify-key-links-strict-paths (consolidation epic #1969 B2 #1971)", () => {
+/**
+ * Regression test for bug #967: verify key-links reads from:/to: as literal
+ * relative file paths; the reference docs wrongly implied component/endpoint
+ * values were valid. Fix direction: author-strict — docs corrected to match code.
+ *
+ * Contract pinned here:
+ * 1. from: must be a relative file path; pattern: is evaluated against its content.
+ * 2. from: pointing to a non-existent file → verified:false, detail "Source file not found".
+ * 3. docs/reference/plan-md.md reference example uses a file path for to: (NOT /api/feed).
+ */
+
+'use strict';
+
+const { test, describe, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+
+function writePlanWithKeyLinks(tmpDir, keyLinksYaml, opts) {
+  // parseMustHavesBlock expects 4-space indent for block name, 6-space for items
+  const wave = (opts && opts.wave != null) ? opts.wave : 1;
+  const filesModified = (opts && opts.filesModified) ? opts.filesModified : ['src/a.js'];
+  const filesModifiedYaml = filesModified.length === 1
+    ? `[${filesModified[0]}]`
+    : `[${filesModified.join(', ')}]`;
+  const content = [
+    '---',
+    'phase: 01-test',
+    'plan: 01',
+    'type: execute',
+    `wave: ${wave}`,
+    'depends_on: []',
+    `files_modified: ${filesModifiedYaml}`,
+    'autonomous: true',
+    'must_haves:',
+    '    key_links:',
+    ...keyLinksYaml.map(line => `      ${line}`),
+    '---',
+    '',
+    '<tasks>',
+    '<task type="auto">',
+    '  <name>Task 1: Do thing</name>',
+    '  <files>src/a.js</files>',
+    '  <action>Do it</action>',
+    '  <verify><automated>echo ok</automated></verify>',
+    '  <done>Done</done>',
+    '</task>',
+    '</tasks>',
+  ].join('\n');
+  const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', '01-01-PLAN.md');
+  fs.mkdirSync(path.dirname(planPath), { recursive: true });
+  fs.writeFileSync(planPath, content);
+}
+
+/**
+ * Write an additional plan file in the same phase directory with specific
+ * wave + files_modified (no key_links, just declaring future artifacts).
+ */
+function writeCompanionPlan(tmpDir, planFileName, wave, filesModified) {
+  const filesModifiedYaml = `[${filesModified.join(', ')}]`;
+  const content = [
+    '---',
+    'phase: 01-test',
+    'plan: 02',
+    'type: execute',
+    `wave: ${wave}`,
+    'depends_on: []',
+    `files_modified: ${filesModifiedYaml}`,
+    'autonomous: true',
+    'must_haves:',
+    '    key_links: []',
+    '---',
+    '',
+    '<tasks>',
+    '<task type="auto">',
+    '  <name>Task 2: Create file</name>',
+    '  <files>src/b.js</files>',
+    '  <action>Create it</action>',
+    '  <verify><automated>echo ok</automated></verify>',
+    '  <done>Done</done>',
+    '</task>',
+    '</tasks>',
+  ].join('\n');
+  const planPath = path.join(tmpDir, '.planning', 'phases', '01-test', planFileName);
+  fs.writeFileSync(planPath, content);
+}
+
+describe('bug-967 verify key-links strict file-path contract', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // ── 1. Happy path: from: is a real file path and pattern: matches ──────────
+  test('verified:true when from: is a relative file path and pattern: matches', () => {
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/component.js"',
+      '  to: "src/api/feed.js"',
+      '  via: "fetch in useEffect"',
+      '  pattern: "fetch.*api/feed"',
+    ]);
+    // Create the source file containing the pattern
+    fs.writeFileSync(
+      path.join(tmpDir, 'src', 'component.js'),
+      "fetch('/api/feed').then(r => r.json());\n",
+    );
+    // Create the target file too (not strictly needed for this path, but realistic)
+    fs.mkdirSync(path.join(tmpDir, 'src', 'api'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'src', 'api', 'feed.js'), 'module.exports = {};\n');
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.all_verified,
+      true,
+      `Expected all_verified:true (file-path from: + matching pattern:). Got: ${JSON.stringify(output)}`,
+    );
+    assert.strictEqual(output.links[0].verified, true);
+  });
+
+  // ── 2. Contract: missing source file → verified:false, explicit detail ─────
+  test('verified:false with "Source file not found" detail when from: file does not exist', () => {
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/missing-file.js"',
+      '  to: "src/api/feed.js"',
+      '  via: "fetch in useEffect"',
+      '  pattern: "fetch.*api/feed"',
+    ]);
+    // Deliberately do NOT create src/missing-file.js
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.links[0].verified,
+      false,
+      `Expected verified:false for absent source file. Got: ${JSON.stringify(output.links[0])}`,
+    );
+    assert.ok(
+      output.links[0].detail.includes('Source file not found'),
+      `Expected detail to include "Source file not found". Got: "${output.links[0].detail}"`,
+    );
+  });
+
+  // ── 3. Regression #1202: missing from: file promised by a same-wave plan → pending:true ──
+  //
+  // A from: file absent on disk but listed in files_modified of another plan at
+  // the same wave must be reported pending:true (not verified:false) and must NOT
+  // count against the all_verified gate.
+  //
+  // This test MUST FAIL before the fix is applied (the gate hard-fails today).
+  test('pending:true and all_verified:true when from: file is promised by a same-wave plan', () => {
+    // Plan under test is wave 2; it references src/future-artifact.js which does not
+    // exist on disk yet.
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/future-artifact.js"',
+      '  to: "src/consumer.js"',
+      '  via: "requires future-artifact"',
+      '  pattern: "future-artifact"',
+    ], { wave: 2, filesModified: ['src/consumer.js'] });
+
+    // A companion plan also at wave 2 declares src/future-artifact.js in files_modified
+    writeCompanionPlan(tmpDir, '01-02-PLAN.md', 2, ['src/future-artifact.js']);
+
+    // Do NOT create src/future-artifact.js on disk — it is a planned future file
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(
+      out.links[0].pending,
+      true,
+      `Expected pending:true for a from: file promised by a same-wave plan. Got: ${JSON.stringify(out.links[0])}`,
+    );
+    assert.strictEqual(
+      out.all_verified,
+      true,
+      `Expected all_verified:true (pending links should not fail the gate). Got: ${JSON.stringify(out)}`,
+    );
+    assert.strictEqual(
+      out.links[0].verified,
+      false,
+      `Expected verified:false (file is not yet verified — just pending). Got: ${JSON.stringify(out.links[0])}`,
+    );
+  });
+
+  // ── 4. Regression #1202: missing from: file promised by a LATER-wave plan → pending:true ──
+  test('pending:true and all_verified:true when from: file is promised by a later-wave plan', () => {
+    // Plan under test is wave 1; companion plan is wave 3 (later wave promises the file)
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/later-artifact.js"',
+      '  to: "src/consumer.js"',
+      '  via: "later wave dependency"',
+    ], { wave: 1, filesModified: ['src/consumer.js'] });
+
+    writeCompanionPlan(tmpDir, '01-02-PLAN.md', 3, ['src/later-artifact.js']);
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(
+      out.links[0].pending,
+      true,
+      `Expected pending:true for from: file promised by a later-wave plan. Got: ${JSON.stringify(out.links[0])}`,
+    );
+    assert.strictEqual(
+      out.all_verified,
+      true,
+      `Expected all_verified:true (pending links not counted against gate). Got: ${JSON.stringify(out)}`,
+    );
+  });
+
+  // ── 5. Regression #1202: missing from: file NOT promised by any plan → hard failure ──
+  //
+  // Absence of from: file with no plan promising it must remain a genuine verified:false failure.
+  test('verified:false and all_verified:false when from: file is absent and not promised by any plan', () => {
+    writePlanWithKeyLinks(tmpDir, [
+      '- from: "src/truly-missing.js"',
+      '  to: "src/consumer.js"',
+      '  via: "no plan promises this"',
+    ], { wave: 1, filesModified: ['src/consumer.js'] });
+
+    // No companion plan that promises src/truly-missing.js
+
+    const result = runGsdTools(
+      'verify key-links .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.strictEqual(
+      out.links[0].verified,
+      false,
+      `Expected verified:false for absent+unpromised from: file. Got: ${JSON.stringify(out.links[0])}`,
+    );
+    assert.strictEqual(
+      out.all_verified,
+      false,
+      `Expected all_verified:false (hard failure). Got: ${JSON.stringify(out)}`,
+    );
+    // pending must not be true
+    assert.notStrictEqual(
+      out.links[0].pending,
+      true,
+      `Expected pending not to be true for an absent+unpromised file. Got: ${JSON.stringify(out.links[0])}`,
+    );
+  });
+
+  // ── 6. Doc-contract guard: reference example must use a file path for to: ──
+  //
+  // The old reference example had  to: "/api/feed"  (an HTTP endpoint).
+  // After fix #967, to: must be a relative file path like "app/api/feed/route.ts".
+  // This test reads the canonical docs file and asserts the example is consistent
+  // with the strict-path contract.
+  //
+  // allow-test-rule: <runtime-contract-is-the-product> the plan-md.md reference (see #967)
+  // example IS the documented authoring surface for key_links; asserting it uses
+  // a file path (not an endpoint) directly tests the documented contract.
+  test('docs/reference/plan-md.md key_links example uses a relative file path for to:, not an HTTP endpoint', () => {
+    // Locate plan-md.md relative to this test file's repo root
+    const docPath = path.join(__dirname, '..', 'docs', 'reference', 'plan-md.md');
+    assert.ok(fs.existsSync(docPath), `plan-md.md not found at ${docPath}`);
+    const content = fs.readFileSync(docPath, 'utf-8'); // allow-test-rule: <runtime-contract-is-the-product> the plan-md.md reference example IS the documented authoring surface for key_links; asserting it uses a file path (not an endpoint) directly tests the documented contract. (see #967)
+
+    // Find the key_links block in the annotated example (the first YAML frontmatter fence)
+    // The bad old value was:  to: "/api/feed"
+    assert.ok(
+      !content.includes('to: "/api/feed"'),
+      'docs/reference/plan-md.md still contains the endpoint-style to: "/api/feed" — ' +
+      'the reference example must use a relative file path (e.g. "app/api/feed/route.ts") ' +
+      'to match the strict file-path contract.',
+    );
+
+    // Also assert the corrected example actually uses a path-like value
+    // (must contain at least one '/' and not start with 'http')
+    const toMatch = content.match(/key_links:[\s\S]*?to:\s*"([^"]+)"/);
+    assert.ok(
+      toMatch,
+      'Could not find a to: field in the key_links example in plan-md.md',
+    );
+    const toValue = toMatch[1];
+    assert.ok(
+      !toValue.startsWith('/api') && !toValue.startsWith('http'),
+      `to: value in the docs example looks like an HTTP endpoint: "${toValue}". ` +
+      'It must be a relative file path.',
+    );
+  });
+});
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-2446-milestones-drift.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-2446-milestones-drift (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #2446)
+// Reads .md/.json/.yml product files whose deployed text IS what the
+// runtime loads — testing text content tests the deployed contract.
+
+/**
+ * Tests for gsd-health MILESTONES.md drift detection (#2446).
+ */
+
+const { test, after } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const helpers = require('./helpers.cjs');
+
+const { cmdValidateHealth } = require('../gsd-core/bin/lib/verify.cjs');
+
+const _dirsToClean = [];
+after(() => { for (const d of _dirsToClean) helpers.cleanup(d); });
+
+function makeTempProject(files = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2446-'));
+  _dirsToClean.push(dir);
+  fs.mkdirSync(path.join(dir, '.planning', 'milestones'), { recursive: true });
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content, 'utf-8');
+  }
+  return dir;
+}
+
+test('W018: warns when archived snapshot has no MILESTONES.md entry', () => {
+  const dir = makeTempProject({
+    '.planning/PROJECT.md': '# P\n\n## What This Is\n\nX\n\n## Core Value\n\nY\n\n## Requirements\n\nZ\n',
+    '.planning/ROADMAP.md': '# Roadmap\n',
+    '.planning/STATE.md': '# State\n',
+    '.planning/config.json': '{}',
+    '.planning/milestones/v1.0-ROADMAP.md': '# Milestone v1.0\n',
+    // No MILESTONES.md entry for v1.0
+  });
+
+  const result = cmdValidateHealth(dir, { repair: false }, false);
+
+  const w018 = result.warnings.find(w => w.code === 'W018');
+  assert.ok(w018, 'W018 warning should be emitted');
+  assert.ok(w018.message.includes('v1.0'), 'warning should mention v1.0');
+  assert.ok(w018.repairable, 'W018 should be marked repairable');
+});
+
+test('no W018 when all snapshots have MILESTONES.md entries', () => {
+  const dir = makeTempProject({
+    '.planning/PROJECT.md': '# P\n\n## What This Is\n\nX\n\n## Core Value\n\nY\n\n## Requirements\n\nZ\n',
+    '.planning/ROADMAP.md': '# Roadmap\n',
+    '.planning/STATE.md': '# State\n',
+    '.planning/config.json': '{}',
+    '.planning/milestones/v1.0-ROADMAP.md': '# Milestone v1.0\n',
+    '.planning/MILESTONES.md': '# Milestones\n\n## v1.0 My App (Shipped: 2026-01-01)\n\n---\n\n',
+  });
+
+  const result = cmdValidateHealth(dir, { repair: false }, false);
+
+  const w018 = result.warnings.find(w => w.code === 'W018');
+  assert.strictEqual(w018, undefined, 'no W018 when entries are present');
+});
+
+test('no W018 when milestones archive dir is empty', () => {
+  const dir = makeTempProject({
+    '.planning/PROJECT.md': '# P\n\n## What This Is\n\nX\n\n## Core Value\n\nY\n\n## Requirements\n\nZ\n',
+    '.planning/ROADMAP.md': '# Roadmap\n',
+    '.planning/STATE.md': '# State\n',
+    '.planning/config.json': '{}',
+    // No snapshots in milestones/
+  });
+
+  const result = cmdValidateHealth(dir, { repair: false }, false);
+
+  const w018 = result.warnings.find(w => w.code === 'W018');
+  assert.strictEqual(w018, undefined, 'no W018 with empty archive dir');
+});
+
+test('--backfill synthesizes missing MILESTONES.md entry from snapshot', () => {
+  const dir = makeTempProject({
+    '.planning/PROJECT.md': '# P\n\n## What This Is\n\nX\n\n## Core Value\n\nY\n\n## Requirements\n\nZ\n',
+    '.planning/ROADMAP.md': '# Roadmap\n',
+    '.planning/STATE.md': '# State\n',
+    '.planning/config.json': '{}',
+    '.planning/milestones/v1.0-ROADMAP.md': '# Milestone v1.0 First Release\n',
+  });
+
+  cmdValidateHealth(dir, { repair: true, backfill: true }, false);
+
+  const milestonesPath = path.join(dir, '.planning', 'MILESTONES.md');
+  assert.ok(fs.existsSync(milestonesPath), 'MILESTONES.md should be created');
+  const content = fs.readFileSync(milestonesPath, 'utf-8');
+  assert.ok(content.includes('## v1.0'), 'backfilled entry should contain v1.0');
+  assert.ok(content.includes('Backfilled'), 'should note it was backfilled');
+});
+
+test('health.md mentions --backfill flag', () => {
+  const healthMd = fs.readFileSync(
+    path.join(__dirname, '../gsd-core/workflows/health.md'), 'utf-8'
+  );
+  assert.ok(healthMd.includes('--backfill'), 'health.md should document --backfill');
+  assert.ok(healthMd.includes('W018'), 'health.md should list W018 error code');
+  assert.ok(healthMd.includes('backfillMilestones'), 'repair_actions should include backfillMilestones');
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-968-region-scoped-negative-grep.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-968-region-scoped-negative-grep (consolidation epic #1969 B3 #1972)", () => {
+// allow-test-rule: source-text-is-the-product #968
+// Enhancement #968: region-scoped negative gate detector + guidance docs.
+// Tests the pure function scanFileWideNegativeGateConflict exported from
+// verify.cjs, plus CLI integration and doc-contract assertions.
+
+'use strict';
+
+const { test, describe, before, beforeEach, afterEach } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const os = require('node:os');
+const { createTempProject, cleanup, runGsdTools } = require('./helpers.cjs');
+
+// Build path to built verify.cjs
+const VERIFY_CJS = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'verify.cjs');
+
+// Build paths to doc files
+const PLANNER_MD = path.join(__dirname, '..', 'agents', 'gsd-planner.md');
+const ANTIPATTERNS_MD = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-antipatterns.md');
+// PLAN_MD_REF removed — was unused (doc-contract cases test PLANNER_MD and ANTIPATTERNS_MD only)
+
+// ─── Fixture helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Build a minimal two-task plan fixture.
+ * taskA: file=app/page.py, gateText=the verify/acceptance_criteria block, actionText=action block
+ * taskB: file=app/page.py (default) or otherFile, action text
+ * allowlistMarker: optional HTML comment to insert at the top
+ */
+function makeTwoTaskPlan({
+  taskAFile = 'app/page.py',
+  taskAGate = '! grep -Eq \'await .*refresh\' app/page.py',
+  taskAAction = 'Refactor the factory to be synchronous.',
+  taskBFile = 'app/page.py',
+  taskBAction = 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+  allowlistMarker = '',
+} = {}) {
+  const lines = [
+    '---',
+    'phase: 01-test',
+    'plan: 01',
+    'type: execute',
+    'wave: 1',
+    'depends_on: []',
+    `files_modified: [${taskAFile}, ${taskBFile}]`,
+    'autonomous: true',
+    'must_haves:',
+    '  - AC1',
+    '---',
+    '',
+    '# Test Plan',
+    '',
+  ];
+
+  if (allowlistMarker) {
+    lines.push(allowlistMarker, '');
+  }
+
+  // Task A: the one with the negative gate
+  lines.push('<task>');
+  lines.push('<name>Task A: factory refactor</name>');
+  lines.push(`<files>${taskAFile}</files>`);
+  lines.push(`<action>${taskAAction}</action>`);
+  lines.push(`<verify><automated>${taskAGate}</automated></verify>`);
+  lines.push('<done>Factory is synchronous.</done>');
+  lines.push('</task>');
+  lines.push('');
+
+  // Task B: the sibling that requires the construct
+  lines.push('<task>');
+  lines.push('<name>Task B: reindex handler</name>');
+  lines.push(`<files>${taskBFile}</files>`);
+  lines.push(`<action>${taskBAction}</action>`);
+  lines.push('<verify><automated>npm test</automated></verify>');
+  lines.push('<done>Handler is in place.</done>');
+  lines.push('</task>');
+
+  return lines.join('\n');
+}
+
+/**
+ * Build a single-task plan (no sibling).
+ */
+function makeSingleTaskPlan({
+  taskFile = 'app/page.py',
+  taskGate = '! grep -Eq \'await .*refresh\' app/page.py',
+  taskAction = 'Refactor the factory to be synchronous.',
+} = {}) {
+  return [
+    '---',
+    'phase: 01-test',
+    'plan: 01',
+    'type: execute',
+    'wave: 1',
+    'depends_on: []',
+    `files_modified: [${taskFile}]`,
+    'autonomous: true',
+    'must_haves:',
+    '  - AC1',
+    '---',
+    '',
+    '# Test Plan',
+    '',
+    '<task>',
+    '<name>Task A: factory refactor</name>',
+    `<files>${taskFile}</files>`,
+    `<action>${taskAction}</action>`,
+    `<verify><automated>${taskGate}</automated></verify>`,
+    '<done>Factory is synchronous.</done>',
+    '</task>',
+  ].join('\n');
+}
+
+// ─── Group 1: pure-function unit tests ────────────────────────────────────────
+
+describe('scanFileWideNegativeGateConflict — pure unit tests', () => {
+  let scan;
+
+  before(() => {
+    const verify = require(VERIFY_CJS);
+    scan = verify.scanFileWideNegativeGateConflict;
+    assert.ok(typeof scan === 'function', 'scanFileWideNegativeGateConflict must be exported');
+  });
+
+  // Case 1: basic WARN path — Task A bans PAT file-wide, Task B requires it in same file
+  test('case 1 — file-wide ban + sibling requires → WARN', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(Array.isArray(result.warnings), 'must return { warnings: [] }');
+    assert.ok(
+      result.warnings.length >= 1,
+      `expected at least 1 warning, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.ok(
+      result.warnings[0].includes('Region-scope conflict (#968)'),
+      `warning must mention Region-scope conflict (#968), got: ${result.warnings[0]}`,
+    );
+    assert.ok(
+      result.warnings[0].includes('await .*refresh'),
+      `warning must mention the PAT, got: ${result.warnings[0]}`,
+    );
+    assert.ok(
+      result.warnings[0].includes('app/page.py'),
+      `warning must mention the file, got: ${result.warnings[0]}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 2: region-scoped via sed → NO warn
+  test('case 2 — region-scoped via sed pipe → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! sed -n '12,40p' app/page.py | grep -Eq 'await .*refresh'",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `sed-piped grep is region-scoped — must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 2b: region-scoped via awk → NO warn
+  test('case 2b — region-scoped via awk pipe → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! awk '/^def make_page/,/^def /' app/page.py | grep -Eq 'await .*refresh'",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `awk-piped grep is region-scoped — must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 3: single task file-wide ban, no sibling → NO warn
+  test('case 3 — single task, no sibling → NO warn', () => {
+    const content = makeSingleTaskPlan({
+      taskGate: "! grep -Eq 'await .*refresh' app/page.py",
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `single task (no sibling) must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 4: sibling requires PAT but lists a different file → NO warn
+  test('case 4 — sibling lists different file → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAFile: 'app/page.py',
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBFile: 'app/other.py',
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `sibling with different file must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 5: sibling lists same file but action lacks PAT → NO warn
+  test('case 5 — sibling lists same file but action lacks PAT → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls bridge.sync() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `sibling with no PAT in action must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 6: positive grep (no !) + sibling → NO warn (positive requirement, not a ban)
+  test('case 6 — positive grep (no !) + sibling → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "grep -q 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `positive grep must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 7: inverted grep -v with ! + sibling → NO warn
+  test('case 7 — inverted grep -vq with ! + sibling → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -vq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `inverted grep (-v) must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 8: allowlist marker present → NO warn
+  test('case 8 — allowlist marker suppresses warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+      allowlistMarker: '<!-- planner-region-allow: await .*refresh -->',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `allowlist marker must suppress warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 9: one task both bans and requires same PAT in same file (no second task) → NO warn
+  test('case 9 — one task bans and requires PAT (no sibling) → NO warn', () => {
+    const content = makeSingleTaskPlan({
+      taskGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskAction: 'Refactor to avoid await refresh, but note that bridge.refresh() is used later.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `single task (no sibling B) must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 10: count form `grep -c 'PAT' FILE == 0` + sibling → WARN
+  test('case 10 — count form (grep -c PAT FILE == 0) + sibling → WARN', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "grep -c 'await .*refresh' app/page.py == 0",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `count form (grep -c ... == 0) must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 11: bracket form `[ $(grep -c PAT FILE) -eq 0 ]` + sibling → WARN
+  test('case 11 — bracket form ([ $(grep -c PAT FILE) -eq 0 ]) + sibling → WARN', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "[ $(grep -c 'await .*refresh' app/page.py) -eq 0 ]",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `bracket form must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 12: CRLF variant of case 1 → WARN
+  test('case 12 — CRLF line endings → WARN', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const crlfContent = content.split('\n').join('\r\n');
+    const result = scan(crlfContent);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `CRLF content must still warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 13: backslash line-continuation variant → WARN
+  test('case 13 — backslash line continuation → WARN', () => {
+    // Build manually to control exact line continuation
+    const lines = [
+      '---',
+      'phase: 01-test',
+      'plan: 01',
+      'type: execute',
+      'wave: 1',
+      'depends_on: []',
+      'files_modified: [app/page.py]',
+      'autonomous: true',
+      'must_haves:',
+      '  - AC1',
+      '---',
+      '',
+      '<task>',
+      '<name>Task A: factory refactor</name>',
+      '<files>app/page.py</files>',
+      '<action>Refactor the factory to be synchronous.</action>',
+      // Gate split across lines with backslash continuation
+      "<verify><automated>! grep -Eq 'await .*refresh' \\\napp/page.py</automated></verify>",
+      '<done>Factory is synchronous.</done>',
+      '</task>',
+      '',
+      '<task>',
+      '<name>Task B: reindex handler</name>',
+      '<files>app/page.py</files>',
+      '<action>Add a post-reindex handler that calls await bridge.refresh() to repopulate state.</action>',
+      '<verify><automated>npm test</automated></verify>',
+      '<done>Handler is in place.</done>',
+      '</task>',
+    ].join('\n');
+    const result = scan(lines);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `backslash continuation must still warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 14: mixed line with positive gate AND a negative gate, sibling → WARN (on the negative only)
+  test('case 14 — mixed positive+negative on one segment + sibling → WARN for negative', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "grep -c 'X' app/page.py == 1 && ! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `mixed line with negative gate + sibling must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 15: glob file arg `app/*.py` → NO warn (unresolvable path)
+  test('case 15 — glob file arg → NO warn (unresolvable)', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/*.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `glob file arg must not warn (unresolvable), got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 16: invalid-regex PAT literal fallback → WARN, no exception
+  test('case 16 — invalid-regex PAT → literal fallback, WARN, no exception', () => {
+    // "await (refresh" — unbalanced paren, invalid regex
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await (refresh' app/page.py",
+      taskBAction: 'The handler calls await (refresh on bridge to repopulate state.',
+    });
+    let result;
+    assert.doesNotThrow(() => {
+      result = scan(content);
+    }, 'scan must not throw on invalid regex PAT');
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `invalid-regex PAT with literal match must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 17: ReDoS-ish PAT (catastrophic backtracking) → no hang, no false warn.
+  // The sibling action is 5000 'a's — classic ReDoS trigger if we call new RegExp('(a+)+$').
+  // Proof-of-no-hang: the test runner's own timeout catches it; a hanging test fails here.
+  // No timing assertion (flaky) — the linear patternRequiredIn implementation is microsecond-fast.
+  test('case 17 — catastrophic ReDoS pattern is instant, no hang, no false warn', () => {
+    const longAs = 'a'.repeat(5000);
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq '(a+)+$' app/page.py",
+      taskBAction: `Reindex handler that processes ${longAs} records and calls bridge.refresh().`,
+    });
+    let result;
+    assert.doesNotThrow(() => {
+      result = scan(content);
+    }, 'scan must not throw on ReDoS-ish PAT');
+    // The literal '(a+)+$' is not present in the action text as a substring → no warn.
+    // (If new RegExp were used, this test would hang before reaching this assertion.)
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `catastrophic PAT '(a+)+$' not literally in action — must not warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.ok(Array.isArray(result.warnings), 'valid result shape');
+  });
+
+  // Case 23 (mutation-catching): cat producer = file-wide → WARN; sed producer = region-scoped → NO warn
+  test('case 23a — cat pipe: ! cat app/page.py | grep -Eq PAT + sibling → WARN (file-wide via cat)', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! cat app/page.py | grep -Eq 'await .*refresh'",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `cat-piped grep is file-wide — must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.ok(result.valid !== false, 'valid must remain true even when #968 warns');
+  });
+
+  test('case 23b — sed pipe: ! sed -n "12,40p" app/page.py | grep -Eq PAT + sibling → NO warn (region-scoped)', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! sed -n '12,40p' app/page.py | grep -Eq 'await .*refresh'",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `sed-piped grep is region-scoped — must NOT warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 24: awk region → NO warn
+  test('case 24 — awk region pipe: ! awk \'/^def make_page/,/^def /\' app/page.py | grep -Eq PAT + sibling → NO warn', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! awk '/^def make_page/,/^def /' app/page.py | grep -Eq 'await .*refresh'",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `awk-piped grep is region-scoped — must NOT warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 25: basename non-over-match — different dirs, same basename → NO warn
+  test('case 25 — basename non-over-match: different dirs same filename → NO warn', () => {
+    // Task A bans on apps/web/config.py; Task B lists apps/admin/config.py
+    // Same basename "config.py" but different dirs → must NOT warn
+    const content = makeTwoTaskPlan({
+      taskAFile: 'apps/web/config.py',
+      taskAGate: "! grep -Eq 'await .*refresh' apps/web/config.py",
+      taskBFile: 'apps/admin/config.py',
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `different dirs (apps/web/config.py vs apps/admin/config.py) — same basename but must NOT warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 26: extensionless known file (Dockerfile) recognized via knownFiles → WARN
+  test('case 26 — extensionless known file (Dockerfile) via knownFiles → WARN', () => {
+    // Task A has ! grep -Eq 'FROM scratch' Dockerfile
+    // Dockerfile has no extension, so looksLikePath would miss it — but knownFiles should catch it
+    // Task B lists Dockerfile in <files> and action requires 'FROM scratch'
+    const content = makeTwoTaskPlan({
+      taskAFile: 'Dockerfile',
+      taskAGate: "! grep -Eq 'FROM scratch' Dockerfile",
+      taskBFile: 'Dockerfile',
+      taskBAction: 'Update the image base: FROM scratch ensures minimal surface area.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `Dockerfile (extensionless, known via <files>) should be recognized — must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.ok(result.valid !== false, 'valid must remain true');
+  });
+
+  // Case 27: wildcard semantic match — patternRequiredIn handles .* correctly
+  test('case 27 — wildcard semantic match: "await .*refresh" (gate) warns when action has "await bridge.refresh()"', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `patternRequiredIn must match "await .*refresh" against "await bridge.refresh()" — must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 4b: same-file positive control — sibling lists the SAME banned file + requires PAT → WARN
+  // Paired with case 4: proves the no-warn in case 4 is due to the file mismatch, not a dead detector.
+  test('case 4b — same-file positive control: sibling lists same file → WARN (proves case 4 no-warn is file-mismatch)', () => {
+    const content = makeTwoTaskPlan({
+      taskAFile: 'app/page.py',
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBFile: 'app/page.py',
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `same-file sibling must warn — proves case 4's no-warn is due to file mismatch, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 7b: non-inverted positive control — without -v the ban IS detected → WARN
+  // Paired with case 7: proves the -v skip is what suppresses case 7.
+  test('case 7b — non-inverted positive control: ! grep -q (no -v) + sibling → WARN (proves case 7 no-warn is -v skip)', () => {
+    const content = makeTwoTaskPlan({
+      taskAGate: "! grep -q 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `non-inverted ! grep -q must warn — proves the -v flag is what suppresses case 7, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 25b: basename-fallback positive — bare unqualified filename matches sibling's qualified path → WARN
+  // Paired with case 25: proves the bare-name basename fallback at src ~line 525 actually fires.
+  // Case 25 only proves qualified paths don't over-match; this proves the bare fallback does fire.
+  test('case 25b — basename-fallback positive: bare gate file matches sibling qualified path → WARN (proves basename fallback fires)', () => {
+    // Task A gate uses bare "config.py" (no directory prefix — unqualified).
+    // Task B lists "apps/admin/config.py" (qualified). basename("apps/admin/config.py") === "config.py".
+    // The basename fallback (line 525) should match → WARN.
+    const content = makeTwoTaskPlan({
+      taskAFile: 'config.py',
+      taskAGate: "! grep -Eq 'await .*refresh' config.py",
+      taskBFile: 'apps/admin/config.py',
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `bare gate file "config.py" must match sibling "apps/admin/config.py" via basename fallback — must warn, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 28: anchored pattern warns after ^ strip — proves anchor stripping works
+  // Gate: ! grep -Eq '^FROM scratch' Dockerfile
+  // Sibling B lists Dockerfile, action requires 'FROM scratch' (no anchor in prose).
+  // Without anchor stripping, "^FROM scratch" would be treated as containing metacharacters
+  // and fall back to literal-substring: "^FROM scratch" not in B's prose → no warn.
+  // With anchor stripping, "FROM scratch" is the effective literal → found in B's prose → WARN.
+  test('case 28 — anchored pattern warns: ! grep -Eq \'^FROM scratch\' Dockerfile + sibling → WARN (proves ^ strip)', () => {
+    const content = makeTwoTaskPlan({
+      taskAFile: 'Dockerfile',
+      taskAGate: "! grep -Eq '^FROM scratch' Dockerfile",
+      taskBFile: 'Dockerfile',
+      taskBAction: 'Update the image base: FROM scratch ensures minimal surface area.',
+    });
+    const result = scan(content);
+    assert.ok(
+      result.warnings.filter(w => w.includes('#968')).length >= 1,
+      `anchored pattern "^FROM scratch" must warn after ^ is stripped — "FROM scratch" is in sibling action, got: ${JSON.stringify(result.warnings)}`,
+    );
+    assert.strictEqual(result.valid, true, '#968 is warn-only: valid must be true');
+  });
+
+  // Case 29: alternation falls back conservatively — documents the known limitation.
+  // Gate: ! grep -Eq 'debug|trace' src/logger.ts
+  // Sibling B lists src/logger.ts, action says "remove debug calls" (contains "debug" but NOT "debug|trace").
+  // patternRequiredIn sees unhandled `|` in joined frags → literal-substring fallback on raw pattern.
+  // "debug|trace" is NOT literally in B's prose → conservative NO warn.
+  // This is intentional: false-negative is the safe direction for a warn-only advisory.
+  test('case 29 — alternation conservative fallback: "debug|trace" → NO warn (documents alternation limitation)', () => {
+    // NOTE: This is intended conservative behavior, not a bug.
+    // patternRequiredIn falls back to literal-substring for patterns containing `|` (alternation),
+    // because safely expanding alternation without new RegExp would require a mini-parser.
+    // The literal "debug|trace" is not present verbatim in the action, so no warn fires.
+    // A planner who writes `debug|trace` gets no advisory — acceptable, since a false-negative
+    // is always safer than a false-positive for a warn-only gate.
+    const content = makeTwoTaskPlan({
+      taskAFile: 'src/logger.ts',
+      taskAGate: "! grep -Eq 'debug|trace' src/logger.ts",
+      taskBFile: 'src/logger.ts',
+      taskBAction: 'Remove debug calls from the logger module to reduce noise.',
+    });
+    const result = scan(content);
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      `alternation pattern "debug|trace" must conservatively NOT warn — literal "debug|trace" not in action, got: ${JSON.stringify(result.warnings)}`,
+    );
+  });
+
+  // Case 18: empty content → no crash, no #968 warn
+  test('case 18 — empty content → no crash', () => {
+    let result;
+    assert.doesNotThrow(() => {
+      result = scan('');
+    });
+    assert.ok(Array.isArray(result.warnings), 'must return { warnings: [] }');
+    assert.strictEqual(
+      result.warnings.filter(w => w.includes('#968')).length,
+      0,
+      'empty content must produce no #968 warn',
+    );
+  });
+
+  // Case 18b: no-task plan → no crash
+  test('case 18b — no-task plan → no crash', () => {
+    const content = [
+      '---',
+      'phase: 01-test',
+      'plan: 01',
+      'type: execute',
+      'wave: 1',
+      'depends_on: []',
+      'files_modified: []',
+      'autonomous: true',
+      'must_haves:',
+      '  - AC1',
+      '---',
+      '',
+      '# No tasks here',
+    ].join('\n');
+    let result;
+    assert.doesNotThrow(() => {
+      result = scan(content);
+    });
+    assert.strictEqual(result.warnings.filter(w => w.includes('#968')).length, 0);
+  });
+});
+
+// ─── Group 2: end-to-end via runGsdTools ──────────────────────────────────────
+
+describe('scanFileWideNegativeGateConflict — end-to-end via verify plan-structure', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Case 19: integration — valid stays true despite warning (warn-only)
+  test('case 19 — integration: valid===true despite #968 warning', () => {
+    const planContent = makeTwoTaskPlan({
+      taskAGate: "! grep -Eq 'await .*refresh' app/page.py",
+      taskBAction: 'Add a post-reindex handler that calls await bridge.refresh() to repopulate state.',
+    });
+    const planDir = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(planDir, { recursive: true });
+    fs.writeFileSync(path.join(planDir, '01-01-PLAN.md'), planContent);
+
+    const result = runGsdTools(
+      'verify plan-structure .planning/phases/01-test/01-01-PLAN.md',
+      tmpDir,
+    );
+    const parsed = JSON.parse(result.output);
+    assert.strictEqual(
+      parsed.valid,
+      true,
+      `#968 is warn-only: valid must be true, got: ${JSON.stringify(parsed)}`,
+    );
+    assert.ok(
+      parsed.warnings.some(w => w.includes('#968')),
+      `must have a #968 warning, got: ${JSON.stringify(parsed.warnings)}`,
+    );
+  });
+});
+
+// ─── Group 3: doc-contract ────────────────────────────────────────────────────
+
+describe('doc-contract: guidance prose is in place', () => {
+  // Case 20: gsd-planner.md has the new guidance
+  test('case 20 — gsd-planner.md contains Region-scoped negative gates + reference', () => {
+    const content = fs.readFileSync(PLANNER_MD, 'utf8');
+    assert.ok(
+      content.includes('Region-scoped negative gates'),
+      'gsd-planner.md must include "Region-scoped negative gates"',
+    );
+    assert.ok(
+      content.includes('planner-antipatterns.md'),
+      'gsd-planner.md must reference planner-antipatterns.md',
+    );
+  });
+
+  // Case 21: planner-antipatterns.md has the new section
+  test('case 21 — planner-antipatterns.md has ## Region-Scoped Negative Gates + examples', () => {
+    const content = fs.readFileSync(ANTIPATTERNS_MD, 'utf8');
+    assert.ok(
+      content.includes('## Region-Scoped Negative Gates'),
+      'planner-antipatterns.md must include "## Region-Scoped Negative Gates"',
+    );
+    assert.ok(
+      content.includes('await .*refresh'),
+      'planner-antipatterns.md must include the worked example pattern "await .*refresh"',
+    );
+    // Verify sed or awk region example is present
+    const hasSedOrAwk = content.includes('sed -n') || content.includes('awk ');
+    assert.ok(
+      hasSedOrAwk,
+      'planner-antipatterns.md must include sed-n or awk region example',
+    );
+  });
+});
+
+// ─── Group 4: AC3 executable proof ───────────────────────────────────────────
+
+describe('AC3: executable proof — file-wide ban vs region-scoped simultaneously satisfiable', () => {
+  test('case 22 — grep/sed proof: both gates simultaneously satisfiable', () => {
+    // Check if grep and sed are available
+    const grepAvail = spawnSync('grep', ['--version']).status === 0;
+    const sedAvail = spawnSync('sed', ['--version']).status === 0 ||
+                    spawnSync('sed', ['-n', '1p', '/dev/null']).status === 0;
+
+    if (!grepAvail || !sedAvail) {
+      // Skip gracefully if tools are unavailable
+      return;
+    }
+
+    // Write a temp Python file with:
+    //   def make_page(): — no await refresh
+    //   async def reindex_handler(): — awaits bridge.refresh()
+    const tmpFile = path.join(os.tmpdir(), `gsd-968-proof-${process.pid}.py`);
+    const pyContent = [
+      'def make_page():',
+      '    """Synchronous factory — must not block on a refresh."""',
+      '    return {"title": "My Page"}',
+      '',
+      '',
+      'async def reindex_handler():',
+      '    """Post-reindex callback — must await bridge.refresh() to repopulate state."""',
+      '    await bridge.refresh()',
+      '    return True',
+    ].join('\n');
+    fs.writeFileSync(tmpFile, pyContent);
+
+    try {
+      // (a) File-wide: grep -Eq 'await .*refresh' <file> — should EXIT 0 (pattern found)
+      //     This means a file-wide ban (! grep -Eq ...) WOULD FAIL
+      const fileWide = spawnSync('grep', ['-Eq', 'await .*refresh', tmpFile]);
+      assert.strictEqual(
+        fileWide.status,
+        0,
+        'grep file-wide should find the pattern (exits 0) — proving the file-wide ban would fail',
+      );
+
+      // (b) Region-scoped (make_page only): sed extracts lines 1-3, piped to grep → pattern NOT found
+      //     The factory region is clean: ban PASSES
+      const makePageLines = spawnSync('sed', ['-n', '1,3p', tmpFile]);
+      assert.strictEqual(makePageLines.status, 0, 'sed should succeed');
+      const makePageRegion = makePageLines.stdout.toString();
+
+      // Write to a temp file and grep it
+      const regionFile = path.join(os.tmpdir(), `gsd-968-region-${process.pid}.py`);
+      fs.writeFileSync(regionFile, makePageRegion);
+      try {
+        const regionBan = spawnSync('grep', ['-Eq', 'await .*refresh', regionFile]);
+        assert.strictEqual(
+          regionBan.status,
+          1,
+          'grep in make_page region should NOT find pattern (exits 1) — ban PASSES in factory region',
+        );
+
+        // (c) Region-scoped (reindex_handler): grep should FIND the pattern → requirement met
+        const reindexLines = spawnSync('sed', ['-n', '6,9p', tmpFile]);
+        const reindexRegion = reindexLines.stdout.toString();
+        const reindexFile = path.join(os.tmpdir(), `gsd-968-reindex-${process.pid}.py`);
+        fs.writeFileSync(reindexFile, reindexRegion);
+        try {
+          const reindexCheck = spawnSync('grep', ['-Eq', 'await .*refresh', reindexFile]);
+          assert.strictEqual(
+            reindexCheck.status,
+            0,
+            'grep in reindex_handler region MUST find pattern (exits 0) — requirement met',
+          );
+        } finally {
+          try { fs.unlinkSync(reindexFile); } catch { /* ignore */ }
+        }
+      } finally {
+        try { fs.unlinkSync(regionFile); } catch { /* ignore */ }
+      }
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  });
+});
+  });
+}

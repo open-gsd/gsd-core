@@ -3,7 +3,7 @@
 /**
  * Equivalence proof for ADR-857 phase 5b: descriptor-driven getGlobalConfigDir.
  *
- * For every runtime in the 16-entry capability registry, plus grok and unknown
+ * For every runtime in the 15-entry capability registry, plus grok and unknown
  * runtime, this test asserts that getGlobalConfigDir() produces exactly the
  * same path that the old hardcoded switch produced (golden expected values
  * captured from the switch BEFORE any edits). All assertions are byte-identical.
@@ -55,7 +55,7 @@ function withEnv(overrides, fn) {
 
 // All env vars for all runtimes — cleared in each test that calls getGlobalConfigDir directly
 const ALL_ENV_KEYS = [
-  'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'GEMINI_CONFIG_DIR', 'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR', 'CURSOR_CONFIG_DIR', 'CODEX_HOME',
   'GROK_AGENTS_HOME', 'COPILOT_CONFIG_DIR', 'COPILOT_HOME', 'ANTIGRAVITY_CONFIG_DIR',
   'WINDSURF_CONFIG_DIR', 'AUGMENT_CONFIG_DIR', 'TRAE_CONFIG_DIR', 'QWEN_CONFIG_DIR',
   'HERMES_HOME', 'CODEBUDDY_CONFIG_DIR', 'CLINE_CONFIG_DIR', 'KIMI_CONFIG_DIR',
@@ -88,7 +88,6 @@ function restoreEnvKeys(saved) {
 const GOLDEN_DEFAULTS = {
   claude:      path.join(HOME, '.claude'),
   cursor:      path.join(HOME, '.cursor'),
-  gemini:      path.join(HOME, '.gemini'),
   codex:       path.join(HOME, '.codex'),
   grok:        path.join(HOME, '.agents'),
   copilot:     path.join(HOME, '.copilot'),
@@ -102,6 +101,7 @@ const GOLDEN_DEFAULTS = {
   cline:       path.join(HOME, '.cline'),
   opencode:    path.join(HOME, '.config', 'opencode'),
   kilo:        path.join(HOME, '.config', 'kilo'),
+  zcode:       path.join(HOME, '.zcode'),
 };
 
 // ── GOLDEN DEFAULTS ────────────────────────────────────────────────────────────
@@ -144,7 +144,6 @@ describe('descriptor-driven equivalence: env-var overrides', () => {
   const cases = [
     { runtime: 'claude',    envKey: 'CLAUDE_CONFIG_DIR',    value: '/custom/claude' },
     { runtime: 'cursor',    envKey: 'CURSOR_CONFIG_DIR',    value: '/custom/cursor' },
-    { runtime: 'gemini',    envKey: 'GEMINI_CONFIG_DIR',    value: '/custom/gemini' },
     { runtime: 'codex',     envKey: 'CODEX_HOME',           value: '/custom/codex' },
     { runtime: 'grok',      envKey: 'GROK_AGENTS_HOME',     value: '/custom/grok' },
     { runtime: 'augment',   envKey: 'AUGMENT_CONFIG_DIR',   value: '/custom/augment' },
@@ -841,9 +840,9 @@ describe('descriptor-driven global skills base', () => {
   });
 });
 
-// ── GOLDEN PARITY: getGlobalConfigDir via process.env for all 16 registry runtimes ──
+// ── GOLDEN PARITY: getGlobalConfigDir via process.env for every non-probe registry runtime ──
 
-describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-vars = golden defaults', () => {
+describe('descriptor-driven parity: 13 non-probe registry runtimes × no-env-vars = golden defaults', () => {
   // This is the hardest assertion: it drives getGlobalConfigDir() (which calls
   // the registry internally) and compares against GOLDEN_DEFAULTS captured from
   // the old switch. Any discrepancy means a regression.
@@ -872,3 +871,358 @@ describe('descriptor-driven parity: 14 non-probe registry runtimes × no-env-var
     });
   }
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-3126-global-skills-base-runtime-path.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-3126-global-skills-base-runtime-path (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+// allow-test-rule: last three tests read init.cjs source to verify delegation contract to runtime-homes.cjs — structural guard, no behavioral IR exposed (see #3126)
+
+// Regression guard for bug #3126.
+//
+// buildAgentSkillsBlock() in init.cjs hardcoded `globalSkillsBase` to
+// `~/.claude/skills` regardless of the active runtime. On a Cursor install,
+// global: skills live under `~/.cursor/skills`, causing every global: lookup
+// to silently fail with:
+//   [agent-skills] WARNING: Global skill not found at "~/.cursor/skills/X/SKILL.md" — skipping
+//
+// Fix introduces gsd-core/bin/lib/runtime-homes.cjs with first-class
+// support for every supported runtime, including:
+//   - hermes: nested skills/gsd/<skillName>/ layout (#2841)
+//   - cline: rules-based, returns null (no skills directory)
+//   - CLAUDE_CONFIG_DIR env var for Claude (was missing)
+//   - All other runtime-specific env vars
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
+
+const ROOT = path.join(__dirname, '..');
+const {
+  getGlobalConfigDir,
+  getGlobalSkillsBase,
+  getGlobalSkillDir,
+} = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-homes.cjs'));
+
+// Helper: run fn with an env var temporarily set
+function withEnv(key, value, fn) {
+  const orig = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  try { return fn(); }
+  finally {
+    if (orig === undefined) delete process.env[key];
+    else process.env[key] = orig;
+  }
+}
+
+describe('bug #3126: runtime-homes getGlobalConfigDir — defaults', () => {
+  const defaults = [
+    ['claude',      path.join(os.homedir(), '.claude')],
+    ['cursor',      path.join(os.homedir(), '.cursor')],
+    ['codex',       path.join(os.homedir(), '.codex')],
+    ['copilot',     path.join(os.homedir(), '.copilot')],
+    ['antigravity', path.join(os.homedir(), '.gemini', 'antigravity')],
+    ['windsurf',    path.join(os.homedir(), '.codeium', 'windsurf')],
+    ['augment',     path.join(os.homedir(), '.augment')],
+    ['trae',        path.join(os.homedir(), '.trae')],
+    ['qwen',        path.join(os.homedir(), '.qwen')],
+    ['hermes',      path.join(os.homedir(), '.hermes')],
+    ['codebuddy',   path.join(os.homedir(), '.codebuddy')],
+    ['cline',       path.join(os.homedir(), '.cline')],
+    ['opencode',    path.join(os.homedir(), '.config', 'opencode')],
+    ['kilo',        path.join(os.homedir(), '.config', 'kilo')],
+  ];
+  for (const [runtime, expected] of defaults) {
+    test(`${runtime} default configDir`, () => {
+      // Derive env-var list from the registry so new runtimes are auto-covered.
+      // GROK_AGENTS_HOME is kept explicitly (grok has no registry entry).
+      const { runtimes: _reg3126 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+      const _regEnvKeys3126 = Object.values(_reg3126).flatMap((r) => {
+        const ch = r.runtime?.configHome;
+        if (!ch) return [];
+        const envs = Array.isArray(ch.env) ? ch.env : [];
+        const skillsEnvs = ch.skillsHome && Array.isArray(ch.skillsHome.env) ? ch.skillsHome.env : [];
+        return [...envs, ...skillsEnvs];
+      });
+      const envKeys = [...new Set([..._regEnvKeys3126, 'GROK_AGENTS_HOME', 'XDG_CONFIG_HOME'])];
+      const saved = {};
+      for (const k of envKeys) { saved[k] = process.env[k]; delete process.env[k]; }
+      try {
+        assert.strictEqual(getGlobalConfigDir(runtime), expected);
+      } finally {
+        for (const k of envKeys) {
+          if (saved[k] !== undefined) process.env[k] = saved[k];
+        }
+      }
+    });
+  }
+  test('unknown runtime falls back to ~/.claude', () => {
+    withEnv('CLAUDE_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(getGlobalConfigDir('unknown-xyz'), path.join(os.homedir(), '.claude'));
+    });
+  });
+});
+
+describe('bug #3126: runtime-homes env-var overrides', () => {
+  test('claude respects CLAUDE_CONFIG_DIR (was missing in old code)', () => {
+    withEnv('CLAUDE_CONFIG_DIR', '/custom/claude', () => {
+      assert.strictEqual(String(getGlobalConfigDir('claude')).replace(/\\/g, '/'), '/custom/claude');
+    });
+  });
+  test('cursor respects CURSOR_CONFIG_DIR', () => {
+    withEnv('CURSOR_CONFIG_DIR', '/custom/cursor', () => {
+      assert.strictEqual(String(getGlobalConfigDir('cursor')).replace(/\\/g, '/'), '/custom/cursor');
+    });
+  });
+  test('opencode respects OPENCODE_CONFIG_DIR', () => {
+    withEnv('OPENCODE_CONFIG_DIR', '/custom/opencode', () => {
+      withEnv('XDG_CONFIG_HOME', undefined, () => {
+        assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/custom/opencode');
+      });
+    });
+  });
+  test('opencode uses XDG_CONFIG_HOME when OPENCODE_CONFIG_DIR absent', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('OPENCODE_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg', () => {
+          assert.strictEqual(getGlobalConfigDir('opencode'), path.join('/xdg', 'opencode'));
+        });
+      });
+    });
+  });
+  test('kilo uses XDG_CONFIG_HOME when KILO_CONFIG_DIR absent', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('KILO_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg', () => {
+          assert.strictEqual(getGlobalConfigDir('kilo'), path.join('/xdg', 'kilo'));
+        });
+      });
+    });
+  });
+
+  test('antigravity detects 2.x IDE dir when legacy dir is absent', () => {
+    const home = require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'gsd-antigravity-home-'));
+    try {
+      require('node:fs').mkdirSync(path.join(home, '.gemini', 'antigravity-ide'), { recursive: true });
+      const savedHome = process.env.HOME;
+      const savedUserProfile = process.env.USERPROFILE;
+      process.env.HOME = home;
+      process.env.USERPROFILE = home;
+      withEnv('ANTIGRAVITY_CONFIG_DIR', undefined, () => {
+        assert.strictEqual(
+          getGlobalConfigDir('antigravity'),
+          path.join(home, '.gemini', 'antigravity-ide'),
+        );
+      });
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = savedUserProfile;
+    } finally {
+      cleanup(home);
+    }
+  });
+});
+
+describe('bug #3126: runtime-homes getGlobalSkillsBase', () => {
+  test('most runtimes: skills at <configDir>/skills', () => {
+    withEnv('CURSOR_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillsBase('cursor'),
+        path.join(os.homedir(), '.cursor', 'skills'),
+      );
+    });
+  });
+  test('hermes: skills at <configDir>/skills/gsd (nested layout #2841)', () => {
+    withEnv('HERMES_HOME', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillsBase('hermes'),
+        path.join(os.homedir(), '.hermes', 'skills', 'gsd'),
+      );
+    });
+  });
+  test('cline: returns ~/.cline/skills (skills-capable since v3.48.0 — #782)', () => {
+    withEnv('CLINE_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillsBase('cline'),
+        path.join(os.homedir(), '.cline', 'skills'),
+      );
+    });
+  });
+});
+
+describe('bug #3126: runtime-homes getGlobalSkillDir', () => {
+  test('cursor: <configDir>/skills/<skillName>', () => {
+    withEnv('CURSOR_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillDir('cursor', 'gsd-executor'),
+        path.join(os.homedir(), '.cursor', 'skills', 'gsd-executor'),
+      );
+    });
+  });
+  test('hermes: <configDir>/skills/gsd/<skillName>', () => {
+    withEnv('HERMES_HOME', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillDir('hermes', 'gsd-executor'),
+        path.join(os.homedir(), '.hermes', 'skills', 'gsd', 'gsd-executor'),
+      );
+    });
+  });
+  test('cline: returns ~/.cline/skills/gsd-executor (skills-capable since v3.48.0 — #782)', () => {
+    withEnv('CLINE_CONFIG_DIR', undefined, () => {
+      assert.strictEqual(
+        getGlobalSkillDir('cline', 'gsd-executor'),
+        path.join(os.homedir(), '.cline', 'skills', 'gsd-executor'),
+      );
+    });
+  });
+});
+
+describe('getGlobalConfigDir — explicitDir override and opencode/kilo file-path precedence', () => {
+  // ── explicitDir override ──────────────────────────────────────────────────
+  test('explicitDir absolute path is returned as-is (claude)', () => {
+    assert.strictEqual(String(getGlobalConfigDir('claude', '/tmp/x')).replace(/\\/g, '/'), '/tmp/x');
+  });
+
+  test('explicitDir with tilde is expanded (opencode)', () => {
+    assert.strictEqual(
+      getGlobalConfigDir('opencode', '~/foo'),
+      path.join(os.homedir(), 'foo'),
+    );
+  });
+
+  test('explicitDir wins even when OPENCODE_CONFIG_DIR is also set', () => {
+    withEnv('OPENCODE_CONFIG_DIR', '/should/not/win', () => {
+      assert.strictEqual(String(getGlobalConfigDir('opencode', '/explicit/wins')).replace(/\\/g, '/'), '/explicit/wins');
+    });
+  });
+
+  // ── opencode: OPENCODE_CONFIG file-path step ──────────────────────────────
+  test('opencode: OPENCODE_CONFIG → path.dirname(expandTilde(value))', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('XDG_CONFIG_HOME', undefined, () => {
+        withEnv('OPENCODE_CONFIG', '/home/u/cfg/opencode.json', () => {
+          assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/home/u/cfg');
+        });
+      });
+    });
+  });
+
+  test('opencode: OPENCODE_CONFIG_DIR takes precedence over OPENCODE_CONFIG', () => {
+    withEnv('OPENCODE_CONFIG_DIR', '/dir/wins', () => {
+      withEnv('OPENCODE_CONFIG', '/file/loses.json', () => {
+        assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/dir/wins');
+      });
+    });
+  });
+
+  test('opencode: OPENCODE_CONFIG takes precedence over XDG_CONFIG_HOME', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('OPENCODE_CONFIG', '/cfg/opencode.json', () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg/should/lose', () => {
+          assert.strictEqual(String(getGlobalConfigDir('opencode')).replace(/\\/g, '/'), '/cfg');
+        });
+      });
+    });
+  });
+
+  test('opencode: default ~/.config/opencode when no env vars set', () => {
+    withEnv('OPENCODE_CONFIG_DIR', undefined, () => {
+      withEnv('OPENCODE_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', undefined, () => {
+          assert.strictEqual(
+            getGlobalConfigDir('opencode'),
+            path.join(os.homedir(), '.config', 'opencode'),
+          );
+        });
+      });
+    });
+  });
+
+  // ── kilo: KILO_CONFIG file-path step ─────────────────────────────────────
+  test('kilo: KILO_CONFIG → path.dirname(expandTilde(value))', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('XDG_CONFIG_HOME', undefined, () => {
+        withEnv('KILO_CONFIG', '/home/u/cfg/kilo.json', () => {
+          assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/home/u/cfg');
+        });
+      });
+    });
+  });
+
+  test('kilo: KILO_CONFIG_DIR takes precedence over KILO_CONFIG', () => {
+    withEnv('KILO_CONFIG_DIR', '/dir/wins', () => {
+      withEnv('KILO_CONFIG', '/file/loses.json', () => {
+        assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/dir/wins');
+      });
+    });
+  });
+
+  test('kilo: KILO_CONFIG takes precedence over XDG_CONFIG_HOME', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('KILO_CONFIG', '/cfg/kilo.json', () => {
+        withEnv('XDG_CONFIG_HOME', '/xdg/should/lose', () => {
+          assert.strictEqual(String(getGlobalConfigDir('kilo')).replace(/\\/g, '/'), '/cfg');
+        });
+      });
+    });
+  });
+
+  test('kilo: default ~/.config/kilo when no env vars set', () => {
+    withEnv('KILO_CONFIG_DIR', undefined, () => {
+      withEnv('KILO_CONFIG', undefined, () => {
+        withEnv('XDG_CONFIG_HOME', undefined, () => {
+          assert.strictEqual(
+            getGlobalConfigDir('kilo'),
+            path.join(os.homedir(), '.config', 'kilo'),
+          );
+        });
+      });
+    });
+  });
+});
+
+describe('bug #3126: init.cjs uses runtime-homes not hardcoded .claude', () => {
+  test('init.cjs has no hardcoded globalSkillsBase assignment to ~/.claude/skills', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(
+      path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'),
+      'utf8',
+    );
+    assert.ok(
+      !src.includes("const globalSkillsBase = path.join(os.homedir(), '.claude', 'skills')"),
+      'init.cjs still assigns globalSkillsBase to hardcoded ~/.claude/skills — fix not applied',
+    );
+  });
+  test('init.cjs requires runtime-homes', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(
+      path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'),
+      'utf8',
+    );
+    assert.ok(
+      src.includes('runtime-homes'),
+      'init.cjs does not require runtime-homes.cjs',
+    );
+  });
+  test('init.cjs warning message no longer hardcodes ~/.claude/skills', () => {
+    const fs = require('node:fs');
+    const src = fs.readFileSync(
+      path.join(ROOT, 'gsd-core', 'bin', 'lib', 'init.cjs'),
+      'utf8',
+    );
+    assert.ok(
+      !src.includes("~/.claude/skills/${skillName}/SKILL.md"),
+      'init.cjs warning message still hardcodes ~/.claude/skills path',
+    );
+  });
+});
+  });
+}

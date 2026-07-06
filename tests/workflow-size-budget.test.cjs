@@ -124,6 +124,7 @@ const LARGE_WORKFLOWS = new Set([
   'update',                // 20766
   'quick',                 // 45710
   'code-review',           // 28726
+  'review',                // multi-reviewer orchestration; outgrew DEFAULT (was at the 40960 ceiling) when the OpenCode reviewer gained JSON reconstruction + a diagnosable empty-output stub (#1936)
 ]);
 
 // Single source of truth for BOTH enumeration and measurement (#1074; finishes

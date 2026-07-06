@@ -60,6 +60,14 @@ export interface BuildWorkstreamInventoryInputs {
   roadmapPhaseCount: number;
   stateProjection: StateProjection;
   filesExist: WorkstreamFilesExist;
+  /**
+   * True when an authoritative shipped signal is present for this workstream
+   * (an archived milestone snapshot under milestones/, or a SHIPPED marker in
+   * the workstream ROADMAP). When true, the inventory status is DERIVED as
+   * "milestone complete" regardless of the mutable STATE.md `Status` field,
+   * so a stale field can never report a shipped workstream as executing (#1913).
+   */
+  milestoneShipped: boolean;
 }
 
 export interface WorkstreamInventory {
@@ -68,6 +76,10 @@ export interface WorkstreamInventory {
   active: boolean;
   files: WorkstreamFilesExist;
   status: string;
+  /** Whether `status` was derived from an authoritative signal ("derived") or taken verbatim from the STATE.md field ("field"). */
+  status_source: 'field' | 'derived';
+  /** True when the derived status disagrees with the STATE.md `Status` field (the field is stale). */
+  status_conflict: boolean;
   current_phase: string | null | undefined;
   last_activity: string | null | undefined;
   phases: PhaseStatus[];
@@ -90,6 +102,7 @@ export function buildWorkstreamInventory(inputs: BuildWorkstreamInventoryInputs)
     roadmapPhaseCount,
     stateProjection,
     filesExist,
+    milestoneShipped,
   } = inputs;
 
   // Index counts by directory for O(1) lookup during sort/iteration
@@ -122,6 +135,15 @@ export function buildWorkstreamInventory(inputs: BuildWorkstreamInventoryInputs)
     });
   }
 
+  // #1913: derive status from authoritative shipped signals rather than trusting
+  // the mutable STATE.md `Status` field. When a shipped signal is present, the
+  // workstream is "milestone complete" regardless of a stale field value.
+  const fieldStatus = stateProjection.status;
+  const useDerived = milestoneShipped;
+  const status = useDerived ? 'milestone complete' : fieldStatus;
+  const status_source: 'field' | 'derived' = useDerived ? 'derived' : 'field';
+  const status_conflict = useDerived && !isCompletedInventory(fieldStatus);
+
   return {
     name,
     path: toPosixPath(path.relative(projectDir, workstreamDir)),
@@ -131,7 +153,9 @@ export function buildWorkstreamInventory(inputs: BuildWorkstreamInventoryInputs)
       state: filesExist.state,
       requirements: filesExist.requirements,
     },
-    status: stateProjection.status,
+    status,
+    status_source,
+    status_conflict,
     current_phase: stateProjection.current_phase,
     last_activity: stateProjection.last_activity,
     phases,

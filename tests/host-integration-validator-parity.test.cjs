@@ -286,7 +286,7 @@ describe('ADR-1239 validator behavioral: undocumented sentinel passes, bogus fai
       `bogus value "zzz" for backgroundDispatch must produce a validator error`);
   });
 
-  test('dispatch without backgroundDispatch key → validator error (required field — all 16 descriptors carry it)', () => {
+  test('dispatch without backgroundDispatch key → validator error (required field — all 15 descriptors carry it)', () => {
     // backgroundDispatch is now REQUIRED (matches sibling fields namedDispatch/nested/background/subagentToolkit/maxDepth).
     const cap = makeMinimalRuntimeCap({
       hostIntegration: {

@@ -10,7 +10,9 @@ allowed-tools:
 Route to the appropriate phase-pipeline skill based on the user's intent.
 Sub-skill names below are post-#2790 consolidated targets — `gsd-phase`
 absorbs the former add/insert/remove/edit-phase commands and `gsd-progress`
-absorbs the former next/do commands.
+absorbs the former next/do workflow-advance commands. The reclaimed
+`gsd-next` target is the state-aware smart-entry launcher, not the retired
+workflow-advance command.
 
 | User wants | Invoke |
 |---|---|
@@ -21,6 +23,7 @@ absorbs the former next/do commands.
 | Verify built features through UAT | gsd-verify-work |
 | Add / insert / remove / edit a phase | gsd-phase |
 | Advance to the next logical step | gsd-progress |
+| Open the state-aware smart-entry launcher | gsd-next |
 | Offload planning to the ultraplan cloud | gsd-ultraplan-phase |
 | Cross-AI plan review convergence loop | gsd-plan-review-convergence |
 | Generate tests for a completed phase | gsd-add-tests |

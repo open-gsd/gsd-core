@@ -29,7 +29,7 @@ When you're satisfied with the draft, you save it and import it back into GSD â€
 
 ### Requirements
 
-- **Runtime:** Claude Code only. The command exits with an error on Gemini CLI, Copilot CLI, and other runtimes.
+- **Runtime:** Claude Code only. The command exits with an error on Antigravity CLI, Copilot CLI, and other runtimes.
 - **Version:** Claude Code v2.1.91 or later (the `$CLAUDE_CODE_VERSION` env var must be set).
 - **Cost:** No extra charge for Pro and Max subscribers. Ultraplan is included at no additional cost.
 

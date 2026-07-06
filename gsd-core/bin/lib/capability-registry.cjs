@@ -10,7 +10,7 @@ const capabilities = {
   "ai-integration": {
     "id": "ai-integration",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "AI design contract",
     "description": "AI-SPEC design contract workflow for phases that build AI systems; owns the AI integration command, agents, and workflow.ai_integration_phase activation key.",
     "tier": "full",
@@ -63,7 +63,7 @@ const capabilities = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -141,7 +141,7 @@ const capabilities = {
   "assumption-delta": {
     "id": "assumption-delta",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Assumption-delta architecture checkpoint",
     "description": "Rarely-firing advisory checkpoint that triggers when a phase makes something plural, optional, or chosen that used to be singular, required, or derived. Surfaces one identity-model question (promote the new general representation to primary, or add it alongside?) so a silent primary-key drift does not accumulate into a later user-facing bug. Non-blocking; fires only on a detected signal.",
     "tier": "full",
@@ -187,7 +187,7 @@ const capabilities = {
   "audit": {
     "id": "audit",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Audit",
     "description": "Open-artifact audit and UAT-gap audit for milestone close gates; exposes `gsd-tools audit-uat` (cross-phase UAT outstanding items) and `gsd-tools audit-open` (structured open-artifact scan across debug, tasks, threads, todos, seeds, UAT, verification, context-questions).",
     "tier": "full",
@@ -224,7 +224,7 @@ const capabilities = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -327,7 +327,7 @@ const capabilities = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -411,7 +411,7 @@ const capabilities = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -472,7 +472,7 @@ const capabilities = {
   "code-review": {
     "id": "code-review",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Code review",
     "description": "Source-file code review and review-fix workflow support for completed execution work.",
     "tier": "full",
@@ -533,7 +533,7 @@ const capabilities = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -636,7 +636,7 @@ const capabilities = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -707,7 +707,7 @@ const capabilities = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -778,7 +778,7 @@ const capabilities = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -881,7 +881,7 @@ const capabilities = {
   "drift": {
     "id": "drift",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Drift detection gates",
     "description": "Drift detection gates for the planning loop. At execute:wave:post: a blocking schema drift gate (detects schema files changed without a database push) and a non-blocking codebase drift gate (detects structural additions not reflected in STRUCTURE.md). At plan:pre: a non-blocking, warn-only codebase drift gate (gated on workflow.plan_drift_precheck) that flags a stale codebase map before planning, so plans are authored against a fresh STRUCTURE.md instead of discovering drift mid-execution.",
     "tier": "full",
@@ -956,10 +956,93 @@ const capabilities = {
       }
     ]
   },
+  "external-job": {
+    "id": "external-job",
+    "role": "feature",
+    "version": "1.7.0-rc.3",
+    "title": "Async external-job scheduler adapter",
+    "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it. NOTE on contribution point: #1164 specifies execute:wave:pre, but execute-phase.md only dispatches execute:wave:post today (wave:pre is declared in the loop host contract but not rendered); wiring wave:pre dispatch is a core-loop change #1164 explicitly puts out of scope, so this capability registers at wave:post and the executor honors the runtime_budget classification guidance before running any tagged task. The adapter (scripts/slurm-adapter.cjs) reads external_job.submit_timeout_ms / poll_timeout_ms / artifact_dir through the canonical capability-config seam (env override > config > registry default).",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "external_job.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+      },
+      "external_job.backend": {
+        "type": "enum",
+        "values": [
+          "slurm"
+        ],
+        "default": "slurm",
+        "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value."
+      },
+      "external_job.artifact_dir": {
+        "type": "string",
+        "default": "Artifacts/jobs",
+        "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout. Surfaced by the adapter (`slurm-adapter.cjs submit` prints the resolved value); override via GSD_EXTERNAL_JOB_ARTIFACT_DIR."
+      },
+      "external_job.submit_timeout_ms": {
+        "type": "number",
+        "default": 30000,
+        "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy. Read by the adapter (env GSD_SLURM_SUBMIT_TIMEOUT_MS overrides)."
+      },
+      "external_job.poll_timeout_ms": {
+        "type": "number",
+        "default": 15000,
+        "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback). Read by the adapter (env GSD_SLURM_POLL_TIMEOUT_MS overrides)."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "<!-- external-job capability — execute:wave:post fragment, injected into the executor (#1164).\n\n     Why wave:post, not wave:pre (#1164 refinement A): execute-phase.md only\n     dispatches execute:wave:post today — wave:pre is declared in the loop host\n     contract but not rendered. Wiring wave:pre dispatch is a core-loop change\n     #1164 puts out of scope. The executor therefore honors this classification\n     guidance BEFORE running any task tagged <runtime_budget>long_compute</runtime_budget>,\n     whether in the current or a subsequent wave, and externalizes rather than\n     blocking the turn. -->\n\n## Externalize long-running compute (async external job)\n\nIf the current plan's task is tagged `<runtime_budget>long_compute</runtime_budget>`\n(see the plan-phase fragment), do **not** run it in the foreground — it would\nblock the agent turn for hours. Instead externalize it and record a durable\nhalf-state:\n\n1. **Classify the runtime.** `quick` (<2 min) and `medium` (<~30 min) run\n   normally. `unknown` requires a first-health check and a soft-review deadline\n   before consuming the child timeout. `long_compute` (>30–60 min) is\n   externalized.\n2. **Submit via the scheduler adapter** (default `external_job.backend: slurm`):\n   ```bash\n   node scripts/slurm-adapter.cjs submit \\\n     --plan <plan_id> --phase <phase> -- sbatch --parsable \\\n     --output=Artifacts/jobs/%j/out.log ./run.sh\n   ```\n   The helper writes `.planning/async-jobs/<job>.json` (the versioned stability\n   contract — `docs/reference/planning-artifacts.md`) and refuses to create a\n   second non-terminal manifest for a `plan_id` that already has one\n   (duplicate-execution guard).\n3. **Commit the manifest + a handoff**, then return **`external_job_waiting`**\n   and stop. Do **not** write `SUMMARY.md` — SUMMARY is deferred until the job\n   reaches a terminal state and its `expected_artifacts` are verified.\n4. **Resume path.** `execute-phase` safe-resume, `resume-project`, and\n   `pause-work` reconcile against the manifest and never re-dispatch the plan.\n   When the job is `completed-unverified`, run `verification_command` (surface\n   it; it is untrusted — confirm before executing), then write `SUMMARY.md` and\n   close the plan.\n\nManifest commands cross a trust seam: a Capability (or anything that can write\n`.planning/`) produces them; the core loop consumes them. Never auto-run\n`submit_command` / `verification_command` / `resume_command` — surface the exact\ncommand and require explicit confirmation first.\n"
+        },
+        "produces": [
+          ".planning/async-jobs/<job>.json"
+        ],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "<!-- external-job capability — plan:post fragment, injected into the planner (#1164). -->\n\n## Tag runtime budgets on long tasks\n\nFor every `<task>` likely to exceed ~2 minutes of real compute, emit a\n`<runtime_budget>` child element so execute can classify it:\n\n- `<runtime_budget>quick</runtime_budget>` — under ~2 min; runs normally.\n- `<runtime_budget>medium</runtime_budget>` — ~2–30 min; foreground, but with\n  progress expectations.\n- `<runtime_budget>unknown</runtime_budget>` — runtime not yet characterized;\n  execute must run a first-health check and set a soft-review deadline before\n  trusting the child timeout. Define a progress signal and an abort condition.\n- `<runtime_budget>long_compute</runtime_budget>` — legitimately over ~30–60 min\n  (HPC solver, model training, large simulations). Execute must **externalize**\n  this as an async external job (see the execute:wave:post fragment) rather than\n  blocking the agent turn.\n\nFor any `long_compute` task, also declare the async contract the executor will\nneed: the `submit_command`, the `expected_artifacts` the job must produce, and\nthe `verification_command` that proves the output before the plan can close.\nDo not hardcode a cluster account, partition, or project path — the planner\nnever knows the scheduler layout; it declares the contract, the executor's\nadapter fills the backend specifics.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "gap-analysis": {
     "id": "gap-analysis",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Post-planning gap analysis",
     "description": "Proactive, non-blocking post-planning coverage report. After all PLAN.md files are generated, cross-references every REQ-ID and D-ID from REQUIREMENTS.md and CONTEXT.md against plan bodies. Emits a Source | Item | Status table. Does not block phase advancement.",
     "tier": "standard",
@@ -997,85 +1080,10 @@ const capabilities = {
       }
     ]
   },
-  "gemini": {
-    "id": "gemini",
-    "role": "runtime",
-    "version": "1.7.0-rc.1",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
-    "tier": "core",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.6.0"
-    },
-    "runtime": {
-      "configHome": {
-        "kind": "dot-home",
-        "name": ".gemini",
-        "env": [
-          "GEMINI_CONFIG_DIR"
-        ]
-      },
-      "localConfigDir": ".gemini",
-      "configFormat": "settings-json",
-      "artifactLayout": {
-        "global": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ],
-        "local": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ]
-      },
-      "commandStyle": "slash-hyphen",
-      "hooksSurface": "settings-json",
-      "hookEvents": "gemini",
-      "sandboxTier": "none",
-      "supportTier": 2,
-      "installSurface": "settings-json",
-      "writesSharedSettings": true,
-      "permissionWriter": null,
-      "extendedHookEvents": [
-        "BeforeAgent",
-        "AfterAgent",
-        "BeforeModel"
-      ],
-      "hostIntegration": {
-        "embeddingMode": "declarative",
-        "commandSurface": "slash-toml",
-        "dispatch": {
-          "namedDispatch": true,
-          "nested": false,
-          "maxDepth": 1,
-          "background": "undocumented",
-          "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
-        },
-        "modelMode": "passive",
-        "hookBus": "host",
-        "stateIO": "filesystem",
-        "transport": "mcp",
-        "runtime": "node"
-      }
-    }
-  },
   "graphify": {
     "id": "graphify",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Knowledge graph",
     "description": "Build, query, and inspect the project knowledge graph in `.planning/graphs/`; exposes graphify CLI subcommands (build, query, status, diff) and the /gsd-graphify skill.",
     "tier": "full",
@@ -1116,7 +1124,7 @@ const capabilities = {
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1187,7 +1195,7 @@ const capabilities = {
   "intel": {
     "id": "intel",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Codebase intelligence",
     "description": "Code-intelligence store for codebase querying, diff, snapshot, and API-surface extraction; exposes `gsd-tools intel` subcommands (query, status, update, diff, snapshot, patch-meta, validate, extract-exports, api-surface) and backs `/gsd-map-codebase` and `gsd-intel-updater`.",
     "tier": "full",
@@ -1239,7 +1247,7 @@ const capabilities = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -1332,7 +1340,7 @@ const capabilities = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -1406,7 +1414,7 @@ const capabilities = {
   "mempalace": {
     "id": "mempalace",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "MemPalace memory",
     "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
     "tier": "full",
@@ -1442,7 +1450,7 @@ const capabilities = {
           "replace"
         ],
         "default": "augment",
-        "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'."
+        "description": "How MemPalace relates to GSD native memory during recall/capture. 'augment' (default): the palace is an additive layer alongside .planning/graphs/ — native memory stays authoritative. 'kg_backend': knowledge-graph queries resolve against the palace's temporal KG as the primary source, with .planning/graphs/ as fallback. 'replace': recall resolves through the palace as the source of truth, native memory as fallback. Every mode stays onError:skip and default-resilient — an unreachable palace degrades to native memory, and GSD keeps writing .planning/graphs/ so no memory is lost. Cross-mode migration of existing .planning/graphs/ into the palace is a separate, not-yet-implemented concern."
       },
       "mempalace.wing": {
         "type": "string",
@@ -1555,7 +1563,7 @@ const capabilities = {
         "into": "orchestrator",
         "fragment": {
           "path": "fragments/recall-discuss.md",
-          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness.** Only `augment` is currently wired: always treat the palace as an *additional* recall layer on top of GSD's native memory — never skip `.planning/graphs/` or STATE. `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness** (`mempalace.memory_mode`). `augment` (default): the palace is an *additional* layer — never skip `.planning/graphs/` or STATE. `kg_backend`: query the palace's temporal KG as the *primary* graph source, with `.planning/graphs/` as fallback. `replace`: resolve recall *through the palace as the source of truth*, native memory as fallback. In every mode an unreachable palace falls back to native memory — recall never blocks.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
         },
         "produces": [],
         "consumes": [],
@@ -1567,7 +1575,7 @@ const capabilities = {
         "into": "verifier",
         "fragment": {
           "path": "fragments/capture-problems.md",
-          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness.** Only `augment` is currently wired: the fact is an *additive* mirror alongside `.planning/graphs/` (never a replacement). `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness** (`mempalace.memory_mode`). Under `augment` the fact is an *additive* mirror alongside `.planning/graphs/`. Under `kg_backend`/`replace` the palace is the *authoritative* store for the fact; GSD still writes `.planning/graphs/` through its normal graphify, so an unreachable palace never loses it.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
         },
         "produces": [],
         "consumes": [],
@@ -1580,7 +1588,7 @@ const capabilities = {
   "nyquist": {
     "id": "nyquist",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Nyquist validation",
     "description": "Validation coverage audit that maps executed work back to tests and manual-only evidence.",
     "tier": "full",
@@ -1630,7 +1638,7 @@ const capabilities = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -1690,6 +1698,7 @@ const capabilities = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "opencode",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "settings-json",
@@ -1718,7 +1727,7 @@ const capabilities = {
   "pattern-mapper": {
     "id": "pattern-mapper",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Pattern mapping",
     "description": "Optional codebase-pattern mapping before planning; owns the pattern mapper agent and workflow.pattern_mapper activation key.",
     "tier": "full",
@@ -1772,7 +1781,7 @@ const capabilities = {
   "profile-pipeline": {
     "id": "profile-pipeline",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Developer profiling pipeline",
     "description": "Developer behavioral profiling from Claude Code session history; scans session JSONL files, extracts and samples user messages, and generates profile artifacts (USER-PROFILE.md, dev-preferences.md, CLAUDE.md sections). Exposes eight `gsd-tools` commands: scan-sessions, extract-messages, profile-sample (pipeline phase) and write-profile, profile-questionnaire, generate-dev-preferences, generate-claude-profile, generate-claude-md (output phase). Backs the /gsd-profile-user skill and gsd-user-profiler agent.",
     "tier": "full",
@@ -1849,7 +1858,7 @@ const capabilities = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -1924,7 +1933,7 @@ const capabilities = {
   "research": {
     "id": "research",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Phase research",
     "description": "Optional phase research before planning; owns the phase researcher agent and workflow.research activation key.",
     "tier": "standard",
@@ -1976,7 +1985,7 @@ const capabilities = {
   "schema-gate": {
     "id": "schema-gate",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Schema push detection gate",
     "description": "Detects ORM schema-relevant files in the phase scope during planning and injects a mandatory [BLOCKING] schema push task into the plan. Prevents false-positive verification where build/types pass because TypeScript types come from config, not the live database.",
     "tier": "full",
@@ -2022,7 +2031,7 @@ const capabilities = {
   "security": {
     "id": "security",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Security enforcement",
     "description": "Threat mitigation verification and ship-time security blocking for phases with security enforcement enabled.",
     "tier": "full",
@@ -2121,7 +2130,7 @@ const capabilities = {
   "tdd": {
     "id": "tdd",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Test-driven development",
     "description": "Injects TDD heuristics into the planner and enforces RED/GREEN gate compliance on type:tdd plans after execution. Owns workflow.tdd_mode; the --tdd CLI flag is the ephemeral override.",
     "tier": "full",
@@ -2174,7 +2183,7 @@ const capabilities = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -2260,7 +2269,7 @@ const capabilities = {
   "ui": {
     "id": "ui",
     "role": "feature",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "UI design contracts",
     "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
     "tier": "full",
@@ -2355,7 +2364,7 @@ const capabilities = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -2430,6 +2439,108 @@ const capabilities = {
         "runtime": "undocumented"
       }
     }
+  },
+  "zcode": {
+    "id": "zcode",
+    "role": "runtime",
+    "version": "1.7.0-rc.3",
+    "title": "ZCode",
+    "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".zcode",
+        "env": [
+          "ZCODE_CONFIG_DIR"
+        ]
+      },
+      "localConfigDir": ".zcode",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": false,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "electron"
+      }
+    }
   }
 };
 
@@ -2473,7 +2584,7 @@ const byLoopPoint = {
         "into": "orchestrator",
         "fragment": {
           "path": "fragments/recall-discuss.md",
-          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness.** Only `augment` is currently wired: always treat the palace as an *additional* recall layer on top of GSD's native memory — never skip `.planning/graphs/` or STATE. `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the discuss:pre orchestrator prompt when `mempalace.recall_on_discuss` is true.\n  Contributes DATA (recall instructions), not control flow. onError: skip — never blocks discussion.\n-->\n### Memory recall (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.recall_on_discuss` is `false`, **skip this entire section** and continue the discussion unchanged. (This contribution is only injected when the capability is enabled; the `recall_on_discuss` check lets you turn discuss-time recall off without disabling the rest of the capability.)\n\nOtherwise — before gathering new context, surface what you already know. This is read-only and side-effect-free; if MemPalace is unreachable, note \"memory unavailable\" and continue — recall never blocks discussion.\n\n1. **Resolve the wing.** Use `mempalace.wing` if set; otherwise derive it from `project_code` (fall back to the project directory name).\n2. **Wake up (cheap, ~600–900 tokens).**\n   - Interactive run → call `mempalace_search` after a wake-up read of the wing.\n   - Headless/cron run (no MCP server) → run `mempalace wake-up --wing <wing>` via the CLI.\n3. **Targeted recall.** Search the palace for prior work on this phase's topic:\n   - Interactive → `mempalace_search(query=<phase topic>, wing=<wing>)` and, when `mempalace.mirror_kg` is on, `mempalace_kg_query` / `mempalace_kg_timeline` for decision facts and their validity windows.\n   - Headless → `mempalace search \"<phase topic>\" --wing <wing>`.\n4. **Mode awareness** (`mempalace.memory_mode`). `augment` (default): the palace is an *additional* layer — never skip `.planning/graphs/` or STATE. `kg_backend`: query the palace's temporal KG as the *primary* graph source, with `.planning/graphs/` as fallback. `replace`: resolve recall *through the palace as the source of truth*, native memory as fallback. In every mode an unreachable palace falls back to native memory — recall never blocks.\n5. **Surface, don't dump.** Fold the top relevant drawers, decisions, patterns, and *surprises* into the discussion as prior context — cite drawer/fact provenance. Do not paste raw search output.\n\nIf any MemPalace call errors or times out, skip the rest of recall and proceed with discussion as normal.\n"
         },
         "produces": [],
         "consumes": [],
@@ -2701,7 +2812,21 @@ const byLoopPoint = {
         "onError": "skip"
       }
     ],
-    "contributions": [],
+    "contributions": [
+      {
+        "capId": "external-job",
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "<!-- external-job capability — plan:post fragment, injected into the planner (#1164). -->\n\n## Tag runtime budgets on long tasks\n\nFor every `<task>` likely to exceed ~2 minutes of real compute, emit a\n`<runtime_budget>` child element so execute can classify it:\n\n- `<runtime_budget>quick</runtime_budget>` — under ~2 min; runs normally.\n- `<runtime_budget>medium</runtime_budget>` — ~2–30 min; foreground, but with\n  progress expectations.\n- `<runtime_budget>unknown</runtime_budget>` — runtime not yet characterized;\n  execute must run a first-health check and set a soft-review deadline before\n  trusting the child timeout. Define a progress signal and an abort condition.\n- `<runtime_budget>long_compute</runtime_budget>` — legitimately over ~30–60 min\n  (HPC solver, model training, large simulations). Execute must **externalize**\n  this as an async external job (see the execute:wave:post fragment) rather than\n  blocking the agent turn.\n\nFor any `long_compute` task, also declare the async contract the executor will\nneed: the `submit_command`, the `expected_artifacts` the job must produce, and\nthe `verification_command` that proves the output before the plan can close.\nDo not hardcode a cluster account, partition, or project path — the planner\nnever knows the scheduler layout; it declares the contract, the executor's\nadapter fills the backend specifics.\n"
+        },
+        "produces": [],
+        "consumes": [],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      }
+    ],
     "gates": [
       {
         "capId": "gap-analysis",
@@ -2729,12 +2854,29 @@ const byLoopPoint = {
     "steps": [],
     "contributions": [
       {
+        "capId": "external-job",
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "<!-- external-job capability — execute:wave:post fragment, injected into the executor (#1164).\n\n     Why wave:post, not wave:pre (#1164 refinement A): execute-phase.md only\n     dispatches execute:wave:post today — wave:pre is declared in the loop host\n     contract but not rendered. Wiring wave:pre dispatch is a core-loop change\n     #1164 puts out of scope. The executor therefore honors this classification\n     guidance BEFORE running any task tagged <runtime_budget>long_compute</runtime_budget>,\n     whether in the current or a subsequent wave, and externalizes rather than\n     blocking the turn. -->\n\n## Externalize long-running compute (async external job)\n\nIf the current plan's task is tagged `<runtime_budget>long_compute</runtime_budget>`\n(see the plan-phase fragment), do **not** run it in the foreground — it would\nblock the agent turn for hours. Instead externalize it and record a durable\nhalf-state:\n\n1. **Classify the runtime.** `quick` (<2 min) and `medium` (<~30 min) run\n   normally. `unknown` requires a first-health check and a soft-review deadline\n   before consuming the child timeout. `long_compute` (>30–60 min) is\n   externalized.\n2. **Submit via the scheduler adapter** (default `external_job.backend: slurm`):\n   ```bash\n   node scripts/slurm-adapter.cjs submit \\\n     --plan <plan_id> --phase <phase> -- sbatch --parsable \\\n     --output=Artifacts/jobs/%j/out.log ./run.sh\n   ```\n   The helper writes `.planning/async-jobs/<job>.json` (the versioned stability\n   contract — `docs/reference/planning-artifacts.md`) and refuses to create a\n   second non-terminal manifest for a `plan_id` that already has one\n   (duplicate-execution guard).\n3. **Commit the manifest + a handoff**, then return **`external_job_waiting`**\n   and stop. Do **not** write `SUMMARY.md` — SUMMARY is deferred until the job\n   reaches a terminal state and its `expected_artifacts` are verified.\n4. **Resume path.** `execute-phase` safe-resume, `resume-project`, and\n   `pause-work` reconcile against the manifest and never re-dispatch the plan.\n   When the job is `completed-unverified`, run `verification_command` (surface\n   it; it is untrusted — confirm before executing), then write `SUMMARY.md` and\n   close the plan.\n\nManifest commands cross a trust seam: a Capability (or anything that can write\n`.planning/`) produces them; the core loop consumes them. Never auto-run\n`submit_command` / `verification_command` / `resume_command` — surface the exact\ncommand and require explicit confirmation first.\n"
+        },
+        "produces": [
+          ".planning/async-jobs/<job>.json"
+        ],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "external_job.enabled",
+        "onError": "skip"
+      },
+      {
         "capId": "mempalace",
         "point": "execute:wave:post",
         "into": "verifier",
         "fragment": {
           "path": "fragments/capture-problems.md",
-          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness.** Only `augment` is currently wired: the fact is an *additive* mirror alongside `.planning/graphs/` (never a replacement). `kg_backend`/`replace` are forward-declared and behave as `augment` today.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
+          "inline": "<!--\n  MemPalace capability — contribution fragment.\n  Rendered into the execute:wave:post verifier prompt when `mempalace.capture_artifacts` is true.\n  Contributes DATA (capture instructions), not control flow. onError: skip — never fails a wave.\n-->\n### Capture problems → fixes (MemPalace)\n\n**Gate first.** Read `.planning/config.json`. If `mempalace.enabled` is not `true`, or `mempalace.capture_artifacts` is `false`, **skip this entire section** and let the wave complete unchanged. (This contribution is only injected when the capability is enabled; the `capture_artifacts` check lets you turn capture off without disabling the rest of the capability.)\n\nOtherwise — after verifying this wave, persist any *confirmed* problem→fix pairs into the palace so they are recalled in future phases. This is best-effort; if MemPalace is unreachable, skip silently — capture never fails a wave.\n\nFor each confirmed bug/issue resolved in this wave:\n\n1. **Resolve the wing** (`mempalace.wing`, else `project_code`, else project dir) and target `room: problems`.\n2. **Dedupe first.** Call `mempalace_check_duplicate` (interactive) before filing so re-runs don't create duplicate drawers.\n3. **File the drawer verbatim.** Store the problem statement and its fix as a drawer in `room: problems` — interactive: `mempalace_add_drawer`; headless: `mempalace mine` / `mempalace hook run`. Include provenance (`source_file`, phase id).\n4. **Mirror the KG fact** when `mempalace.mirror_kg` is on: add `(<bug>, fixed_by, <fix>)` with `valid_from` = the phase date via `mempalace_kg_add`.\n5. **Mode awareness** (`mempalace.memory_mode`). Under `augment` the fact is an *additive* mirror alongside `.planning/graphs/`. Under `kg_backend`/`replace` the palace is the *authoritative* store for the fact; GSD still writes `.planning/graphs/` through its normal graphify, so an unreachable palace never loses it.\n\nCaptures are idempotent: deterministic drawer IDs + `check_duplicate` mean re-running the wave re-files the same content without duplication. On any error, skip and let the wave complete normally.\n"
         },
         "produces": [],
         "consumes": [],
@@ -2927,6 +3069,11 @@ const configKeys = {
   "workflow.drift_action": "drift",
   "workflow.schema_drift_gate": "drift",
   "workflow.plan_drift_precheck": "drift",
+  "external_job.enabled": "external-job",
+  "external_job.backend": "external-job",
+  "external_job.artifact_dir": "external-job",
+  "external_job.submit_timeout_ms": "external-job",
+  "external_job.poll_timeout_ms": "external-job",
   "workflow.post_planning_gaps": "gap-analysis",
   "graphify.enabled": "graphify",
   "intel.enabled": "intel",
@@ -3012,6 +3159,39 @@ const configSchema = {
     "default": true,
     "description": "Enable the non-blocking codebase drift pre-check at plan:pre, before /gsd:plan-phase spawns the planner. When enabled, a stale STRUCTURE.md (structural additions exceeding drift_threshold) is surfaced up front as a warn-only advisory pointing to /gsd:map-codebase; it never blocks planning and never spawns the mapper agent. Separate from schema_drift_gate so autonomous/CI runs can silence the plan-time advisory while keeping the execute:wave:post gates enabled."
   },
+  "external_job.enabled": {
+    "owner": "external-job",
+    "type": "boolean",
+    "default": false,
+    "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+  },
+  "external_job.backend": {
+    "owner": "external-job",
+    "type": "enum",
+    "default": "slurm",
+    "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value.",
+    "values": [
+      "slurm"
+    ]
+  },
+  "external_job.artifact_dir": {
+    "owner": "external-job",
+    "type": "string",
+    "default": "Artifacts/jobs",
+    "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout. Surfaced by the adapter (`slurm-adapter.cjs submit` prints the resolved value); override via GSD_EXTERNAL_JOB_ARTIFACT_DIR."
+  },
+  "external_job.submit_timeout_ms": {
+    "owner": "external-job",
+    "type": "number",
+    "default": 30000,
+    "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy. Read by the adapter (env GSD_SLURM_SUBMIT_TIMEOUT_MS overrides)."
+  },
+  "external_job.poll_timeout_ms": {
+    "owner": "external-job",
+    "type": "number",
+    "default": 15000,
+    "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback). Read by the adapter (env GSD_SLURM_POLL_TIMEOUT_MS overrides)."
+  },
   "workflow.post_planning_gaps": {
     "owner": "gap-analysis",
     "type": "boolean",
@@ -3040,7 +3220,7 @@ const configSchema = {
     "owner": "mempalace",
     "type": "enum",
     "default": "augment",
-    "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'.",
+    "description": "How MemPalace relates to GSD native memory during recall/capture. 'augment' (default): the palace is an additive layer alongside .planning/graphs/ — native memory stays authoritative. 'kg_backend': knowledge-graph queries resolve against the palace's temporal KG as the primary source, with .planning/graphs/ as fallback. 'replace': recall resolves through the palace as the source of truth, native memory as fallback. Every mode stays onError:skip and default-resilient — an unreachable palace degrades to native memory, and GSD keeps writing .planning/graphs/ so no memory is lost. Cross-mode migration of existing .planning/graphs/ into the palace is a separate, not-yet-implemented concern.",
     "values": [
       "augment",
       "kg_backend",
@@ -3180,7 +3360,7 @@ const runtimes = {
   "antigravity": {
     "id": "antigravity",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Antigravity",
     "description": "Google Antigravity IDE — nested under ~/.gemini/antigravity; probed across 1.x and 2.x layouts; Gemini hook event dialect; flat skill layout; tier-1 support.",
     "tier": "core",
@@ -3258,7 +3438,7 @@ const runtimes = {
   "augment": {
     "id": "augment",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Augment Code",
     "description": "Augment Code CLI — commands + nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -3361,7 +3541,7 @@ const runtimes = {
   "claude": {
     "id": "claude",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Claude Code",
     "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
     "tier": "core",
@@ -3445,7 +3625,7 @@ const runtimes = {
   "cline": {
     "id": "cline",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Cline",
     "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
     "tier": "core",
@@ -3506,7 +3686,7 @@ const runtimes = {
   "codebuddy": {
     "id": "codebuddy",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "CodeBuddy",
     "description": "CodeBuddy (Tencent) — converted commands + skills artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -3609,7 +3789,7 @@ const runtimes = {
   "codex": {
     "id": "codex",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "OpenAI Codex CLI",
     "description": "OpenAI Codex CLI — shell-var command style; per-agent sandbox tiers; config.toml + hooks.json hook surface; tier-1 support.",
     "tier": "core",
@@ -3680,7 +3860,7 @@ const runtimes = {
   "copilot": {
     "id": "copilot",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "GitHub Copilot",
     "description": "GitHub Copilot (VS Code) — markdown config format; copilot-inline hook surface; no hook events emitted; flat skill nesting (unconfirmed recursive loader); tier-2 support.",
     "tier": "core",
@@ -3751,7 +3931,7 @@ const runtimes = {
   "cursor": {
     "id": "cursor",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Cursor",
     "description": "Cursor IDE — skills + converted commands artifact layout; hooks.json surface; Claude hook event dialect; recursive skill loader (flat nesting); tier-2 support.",
     "tier": "core",
@@ -3851,85 +4031,10 @@ const runtimes = {
       }
     }
   },
-  "gemini": {
-    "id": "gemini",
-    "role": "runtime",
-    "version": "1.7.0-rc.1",
-    "title": "Gemini CLI",
-    "description": "Google Gemini CLI — commands-only artifact layout (TOML); Gemini hook event dialect; settings-json hook surface; tier-2 support.",
-    "tier": "core",
-    "requires": [],
-    "engines": {
-      "gsd": ">=1.6.0"
-    },
-    "runtime": {
-      "configHome": {
-        "kind": "dot-home",
-        "name": ".gemini",
-        "env": [
-          "GEMINI_CONFIG_DIR"
-        ]
-      },
-      "localConfigDir": ".gemini",
-      "configFormat": "settings-json",
-      "artifactLayout": {
-        "global": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ],
-        "local": [
-          {
-            "kind": "commands",
-            "destSubpath": "commands/gsd",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null
-          }
-        ]
-      },
-      "commandStyle": "slash-hyphen",
-      "hooksSurface": "settings-json",
-      "hookEvents": "gemini",
-      "sandboxTier": "none",
-      "supportTier": 2,
-      "installSurface": "settings-json",
-      "writesSharedSettings": true,
-      "permissionWriter": null,
-      "extendedHookEvents": [
-        "BeforeAgent",
-        "AfterAgent",
-        "BeforeModel"
-      ],
-      "hostIntegration": {
-        "embeddingMode": "declarative",
-        "commandSurface": "slash-toml",
-        "dispatch": {
-          "namedDispatch": true,
-          "nested": false,
-          "maxDepth": 1,
-          "background": "undocumented",
-          "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
-        },
-        "modelMode": "passive",
-        "hookBus": "host",
-        "stateIO": "filesystem",
-        "transport": "mcp",
-        "runtime": "node"
-      }
-    }
-  },
   "hermes": {
     "id": "hermes",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Hermes Agent",
     "description": "Hermes Agent (NousResearch) — skills nest under skills/gsd/ category bucket; nested skill layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4000,7 +4105,7 @@ const runtimes = {
   "kilo": {
     "id": "kilo",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Kilo Code",
     "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -4093,7 +4198,7 @@ const runtimes = {
   "kimi": {
     "id": "kimi",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Kimi CLI",
     "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -4167,7 +4272,7 @@ const runtimes = {
   "opencode": {
     "id": "opencode",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "OpenCode",
     "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
@@ -4227,6 +4332,7 @@ const runtimes = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "opencode",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "settings-json",
@@ -4255,7 +4361,7 @@ const runtimes = {
   "qwen": {
     "id": "qwen",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Qwen Code",
     "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
     "tier": "core",
@@ -4330,7 +4436,7 @@ const runtimes = {
   "trae": {
     "id": "trae",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Trae IDE",
     "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
     "tier": "core",
@@ -4416,7 +4522,7 @@ const runtimes = {
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
-    "version": "1.7.0-rc.1",
+    "version": "1.7.0-rc.3",
     "title": "Windsurf",
     "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
     "tier": "core",
@@ -4489,6 +4595,108 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "undocumented"
+      }
+    }
+  },
+  "zcode": {
+    "id": "zcode",
+    "role": "runtime",
+    "version": "1.7.0-rc.3",
+    "title": "ZCode",
+    "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".zcode",
+        "env": [
+          "ZCODE_CONFIG_DIR"
+        ]
+      },
+      "localConfigDir": ".zcode",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "commands",
+            "destSubpath": "commands",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": false,
+          "subagentToolkit": "full",
+          "backgroundDispatch": false
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "electron"
       }
     }
   }
@@ -4651,8 +4859,8 @@ const _requiresGraph = {
   "copilot": [],
   "cursor": [],
   "drift": [],
+  "external-job": [],
   "gap-analysis": [],
-  "gemini": [],
   "graphify": [],
   "hermes": [],
   "intel": [],
@@ -4672,7 +4880,8 @@ const _requiresGraph = {
   "tdd": [],
   "trae": [],
   "ui": [],
-  "windsurf": []
+  "windsurf": [],
+  "zcode": []
 };
 
 function requiresClosure(id) {

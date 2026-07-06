@@ -70,7 +70,7 @@ describe('getDirName (Copilot)', () => {
   test('does not break existing runtimes', () => {
     assert.strictEqual(getDirName('claude'), '.claude');
     assert.strictEqual(getDirName('opencode'), '.opencode');
-    assert.strictEqual(getDirName('gemini'), '.gemini');
+    assert.strictEqual(getDirName('antigravity'), '.agents');
     assert.strictEqual(getDirName('kilo'), '.kilo');
     assert.strictEqual(getDirName('codex'), '.codex');
   });
@@ -172,7 +172,7 @@ describe('getConfigDirFromHome (Copilot)', () => {
   test('does not break existing runtimes', () => {
     assert.strictEqual(getConfigDirFromHome('opencode', true), "'.config', 'opencode'");
     assert.strictEqual(getConfigDirFromHome('claude', true), "'.claude'");
-    assert.strictEqual(getConfigDirFromHome('gemini', true), "'.gemini'");
+    assert.strictEqual(getConfigDirFromHome('cursor', true), "'.cursor'");
     assert.strictEqual(getConfigDirFromHome('kilo', true), "'.config', 'kilo'");
     assert.strictEqual(getConfigDirFromHome('codex', true), "'.codex'");
   });

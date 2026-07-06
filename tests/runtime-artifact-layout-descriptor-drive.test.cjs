@@ -3,7 +3,7 @@
 /**
  * Equivalence proof for ADR-857 phase 5d: descriptor-driven resolveRuntimeArtifactLayout.
  *
- * For every runtime in the 16-entry capability registry × {global, local} scopes,
+ * For every runtime in the 15-entry capability registry × {global, local} scopes,
  * this test asserts that:
  *   1. kind.kind, kind.destSubpath, kind.prefix are byte-identical to the STEP-0
  *      golden captured from the old switch() before any edits.
@@ -11,11 +11,11 @@
  *   3. layout.runtime === runtime, layout.configDir === configDir, layout.scope === scope.
  *
  * SCOPE-FALL-THROUGH NOTE:
- *   The old switch() had no scope branches for 13 runtimes (cursor, gemini, codex,
+ *   The old switch() had no scope branches for 12 runtimes (cursor, codex,
  *   copilot, antigravity, windsurf, augment, trae, qwen, hermes, codebuddy, opencode,
  *   kilo), meaning scope='local' returned the same kinds as scope='global'. The 5a
  *   descriptors incorrectly set local:[] for those runtimes, causing 31 local-install
- *   test regressions. The 5b backfill sets local == global for these 13, restoring
+ *   test regressions. The 5b backfill sets local == global for these 12, restoring
  *   the old switch's scope-agnostic behaviour.
  *
  *   For runtimes that had explicit scope branches in the old switch
@@ -70,15 +70,6 @@ const GOLDEN = {
     { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
     { kind: 'commands', destSubpath: 'commands',  prefix: 'gsd-' },
     { kind: 'agents',   destSubpath: 'agents',   prefix: 'gsd-' },
-  ],
-
-  // ── gemini ───────────────────────────────────────────────────────────────────
-  // Old switch: no scope branch → local == global. 5b backfill restores this.
-  'gemini/global': [
-    { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' },
-  ],
-  'gemini/local': [
-    { kind: 'commands', destSubpath: 'commands/gsd', prefix: 'gsd-' },
   ],
 
   // ── codex ────────────────────────────────────────────────────────────────────
@@ -217,7 +208,7 @@ const GOLDEN = {
 // ── Parametrized tests ────────────────────────────────────────────────────────
 
 const RUNTIMES = [
-  'claude', 'cursor', 'gemini', 'codex', 'copilot',
+  'claude', 'cursor', 'codex', 'copilot',
   'antigravity', 'windsurf', 'augment', 'trae', 'qwen',
   'hermes', 'codebuddy', 'cline', 'kimi', 'opencode', 'kilo',
 ];

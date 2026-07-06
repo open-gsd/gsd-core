@@ -2778,3 +2778,672 @@ describe('pr-subrepo', () => {
     });
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-1754-cli-skew-detection.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-1754-cli-skew-detection (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+
+/**
+ * feat-1754-cli-skew-detection.test.cjs
+ *
+ * Tests for the CLI version-skew detection module (src/cli-skew-check.cts).
+ *
+ * The check warns (returns a string) when the running gsd-tools.cjs is NOT the
+ * project-local install while a project-local install EXISTS — the shadowing
+ * scenario from #1748 (a stale global canary from @gsd-build/sdk shadowing
+ * project-local 1.6.0).
+ *
+ * DEFECT class: environment / version skew (enhancement #1754)
+ *
+ * The function is PURE (no I/O — the caller provides paths + existence flags),
+ * making it trivially testable without filesystem setup.
+ */
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+
+const { checkCliSkew } = require('../gsd-core/bin/lib/cli-skew-check.cjs');
+
+describe('#1754: checkCliSkew — pure path-comparison skew detection', () => {
+  test('SKEW: resolved CLI outside project root + project-local exists → returns warning', () => {
+    const warning = checkCliSkew({
+      resolvedPath: '/opt/homebrew/bin/gsd-tools',
+      projectRoot: '/home/user/my-project',
+      projectLocalExists: true,
+    });
+    assert.ok(warning, 'Expected a warning string when resolved CLI is outside project root and project-local exists');
+    assert.ok(warning.includes('shadow') || warning.includes('outside') || warning.includes('may'),
+      `Warning should mention the shadowing/outside nature, got: "${warning}"`);
+  });
+
+  test('NO-SKEW: resolved CLI is the project-local install → returns null', () => {
+    const warning = checkCliSkew({
+      resolvedPath: '/home/user/my-project/.claude/gsd-core/bin/gsd-tools.cjs',
+      projectRoot: '/home/user/my-project',
+      projectLocalExists: true,
+    });
+    assert.strictEqual(warning, null, 'No warning expected when resolved CLI IS the project-local install');
+  });
+
+  test('NO-SKEW: resolved CLI outside project root but NO project-local install → returns null', () => {
+    const warning = checkCliSkew({
+      resolvedPath: '/usr/local/bin/gsd-tools',
+      projectRoot: '/home/user/my-project',
+      projectLocalExists: false,
+    });
+    assert.strictEqual(warning, null, 'No warning expected when no project-local install exists (legitimate global-only)');
+  });
+
+  test('NO-SKEW: projectRoot is null (no project context) → returns null', () => {
+    const warning = checkCliSkew({
+      resolvedPath: '/usr/local/bin/gsd-tools',
+      projectRoot: null,
+      projectLocalExists: false,
+    });
+    assert.strictEqual(warning, null, 'No warning expected when there is no project root');
+  });
+
+  test('LEGACY-SDK: resolved path contains @gsd-build → warning includes removal instructions', () => {
+    const warning = checkCliSkew({
+      resolvedPath: '/opt/homebrew/lib/node_modules/@gsd-build/sdk/bin/gsd-tools',
+      projectRoot: '/home/user/my-project',
+      projectLocalExists: true,
+    });
+    assert.ok(warning, 'Expected a warning for @gsd-build/sdk paths');
+    assert.ok(warning.includes('@gsd-build/sdk') || warning.includes('npm uninstall'),
+      `Warning should include @gsd-build/sdk removal instructions, got: "${warning}"`);
+  });
+
+  test('PATH-NORMALIZATION: resolved under project root via realpath → no false positive', () => {
+    // Even if the resolved path differs in symlink resolution, if it's under the
+    // project root, it's not a skew. The caller normalizes paths before calling.
+    const warning = checkCliSkew({
+      resolvedPath: path.resolve('/home/user/my-project/.claude/gsd-core/bin/gsd-tools.cjs'),
+      projectRoot: path.resolve('/home/user/my-project'),
+      projectLocalExists: true,
+    });
+    assert.strictEqual(warning, null, 'No warning when resolved path is under project root (even with realpath normalization)');
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-3251-command-aliases-manifest-coverage.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-3251-command-aliases-manifest-coverage (consolidation epic #1969 B3 #1972)", () => {
+'use strict';
+/**
+ * Regression guard for issue #3251:
+ * 14 commands used in workflows must be present in command-aliases.cjs.
+ *
+ * Asserts structurally by requiring the manifest and checking each canonical
+ * command appears in either the family arrays or the non-family array.
+ * Never greps the source file — see feedback_no_source_grep_tests.md.
+ */
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('path');
+const { spawnSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
+
+const REPO_ROOT = path.join(__dirname, '..');
+const COMMAND_ALIASES_FILE = path.join(
+  REPO_ROOT,
+  'gsd-core',
+  'bin',
+  'lib',
+  'command-aliases.cjs',
+);
+const GSD_TOOLS = path.join(REPO_ROOT, 'gsd-core', 'bin', 'gsd-tools.cjs');
+
+const MISSING_14 = [
+  'check.decision-coverage-plan',
+  'check.decision-coverage-verify',
+  'frontmatter.get',
+  'frontmatter.set',
+  'learnings.copy',
+  'milestone.complete',
+  'phase.mvp-mode',
+  'progress.bar',
+  'requirements.mark-complete',
+  'stats.json',
+  'task.is-behavior-adding',
+  'todo.match-phase',
+  'uat.render-checkpoint',
+  'workstream.list',
+];
+
+describe('feat-3251: command-aliases.cjs manifest coverage', () => {
+  let manifest;
+
+  test('manifest file can be required without error', () => {
+    try {
+      manifest = require(COMMAND_ALIASES_FILE);
+    } catch (err) {
+      assert.fail(`Failed to require manifest: ${err.message}`);
+    }
+    assert.ok(manifest, 'manifest should be truthy');
+  });
+
+  test('manifest exports NON_FAMILY_COMMAND_ALIASES array', () => {
+    manifest = manifest ?? require(COMMAND_ALIASES_FILE);
+    assert.ok(
+      Array.isArray(manifest.NON_FAMILY_COMMAND_ALIASES),
+      'NON_FAMILY_COMMAND_ALIASES must be an exported array in command-aliases.cjs',
+    );
+  });
+
+  test('all 14 missing commands are present in the manifest (family or non-family)', () => {
+    manifest = manifest ?? require(COMMAND_ALIASES_FILE);
+
+    const allCanonicalsInManifest = new Set();
+
+    // Collect from all family arrays
+    const familyArrayKeys = [
+      'STATE_COMMAND_ALIASES',
+      'VERIFY_COMMAND_ALIASES',
+      'INIT_COMMAND_ALIASES',
+      'PHASE_COMMAND_ALIASES',
+      'PHASES_COMMAND_ALIASES',
+      'VALIDATE_COMMAND_ALIASES',
+      'ROADMAP_COMMAND_ALIASES',
+      'EVAL_COMMAND_ALIASES',
+    ];
+    for (const key of familyArrayKeys) {
+      const arr = manifest[key];
+      if (!Array.isArray(arr)) continue;
+      for (const entry of arr) {
+        if (entry && entry.canonical) allCanonicalsInManifest.add(entry.canonical);
+      }
+    }
+
+    // Collect from non-family array
+    const nonFamily = manifest.NON_FAMILY_COMMAND_ALIASES;
+    if (Array.isArray(nonFamily)) {
+      for (const entry of nonFamily) {
+        if (entry && entry.canonical) allCanonicalsInManifest.add(entry.canonical);
+      }
+    }
+
+    const missing = MISSING_14.filter((cmd) => !allCanonicalsInManifest.has(cmd));
+    assert.deepStrictEqual(
+      missing,
+      [],
+      `${missing.length} command(s) still missing from manifest: ${missing.join(', ')}`,
+    );
+  });
+
+  test('each non-family entry has required fields: canonical, aliases, mutation', () => {
+    manifest = manifest ?? require(COMMAND_ALIASES_FILE);
+    const nonFamily = manifest.NON_FAMILY_COMMAND_ALIASES;
+    if (!Array.isArray(nonFamily)) return; // caught by earlier test
+
+    for (const entry of nonFamily) {
+      assert.ok(typeof entry.canonical === 'string' && entry.canonical.length > 0,
+        `entry missing canonical: ${JSON.stringify(entry)}`);
+      assert.ok(Array.isArray(entry.aliases),
+        `entry missing aliases array for canonical=${entry.canonical}`);
+      assert.ok(typeof entry.mutation === 'boolean',
+        `entry missing mutation boolean for canonical=${entry.canonical}`);
+    }
+  });
+
+  test('NON_FAMILY_COMMAND_ALIASES is sorted by canonical (deterministic output)', () => {
+    manifest = manifest ?? require(COMMAND_ALIASES_FILE);
+    const nonFamily = manifest.NON_FAMILY_COMMAND_ALIASES;
+    if (!Array.isArray(nonFamily)) return; // caught by earlier test
+
+    const canonicals = nonFamily.map((e) => e.canonical);
+    const sorted = [...canonicals].sort((a, b) => a.localeCompare(b));
+    assert.deepStrictEqual(
+      canonicals,
+      sorted,
+      'NON_FAMILY_COMMAND_ALIASES must be sorted by canonical for deterministic regeneration',
+    );
+  });
+});
+
+function createProject() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3251-dispatch-'));
+  fs.mkdirSync(path.join(dir, '.planning', 'phases'), { recursive: true });
+  return dir;
+}
+
+function runGsdTools(args, projectDir) {
+  return spawnSync(process.execPath, [GSD_TOOLS, ...args], {
+    cwd: projectDir,
+    encoding: 'utf8',
+    timeout: 30000,
+    killSignal: 'SIGKILL',
+  });
+}
+
+function snapshotProjectState(projectDir) {
+  const files = [];
+  function walk(dir) {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(projectDir, full);
+      if (entry.isDirectory()) walk(full);
+      else {
+        files.push({
+          path: rel,
+          sha256: crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex'),
+        });
+      }
+    }
+  }
+  walk(projectDir);
+  return files.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+describe('feat-3251: generated aliases dispatch through real gsd-tools behavior', () => {
+  test('phase.mvp-mode spaced alias resolves CLI flag precedence', () => {
+    const projectDir = createProject();
+    try {
+      const result = runGsdTools(['phase', 'mvp-mode', '1', '--cli-flag'], projectDir);
+      assert.equal(result.status, 0, result.stderr);
+
+      const output = JSON.parse(result.stdout);
+      assert.deepEqual(output, {
+        active: true,
+        source: 'cli_flag',
+        roadmap_mode: null,
+        config_mvp_mode: false,
+        cli_flag_present: true,
+      });
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  test('phase.mvp-mode spaced alias resolves ROADMAP mode without mutating files', () => {
+    const projectDir = createProject();
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0.0',
+          '',
+          '### Phase 1: User Auth',
+          '**Goal:** Users can sign in.',
+          '**Mode:** mvp',
+          '',
+        ].join('\n'),
+      );
+      const beforeFiles = snapshotProjectState(projectDir);
+
+      const result = runGsdTools(['phase', 'mvp-mode', '1'], projectDir);
+      assert.equal(result.status, 0, result.stderr);
+
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.active, true);
+      assert.equal(output.source, 'roadmap');
+      assert.equal(output.roadmap_mode, 'mvp');
+      assert.equal(output.config_mvp_mode, false);
+      assert.equal(output.cli_flag_present, false);
+      assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  test('phase.mvp-mode ROADMAP lookup stops before custom-id next phase', () => {
+    const projectDir = createProject();
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0.0',
+          '',
+          '### Phase 1: Numeric Phase',
+          '**Goal:** Users can sign in.',
+          '',
+          '### Phase custom-alpha: Custom Phase',
+          '**Goal:** Custom work.',
+          '**Mode:** mvp',
+          '',
+        ].join('\n'),
+      );
+      const beforeFiles = snapshotProjectState(projectDir);
+
+      const result = runGsdTools(['phase', 'mvp-mode', '1'], projectDir);
+      assert.equal(result.status, 0, result.stderr);
+
+      const output = JSON.parse(result.stdout);
+      assert.equal(output.active, false);
+      assert.equal(output.source, 'none');
+      assert.equal(output.roadmap_mode, null);
+      assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+
+  test('phase.mvp-mode JSON error is typed and leaves project files untouched', () => {
+    const projectDir = createProject();
+    try {
+      const beforeFiles = snapshotProjectState(projectDir);
+      const result = runGsdTools(['--json-errors', 'phase', 'mvp-mode'], projectDir);
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+
+      const error = JSON.parse(result.stderr);
+      assert.deepEqual(Object.keys(error).sort(), ['message', 'ok', 'reason']);
+      assert.equal(error.ok, false);
+      assert.equal(error.reason, 'usage');
+      assert.equal(typeof error.message, 'string');
+      assert.equal(/\n\s*at\s/.test(result.stderr), false, 'non-debug failure must not print a stack trace');
+      assert.deepEqual(snapshotProjectState(projectDir), beforeFiles);
+    } finally {
+      cleanup(projectDir);
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/feat-488-effort-sync.test.cjs — consolidation epic #1969 (B3 #1972)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:feat-488-effort-sync (consolidation epic #1969 B3 #1972)", () => {
+// Tests for gsd-tools effort sync command (#488)
+// Verifies that effort frontmatter in installed agent files can be re-synced
+// when effort config changes after initial install.
+// allow-test-rule: structural-regression-guard — readFileSync asserts on installed agent .md files (the product under mutation) to verify dry-run safety and apply correctness; stderr.includes guards the CLI argument-rejection contract. (see #488)
+
+'use strict';
+
+process.env.GSD_TEST_MODE = '1';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+
+const { cleanup } = require('./helpers.cjs');
+
+const GSD_TOOLS = path.resolve(__dirname, '../gsd-core/bin/gsd-tools.cjs');
+
+function runCli(args, env = {}) {
+  const result = spawnSync(process.execPath, [GSD_TOOLS, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, GSD_TEST_MODE: '1', ...env },
+  });
+  return result;
+}
+
+function makeTmpDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+// output() in core.cjs uses fs.writeSync(1, data) — intercept fd=1 writes.
+// Pass raw=false so output() emits JSON (raw=true emits the plain rawValue string).
+function captureOutput(fn) {
+  const origWriteSync = fs.writeSync;
+  let captured = '';
+  fs.writeSync = (fd, data) => {
+    if (fd === 1) captured += data;
+    else origWriteSync(fd, data);
+  };
+  try {
+    fn();
+  } finally {
+    fs.writeSync = origWriteSync;
+  }
+  return JSON.parse(captured);
+}
+
+function makeAgentsDir(tmpDir) {
+  const agentsDir = path.join(tmpDir, 'agents');
+  fs.mkdirSync(agentsDir, { recursive: true });
+  return agentsDir;
+}
+
+function writePlanningConfig(tmpDir, effortConfig) {
+  const planningDir = path.join(tmpDir, '.planning');
+  fs.mkdirSync(planningDir, { recursive: true });
+  fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify({ effort: effortConfig }));
+}
+
+const AGENT_WITH_EFFORT = `---
+name: gsd-planner
+description: Plans phases for GSD milestones
+effort: medium
+---
+Body of the agent.
+`;
+
+const AGENT_WITHOUT_EFFORT = `---
+name: gsd-executor
+description: Executes GSD phase plans
+---
+Body of the agent.
+`;
+
+describe('feat-488: effort sync command', () => {
+  test('dry-run mode reports pending changes without writing files', () => {
+    const tmpDir = makeTmpDir('effort-sync-dry-');
+    const agentsDir = makeAgentsDir(tmpDir);
+    const agentPath = path.join(agentsDir, 'gsd-planner.md');
+    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT);
+    writePlanningConfig(tmpDir, { default: 'high', agent_overrides: { 'gsd-planner': 'xhigh' } });
+
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    const result = captureOutput(() =>
+      cmdEffortSync(tmpDir, false, { dryRun: true, configDir: tmpDir, runtime: 'claude' })
+    );
+
+    assert.equal(result.dry_run, true);
+    assert.equal(result.synced, 1, 'should report 1 pending change');
+    assert.equal(result.changes[0].agent, 'gsd-planner');
+    assert.equal(result.changes[0].from, 'medium');
+    assert.equal(result.changes[0].to, 'xhigh');
+
+    // dry-run must not modify the file
+    assert.ok(fs.readFileSync(agentPath, 'utf8').includes('effort: medium'), 'dry-run must not write file');
+
+    cleanup(tmpDir);
+  });
+
+  test('--apply mode rewrites effort: frontmatter to new config value', () => {
+    const tmpDir = makeTmpDir('effort-sync-apply-');
+    const agentsDir = makeAgentsDir(tmpDir);
+    const agentPath = path.join(agentsDir, 'gsd-planner.md');
+    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT);
+    writePlanningConfig(tmpDir, { default: 'low', agent_overrides: { 'gsd-planner': 'xhigh' } });
+
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    const result = captureOutput(() =>
+      cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
+    );
+
+    assert.equal(result.dry_run, false);
+    assert.equal(result.synced, 1);
+
+    const updated = fs.readFileSync(agentPath, 'utf8');
+    assert.ok(updated.includes('effort: xhigh'), 'file must be updated to xhigh');
+    assert.ok(!updated.includes('effort: medium'), 'old effort value must be gone');
+
+    cleanup(tmpDir);
+  });
+
+  test('skips agents where effort: already matches config', () => {
+    const tmpDir = makeTmpDir('effort-sync-noop-');
+    const agentsDir = makeAgentsDir(tmpDir);
+    const agentPath = path.join(agentsDir, 'gsd-planner.md');
+    // Already has the correct value
+    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT.replace('effort: medium', 'effort: xhigh'));
+    writePlanningConfig(tmpDir, { agent_overrides: { 'gsd-planner': 'xhigh' } });
+
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    const result = captureOutput(() =>
+      cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
+    );
+
+    assert.equal(result.synced, 0, 'nothing to sync when already matching');
+    assert.equal(result.skipped, 1);
+
+    cleanup(tmpDir);
+  });
+
+  test('injects effort: into agent files that lack the frontmatter key', () => {
+    const tmpDir = makeTmpDir('effort-sync-inject-');
+    const agentsDir = makeAgentsDir(tmpDir);
+    const agentPath = path.join(agentsDir, 'gsd-executor.md');
+    fs.writeFileSync(agentPath, AGENT_WITHOUT_EFFORT);
+    writePlanningConfig(tmpDir, { default: 'max' });
+
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    const result = captureOutput(() =>
+      cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
+    );
+
+    assert.equal(result.synced, 1, 'should inject effort into agent missing the key');
+    assert.equal(result.changes[0].from, null);
+    assert.equal(result.changes[0].to, 'max');
+    assert.ok(fs.readFileSync(agentPath, 'utf8').includes('effort: max'), 'effort must be injected');
+
+    cleanup(tmpDir);
+  });
+
+  test('non-claude runtime exits cleanly with informative reason field', () => {
+    const tmpDir = makeTmpDir('effort-sync-gemini-');
+
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    const result = captureOutput(() =>
+      cmdEffortSync(tmpDir, false, { dryRun: true, runtime: 'gemini' })
+    );
+
+    assert.ok(result.reason, 'should include a reason message for unsupported runtime');
+    assert.equal(result.synced, 0);
+
+    cleanup(tmpDir);
+  });
+
+  test('home-default effort config gap: applies home-level effort when project config has no effort section', () => {
+    // The key #488 scenario: user changed ~/.gsd/defaults.json effort settings
+    // after install, but the project .planning/config.json has no effort section.
+    // cmdEffortSync must pick up the home config (via readGsdEffectiveEffortConfig),
+    // not fall back to 'high' (which loadConfig would return).
+    //
+    // readGsdEffectiveEffortConfig calls os.homedir() directly, and os.homedir()
+    // is live (respects process.env.HOME).  We redirect HOME to an isolated
+    // tmpHome so the test is hermetic and can assert the real outcome.
+    const tmpHome = makeTmpDir('effort-sync-homecfg-');
+    const tmpDir = makeTmpDir('effort-sync-project-');
+    const agentsDir = makeAgentsDir(tmpDir);
+    const agentPath = path.join(agentsDir, 'gsd-planner.md');
+    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT); // current: effort: medium
+
+    // Project has .planning/config.json with NO effort section
+    const planningDir = path.join(tmpDir, '.planning');
+    fs.mkdirSync(planningDir, { recursive: true });
+    fs.writeFileSync(path.join(planningDir, 'config.json'), JSON.stringify({ model_profile: 'balanced' }));
+
+    // Home defaults set effort.default = low
+    const gsdDir = path.join(tmpHome, '.gsd');
+    fs.mkdirSync(gsdDir, { recursive: true });
+    fs.writeFileSync(path.join(gsdDir, 'defaults.json'), JSON.stringify({ effort: { default: 'low' } }));
+
+    // Isolate HOME (and USERPROFILE for Windows parity) so
+    // readGsdEffectiveEffortConfig reads our fixture, not the
+    // developer's real ~/.gsd/defaults.json.
+    const origHome = process.env.HOME;
+    const origUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
+
+    const { cmdEffortSync } = require('../gsd-core/bin/lib/commands.cjs');
+    let result;
+    try {
+      result = captureOutput(() =>
+        cmdEffortSync(tmpDir, false, { dryRun: false, configDir: tmpDir, runtime: 'claude' })
+      );
+    } finally {
+      if (origHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = origHome;
+      }
+      if (origUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = origUserProfile;
+      }
+    }
+
+    // With home effort.default = 'low' and the agent currently at 'medium',
+    // cmdEffortSync must sync exactly 1 agent and set it to 'low'.
+    assert.equal(result.synced, 1, 'should sync 1 agent whose effort differs from home default');
+    assert.equal(result.changes[0].agent, 'gsd-planner');
+    assert.equal(result.changes[0].from, 'medium');
+    assert.equal(result.changes[0].to, 'low', 'effort must be updated to the home-default value');
+    assert.ok(
+      fs.readFileSync(agentPath, 'utf8').includes('effort: low'),
+      'agent file must be rewritten with the home-default effort value'
+    );
+
+    cleanup(tmpHome);
+    cleanup(tmpDir);
+  });
+
+  test('CLI dispatcher: positional args after effort sync are rejected', () => {
+    const result = runCli(['effort', 'sync', 'unexpected-arg']);
+    assert.notEqual(result.status, 0, 'should exit non-zero on unexpected positional arg');
+    assert.ok(
+      result.stderr.includes('positional') || result.stderr.includes('unexpected-arg'),
+      `stderr should mention the bad arg; got: ${result.stderr}`
+    );
+  });
+
+  test('CLI dispatcher: effort sync --apply routes through gsd-tools correctly', () => {
+    const tmpDir = makeTmpDir('effort-sync-cli-');
+    const agentsDir = makeAgentsDir(tmpDir);
+    const agentPath = path.join(agentsDir, 'gsd-planner.md');
+    fs.writeFileSync(agentPath, AGENT_WITH_EFFORT);
+    writePlanningConfig(tmpDir, { agent_overrides: { 'gsd-planner': 'xhigh' } });
+
+    const result = runCli(
+      ['--cwd', tmpDir, 'effort', 'sync', '--apply', '--config-dir', tmpDir],
+    );
+
+    assert.equal(result.status, 0, `CLI exited non-zero: ${result.stderr}`);
+    // gsd-tools may print a startup banner before the JSON payload — parse from the first `{`.
+    const jsonStart = result.stdout.indexOf('{');
+    const output = JSON.parse(result.stdout.slice(jsonStart));
+    assert.equal(output.synced, 1);
+    assert.ok(
+      fs.readFileSync(agentPath, 'utf8').includes('effort: xhigh'),
+      'CLI --apply must write the updated effort value'
+    );
+
+    cleanup(tmpDir);
+  });
+});
+  });
+}

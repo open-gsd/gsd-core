@@ -8,7 +8,7 @@ Install GSD Core (`@opengsd/gsd-core`) into the AI coding runtime you use every 
 
 ## Why the installer is required
 
-GSD Core ships agent and command files in Claude Code's native frontmatter format. Each supported runtime expects a different schema, directory layout, and command-invocation syntax. The installer performs the necessary transformations — for example, converting tool lists and colour values for OpenCode, writing TOML agent entries for Codex, and rewriting every command body from hyphen form (`/gsd-update`) to colon form (`/gsd:update`) for Gemini CLI.
+GSD Core ships agent and command files in Claude Code's native frontmatter format. Each supported runtime expects a different schema, directory layout, and command-invocation syntax. The installer performs the necessary transformations — for example, converting tool lists and colour values for OpenCode and writing TOML agent entries for Codex.
 
 **Do not copy files from `agents/` or `commands/` directly.** Doing so bypasses the transformations and produces schema-validation errors or missing commands.
 
@@ -102,6 +102,8 @@ The `gsd-tools` binary (installed as part of the `@opengsd/gsd-core` npm package
 
 Node.js (`node`) must also be available on your `PATH`. The plugin's always-on guard hooks (wired in `hooks/hooks.json`) are invoked as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<script>"`. Some Claude Code distributions ship as a standalone binary and do not expose a `node` executable on `PATH`; in those environments the plugin's hooks will not run. Verify with `node --version` before relying on the plugin hooks.
 
+**Runtime build (self-healing).** The runtime CLI's compiled modules under `gsd-core/bin/lib/*.cjs` are build artifacts (ADR-457): they are compiled from `src/*.cts` by `npm run build:lib` and shipped prebuilt in the npm tarball. A plugin-marketplace or git-clone install materializes the repository tree directly and never runs that build step, so those files are initially absent. The CLI heals this automatically: the first `gsd-tools` invocation detects the missing output and compiles it once (using the bundled `typescript` devDependency), then proceeds normally. You may see a one-time `gsd: runtime library not built — compiling once…` notice on stderr; subsequent commands are unaffected. If auto-build cannot run (for example `node_modules` was pruned to production-only and `typescript` is unavailable), the CLI prints an actionable message telling you to run `npm install && npm run build:lib` in the plugin directory.
+
 #### Claude plugin marketplace discovery (ZCODE and compatible runtimes)
 
 GSD Core also ships a `.claude-plugin/marketplace.json` marketplace manifest (sibling to `plugin.json`). Runtimes that implement the Claude plugin marketplace contract — such as ZCODE — can discover and install GSD Core from a custom marketplace source without a manual clone:
@@ -113,64 +115,15 @@ This path is **additive** and changes nothing about the Claude Code plugin insta
 
 ---
 
-### Gemini CLI
-
-```bash
-npx @opengsd/gsd-core@latest --gemini --global
-```
-
-Skills land in `~/.gemini/`. The installer rewrites all command bodies to Gemini's colon namespace (`/gsd:update`, `/gsd:config`, etc.). Restart Gemini CLI after install.
-
-The installer also enriches the generated TOML commands with two native Gemini custom-command features:
-
-- **`{{args}}` interpolation** — every command that references arguments inline is emitted with Gemini's `{{args}}` placeholder (translated from Claude's `$ARGUMENTS`), so flags and free-text you type after the command name are interpolated into the prompt body rather than ignored.
-- **`!{...}` live-state injection** — `/gsd:progress` injects the current contents of `.planning/STATE.md` via a fixed `!{cat .planning/STATE.md 2>/dev/null}` shell block, giving Gemini live project state without relying on session memory. The shell block contains no interpolated input, so there is no injection risk; Gemini still shows its standard confirmation dialog the first time the command runs in a session.
-
-**Override the install directory:**
-
-```bash
-GEMINI_CONFIG_DIR=~/.gemini-alt npx @opengsd/gsd-core@latest --gemini --global
-```
-
-**Hook coverage**
-
-GSD registers the following hook events automatically on install:
-
-| Event | Hook | Purpose |
-|---|---|---|
-| `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
-| `BeforeTool` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
-| `AfterTool` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
-| `BeforeAgent` | `gsd-context-monitor.js` | Context headroom awareness before the agent begins planning each prompt |
-| `AfterAgent` | `gsd-context-monitor.js` | Context headroom tracking after each agent turn's final response |
-| `BeforeModel` | `gsd-context-monitor.js` | Per-turn context injection before each LLM call |
-
-> **`hooksConfig.enabled: false` warning.** If your Gemini `settings.json` contains `hooksConfig.enabled: false`, the Gemini CLI silently disables all hook execution — GSD hooks are registered but will never run. The installer detects this and emits a warning. To enable hooks, set `hooksConfig.enabled: true` in `~/.gemini/settings.json` (or the directory matching your `GEMINI_CONFIG_DIR`).
-
----
-
-### Gemini CLI — native extension install (#775)
-
-GSD also ships a `gemini-extension.json` extension manifest, so you can manage GSD through Gemini's own extension lifecycle and see it in `gemini extensions list`:
-
-```bash
-gemini extensions install https://github.com/open-gsd/gsd-core   # install
-gemini extensions update gsd-core                                # update
-gemini extensions uninstall gsd-core                             # remove
-gemini extensions link /path/to/gsd-core                         # dev: symlink a checkout
-```
-
-The extension loads GSD's operating context (`GEMINI.md`) into every session and gives you the discoverable install/update/remove lifecycle. The `/gsd:*` slash commands, agents, and hooks are installed separately by `npx @opengsd/gsd-core --gemini --global` (above). The two paths are complementary and additive — neither replaces the other, and slash-command projection into the extension is a planned follow-up.
-
----
-
 ### OpenCode
 
 ```bash
 npx @opengsd/gsd-core@latest --opencode --global
 ```
 
-The installer writes three surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `command/`, file-based subagents in `agents/`, and on-demand skills in `skills/<name>/SKILL.md`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
+The installer writes four surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `command/`, file-based subagents in `agents/`, on-demand skills in `skills/<name>/SKILL.md`, and a native plugin in `plugins/gsd-core.js`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
+
+**GSD safety hooks on OpenCode.** OpenCode does not register lifecycle hooks the way Claude Code does (its `hooksSurface` is `none`), so GSD's prompt-injection guard, read-before-edit guard, injection scanner, and context monitor would otherwise be inert. The bundled plugin (`plugins/gsd-core.js`) closes that gap: OpenCode auto-discovers `plugins/*.{ts,js}` files under its config directory at startup and the adapter bridges OpenCode's event bus (`tool.execute.before`/`after`, `session.created`, `file.edited`) onto GSD's existing hook scripts, spawning them as subprocesses. No `opencode.json` entry is needed — the plugin is loaded by directory auto-discovery (the config `plugin` array is for npm packages only). A blocking hook aborts the tool call; an advisory hook surfaces its message without blocking.
 
 **Override the install directory:**
 
@@ -452,6 +405,22 @@ npx @opengsd/gsd-core@latest --trae --global
 ```
 
 Skills land in `~/.trae/`. GSD installs skills, agents, and rule references.
+
+---
+
+### ZCode
+
+```bash
+npx @opengsd/gsd-core@latest --zcode --global
+```
+
+[ZCode](https://zcode.z.ai/en) is Z.ai's desktop Agentic Development Environment for the GLM-5.2 model. GSD installs skills (nested `SKILL.md` bundles), slash commands, and subagents under `~/.zcode/`:
+
+- **Skills** → `~/.zcode/skills/gsd-<name>/SKILL.md` (invoke with `$gsd-<name>` in chat)
+- **Commands** → `~/.zcode/commands/gsd-<name>.md` (invoke with `/gsd-<name>`)
+- **Subagents** → `~/.zcode/agents/gsd-<name>.md`
+
+ZCode's skill format is identical to Claude Code's, so no runtime-specific converter is required — GSD lands as a pure declarative descriptor with no hardcoded installer branches. ZCode also natively imports skills and MCP config from `~/.claude`; if you install GSD for **both** Claude and ZCode, you may see duplicate GSD skills inside ZCode, which is expected. To connect ZCode's MCP servers to GSD's companion server, see [how to connect the GSD MCP server](connect-gsd-mcp-server.md).
 
 ---
 

@@ -1,7 +1,7 @@
 {
   "id": "mempalace",
   "role": "feature",
-  "version": "1.7.0-rc.1",
+  "version": "1.7.0-rc.3",
   "title": "MemPalace memory",
   "description": "Cross-session, cross-project memory: deliberate recall before discuss/plan and verbatim capture + temporal-KG sync at phase boundaries, via the MemPalace MCP server and CLI.",
   "tier": "full",
@@ -37,7 +37,7 @@
         "replace"
       ],
       "default": "augment",
-      "description": "How MemPalace relates to GSD native memory. Only 'augment' (additive) is implemented today; 'kg_backend' and 'replace' are forward-declared (routing seam not yet built) and currently behave as 'augment'."
+      "description": "How MemPalace relates to GSD native memory during recall/capture. 'augment' (default): the palace is an additive layer alongside .planning/graphs/ — native memory stays authoritative. 'kg_backend': knowledge-graph queries resolve against the palace's temporal KG as the primary source, with .planning/graphs/ as fallback. 'replace': recall resolves through the palace as the source of truth, native memory as fallback. Every mode stays onError:skip and default-resilient — an unreachable palace degrades to native memory, and GSD keeps writing .planning/graphs/ so no memory is lost. Cross-mode migration of existing .planning/graphs/ into the palace is a separate, not-yet-implemented concern."
     },
     "mempalace.wing": {
       "type": "string",

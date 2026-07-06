@@ -150,3 +150,291 @@ describe('review workflow source-grounding requirement in build_prompt (#1318)',
     assert.match(extracted, /cite `path\/to\/file:line`/);
   });
 });
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/bug-687-agy-timeout.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:bug-687-agy-timeout (consolidation epic #1969 B4 #1973)", () => {
+// allow-test-rule: source-text-is-the-product (see #687)
+// review.md is a workflow file whose deployed text IS the runtime contract; the
+// agy -p invocation cannot be run in CI, so we assert on its content (issue #687).
+'use strict';
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const reviewPath = path.resolve(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+const read = () => fs.readFileSync(reviewPath, 'utf-8');
+
+describe('bug #687: agy print mode must be bounded via its native --print-timeout', () => {
+  test('invokes agy with its own --print-timeout flag (not an external killer)', () => {
+    assert.match(read(), /agy --print-timeout \d+s? -p "\$\(cat/,
+      'review.md must cap agy through `agy --print-timeout <N> -p …` (the tool\'s own mechanism)');
+  });
+
+  test('discards partial output on non-zero exit so the fallback fires', () => {
+    const c = read();
+    assert.match(c, /_AGY_RC.*-ne 0/, 'review.md must check the agy exit code');
+    assert.match(c, /: > \/tmp\/gsd-review-antigravity-/,
+      'review.md must truncate the output file when agy timed out / failed');
+  });
+
+  test('agy is bounded only by its own --print-timeout, not an external process killer', () => {
+    const c = read();
+    // Print-mode reviewers invoke the tool directly; agy must self-terminate via
+    // --print-timeout, never via an external SIGKILL/timeout binary wrapped around it.
+    assert.doesNotMatch(c, /-s KILL/, 'must not SIGKILL agy from the outside');
+    // Any external timeout binary wrapping agy — `timeout 300s agy …`,
+    // `gtimeout 300 agy …`, `timeout -s KILL 300 agy …`. The lookbehind keeps
+    // agy's own `--print-timeout` flag from tripping it.
+    assert.doesNotMatch(c, /(?<!print-)\bg?timeout[ \t]+[^\n]*\bagy\b/,
+      'must not wrap agy in an external timeout binary — use its --print-timeout flag');
+    assert.doesNotMatch(c, /kill -9 "\$_AGY/, 'must not use a kill -9 watchdog on agy');
+  });
+
+  test('no unguarded bare "agy -p" invocation remains at line start', () => {
+    // A bare `agy -p "$(cat …)"` with no cap was the original hang.
+    assert.doesNotMatch(read(), /^agy -p "\$\(cat/m,
+      'review.md must not invoke agy -p without --print-timeout');
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Folded from tests/enh-773-codex-exec-automation-flags.test.cjs — consolidation epic #1969 (B4 #1973)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe("folded:enh-773-codex-exec-automation-flags (consolidation epic #1969 B4 #1973)", () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #773)
+// Workflow markdown is runtime contract; these assertions verify that
+// automated codex exec invocations carry the correct automation flags.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+describe('enh-773: automated codex exec invocations include --ephemeral and --dangerously-bypass-hook-trust', () => {
+  const workflow = fs.readFileSync(
+    path.join(process.cwd(), 'gsd-core', 'workflows', 'review.md'),
+    'utf8'
+  );
+
+  // Extract codex exec INVOCATION lines from code fences. The #1115 capability
+  // probe (`codex exec --help | grep …`) is not an automation invocation, so it
+  // is excluded from the per-invocation flag assertions below.
+  const codexExecLines = workflow
+    .split(/\r?\n/)
+    .filter((line) => line.includes('codex exec') && !line.includes('codex exec --help'));
+
+  test('review.md contains at least one codex exec invocation', () => {
+    assert.ok(
+      codexExecLines.length > 0,
+      'review.md must contain at least one codex exec invocation'
+    );
+  });
+
+  test('every codex exec invocation includes --ephemeral', () => {
+    for (const line of codexExecLines) {
+      assert.ok(
+        line.includes('--ephemeral'),
+        `codex exec invocation is missing --ephemeral:\n  ${line.trim()}`
+      );
+    }
+  });
+
+  test('#1115: the hook-trust bypass is capability-gated, not passed unconditionally', () => {
+    // --dangerously-bypass-hook-trust only exists on codex-cli >= 0.137.0. It must
+    // be probed (`codex exec --help | grep`) and applied via $CODEX_BYPASS_FLAG so
+    // older installs do not fail with "unexpected argument" (a silent empty review).
+    assert.ok(
+      /codex exec --help[^\r\n]*grep[^\r\n]*--dangerously-bypass-hook-trust/.test(workflow),
+      'review.md must capability-probe --dangerously-bypass-hook-trust via `codex exec --help | grep`'
+    );
+    assert.ok(
+      workflow.includes('CODEX_BYPASS_FLAG="--dangerously-bypass-hook-trust"'),
+      'the probe must set CODEX_BYPASS_FLAG to the flag when the CLI supports it'
+    );
+    for (const line of codexExecLines) {
+      assert.ok(
+        line.includes('$CODEX_BYPASS_FLAG'),
+        `codex exec invocation must apply the capability-gated $CODEX_BYPASS_FLAG, not an unconditional flag:\n  ${line.trim()}`
+      );
+      // …and must NOT also pass the literal flag (that would reintroduce #1115).
+      assert.ok(
+        !line.includes('--dangerously-bypass-hook-trust'),
+        `codex exec invocation must not pass the literal --dangerously-bypass-hook-trust (use the gated $CODEX_BYPASS_FLAG):\n  ${line.trim()}`
+      );
+    }
+  });
+
+  test('#1115: codex review failures are surfaced, not silently swallowed', () => {
+    // stderr must be captured (not discarded to /dev/null) and an empty output
+    // must be replaced with a diagnostic, so a broken reviewer is reported.
+    for (const line of codexExecLines) {
+      assert.ok(
+        !line.includes('2>/dev/null'),
+        `codex exec must not discard stderr to /dev/null:\n  ${line.trim()}`
+      );
+    }
+    assert.ok(
+      /\[ ! -s \/tmp\/gsd-review-codex-\{phase\}\.md \]/.test(workflow),
+      'review.md must guard against an empty codex review output and surface the failure'
+    );
+  });
+
+  test('--ephemeral appears before the prompt argument (flag ordering)', () => {
+    for (const line of codexExecLines) {
+      const ephemeralPos = line.indexOf('--ephemeral');
+      const promptPos = line.indexOf(' - ');
+      if (promptPos === -1) continue; // no stdin prompt arg on this line
+      assert.ok(
+        ephemeralPos < promptPos,
+        `--ephemeral must appear before the stdin prompt argument:\n  ${line.trim()}`
+      );
+    }
+  });
+
+  test('--skip-git-repo-check is preserved alongside automation flags', () => {
+    for (const line of codexExecLines) {
+      assert.ok(
+        line.includes('--skip-git-repo-check'),
+        `codex exec invocation lost --skip-git-repo-check:\n  ${line.trim()}`
+      );
+    }
+  });
+});
+
+describe('#1698 regression: codex review is captured via --output-last-message, not stdout', () => {
+  // WHY: on some platforms (Windows) `codex exec` writes process-teardown output
+  // to stdout *after* the final agent message. A `> FILE` stdout redirect appends
+  // that noise to a non-empty file, so it slips past the `[ ! -s … ]` empty-output
+  // guard and downstream consumers (severity extraction, the
+  // plan-review-convergence "concerns resolved?" gate) parse a polluted review.
+  // `-o/--output-last-message <FILE>` writes only the final message — robust on
+  // every platform — so each codex invocation must capture via -o and discard stdout.
+  const workflow = fs.readFileSync(
+    path.join(process.cwd(), 'gsd-core', 'workflows', 'review.md'),
+    'utf8'
+  );
+  const codexExecLines = workflow
+    .split(/\r?\n/)
+    .filter((line) => line.includes('codex exec') && !line.includes('codex exec --help'));
+
+  test('every codex exec invocation captures the review via -o <FILE>', () => {
+    for (const line of codexExecLines) {
+      assert.ok(
+        /\s-o\s+\/tmp\/gsd-review-codex-\{phase\}\.md\b/.test(line),
+        `codex exec invocation must capture the review via -o /tmp/gsd-review-codex-{phase}.md:\n  ${line.trim()}`
+      );
+    }
+  });
+
+  test('no codex exec invocation redirects stdout into the review file', () => {
+    for (const line of codexExecLines) {
+      assert.ok(
+        !/>\s*\/tmp\/gsd-review-codex-\{phase\}\.md\b/.test(line),
+        `codex exec must not redirect stdout into the review file (teardown noise pollutes it); use -o + >/dev/null:\n  ${line.trim()}`
+      );
+      assert.ok(
+        />\s*\/dev\/null\b/.test(line),
+        `codex exec must discard stdout to /dev/null so teardown output is not captured:\n  ${line.trim()}`
+      );
+    }
+  });
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// #1936: OpenCode reviewer must not silently yield an empty review
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __foldDescribe } = require('node:test');
+  __foldDescribe('#1936: OpenCode reviewer empty-output hardening', () => {
+'use strict';
+
+// allow-test-rule: source-text-is-the-product (see #1936)
+// review.md is a workflow file whose embedded bash IS the runtime contract; the
+// `opencode run` invocation on a large agentic prompt cannot be run in CI, so we
+// assert on its content.
+
+const { describe, test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const reviewPath = path.resolve(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
+const read = () => fs.readFileSync(reviewPath, 'utf-8');
+
+// Isolate the base OpenCode reviewer block (heading -> next reviewer heading) so
+// assertions about its stderr handling don't accidentally match sibling reviewers
+// (gemini/claude/coderabbit/qwen legitimately use /dev/null).
+function openCodeBlock() {
+  const c = read();
+  const start = c.indexOf('**OpenCode (via GitHub Copilot):**');
+  assert.notStrictEqual(start, -1, 'review.md must contain the base OpenCode reviewer block');
+  const rest = c.slice(start + 1);
+  const nextHeading = rest.search(/\n\*\*[A-Z][^\n]*:\*\*/);
+  return nextHeading === -1 ? c.slice(start) : c.slice(start, start + 1 + nextHeading);
+}
+
+describe('bug #1936: OpenCode reviewer must not silently yield an empty review', () => {
+  test('captures opencode stderr to a sidecar, never /dev/null', () => {
+    const block = openCodeBlock();
+    assert.match(block, /opencode run [^\n]*2>\/tmp\/gsd-review-opencode-\{phase\}\.err/,
+      'the opencode invocation must send stderr to a .err sidecar so failures are diagnosable');
+    assert.doesNotMatch(block, /opencode run [^\n]*2>\/dev\/null/,
+      'the opencode invocation must not discard stderr to /dev/null (#1936)');
+  });
+
+  test('requests structured JSON output and reconstructs review from assistant text parts', () => {
+    const block = openCodeBlock();
+    assert.match(block, /opencode run [^\n]*--format json/,
+      'must invoke opencode with --format json so assistant text parts are recoverable');
+    assert.match(block, /select\(\.type=="text"\)\s*\|\s*\.part\.text/,
+      'must extract the assistant text parts via `.part.text` from the JSON event stream');
+  });
+
+  test('gates the empty-review stub on extracted CONTENT, not output-file size', () => {
+    // An empty jq extraction still writes a trailing newline, so a `[ -s file ]`
+    // check would treat a content-less review as populated and skip the stub. The
+    // block must test the captured text variable instead.
+    const block = openCodeBlock();
+    assert.match(block, /OPENCODE_REVIEW=\$\(jq/, 'must capture the extraction into a variable');
+    assert.match(block, /\[ -n "\$OPENCODE_REVIEW" \]/,
+      'must branch on the content of $OPENCODE_REVIEW, not on the size of the .md file');
+    assert.doesNotMatch(block, /\[ ! -s \/tmp\/gsd-review-opencode-\{phase\}\.md \]/,
+      'must not gate the stub on `[ ! -s ...opencode...md ]` (a lone newline defeats it)');
+  });
+
+  test('empty-output stub is diagnosable: references #1936, stop reason/tokens, and stderr', () => {
+    const block = openCodeBlock();
+    assert.match(block, /#1936/, 'the empty-output stub must reference the issue');
+    assert.match(block, /step_finish[\s\S]*\.part\.reason[\s\S]*\.part\.tokens\.output/,
+      'the stub must surface the stop reason and output-token count from the final step_finish');
+    assert.match(block, /cat \/tmp\/gsd-review-opencode-\{phase\}\.err/,
+      'the stub must append the captured stderr');
+  });
+
+  test('does not regress the Codex reviewer block (still captures stderr to .err)', () => {
+    // #1936 changes only the OpenCode block; the Codex block's existing
+    // stderr-to-sidecar contract must remain intact.
+    assert.match(read(), /codex exec [^\n]*2>\/tmp\/gsd-review-codex-\{phase\}\.err/,
+      'the Codex reviewer block must be left unchanged');
+  });
+});
+
+  });
+}

@@ -37,7 +37,6 @@ body:
       description: Which AI coding tool are you using GSD with?
       options:
         - Claude Code
-        - Gemini CLI
         - OpenCode
         - Codex
         - Copilot
@@ -174,7 +173,6 @@ body:
 
         **How to retrieve:**
         - Claude Code: `cat ~/.claude/settings.json`
-        - Gemini CLI: `cat ~/.gemini/settings.json`
         - OpenCode: `cat ~/.config/opencode/opencode.json` or `opencode.jsonc`
 
         **⚠️ PII Warning:** This file may contain API keys, tokens, or custom paths. **Remove all API keys and tokens before pasting.** We recommend running through [presidio-anonymizer](https://microsoft.github.io/presidio/) or manually redacting any line containing "key", "token", or "secret".

@@ -1,0 +1,81 @@
+{
+  "id": "external-job",
+  "role": "feature",
+  "version": "1.7.0-rc.3",
+  "title": "Async external-job scheduler adapter",
+  "description": "Default-off producer of the async external-job manifest (#1164). At execute:wave:post an executor can externalize long-running compute (SLURM first, scheduler-pluggable), commit a .planning/async-jobs/<job>.json manifest, defer SUMMARY.md, and return external_job_waiting. The core loop (#1165) consumes the manifest; this capability is the only thing that writes it. NOTE on contribution point: #1164 specifies execute:wave:pre, but execute-phase.md only dispatches execute:wave:post today (wave:pre is declared in the loop host contract but not rendered); wiring wave:pre dispatch is a core-loop change #1164 explicitly puts out of scope, so this capability registers at wave:post and the executor honors the runtime_budget classification guidance before running any tagged task. The adapter (scripts/slurm-adapter.cjs) reads external_job.submit_timeout_ms / poll_timeout_ms / artifact_dir through the canonical capability-config seam (env override > config > registry default).",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.7.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "config": {
+    "external_job.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Master toggle for the async external-job producer capability. Default-off: the core loop consumes manifests whether or not this is on, but no manifest is ever written unless an executor opts in here."
+    },
+    "external_job.backend": {
+      "type": "enum",
+      "values": [
+        "slurm"
+      ],
+      "default": "slurm",
+      "description": "Scheduler backend. SLURM is the first adapter; the field is the pluggability seam for future backends (LSF, PBS, Kubernetes batch). Core never interprets this value."
+    },
+    "external_job.artifact_dir": {
+      "type": "string",
+      "default": "Artifacts/jobs",
+      "description": "Root for per-job artifact directories (e.g. Artifacts/jobs/<jobid>/). Avoids fixed log paths and hardcoding a cluster/project layout. Surfaced by the adapter (`slurm-adapter.cjs submit` prints the resolved value); override via GSD_EXTERNAL_JOB_ARTIFACT_DIR."
+    },
+    "external_job.submit_timeout_ms": {
+      "type": "number",
+      "default": 30000,
+      "description": "Hard timeout (ms) for the scheduler submit subprocess (e.g. sbatch). Bounded per CLAUDE.md unbounded-subprocess policy. Read by the adapter (env GSD_SLURM_SUBMIT_TIMEOUT_MS overrides)."
+    },
+    "external_job.poll_timeout_ms": {
+      "type": "number",
+      "default": 15000,
+      "description": "Hard timeout (ms) for the scheduler poll subprocess (squeue, with sacct fallback). Read by the adapter (env GSD_SLURM_POLL_TIMEOUT_MS overrides)."
+    }
+  },
+  "steps": [],
+  "contributions": [
+    {
+      "point": "execute:wave:post",
+      "into": "executor",
+      "fragment": {
+        "path": "fragments/execute-wave-post.md"
+      },
+      "produces": [
+        ".planning/async-jobs/<job>.json"
+      ],
+      "consumes": [
+        "PLAN.md"
+      ],
+      "when": "external_job.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "plan:post",
+      "into": "planner",
+      "fragment": {
+        "path": "fragments/plan-post.md"
+      },
+      "produces": [],
+      "consumes": [],
+      "when": "external_job.enabled",
+      "onError": "skip"
+    }
+  ],
+  "gates": []
+}

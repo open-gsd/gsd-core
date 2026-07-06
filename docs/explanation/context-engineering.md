@@ -77,7 +77,6 @@ Since GSD 1.4.0, this is addressed by registering runtime lifecycle hooks. Rathe
 Each AI runtime exposes lifecycle events in its own vocabulary, but the purpose is the same across all of them: fire at boundaries that correspond to context pressure or turn transitions, so GSD can observe and react.
 
 - **Claude Code** fires `PreCompact` when a compaction is about to occur, `Stop` when a session turn ends, and `SubagentStop` when a spawned subagent completes. Together these bracket the moments when context has grown or a context-consuming task has just finished.
-- **Gemini** fires `BeforeAgent`/`AfterAgent` around each agent invocation, and `BeforeModel` before each model call — giving a per-inference opportunity to check headroom.
 - **Qwen** exposes `SubagentStop`, `Stop`, and `PreCompact`, mirroring Claude Code's shape in its own event system.
 
 Think of these as the same concept — "notify GSD at context boundaries" — expressed in each runtime's native event vocabulary. This is the multi-runtime philosophy applied at the observability layer: GSD registers the semantically equivalent hook wherever each runtime exposes it, rather than demanding every runtime adopt a single event schema.

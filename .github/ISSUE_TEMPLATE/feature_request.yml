@@ -170,7 +170,6 @@ body:
       description: Which runtimes must this work with? Check all that apply.
       options:
         - label: Claude Code
-        - label: Gemini CLI
         - label: OpenCode
         - label: Codex
         - label: Copilot

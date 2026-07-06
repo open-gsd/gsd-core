@@ -12,9 +12,9 @@ const { runtimeFlags } = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const EXPECTED_FLAGS = [
-  'isOpencode', 'isKilo', 'isGemini', 'isCodex', 'isCopilot', 'isAntigravity',
+  'isOpencode', 'isKilo', 'isCodex', 'isCopilot', 'isAntigravity',
   'isCursor', 'isWindsurf', 'isAugment', 'isTrae', 'isQwen', 'isHermes',
-  'isCodebuddy', 'isCline', 'isKimi',
+  'isCodebuddy', 'isCline', 'isKimi', 'isZcode',
 ];
 
 test('runtimeFlags: every known non-claude runtime sets exactly its own flag true', () => {

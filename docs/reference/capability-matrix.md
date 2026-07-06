@@ -44,7 +44,7 @@ Core package and are stamped with the package version at release (per
 ADR-1244 D6). They are not subject to the consent or integrity-pin flow applied
 to third-party capabilities.
 
-### Feature capabilities (role: feature) — 17
+### Feature capabilities (role: feature) — 18
 
 Feature capabilities extend what the loop does — contributing research,
 planning, execution, verification, or ship artefacts at the loop extension
@@ -57,6 +57,7 @@ points.
 | `audit` | feature | full | `>=1.6.0` | — | — | first-party |
 | `code-review` | feature | full | `>=1.6.0` | `execute:post` | step | first-party |
 | `drift` | feature | full | `>=1.6.0` | `plan:pre`, `execute:wave:post` | gate | first-party |
+| `external-job` | feature | full | `>=1.7.0` | `plan:post`, `execute:wave:post` | contribution | first-party |
 | `gap-analysis` | feature | standard | `>=1.6.0` | `plan:post` | gate | first-party |
 | `graphify` | feature | full | `>=1.6.0` | — | — | first-party |
 | `intel` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
@@ -87,7 +88,6 @@ emission), so their extension-point and hook-kind cells are `—`.
 | `codex` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `copilot` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `cursor` | runtime | core | `>=1.6.0` | — | — | first-party |
-| `gemini` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `hermes` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `kilo` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `kimi` | runtime | core | `>=1.6.0` | — | — | first-party |
@@ -95,6 +95,7 @@ emission), so their extension-point and hook-kind cells are `—`.
 | `qwen` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `trae` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `windsurf` | runtime | core | `>=1.6.0` | — | — | first-party |
+| `zcode` | runtime | core | `>=1.6.0` | — | — | first-party |
 
 ---
 

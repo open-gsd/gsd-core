@@ -324,7 +324,7 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 ```bash
 # Arquiva milestone
-node gsd-tools.cjs milestone complete <version> [--name <name>] [--archive-phases]
+node gsd-tools.cjs milestone complete <version> [--name <name>] [--no-archive-phases]
 
 # Marca requisitos como concluídos
 node gsd-tools.cjs requirements mark-complete <ids>

@@ -84,6 +84,7 @@
     "context_window",
     "graphify.build_timeout",
     "graphify.auto_update",
+    "graphify.graph_path",
     "claude_md_path",
     "claude_md_assembly.mode",
     "runtime",
