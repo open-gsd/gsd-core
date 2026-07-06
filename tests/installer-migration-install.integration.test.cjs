@@ -40,6 +40,7 @@ const RUNTIME_INSTALL_CONTRACTS = {
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
   windsurf: { surface: 'global-artifacts-noop', settings: false, packageJson: false },
+  zcode: { surface: 'flat-skills', settings: false, packageJson: true },
 };
 
 function sha256(content) {

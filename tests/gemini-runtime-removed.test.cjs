@@ -45,6 +45,8 @@ const {
   getProjectInstructionFile,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-name-policy.cjs'));
 
+const registry = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
+
 const { convertClaudeAgentToAntigravityAgent } = require('../bin/install.js');
 
 // Run the installer as a subprocess with an isolated HOME so no install can
@@ -162,10 +164,15 @@ describe('#1928 gemini removed from every runtime-name-policy surface', () => {
     assert.strictEqual(getRuntimeNewProjectCommand('gemini'), '/gsd-new-project', 'new-project override removed → default');
   });
 
-  test('runtimeFlags has exactly 14 non-claude runtimes and no isGemini', () => {
+  test('runtimeFlags has no isGemini and covers exactly the non-claude registry runtimes (count-agnostic)', () => {
     const flags = runtimeFlags('claude');
     assert.ok(!('isGemini' in flags), 'isGemini flag must be gone');
-    assert.strictEqual(Object.keys(flags).length, 14, 'flag count drops 15 → 14 with gemini removed');
+    // The flag set tracks the non-claude registry runtimes (one is<Runtime> per
+    // id), so adding a runtime updates the count automatically — no hand-pinned
+    // number that would break on the next runtime addition.
+    const expectedNonClaudeCount = Object.keys(registry.runtimes).filter((id) => id !== 'claude').length;
+    assert.strictEqual(Object.keys(flags).length, expectedNonClaudeCount,
+      'flag count must equal the non-claude registry runtime count');
   });
 
   test('gemini no longer maps to GEMINI.md (defaults to AGENTS.md)', () => {

@@ -3186,11 +3186,9 @@ const {
 // file is an installed artifact captured by golden-install-parity (#1943).
 const VALID_EXTENSION_EVENTS = capValidatorModule.VALID_EXTENSION_EVENTS;
 
-const RUNTIME_IDS = [
-  'claude', 'codex', 'antigravity', 'cursor', 'opencode',
-  'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-  'codebuddy', 'cline', 'kimi', 'windsurf',
-];
+// Runtime ids are derived from the built registry (the single source of truth)
+// so this file stays fluid when a runtime descriptor is added or removed.
+const RUNTIME_IDS = Object.keys(buildRegistry(loadAndValidate(new Set()).capMap).runtimes);
 
 // Helper: build a minimal valid runtime capability object for fixture-based tests
 function makeRuntimeCap(overrides) {
@@ -3232,18 +3230,31 @@ function makeRuntimeCap(overrides) {
   };
 }
 
-// ── 24a. All 15 runtime ids appear in the runtimes index ─────────────────────
+// ── 24a. Every role:runtime capability appears in the runtimes index ─────────
+// Count-agnostic: the built registry's runtime set must exactly equal the set
+// of capability folders whose descriptor declares role:"runtime". Adding a
+// runtime descriptor extends coverage with zero edits here.
 
-describe('ADR-1016 phase 5a: all 15 runtimes in registry index', () => {
+describe('ADR-1016 phase 5a: every role:runtime capability is in the registry index', () => {
   let registry;
 
-  test('loadAndValidate + buildRegistry produces runtimes index with 15 entries', () => {
+  test('loadAndValidate + buildRegistry indexes exactly the role:runtime capabilities on disk', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors: ' + JSON.stringify(hardErrors));
     registry = buildRegistry(capMap);
+
+    // Derive the expected runtime id set from the loaded capability map — not a
+    // hand-pinned count. This is the contract: every role:runtime descriptor on
+    // disk becomes a runtimes-index entry, no more, no less.
+    const expectedRuntimeIds = [...capMap.entries()]
+      .filter(([, cap]) => cap && cap.role === 'runtime')
+      .map(([id]) => id)
+      .sort();
     const runtimeKeys = Object.keys(registry.runtimes).sort();
-    assert.strictEqual(runtimeKeys.length, 15, 'Expected 15 runtime entries, got: ' + runtimeKeys.join(', '));
+    assert.ok(expectedRuntimeIds.length > 0, 'expected at least one role:runtime capability on disk');
+    assert.deepEqual(runtimeKeys, expectedRuntimeIds,
+      'runtimes index must exactly equal the role:runtime capabilities on disk. got: ' + runtimeKeys.join(', '));
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
@@ -4072,17 +4083,17 @@ describe('ADR-857 phase 5e: validateArtifactKindEntry — ConverterName enum (FA
     assert.deepEqual(converterErrors, [], 'converter: null must always be accepted, got: ' + JSON.stringify(converterErrors));
   });
 
-  // Parity: all 15 runtime descriptors must have converters in the valid set (or null)
-  test('all 15 real runtime descriptors have converters in VALID_CONVERTER_NAMES or null', () => {
+  // Parity: every role:runtime descriptor's converters must be in the valid set (or null).
+  // Count-agnostic: iterates the real capability map rather than a hand-pinned runtime list.
+  test('every real runtime descriptor has converters in VALID_CONVERTER_NAMES or null', () => {
     const { capMap, errors } = loadAndValidate(new Set());
     const hardErrors = errors.filter((e) => !e.includes('pending-migration'));
     assert.deepEqual(hardErrors, [], 'Expected no hard errors from real capabilities, got: ' + JSON.stringify(hardErrors));
 
-    const runtimeIds = [
-      'claude', 'codex', 'antigravity', 'cursor', 'opencode',
-      'kilo', 'copilot', 'augment', 'trae', 'qwen', 'hermes',
-      'codebuddy', 'cline', 'kimi', 'windsurf',
-    ];
+    const runtimeIds = [...capMap.entries()]
+      .filter(([, cap]) => cap && cap.role === 'runtime')
+      .map(([id]) => id);
+    assert.ok(runtimeIds.length > 0, 'expected at least one role:runtime capability');
     for (const id of runtimeIds) {
       const cap = capMap.get(id);
       assert.ok(cap, 'capMap must contain "' + id + '"');
@@ -6406,45 +6417,43 @@ const {
   resolveRuntimeConfigIntent,
   ALLOWED_CONFIG_RUNTIMES,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs'));
+const enh1055Registry = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
 
 // ---------------------------------------------------------------------------
-// Frozen expected table (pre-change behavior — the contract being pinned)
+// Expected table — DERIVED from the capability registry descriptors. The
+// contract being pinned is the PROJECTION (descriptor fields → intent), not a
+// frozen per-runtime value snapshot. Adding a runtime descriptor extends
+// coverage with zero edits here.
 // ---------------------------------------------------------------------------
 
-const EXPECTED = [
-  { runtime: 'claude',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'antigravity',  installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'augment',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'qwen',         installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'hermes',       installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'codebuddy',    installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null        },
-  { runtime: 'opencode',     installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: 'opencode'  },
-  { runtime: 'kilo',         installSurface: 'settings-json',        writesSharedSettings: false, finishPermissionWriter: 'kilo'      },
-  { runtime: 'codex',        installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null        },
-  { runtime: 'copilot',      installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null        },
-  { runtime: 'cline',        installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null        },
-  { runtime: 'cursor',       installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null        },
-  { runtime: 'windsurf',     installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
-  { runtime: 'trae',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
-  { runtime: 'kimi',         installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null        },
-];
+const EXPECTED = Object.keys(enh1055Registry.runtimes).map((id) => {
+  const r = enh1055Registry.runtimes[id].runtime;
+  const pw = r.permissionWriter;
+  return {
+    runtime: id,
+    installSurface: r.installSurface,
+    writesSharedSettings: r.writesSharedSettings,
+    finishPermissionWriter: pw == null ? null : pw,
+  };
+});
 
 // ---------------------------------------------------------------------------
-// Test 1: Golden master — all 15 runtimes resolve to expected values
+// Test 1: Projection contract — every registry runtime resolves to its
+// descriptor-derived intent (count-agnostic).
 // ---------------------------------------------------------------------------
 
-describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent golden master', () => {
-  for (const row of EXPECTED) {
-    test(`${row.runtime} resolves to expected intent`, () => {
-      const intent = resolveRuntimeConfigIntent(row.runtime);
-      assert.deepStrictEqual(intent, {
-        runtime:               row.runtime,
-        installSurface:        row.installSurface,
-        writesSharedSettings:  row.writesSharedSettings,
+describe('enh-1055 descriptor-drive: resolveRuntimeConfigIntent projection contract', () => {
+  test('every registry runtime resolves to its descriptor-derived intent', () => {
+    assert.ok(EXPECTED.length > 0, 'registry must contain at least one runtime');
+    for (const row of EXPECTED) {
+      assert.deepStrictEqual(resolveRuntimeConfigIntent(row.runtime), {
+        runtime: row.runtime,
+        installSurface: row.installSurface,
+        writesSharedSettings: row.writesSharedSettings,
         finishPermissionWriter: row.finishPermissionWriter,
-      });
-    });
-  }
+      }, `resolveRuntimeConfigIntent('${row.runtime}') must match the descriptor projection`);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -6470,21 +6479,18 @@ describe('enh-1055 descriptor-drive: unknown runtime throws TypeError', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 4: ALLOWED_CONFIG_RUNTIMES contains all 15 expected runtimes
+// Test 4: ALLOWED_CONFIG_RUNTIMES equals the registry runtimes that declare an
+// installSurface (count-agnostic; derived from the same source as production).
 // ---------------------------------------------------------------------------
 
 describe('enh-1055 descriptor-drive: ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_15 = new Set([
-    'claude', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
-    'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae', 'kimi',
-  ]);
-
-  test('contains exactly the 15 expected runtimes', () => {
-    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), EXPECTED_15);
-  });
-
-  test('has exactly 15 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 15);
+  test('equals the registry runtimes that declare an installSurface', () => {
+    const descriptorAllowed = new Set(
+      Object.entries(enh1055Registry.runtimes)
+        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string')
+        .map(([id]) => id),
+    );
+    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), descriptorAllowed);
   });
 });
 

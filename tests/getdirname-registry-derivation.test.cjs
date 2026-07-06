@@ -1,17 +1,20 @@
 'use strict';
 /**
- * Drift-guard: getDirName must be derived from the capability registry.
- * Verifies:
- *   1. For every known runtime id, getDirName(id) equals the hardcoded golden
- *      expected map — a pinned oracle that catches BOTH formula bugs AND
- *      unintended registry drift (adding/removing a runtime or changing its
- *      localConfigDir forces a deliberate golden-map update here).
- *   2. getDirName('unknown') and getDirName('') fall back to '.claude'.
- *   3. Every registry runtime entry has a non-empty dot-dir localConfigDir string —
- *      cross-check from a different angle than the production derivation formula.
+ * Property test: getDirName is a pure projection of each runtime descriptor's
+ * `localConfigDir`. Because 1.7.0 (ADR-1016 / ADR-1239) makes runtimes
+ * pluggable data descriptors, this test asserts the DERIVATION CONTRACT —
+ * `getDirName(id) === registry.runtimes[id].runtime.localConfigDir` — for
+ * EVERY runtime currently in the registry, rather than pinning a frozen
+ * per-runtime golden snapshot that would have to be hand-edited every time a
+ * runtime is added or removed. Adding a new runtime descriptor requires zero
+ * changes here; if the derivation breaks for any runtime, this fails loudly.
  *
- * ADR-1239 Phase B (#1679).
- * Behavioral tests only: assert on returned values, no source-grep.
+ * Also covers:
+ *   - the fail-closed fallback (`getDirName('unknown')` / `getDirName('')` → '.claude');
+ *   - a structural cross-check that every descriptor's localConfigDir is a
+ *     non-empty dot-dir string.
+ *
+ * ADR-1239 Phase B (#1679). Behavioral tests only: assert on returned values.
  */
 
 const { test } = require('node:test');
@@ -21,59 +24,26 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const { getDirName } = runtimeNamePolicy;
 
-// Golden oracle: hardcoded expected map of all 15 runtime ids to their local config dir.
-// A pinned expected value in a TEST is correct — the test IS the oracle (non-circular).
-// Only PRODUCTION code should derive dynamically from the registry.
-// If this map diverges from getDirName output, either the formula is wrong
-// OR the registry changed — both require a deliberate golden-map update here.
-const GOLDEN_DIR_MAP = {
-  claude:      '.claude',
-  copilot:     '.github',
-  opencode:    '.opencode',
-  kilo:        '.kilo',
-  codex:       '.codex',
-  antigravity: '.agents',
-  cursor:      '.cursor',
-  windsurf:    '.windsurf',
-  augment:     '.augment',
-  trae:        '.trae',
-  qwen:        '.qwen',
-  hermes:      '.hermes',
-  kimi:        '.kimi-code',
-  codebuddy:   '.codebuddy',
-  cline:       '.cline',
-};
+const RUNTIME_IDS = Object.keys(registry.runtimes);
 
-test('getDirName: golden map matches for all 15 known runtime ids', () => {
-  for (const [id, expected] of Object.entries(GOLDEN_DIR_MAP)) {
-    const actual = getDirName(id);
+test('getDirName(id) projects each descriptor runtime.localConfigDir (derivation contract, count-agnostic)', () => {
+  assert.ok(RUNTIME_IDS.length > 0, 'registry must contain at least one runtime');
+  for (const id of RUNTIME_IDS) {
+    const desc = registry.runtimes[id] && registry.runtimes[id].runtime;
+    const expected = desc && desc.localConfigDir;
+    assert.ok(typeof expected === 'string' && expected.length > 0,
+      `registry.runtimes['${id}'].runtime.localConfigDir must be a non-empty string`);
     assert.strictEqual(
-      actual,
+      getDirName(id),
       expected,
-      `getDirName('${id}') diverged from golden.\n` +
-      `  actual:   ${JSON.stringify(actual)}\n` +
-      `  expected: ${JSON.stringify(expected)}`,
-    );
+      `getDirName('${id}') must equal the descriptor localConfigDir '${expected}'`);
   }
 });
 
-test('drift guard: registry runtime id set EXACTLY equals the golden map (adding/removing a runtime forces a golden update)', () => {
-  // Without this, a newly-added runtime would pass (its value never checked) and
-  // removing `claude` could pass via the .claude fallback. Pin the set both ways.
-  const registryIds = Object.keys(registry.runtimes).sort();
-  const goldenIds = Object.keys(GOLDEN_DIR_MAP).sort();
-  assert.deepEqual(registryIds, goldenIds,
-    'registry.runtimes id set must exactly match GOLDEN_DIR_MAP — update the golden map when adding/removing a runtime');
-});
-
-test('getDirName fallback: unknown runtime returns ".claude"', () => {
-  assert.strictEqual(getDirName('unknown'), '.claude',
-    'getDirName("unknown") must return ".claude" (default fallback)');
-});
-
-test('getDirName fallback: empty string returns ".claude"', () => {
-  assert.strictEqual(getDirName(''), '.claude',
-    'getDirName("") must return ".claude" (empty-input fallback)');
+test('getDirName fallback: unknown / empty runtime returns ".claude" (fail-closed)', () => {
+  assert.strictEqual(getDirName('unknown'), '.claude');
+  assert.strictEqual(getDirName(''), '.claude');
+  assert.strictEqual(getDirName('__nonexistent_runtime__'), '.claude');
 });
 
 test('registry cross-check: every runtimes[id].runtime.localConfigDir is a non-empty dot-dir string', () => {

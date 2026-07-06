@@ -408,6 +408,22 @@ Skills land in `~/.trae/`. GSD installs skills, agents, and rule references.
 
 ---
 
+### ZCode
+
+```bash
+npx @opengsd/gsd-core@latest --zcode --global
+```
+
+[ZCode](https://zcode.z.ai/en) is Z.ai's desktop Agentic Development Environment for the GLM-5.2 model. GSD installs skills (nested `SKILL.md` bundles), slash commands, and subagents under `~/.zcode/`:
+
+- **Skills** → `~/.zcode/skills/gsd-<name>/SKILL.md` (invoke with `$gsd-<name>` in chat)
+- **Commands** → `~/.zcode/commands/gsd-<name>.md` (invoke with `/gsd-<name>`)
+- **Subagents** → `~/.zcode/agents/gsd-<name>.md`
+
+ZCode's skill format is identical to Claude Code's, so no runtime-specific converter is required — GSD lands as a pure declarative descriptor with no hardcoded installer branches. ZCode also natively imports skills and MCP config from `~/.claude`; if you install GSD for **both** Claude and ZCode, you may see duplicate GSD skills inside ZCode, which is expected. To connect ZCode's MCP servers to GSD's companion server, see [how to connect the GSD MCP server](connect-gsd-mcp-server.md).
+
+---
+
 ## Local vs global install
 
 All examples above use `--global`, which installs GSD once for your user account. To scope an install to a single project, replace `--global` with `--local`:

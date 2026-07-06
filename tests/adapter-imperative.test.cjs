@@ -25,7 +25,7 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const RUNTIMES = Object.keys(registry.runtimes);
 
-test('imperative adapter: kind === "imperative" + runtime echoed + registry present, for all 15 runtimes', () => {
+test('imperative adapter: kind === "imperative" + runtime echoed + registry present, for every registry runtime', () => {
   for (const r of RUNTIMES) {
     const adapter = createImperativeAdapter({ runtime: r });
     assert.strictEqual(adapter.kind, 'imperative', `${r}: kind must be 'imperative'`);

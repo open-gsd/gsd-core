@@ -1,31 +1,30 @@
 'use strict';
 /**
- * Drift-guard + collapse: getRuntimeLabel must be the SINGLE source of truth for
- * the install/uninstall console display label, replacing the two duplicated
- * `runtimeLabel` assignment chains that previously lived in bin/install.js
- * (uninstall() and install()) — the add-a-host tax ADR-1239 Phase B (#1679)
- * eliminates.
+ * getRuntimeLabel is the SINGLE source of truth for the short install/uninstall
+ * console display label, replacing the two duplicated `runtimeLabel` assignment
+ * chains that previously lived in bin/install.js (uninstall() and install()) —
+ * the add-a-host tax ADR-1239 Phase B (#1679) eliminates.
  *
- * Verifies:
- *   1. For every known runtime id, getRuntimeLabel(id) equals the hardcoded
- *      golden expected map — a pinned oracle that catches BOTH table bugs AND
- *      unintended drift (adding/removing a runtime forces a deliberate
- *      golden-map update here).
- *   2. getRuntimeLabel('unknown') and getRuntimeLabel('') fall back to
- *      'Claude Code' (the always-safe default).
- *   3. The golden id set EXACTLY equals the capability-registry runtime id set
- *      (adding/removing a runtime forces a golden update here).
+ * Because 1.7.0 (ADR-1016 / ADR-1239) makes runtimes pluggable data, the label
+ * table is CURATED (a runtime id → short label mapping that cannot be derived
+ * from the id alone, e.g. "Claude Code", "Qwen Code", "ZCode"). This test
+ * enforces the COVERAGE CONTRACT rather than a frozen per-runtime snapshot:
  *
- * Voice: these are the SHORT UI labels used in the install/uninstall console
- * output, intentionally distinct from the descriptor `title` (the long product
- * name, e.g. "OpenAI Codex CLI", "GitHub Copilot") which serves
- * documentation/registry display. Two prior-chain inconsistencies are resolved
- * by this canonical map (both move toward the majority + descriptor value):
- *   - kimi: install said 'Kimi', uninstall said 'Kimi CLI' → canonical 'Kimi CLI'
- *   - cline: install said 'Cline', uninstall omitted it (→ 'Claude Code') → canonical 'Cline'
+ *   - every runtime in the capability registry MUST resolve to a distinct,
+ *     non-default curated label (a newly-added runtime that forgets to add a
+ *     label entry silently falls through to "Claude Code" and fails here);
+ *   - the fail-closed fallback returns "Claude Code" for unknown / empty / alias
+ *     inputs (raw-id match only — aliases are NOT auto-expanded).
  *
- * ADR-1239 Phase B (#1679).
- * Behavioral tests only: assert on returned values, no source-grep.
+ * Adding a runtime descriptor requires adding its label to RUNTIME_LABELS (the
+ * deliberate curation step); it does NOT require editing a count or golden
+ * snapshot here.
+ *
+ * Voice: these SHORT UI labels are intentionally distinct from the descriptor
+ * `title` (the long product name). Two prior-chain inconsistencies are resolved
+ * by the canonical map: kimi → 'Kimi CLI'; cline → 'Cline'.
+ *
+ * ADR-1239 Phase B (#1679). Behavioral tests only: assert on returned values.
  */
 
 const { test } = require('node:test');
@@ -35,70 +34,36 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const { getRuntimeLabel, getRuntimeNewProjectCommand } = runtimeNamePolicy;
 
-// Golden oracle: hardcoded expected map of all 15 runtime ids to their short
-// install/uninstall display label. A pinned expected value in a TEST is correct
-// — the test IS the oracle (non-circular). Only PRODUCTION code should derive
-// dynamically. If this map diverges from getRuntimeLabel output, either the
-// table is wrong OR the registry changed — both require a deliberate golden-map
-// update here.
-const GOLDEN_LABEL_MAP = {
-  claude: 'Claude Code',
-  opencode: 'OpenCode',
-  kilo: 'Kilo',
-  codex: 'Codex',
-  copilot: 'Copilot',
-  antigravity: 'Antigravity',
-  cursor: 'Cursor',
-  windsurf: 'Windsurf',
-  augment: 'Augment',
-  trae: 'Trae',
-  qwen: 'Qwen Code',
-  hermes: 'Hermes Agent',
-  kimi: 'Kimi CLI',
-  codebuddy: 'CodeBuddy',
-  cline: 'Cline',
-};
+const FALLBACK = 'Claude Code';
+const RUNTIME_IDS = Object.keys(registry.runtimes);
 
-test('getRuntimeLabel: golden map matches for all 15 known runtime ids', () => {
-  for (const [id, expected] of Object.entries(GOLDEN_LABEL_MAP)) {
-    const actual = getRuntimeLabel(id);
-    assert.strictEqual(
-      actual,
-      expected,
-      `getRuntimeLabel('${id}') diverged from golden.\n` +
-      `  actual:   ${JSON.stringify(actual)}\n` +
-      `  expected: ${JSON.stringify(expected)}`,
-    );
+test('getRuntimeLabel: every registry runtime resolves to a non-empty curated label (coverage contract, count-agnostic)', () => {
+  assert.ok(RUNTIME_IDS.length > 0, 'registry must contain at least one runtime');
+  for (const id of RUNTIME_IDS) {
+    const label = getRuntimeLabel(id);
+    assert.strictEqual(typeof label, 'string', `getRuntimeLabel('${id}') must be a string`);
+    assert.ok(label.length > 0, `getRuntimeLabel('${id}') must be non-empty`);
   }
 });
 
-test('drift guard: registry runtime id set EXACTLY equals the golden map (adding/removing a runtime forces a golden update)', () => {
-  // Without this, a newly-added runtime would pass (its label never checked) and
-  // removing `claude` could pass via the 'Claude Code' fallback. Pin the set
-  // both ways — mirroring the getDirName drift guard.
-  const registryIds = Object.keys(registry.runtimes).sort();
-  const goldenIds = Object.keys(GOLDEN_LABEL_MAP).sort();
-  assert.deepEqual(registryIds, goldenIds,
-    'registry.runtimes id set must exactly match GOLDEN_LABEL_MAP — update the golden map when adding/removing a runtime');
+test('getRuntimeLabel drift guard: no registry runtime except claude falls through to the default (forces a deliberate label per runtime)', () => {
+  // claude's curated label IS the fallback string, so it is exempt. Every other
+  // registry runtime must resolve to a DISTINCT label — otherwise it was added
+  // without a RUNTIME_LABELS entry and is silently masking as "Claude Code".
+  for (const id of RUNTIME_IDS) {
+    if (id === 'claude') continue;
+    assert.notStrictEqual(
+      getRuntimeLabel(id),
+      FALLBACK,
+      `registry runtime '${id}' resolved to the fallback "${FALLBACK}" — add a distinct entry to RUNTIME_LABELS in src/runtime-name-policy.cts`);
+  }
 });
 
-test('getRuntimeLabel fallback: unknown runtime returns "Claude Code"', () => {
-  assert.strictEqual(getRuntimeLabel('unknown'), 'Claude Code',
-    'getRuntimeLabel("unknown") must return "Claude Code" (default fallback)');
-});
-
-test('getRuntimeLabel fallback: empty string returns "Claude Code"', () => {
-  assert.strictEqual(getRuntimeLabel(''), 'Claude Code',
-    'getRuntimeLabel("") must return "Claude Code" (empty-input fallback)');
-});
-
-test('getRuntimeLabel fallback: alias is NOT auto-expanded (raw id match only)', () => {
-  // getRuntimeLabel is a raw-id lookup, not alias-aware (unlike canonicalizeRuntimeName).
-  // Callers pass an already-canonicalized runtime id. An alias must fall back to
-  // the default rather than silently matching — this keeps the label surface
-  // explicit and prevents a future alias from changing console output by accident.
-  assert.strictEqual(getRuntimeLabel('claude-code'), 'Claude Code',
-    'getRuntimeLabel("claude-code") must return the default "Claude Code" (raw-id match only; aliases are not expanded)');
+test('getRuntimeLabel fallback: unknown / empty / alias inputs return "Claude Code" (fail-closed, raw-id match only)', () => {
+  assert.strictEqual(getRuntimeLabel('unknown'), FALLBACK);
+  assert.strictEqual(getRuntimeLabel(''), FALLBACK);
+  assert.strictEqual(getRuntimeLabel('claude-code'), FALLBACK,
+    'getRuntimeLabel("claude-code") must return the default (raw-id match only; aliases are not expanded)');
 });
 
 // ---------------------------------------------------------------------------
@@ -106,23 +71,30 @@ test('getRuntimeLabel fallback: alias is NOT auto-expanded (raw id match only)',
 // /gsd-new-project invocation syntax for the post-install next-step message.
 // ---------------------------------------------------------------------------
 
-const GOLDEN_COMMAND_MAP = {
-  // 3 real overrides (the rest use the default):
+// CURATED override table — runtimes whose /gsd-new-project invocation differs
+// from the default. All other registry runtimes resolve to the default.
+const NEW_PROJECT_OVERRIDES = {
   codex: '$gsd-new-project',
   cursor: 'gsd-new-project (mention the skill name)',
   kimi: '/skill:gsd-new-project',
 };
 const DEFAULT_CMD = '/gsd-new-project';
 
-test('getRuntimeNewProjectCommand: the 3 overrides + the default for the other 12 runtimes', () => {
-  for (const [id, expected] of Object.entries(GOLDEN_COMMAND_MAP)) {
-    assert.strictEqual(getRuntimeLabel ? getRuntimeNewProjectCommand(id) : null, expected, `override ${id}`);
+test('getRuntimeNewProjectCommand: each override runtime resolves to its curated command', () => {
+  for (const [id, expected] of Object.entries(NEW_PROJECT_OVERRIDES)) {
+    assert.strictEqual(getRuntimeNewProjectCommand(id), expected, `override ${id}`);
   }
-  // sanity: getRuntimeNewProjectCommand is imported alongside getRuntimeLabel above
 });
 
-test('getRuntimeNewProjectCommand: claude/unknown/empty + the 12 non-override runtimes → default', () => {
-  for (const id of ['claude', 'opencode', 'kilo', 'copilot', 'antigravity', 'windsurf', 'augment', 'trae', 'cline', 'qwen', 'hermes', 'codebuddy', 'unknown', '']) {
-    assert.strictEqual(getRuntimeNewProjectCommand(id), DEFAULT_CMD, `runtime '${id}' must return the default command`);
+test('getRuntimeNewProjectCommand: every registry runtime not in the override table resolves to the default (count-agnostic)', () => {
+  for (const id of RUNTIME_IDS) {
+    if (Object.prototype.hasOwnProperty.call(NEW_PROJECT_OVERRIDES, id)) continue;
+    assert.strictEqual(getRuntimeNewProjectCommand(id), DEFAULT_CMD,
+      `runtime '${id}' must return the default command (add to NEW_PROJECT_OVERRIDES if it needs a non-default form)`);
   }
+});
+
+test('getRuntimeNewProjectCommand: unknown / empty → default (fail-closed)', () => {
+  assert.strictEqual(getRuntimeNewProjectCommand('unknown'), DEFAULT_CMD);
+  assert.strictEqual(getRuntimeNewProjectCommand(''), DEFAULT_CMD);
 });

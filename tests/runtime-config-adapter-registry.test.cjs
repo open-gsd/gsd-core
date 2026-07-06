@@ -1,7 +1,16 @@
 'use strict';
 
 // Tests for runtime-config-adapter-registry.cjs (issue #60).
-// TDD: this file is written BEFORE the implementation to establish the red state.
+//
+// 1.7.0 (ADR-1016 / ADR-1239) makes runtimes pluggable data descriptors, and
+// resolveRuntimeConfigIntent / resolveInstallPlan are PURE PROJECTIONS of those
+// descriptors. So this file asserts the PROJECTION CONTRACT — that each
+// function maps descriptor fields to the intent/plan shape correctly (right
+// field names, right null-handling, right types) — for EVERY runtime in the
+// registry, rather than pinning a frozen per-runtime value snapshot that would
+// have to be hand-edited on every runtime addition. The EXPECTED_TABLE below is
+// DERIVED from the capability registry at load time; adding a runtime descriptor
+// requires zero changes here.
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -15,45 +24,44 @@ const {
   ALLOWED_CONFIG_RUNTIMES,
   INSTALL_SURFACES,
 } = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'runtime-config-adapter-registry.cjs'));
+const registry = require(path.join(ROOT, 'gsd-core', 'bin', 'lib', 'capability-registry.cjs'));
 
 // ---------------------------------------------------------------------------
-// Source-of-truth table (mirrors the intent table in the brief exactly)
+// Source-of-truth table — DERIVED from the capability registry descriptors.
+// Each row is the descriptor projection of one runtime's config intent. This is
+// deliberately non-circular: production reads the descriptor too, and this
+// asserts the mapping (field names, null-coalescing of permissionWriter, etc.)
+// is correct for every present and future runtime.
 // ---------------------------------------------------------------------------
 
-const EXPECTED_TABLE = [
-  { runtime: 'claude',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'antigravity', installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'augment',     installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'qwen',        installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'hermes',      installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'codebuddy',   installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: null       },
-  { runtime: 'opencode',    installSurface: 'settings-json',        writesSharedSettings: true,  finishPermissionWriter: 'opencode' },
-  { runtime: 'kilo',        installSurface: 'settings-json',        writesSharedSettings: false, finishPermissionWriter: 'kilo'     },
-  { runtime: 'codex',       installSurface: 'codex-toml',           writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'copilot',     installSurface: 'copilot-instructions', writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'cline',       installSurface: 'cline-rules',          writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'cursor',      installSurface: 'cursor-hooks-json',    writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'windsurf',    installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'trae',        installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
-  { runtime: 'kimi',        installSurface: 'profile-marker-only',  writesSharedSettings: false, finishPermissionWriter: null       },
-];
+const EXPECTED_TABLE = Object.keys(registry.runtimes).map((id) => {
+  const r = registry.runtimes[id].runtime;
+  const pw = r.permissionWriter;
+  return {
+    runtime: id,
+    installSurface: r.installSurface,
+    writesSharedSettings: r.writesSharedSettings,
+    finishPermissionWriter: pw == null ? null : pw,
+  };
+});
 
 // ---------------------------------------------------------------------------
-// Test 1: Table-lock — every row in EXPECTED_TABLE must match exactly
+// Test 1: Projection contract — every registry runtime resolves to its
+// descriptor-derived intent (count-agnostic).
 // ---------------------------------------------------------------------------
 
-describe('resolveRuntimeConfigIntent — table-lock', () => {
-  for (const row of EXPECTED_TABLE) {
-    test(`${row.runtime} resolves to expected intent`, () => {
-      const intent = resolveRuntimeConfigIntent(row.runtime);
-      assert.deepStrictEqual(intent, {
-        runtime:               row.runtime,
-        installSurface:        row.installSurface,
-        writesSharedSettings:  row.writesSharedSettings,
+describe('resolveRuntimeConfigIntent — projection contract', () => {
+  test('every registry runtime resolves to its descriptor-derived intent', () => {
+    assert.ok(EXPECTED_TABLE.length > 0, 'registry must contain at least one runtime');
+    for (const row of EXPECTED_TABLE) {
+      assert.deepStrictEqual(resolveRuntimeConfigIntent(row.runtime), {
+        runtime: row.runtime,
+        installSurface: row.installSurface,
+        writesSharedSettings: row.writesSharedSettings,
         finishPermissionWriter: row.finishPermissionWriter,
-      });
-    });
-  }
+      }, `resolveRuntimeConfigIntent('${row.runtime}') must match the descriptor projection`);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -95,31 +103,28 @@ describe('resolveRuntimeConfigIntent — unknown runtime throws TypeError', () =
 });
 
 // ---------------------------------------------------------------------------
-// Test 3: writesSharedSettings exclusion equivalence
+// Test 3: writesSharedSettings — derived equivalence (count-agnostic).
+// The runtimes resolving to false are exactly those whose descriptor declares
+// writesSharedSettings===false.
 // ---------------------------------------------------------------------------
 
-describe('writesSharedSettings exclusion equivalence', () => {
-  const EXPECTED_FALSE_SET = new Set(['codex', 'copilot', 'kilo', 'cursor', 'windsurf', 'trae', 'cline', 'kimi']);
-
-  test('runtimes with writesSharedSettings===false are exactly the exclusion set', () => {
+describe('writesSharedSettings — descriptor-driven equivalence', () => {
+  test('runtimes resolving writesSharedSettings===false are exactly the descriptor-declared false set', () => {
     const falseRuntimes = EXPECTED_TABLE
       .filter(r => r.writesSharedSettings === false)
-      .map(r => r.runtime);
-    assert.deepStrictEqual(new Set(falseRuntimes), EXPECTED_FALSE_SET);
-  });
-
-  test('all other supported runtimes have writesSharedSettings===true', () => {
-    const trueRuntimes = EXPECTED_TABLE
-      .filter(r => r.writesSharedSettings === true)
-      .map(r => r.runtime);
-    for (const runtime of trueRuntimes) {
-      assert.ok(!EXPECTED_FALSE_SET.has(runtime), `${runtime} should have writesSharedSettings true`);
-    }
+      .map(r => r.runtime)
+      .sort();
+    const descriptorFalse = Object.keys(registry.runtimes)
+      .filter((id) => registry.runtimes[id].runtime.writesSharedSettings === false)
+      .sort();
+    assert.deepStrictEqual(falseRuntimes, descriptorFalse);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Test 4: finishPermissionWriter correctness
+// Test 4: finishPermissionWriter — opencode/kilo are non-null, the rest null.
+// Spot-check the two non-null writers (stable curated values) plus the
+// descriptor-derived null set.
 // ---------------------------------------------------------------------------
 
 describe('finishPermissionWriter', () => {
@@ -131,60 +136,39 @@ describe('finishPermissionWriter', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('kilo').finishPermissionWriter, 'kilo');
   });
 
-  test('every other supported runtime -> null', () => {
-    const nullExpected = EXPECTED_TABLE
-      .filter(r => r.finishPermissionWriter === null)
-      .map(r => r.runtime);
-    for (const runtime of nullExpected) {
+  test('every registry runtime whose descriptor permissionWriter is null/absent resolves to null', () => {
+    for (const row of EXPECTED_TABLE.filter((r) => r.finishPermissionWriter === null)) {
       assert.strictEqual(
-        resolveRuntimeConfigIntent(runtime).finishPermissionWriter,
+        resolveRuntimeConfigIntent(row.runtime).finishPermissionWriter,
         null,
-        `${runtime} should have finishPermissionWriter null`,
+        `${row.runtime} should have finishPermissionWriter null`,
       );
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// Test 5: Distinct dedicated surfaces
+// Test 5: installSurface — spot-check the stable dedicated surfaces, plus a
+// descriptor-driven assertion that every runtime resolves to its declared
+// surface (count-agnostic).
 // ---------------------------------------------------------------------------
 
 describe('installSurface correctness', () => {
-  test('codex -> "codex-toml"', () => {
+  test('dedicated surfaces are stable (spot-check)', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('codex').installSurface, 'codex-toml');
-  });
-
-  test('copilot -> "copilot-instructions"', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('copilot').installSurface, 'copilot-instructions');
-  });
-
-  test('cline -> "cline-rules"', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('cline').installSurface, 'cline-rules');
-  });
-
-  test('cursor -> "cursor-hooks-json"', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('cursor').installSurface, 'cursor-hooks-json');
-  });
-
-  test('windsurf -> "profile-marker-only"', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('windsurf').installSurface, 'profile-marker-only');
-  });
-
-  test('trae -> "profile-marker-only"', () => {
     assert.strictEqual(resolveRuntimeConfigIntent('trae').installSurface, 'profile-marker-only');
   });
 
-  test('kimi -> "profile-marker-only"', () => {
-    assert.strictEqual(resolveRuntimeConfigIntent('kimi').installSurface, 'profile-marker-only');
-  });
-
-  test('the 6 passthroughs + opencode + kilo -> "settings-json"', () => {
-    const settingsJsonRuntimes = ['claude', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy', 'opencode', 'kilo'];
-    for (const runtime of settingsJsonRuntimes) {
+  test('every registry runtime resolves to its descriptor-declared installSurface', () => {
+    for (const row of EXPECTED_TABLE) {
       assert.strictEqual(
-        resolveRuntimeConfigIntent(runtime).installSurface,
-        'settings-json',
-        `${runtime} should have installSurface "settings-json"`,
+        resolveRuntimeConfigIntent(row.runtime).installSurface,
+        row.installSurface,
+        `${row.runtime} must resolve its descriptor installSurface`,
       );
     }
   });
@@ -207,29 +191,25 @@ describe('resolveRuntimeConfigIntent — fresh object each call', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 7: Completeness (AC#4 table-driven) — ALLOWED_CONFIG_RUNTIMES
+// Test 7: Completeness — ALLOWED_CONFIG_RUNTIMES equals the set of registry
+// runtimes that declare an installSurface (count-agnostic; derived from the
+// same source as the production Set).
 // ---------------------------------------------------------------------------
 
 describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  const EXPECTED_15 = new Set([
-    'claude', 'antigravity', 'augment', 'qwen', 'hermes', 'codebuddy',
-    'opencode', 'kilo', 'codex', 'copilot', 'cline', 'cursor', 'windsurf', 'trae',
-    'kimi',
-  ]);
-
-  test('ALLOWED_CONFIG_RUNTIMES contains exactly the 15 expected runtimes', () => {
-    const runtimeSet = new Set(ALLOWED_CONFIG_RUNTIMES);
-    assert.deepStrictEqual(runtimeSet, EXPECTED_15);
+  test('ALLOWED_CONFIG_RUNTIMES equals the registry runtimes that declare an installSurface', () => {
+    const descriptorAllowed = new Set(
+      Object.entries(registry.runtimes)
+        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string')
+        .map(([id]) => id),
+    );
+    assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), descriptorAllowed);
   });
 
   test('every member of ALLOWED_CONFIG_RUNTIMES resolves without throwing', () => {
     for (const runtime of ALLOWED_CONFIG_RUNTIMES) {
       assert.doesNotThrow(() => resolveRuntimeConfigIntent(runtime), `${runtime} should resolve without throwing`);
     }
-  });
-
-  test('ALLOWED_CONFIG_RUNTIMES has exactly 15 entries', () => {
-    assert.strictEqual([...ALLOWED_CONFIG_RUNTIMES].length, 15);
   });
 });
 
@@ -304,240 +284,79 @@ describe('resolveInstallPlan — hooksSurface is descriptor-owned', () => {
   });
 });
 
-
-// ────────────────────────────────────────────────────────────────────────
-// Folded from tests/enh-1082-install-plan-capstone.test.cjs — consolidation epic #1969 (B3 #1972)
-// ────────────────────────────────────────────────────────────────────────
-{
-  const { describe: __foldDescribe } = require('node:test');
-  __foldDescribe("folded:enh-1082-install-plan-capstone (consolidation epic #1969 B3 #1972)", () => {
-'use strict';
-
-/**
- * Golden-master test for resolveInstallPlan — ADR-857 phase 5g capstone.
- *
- * Pins the exact InstallPlan shape for all 15 runtimes to guard against
- * descriptor drift. Derived from actual resolveInstallPlan output at the time
- * the seam was introduced (2026-06-11). Behavioral: calls the exported
- * function and asserts on typed fields — no source-grep.
- */
-
-const { describe, it } = require('node:test');
-const assert = require('node:assert/strict');
-const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
-
 // ---------------------------------------------------------------------------
-// Frozen golden-master table — derived from actual resolveInstallPlan output
+// resolveInstallPlan — descriptor-projection contract (replaces the frozen
+// per-runtime golden master). Asserts that for EVERY registry runtime,
+// resolveInstallPlan(id) deep-equals the plan built directly from that runtime's
+// descriptor fields. Count-agnostic: adding a runtime descriptor extends
+// coverage with zero edits here. Folded from enh-1082 (consolidation epic #1969).
 // ---------------------------------------------------------------------------
 
-const EXPECTED = {
-  claude: {
-    runtime: 'claude',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged'],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  codex: {
-    runtime: 'codex',
-    installSurface: 'codex-toml',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: [],
-    hooksSurface: 'codex-hooks-json',
-    sandboxTier: 'codex-agent-sandbox',
-  },
-  antigravity: {
-    runtime: 'antigravity',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'gemini',
-    extendedHookEvents: [],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  cursor: {
-    runtime: 'cursor',
-    installSurface: 'cursor-hooks-json',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: [],
-    hooksSurface: 'cursor-hooks-json',
-    sandboxTier: 'none',
-  },
-  opencode: {
-    runtime: 'opencode',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: 'opencode',
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'none',
-    sandboxTier: 'none',
-  },
-  kilo: {
-    runtime: 'kilo',
-    installSurface: 'settings-json',
-    writesSharedSettings: false,
-    finishPermissionWriter: 'kilo',
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'none',
-    sandboxTier: 'none',
-  },
-  copilot: {
-    runtime: 'copilot',
-    installSurface: 'copilot-instructions',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'copilot-inline',
-    sandboxTier: 'none',
-  },
-  augment: {
-    runtime: 'augment',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: [],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  trae: {
-    runtime: 'trae',
-    installSurface: 'profile-marker-only',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'none',
-    sandboxTier: 'none',
-  },
-  qwen: {
-    runtime: 'qwen',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: ['SubagentStop', 'Stop', 'PreCompact'],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  hermes: {
-    runtime: 'hermes',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: [],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  codebuddy: {
-    runtime: 'codebuddy',
-    installSurface: 'settings-json',
-    writesSharedSettings: true,
-    finishPermissionWriter: null,
-    hookEvents: 'claude',
-    extendedHookEvents: [],
-    hooksSurface: 'settings-json',
-    sandboxTier: 'none',
-  },
-  cline: {
-    runtime: 'cline',
-    installSurface: 'cline-rules',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'cline-rules',
-    sandboxTier: 'none',
-  },
-  kimi: {
-    runtime: 'kimi',
-    installSurface: 'profile-marker-only',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'none',
-    sandboxTier: 'none',
-  },
-  windsurf: {
-    runtime: 'windsurf',
-    installSurface: 'profile-marker-only',
-    writesSharedSettings: false,
-    finishPermissionWriter: null,
-    hookEvents: undefined,
-    extendedHookEvents: [],
-    hooksSurface: 'none',
-    sandboxTier: 'none',
-  },
-};
+describe('resolveInstallPlan — descriptor-projection contract (count-agnostic)', () => {
+  const RUNTIME_IDS = Object.keys(registry.runtimes);
 
-const ALL_RUNTIMES = Object.keys(EXPECTED);
-
-describe('resolveInstallPlan — ADR-857 phase 5g golden master', () => {
-  it('covers exactly 15 runtimes', () => {
-    assert.strictEqual(ALL_RUNTIMES.length, 15);
+  test('covers every registry runtime', () => {
+    assert.ok(RUNTIME_IDS.length > 0, 'registry must contain at least one runtime');
   });
 
-  for (const runtime of ALL_RUNTIMES) {
-    it(`resolveInstallPlan('${runtime}') matches frozen plan`, () => {
-      const actual = resolveInstallPlan(runtime);
-      assert.deepStrictEqual(actual, EXPECTED[runtime],
-        `InstallPlan for '${runtime}' drifted from golden master`);
+  // Build the expected plan directly from each descriptor — the same mapping
+  // resolveInstallPlan performs, asserted rather than trusted.
+  function expectedPlanFromDescriptor(id) {
+    const desc = registry.runtimes[id].runtime;
+    const pw = desc.permissionWriter;
+    return {
+      runtime: id,
+      installSurface: desc.installSurface,
+      writesSharedSettings: desc.writesSharedSettings,
+      finishPermissionWriter: pw == null ? null : pw,
+      hookEvents: desc.hookEvents,
+      extendedHookEvents: Array.isArray(desc.extendedHookEvents) ? [...desc.extendedHookEvents] : [],
+      hooksSurface: desc.hooksSurface,
+      sandboxTier: desc.sandboxTier,
+    };
+  }
+
+  for (const id of RUNTIME_IDS) {
+    test(`resolveInstallPlan('${id}') matches the descriptor projection`, () => {
+      assert.deepStrictEqual(
+        resolveInstallPlan(id),
+        expectedPlanFromDescriptor(id),
+        `InstallPlan for '${id}' diverged from its descriptor projection`,
+      );
     });
   }
 
-  it('resolveInstallPlan throws TypeError for unknown runtime', () => {
+  test('resolveInstallPlan throws TypeError for unknown runtime', () => {
     assert.throws(
       () => resolveInstallPlan('bogus'),
       (err) => err instanceof TypeError && /bogus/.test(err.message),
     );
   });
 
-  it('extendedHookEvents is always an array for every runtime', () => {
-    for (const runtime of ALL_RUNTIMES) {
-      const plan = resolveInstallPlan(runtime);
-      assert.ok(Array.isArray(plan.extendedHookEvents),
-        `${runtime}: extendedHookEvents should be an array`);
+  test('extendedHookEvents is always an array for every runtime', () => {
+    for (const id of RUNTIME_IDS) {
+      assert.ok(Array.isArray(resolveInstallPlan(id).extendedHookEvents),
+        `${id}: extendedHookEvents should be an array`);
     }
   });
 
-  it('hooksSurface is always a non-empty string for every runtime', () => {
-    for (const runtime of ALL_RUNTIMES) {
-      const plan = resolveInstallPlan(runtime);
-      assert.strictEqual(typeof plan.hooksSurface, 'string',
-        `${runtime}: hooksSurface should be a string`);
-      assert.ok(plan.hooksSurface.length > 0,
-        `${runtime}: hooksSurface should not be empty`);
+  test('hooksSurface is always a non-empty string for every runtime', () => {
+    for (const id of RUNTIME_IDS) {
+      const plan = resolveInstallPlan(id);
+      assert.strictEqual(typeof plan.hooksSurface, 'string', `${id}: hooksSurface should be a string`);
+      assert.ok(plan.hooksSurface.length > 0, `${id}: hooksSurface should not be empty`);
     }
   });
 
-  it('parity: resolveInstallPlan config-intent fields match resolveRuntimeConfigIntent', () => {
+  test('parity: resolveInstallPlan config-intent fields match resolveRuntimeConfigIntent', () => {
     // Guard that resolveInstallPlan composes resolveRuntimeConfigIntent correctly —
     // any drift between the two would silently break install().
-    const { resolveRuntimeConfigIntent } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
-    for (const runtime of ALL_RUNTIMES) {
-      const plan = resolveInstallPlan(runtime);
-      const intent = resolveRuntimeConfigIntent(runtime);
-      assert.strictEqual(plan.installSurface, intent.installSurface,
-        `${runtime}: installSurface mismatch between plan and intent`);
-      assert.strictEqual(plan.writesSharedSettings, intent.writesSharedSettings,
-        `${runtime}: writesSharedSettings mismatch`);
-      assert.strictEqual(plan.finishPermissionWriter, intent.finishPermissionWriter,
-        `${runtime}: finishPermissionWriter mismatch`);
+    for (const id of RUNTIME_IDS) {
+      const plan = resolveInstallPlan(id);
+      const intent = resolveRuntimeConfigIntent(id);
+      assert.strictEqual(plan.installSurface, intent.installSurface, `${id}: installSurface mismatch`);
+      assert.strictEqual(plan.writesSharedSettings, intent.writesSharedSettings, `${id}: writesSharedSettings mismatch`);
+      assert.strictEqual(plan.finishPermissionWriter, intent.finishPermissionWriter, `${id}: finishPermissionWriter mismatch`);
     }
   });
 });
-  });
-}

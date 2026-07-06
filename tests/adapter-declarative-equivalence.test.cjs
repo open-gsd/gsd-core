@@ -32,8 +32,8 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 
 const RUNTIMES = Object.keys(registry.runtimes);
 
-test('declarative adapter: kind === "declarative" + runtime echoed, for all 15 runtimes', () => {
-  assert.ok(RUNTIMES.length >= 15, `expected ≥15 runtimes in registry, got ${RUNTIMES.length}`);
+test('declarative adapter: kind === "declarative" + runtime echoed, for every registry runtime', () => {
+  assert.ok(RUNTIMES.length > 0, `expected at least one runtime in registry, got ${RUNTIMES.length}`);
   for (const r of RUNTIMES) {
     const adapter = createDeclarativeAdapter({ runtime: r });
     assert.strictEqual(adapter.kind, 'declarative', `${r}: kind must be 'declarative'`);

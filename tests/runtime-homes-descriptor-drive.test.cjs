@@ -101,6 +101,7 @@ const GOLDEN_DEFAULTS = {
   cline:       path.join(HOME, '.cline'),
   opencode:    path.join(HOME, '.config', 'opencode'),
   kilo:        path.join(HOME, '.config', 'kilo'),
+  zcode:       path.join(HOME, '.zcode'),
 };
 
 // ── GOLDEN DEFAULTS ────────────────────────────────────────────────────────────
@@ -839,7 +840,7 @@ describe('descriptor-driven global skills base', () => {
   });
 });
 
-// ── GOLDEN PARITY: getGlobalConfigDir via process.env for all 15 registry runtimes ──
+// ── GOLDEN PARITY: getGlobalConfigDir via process.env for every non-probe registry runtime ──
 
 describe('descriptor-driven parity: 13 non-probe registry runtimes × no-env-vars = golden defaults', () => {
   // This is the hardest assertion: it drives getGlobalConfigDir() (which calls
@@ -890,7 +891,7 @@ describe('descriptor-driven parity: 13 non-probe registry runtimes × no-env-var
 //   [agent-skills] WARNING: Global skill not found at "~/.cursor/skills/X/SKILL.md" — skipping
 //
 // Fix introduces gsd-core/bin/lib/runtime-homes.cjs with first-class
-// support for all 15 supported runtimes, including:
+// support for every supported runtime, including:
 //   - hermes: nested skills/gsd/<skillName>/ layout (#2841)
 //   - cline: rules-based, returns null (no skills directory)
 //   - CLAUDE_CONFIG_DIR env var for Claude (was missing)

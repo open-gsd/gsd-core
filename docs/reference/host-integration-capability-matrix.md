@@ -548,3 +548,40 @@ Sources consulted:
 Documentation gaps:
 - dispatch.subagentToolkit — docs show three built-in subagent types each with different tool subsets (coder=full, explore=read-only, plan=no shell/write); no single 'full' or 'read-only' value covers all types; maintainer should clarify the intended classification.
 - runtime — CLI core is Python; a Rust Wire implementation also exists; docs do not state a canonical plugin extension runtime.
+
+---
+
+## zcode
+
+> ZCode (Z.ai) is a desktop Agentic Development Environment for the GLM-5.2 model, distributed as an Electron app. It exposes a Claude-Code-shaped extensibility surface (per-user `~/.zcode/skills/<name>/SKILL.md`, slash commands, named subagents, native MCP, and a plugin system). All values below are sourced verbatim from the official ZCode docs.
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://zcode.z.ai/en/docs/plugin | "A single plugin can bundle several capabilities. ZCode detects which components a plugin includes from its directory layout" — plugins/skills/commands/agents are config/markdown files; no in-process programmatic extension API is documented. |
+| commandSurface | slash-file | https://zcode.z.ai/en/docs/commands | "Custom commands are stored as `.md` files under `~/.zcode/commands` ... invoke the command with `/command-name`" |
+| modelMode | passive | https://zcode.z.ai/en/docs/configuration | Models are connected by provider config (Z.ai/BigModel/OpenAI-compat/Anthropic-compat base URLs + API keys in Model Settings); no programmatic model request API is documented. |
+| hookBus | host | https://zcode.z.ai/en/docs/plugin | A plugin's bundled components include a "**Hook** — Automation hooks triggered on specific events" — the host fires the events a plugin subscribes to. |
+| stateIO | filesystem | https://zcode.z.ai/en/docs/skill | "User-level skills for ZCode Agent: `~/.zcode/skills/<skill-name>/SKILL.md`" — full local filesystem (desktop app). |
+| transport | mcp | https://zcode.z.ai/en/docs/mcp-services | "MCP (Model Context Protocol) connects external capabilities ... type as `stdio` (SSE and HTTP remote servers are also supported)" — native MCP. |
+| runtime | electron | https://zcode.z.ai/en/docs/install (download path `cdn-zcode.z.ai/zcode/electron/releases/3.2.5/ZCode-3.2.5-mac-arm64.dmg`) | ZCode is shipped as an Electron desktop application; the release artifact lives under the `electron/releases` path. |
+| dispatch.namedDispatch | true | https://zcode.z.ai/en/docs/subagents | "you can let the Agent pick the subagent automatically, or reference it with `@` in the chat box" — subagents are invoked by name via the Agent tool. |
+| dispatch.nested | undocumented | searched: https://zcode.z.ai/en/docs/subagents | The docs do not state whether a subagent can itself spawn further subagents. |
+| dispatch.maxDepth | undocumented | searched: https://zcode.z.ai/en/docs/subagents | No maximum nesting depth is documented. |
+| dispatch.background | false | https://zcode.z.ai/en/docs/subagents | "**Foreground execution.** Subagents run in the foreground ... Background execution is not enabled yet." |
+| dispatch.subagentToolkit | full | https://zcode.z.ai/en/docs/subagents | "**general-purpose** is the default built-in subagent ... It has access to all tools"; custom subagents default to "All permissions by default" (inherits every tool). |
+| dispatch.backgroundDispatch | false | https://zcode.z.ai/en/docs/subagents | "Background execution is not enabled yet" — background dispatch is therefore impossible. |
+
+Sources consulted:
+- https://zcode.z.ai/en/docs/skill
+- https://zcode.z.ai/en/docs/commands
+- https://zcode.z.ai/en/docs/subagents
+- https://zcode.z.ai/en/docs/mcp-services
+- https://zcode.z.ai/en/docs/plugin
+- https://zcode.z.ai/en/docs/configuration
+- https://zcode.z.ai/en/docs/install
+
+Documentation gaps:
+- dispatch.nested / dispatch.maxDepth — ZCode's subagent docs do not state whether subagents can spawn further subagents or any depth bound.
+- configHome — skills/commands/agents homes are documented (`~/.zcode/skills`, `~/.zcode/commands`, `~/.zcode/agents`); the exact settings filename under `~/.zcode` (where MCP server config is stored) is not fully documented at time of writing.
+- Maintenance note — ZCode is a young, fast-moving app (observed at v3.2.x); these axes may need revision as its on-disk config layout stabilizes. Because ZCode also natively imports skills/MCP from `~/.claude`, installing GSD to BOTH `claude` and `zcode` can surface duplicated skills inside ZCode; this overlap is expected and documented.
+

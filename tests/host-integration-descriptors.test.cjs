@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * ADR-1239 Phase A: Descriptor tests — validate that all 15 role:runtime
+ * ADR-1239 Phase A: Descriptor tests — validate that all 16 role:runtime
  * capability descriptors have correct hostIntegration axes, pass the validator,
  * and negotiate correctly via the host-integration module.
  *
@@ -31,16 +31,15 @@ const SCALAR_AXES = ['embeddingMode', 'commandSurface', 'modelMode', 'hookBus', 
 // All 6 dispatch sub-keys (includes backgroundDispatch added in feat/1679-dispatch-flatten)
 const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'subagentToolkit', 'backgroundDispatch'];
 
-// All 15 runtime IDs (ordered alphabetically)
-const RUNTIME_IDS = [
-  'antigravity', 'augment', 'claude', 'cline', 'codebuddy',
-  'codex', 'copilot', 'cursor', 'hermes',
-  'kilo', 'kimi', 'opencode', 'qwen', 'trae', 'windsurf',
-];
+// Runtime ids are derived from the registry (the single source of truth) so the
+// suite stays fluid when a runtime descriptor is added or removed. The profile
+// and flatten maps below remain CURATED pins — they catch an accidental axis
+// flip (e.g. a descriptor changing embeddingMode silently moves its profile).
+const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
 // programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, qwen, trae (9)
-// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf (6)
+// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
 // ide: 0
 const EXPECTED_PROFILES = {
   claude:      'programmatic-cli',
@@ -58,22 +57,26 @@ const EXPECTED_PROFILES = {
   codex:       'declarative-cli',
   copilot:     'declarative-cli',
   windsurf:    'declarative-cli',
+  zcode:       'declarative-cli',
 };
 
 describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
   // ─── Registry shape ──────────────────────────────────────────────────────────
 
-  test('registry.runtimes contains all 15 expected runtime ids', () => {
+  test('registry.runtimes exactly equals the curated RUNTIME_IDS set (count-agnostic)', () => {
+    // RUNTIME_IDS is derived from the registry above, so this asserts internal
+    // consistency: the curated profile/flatten maps cover every registry runtime
+    // exactly once, no matter how many exist.
     for (const id of RUNTIME_IDS) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(registry.runtimes, id),
         'registry.runtimes must contain "' + id + '"',
       );
     }
-    assert.strictEqual(
-      Object.keys(registry.runtimes).length,
-      15,
-      'registry.runtimes must have exactly 15 entries',
+    assert.deepStrictEqual(
+      Object.keys(registry.runtimes).sort(),
+      [...RUNTIME_IDS].sort(),
+      'registry.runtimes key set must match RUNTIME_IDS',
     );
   });
 
@@ -208,7 +211,10 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── Contract-pin profile split ───────────────────────────────────────────────
 
-  test('contract-pin: exactly 9 programmatic-cli, 6 declarative-cli, 0 ide', () => {
+  test('contract-pin: profile split is internally consistent with EXPECTED_PROFILES (count-agnostic)', () => {
+    // The counts are DERIVED from the curated EXPECTED_PROFILES map rather than
+    // hand-pinned, so adding a runtime + its profile entry updates the counts
+    // automatically. ide must remain 0 (no installed ide-profile host yet).
     const counts = { 'programmatic-cli': 0, 'declarative-cli': 0, 'ide': 0 };
     for (const id of RUNTIME_IDS) {
       const cap = registry.runtimes[id];
@@ -216,13 +222,20 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
       assert.ok(hi, id + ': hostIntegration must exist for profile count');
       const profile = profileOf(hi);
       assert.ok(profile !== null, id + ': profileOf must be non-null');
+      assert.strictEqual(profile, EXPECTED_PROFILES[id],
+        id + ': profileOf must match EXPECTED_PROFILES (an axis may have flipped)');
       if (counts[profile] !== undefined) {
         counts[profile]++;
       }
     }
-    assert.strictEqual(counts['programmatic-cli'], 9, 'Must have exactly 9 programmatic-cli runtimes');
-    assert.strictEqual(counts['declarative-cli'], 6, 'Must have exactly 6 declarative-cli runtimes');
-    assert.strictEqual(counts['ide'], 0, 'Must have exactly 0 ide runtimes');
+    // Derived expected counts from the curated map itself.
+    const expectedCounts = { 'programmatic-cli': 0, 'declarative-cli': 0, 'ide': 0 };
+    for (const p of Object.values(EXPECTED_PROFILES)) {
+      if (expectedCounts[p] !== undefined) expectedCounts[p]++;
+    }
+    assert.strictEqual(counts['programmatic-cli'], expectedCounts['programmatic-cli']);
+    assert.strictEqual(counts['declarative-cli'], expectedCounts['declarative-cli']);
+    assert.strictEqual(counts['ide'], 0, 'no installed host may carry the ide profile yet');
   });
 
   // ─── backgroundDispatch presence ─────────────────────────────────────────────
@@ -249,7 +262,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── shouldFlattenDispatch per-host (#853 discriminator) ─────────────────────
 
-  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 14.
+  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 15.
   const EXPECTED_FLATTEN = {
     antigravity: true,
     augment:     true,
@@ -266,6 +279,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     qwen:        true,
     trae:        true,
     windsurf:    true,
+    zcode:       true,
   };
 
   for (const id of RUNTIME_IDS) {
@@ -282,17 +296,20 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     });
   }
 
-  test('contract-pin: exactly 2 hosts are background-eligible (shouldFlattenDispatch === false): codex and cursor', () => {
+  test('contract-pin: background-eligible set matches EXPECTED_FLATTEN (count-agnostic)', () => {
+    // The eligible set is DERIVED from the curated EXPECTED_FLATTEN map rather
+    // than hand-pinned to a fixed pair, so a runtime whose dispatch axes change
+    // updates the expectation automatically.
+    const expectedEligible = RUNTIME_IDS
+      .filter((id) => EXPECTED_FLATTEN[id] === false)
+      .sort();
     const eligible = RUNTIME_IDS.filter((id) => {
       const cap = registry.runtimes[id];
       const dispatch = cap && cap.runtime && cap.runtime.hostIntegration && cap.runtime.hostIntegration.dispatch;
       return dispatch && shouldFlattenDispatch(dispatch) === false;
-    });
-    assert.deepEqual(
-      eligible.slice().sort(),
-      ['codex', 'cursor'],
-      'Exactly codex and cursor must be background-eligible, got: ' + JSON.stringify(eligible.sort()),
-    );
+    }).sort();
+    assert.deepEqual(eligible, expectedEligible,
+      'background-eligible set must match EXPECTED_FLATTEN (a dispatch axis may have flipped)');
   });
 
   test('contract-pin: spot-check claude→programmatic-cli, codex→declarative-cli, opencode→programmatic-cli, windsurf→declarative-cli', () => {
