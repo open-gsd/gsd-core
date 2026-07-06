@@ -2443,7 +2443,7 @@ const capabilities = {
   "zcode": {
     "id": "zcode",
     "role": "runtime",
-    "version": "1.7.0-rc.2",
+    "version": "1.7.0-rc.3",
     "title": "ZCode",
     "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
     "tier": "core",
@@ -4601,7 +4601,7 @@ const runtimes = {
   "zcode": {
     "id": "zcode",
     "role": "runtime",
-    "version": "1.7.0-rc.2",
+    "version": "1.7.0-rc.3",
     "title": "ZCode",
     "description": "ZCode (Z.ai) — desktop Agentic Development Environment for GLM-5.2; Claude-shaped nested skills at ~/.zcode/skills/<name>/SKILL.md, slash commands, named subagents, native MCP; declarative plugin surface; profile-marker install; tier-2 community support.",
     "tier": "core",
