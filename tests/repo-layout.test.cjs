@@ -20,22 +20,36 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
-test('repo-layout: root AGENTS.md is absent — no ad-hoc AI instruction file committed alongside CONTEXT.md', () => {
-  const agentsMdPath = path.join(ROOT, 'AGENTS.md');
+test('repo-layout: root AGENTS.md is not git-tracked — no ad-hoc AI instruction file committed alongside CONTEXT.md', () => {
+  // The installer legitimately writes AGENTS.md to process.cwd() when
+  // `gsd install copilot` runs inside a repo checkout (issue #786). The file
+  // may exist on disk — that's expected after a local install. What must NOT
+  // happen is committing it to git, where editors and AI tools would silently
+  // pick up the installer-generated stub instead of CONTEXT.md.
+  let tracked;
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', 'AGENTS.md'], {
+      cwd: ROOT, encoding: 'utf8', stdio: 'pipe',
+    });
+    tracked = true;
+  } catch {
+    tracked = false;
+  }
   assert.equal(
-    fs.existsSync(agentsMdPath),
+    tracked,
     false,
     [
-      'root AGENTS.md must not be committed.',
+      'root AGENTS.md must not be git-tracked.',
       'This file is written by `gsd install copilot` (bin/install.js, local Copilot path, issue #786)',
-      'when the installer runs inside a repo checkout.',
+      'when the installer runs inside a repo checkout — its presence on disk is fine,',
+      'but it must never be committed.',
       'The repository source of truth for architecture and contributor guidance is',
       'CONTEXT.md and docs/adr/ — not an installer-generated instruction stub.',
-      'Run `gsd uninstall copilot` to remove the artefact, then verify it is gitignored',
-      'before re-running the install in this checkout.',
+      'Run `git rm --cached AGENTS.md` to untrack it if accidentally staged.',
     ].join(' '),
   );
 });
