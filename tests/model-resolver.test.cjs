@@ -77,6 +77,42 @@ describe('resolveModelInternal', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'my-custom-model');
   });
 
+  // #2041 — a Claude full model ID in model_overrides must be mapped back to its
+  // Agent-tool alias on the claude runtime (the Agent tool takes aliases, not IDs).
+  test('model_overrides full Claude ID -> alias on claude runtime', () => {
+    writeConfig(tmpDir, {
+      model_overrides: {
+        'gsd-planner': 'claude-fable-5',
+        'gsd-executor': 'claude-sonnet-5',
+        'gsd-verifier': 'claude-opus-4-8',
+      },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'fable');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'sonnet');
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-verifier'), 'opus');
+  });
+
+  // #2041 — implicit claude (no runtime key) behaves the same as runtime:claude.
+  test('model_overrides full Claude ID -> alias with no runtime key (implicit claude)', () => {
+    writeConfig(tmpDir, { model_overrides: { 'gsd-executor': 'claude-opus-4-8' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'opus');
+  });
+
+  // #2041 — bare aliases already valid for the Agent tool pass through untouched.
+  test('model_overrides bare alias passes through unchanged on claude', () => {
+    writeConfig(tmpDir, { model_overrides: { 'gsd-executor': 'sonnet' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'sonnet');
+  });
+
+  // #2041 — non-claude runtimes must keep receiving full model IDs verbatim.
+  test('model_overrides full ID returned verbatim on non-claude runtime', () => {
+    writeConfig(tmpDir, {
+      runtime: 'codex',
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'claude-sonnet-5');
+  });
+
   test('model_profile=quality -> opus-class model for gsd-planner', () => {
     writeConfig(tmpDir, { model_profile: 'quality' });
     const model = resolveModelInternal(tmpDir, 'gsd-planner');
@@ -383,6 +419,21 @@ describe('resolveModelForTier', () => {
       },
     });
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-planner'), 'override-model');
+  });
+
+  // #2041 — the override short-circuit maps Claude full IDs to aliases here too,
+  // before any dynamic_routing/tier_models logic runs.
+  test('model_overrides full Claude ID -> alias, wins before dynamic routing', () => {
+    writeConfig(tmpDir, {
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+      dynamic_routing: {
+        enabled: true,
+        tier_models: { light: 'haiku', standard: 'sonnet', heavy: 'opus' },
+        escalate_on_failure: true,
+        max_escalations: 2,
+      },
+    });
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor'), 'sonnet');
   });
 
   test('dynamic_routing + tier_models + attempt=0 -> default tier model', () => {

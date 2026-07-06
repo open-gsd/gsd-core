@@ -87,6 +87,26 @@ const CLAUDE_POLICY_ID_TO_ALIAS: Record<string, string> = {
 };
 const CLAUDE_AGENT_ALIASES = new Set(['opus', 'sonnet', 'haiku', 'fable']);
 
+// #2041 — On the Claude runtime the Agent tool's `model=` accepts only tier
+// aliases (opus/sonnet/haiku/fable), not full model IDs. `model_overrides` is
+// documented (references/model-profiles.md) as accepting full IDs, so a Claude
+// full-ID override must be mapped back to its alias here — the same
+// reconciliation the model_policy path already does (#1133/#1144), which the
+// override (step 1) path previously skipped: the override was returned verbatim,
+// the Agent tool did not recognize the full ID, and the spawned subagent
+// silently inherited the parent session's model. Bare aliases (not in the
+// reverse map) and non-Claude-runtime values pass through untouched — non-Claude
+// runtimes take full IDs verbatim.
+function mapOverrideForRuntime(config: Record<string, unknown>, override: string): string {
+  const rt = config['runtime'] as string | null | undefined;
+  const onClaude = !rt || rt === 'claude';
+  if (onClaude) {
+    const alias = CLAUDE_POLICY_ID_TO_ALIAS[override];
+    if (alias) return alias;
+  }
+  return override;
+}
+
 // Dedupe stderr warnings so repeated agent resolutions don't spam (#1133).
 const _modelPolicyUnmappableWarned = new Set<string>();
 function warnModelPolicyUnmappable(agentType: string, policyModel: string, tier: string): void {
@@ -163,7 +183,7 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   const override = modelOverrides?.[agentType];
   if (override) {
-    return override;
+    return mapOverrideForRuntime(config, override);
   }
 
   // 2. Compute the tier
@@ -287,7 +307,7 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
 
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   const override = modelOverrides?.[agentType];
-  if (override) return override;
+  if (override) return mapOverrideForRuntime(config, override);
 
   if (config['model_policy'] && config['runtime'] && config['runtime'] !== 'claude') {
     return resolveModelInternal(cwd, agentType);
