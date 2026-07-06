@@ -544,6 +544,26 @@ describe('phases clear command', () => {
     assert.ok(fs.existsSync(p999a));
     assert.ok(fs.existsSync(p999b));
   });
+  test('phases clear --confirm resolves suffixed milestone version (e.g. v3.0-B) (#codex-review)', () => {
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-setup');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan\n');
+
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'MILESTONES.md'),
+      '# Milestones\n\n## v3.0-B Sub-milestone (Shipped: 2025-06-01)\n\n---\n\n',
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'milestones', 'v3.0-B-phases', '01-setup'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'milestones', 'v3.0-B-phases', '01-setup', '01-01-PLAN.md'),
+      '# Plan\n',
+    );
+
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(result.success, `should succeed with suffixed milestone: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).cleared, 1);
+    assert.ok(!fs.existsSync(p1), 'phase dir should be cleared');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

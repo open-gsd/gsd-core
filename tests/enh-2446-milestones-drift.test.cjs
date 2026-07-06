@@ -99,6 +99,24 @@ test('--backfill synthesizes missing MILESTONES.md entry from snapshot', () => {
   assert.ok(content.includes('Backfilled'), 'should note it was backfilled');
 });
 
+test('--backfill strips suffixed milestone version from title (e.g. v3.0-B) (#codex-review)', () => {
+  const dir = makeTempProject({
+    '.planning/PROJECT.md': '# P\n\n## What This Is\n\nX\n\n## Core Value\n\nY\n\n## Requirements\n\nZ\n',
+    '.planning/ROADMAP.md': '# Roadmap\n',
+    '.planning/STATE.md': '# State\n',
+    '.planning/config.json': '{}',
+    '.planning/milestones/v3.0-B-ROADMAP.md': '# Milestone v3.0-B Sub-milestone\n',
+  });
+
+  cmdValidateHealth(dir, { repair: true, backfill: true }, false);
+
+  const milestonesPath = path.join(dir, '.planning', 'MILESTONES.md');
+  assert.ok(fs.existsSync(milestonesPath), 'MILESTONES.md should be created');
+  const content = fs.readFileSync(milestonesPath, 'utf-8');
+  assert.ok(content.includes('## v3.0-B Sub-milestone (Backfilled:'), 'backfilled entry should have correct heading with name');
+  assert.ok(!content.includes('## v3.0-B -B Sub-milestone'), 'should not leave suffix fragment in name');
+});
+
 test('health.md mentions --backfill flag', () => {
   const healthMd = fs.readFileSync(
     path.join(__dirname, '../gsd-core/workflows/health.md'), 'utf-8'

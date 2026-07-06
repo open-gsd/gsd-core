@@ -1596,6 +1596,20 @@ describe('cmdInitNewMilestone', () => {
     assert.strictEqual(output.phase_dir_count, 0, 'backlog-only dir must not count');
     assert.strictEqual(output.phase_archive_path, '.planning/milestones/v1.0-phases');
   });
+  test('latest_completed_milestone resolves suffixed version (e.g. v3.0-B) (#codex-review)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'MILESTONES.md'),
+      '# Milestones\n\n## v3.0-B Sub-milestone (Shipped: 2026-03-01)\n\n---\n\n',
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('init new-milestone', tmpDir);
+    assert.ok(result.success, `init should succeed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.latest_completed_milestone, 'v3.0-B');
+    assert.strictEqual(output.latest_completed_milestone_name, 'Sub-milestone');
+    assert.strictEqual(output.phase_archive_path, '.planning/milestones/v3.0-B-phases');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

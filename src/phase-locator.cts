@@ -118,13 +118,13 @@ function findPhaseInternal(cwd: string, phase: unknown): PhaseSearchResult | nul
   try {
     const milestoneEntries = fs.readdirSync(milestonesDir, { withFileTypes: true });
     const archiveDirs = milestoneEntries
-      .filter(e => e.isDirectory() && /^v[\d.]+-phases$/.test(e.name))
+      .filter(e => e.isDirectory() && /^v\S+-phases$/.test(e.name))
       .map(e => e.name)
       .sort()
       .reverse();
 
     for (const archiveName of archiveDirs) {
-      const versionMatch = archiveName.match(/^(v[\d.]+)-phases$/);
+      const versionMatch = archiveName.match(/^(v\S+)-phases$/);
       const version = versionMatch![1];
       const archivePath = path.join(milestonesDir, archiveName);
       const relBase = '.planning/milestones/' + archiveName;
@@ -148,13 +148,13 @@ function getArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
   try {
     const milestoneEntries = fs.readdirSync(milestonesDir, { withFileTypes: true });
     const phaseDirs = milestoneEntries
-      .filter(e => e.isDirectory() && /^v[\d.]+-phases$/.test(e.name))
+      .filter(e => e.isDirectory() && /^v\S+-phases$/.test(e.name))
       .map(e => e.name)
       .sort()
       .reverse();
 
     for (const archiveName of phaseDirs) {
-      const versionMatch = archiveName.match(/^(v[\d.]+)-phases$/);
+      const versionMatch = archiveName.match(/^(v\S+)-phases$/);
       const version = versionMatch![1];
       const archivePath = path.join(milestonesDir, archiveName);
       const dirs = readSubdirectories(archivePath, true);

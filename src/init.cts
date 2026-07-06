@@ -90,7 +90,7 @@ function getLatestCompletedMilestone(cwd: string): { version: string; name: stri
   const content = platformReadSync(milestonesPath);
   if (content === null) return null;
 
-  const match = content.match(/^##\s+(v[\d.]+)\s+(.+?)\s+\(Shipped:/m);
+  const match = content.match(/^##\s+(v\S+)\s+(.+?)\s+\(Shipped:/m);
   if (!match) return null;
   return {
     version: match[1],

@@ -238,7 +238,7 @@ describe('findPhaseInternal: archived milestone phase lookup', () => {
 
   test('ignores non-matching milestone dir names (not vX.Y.Z-phases)', () => {
     tmpDir = createTempProject('gsd-pl-test-');
-    // Directory that doesn't match /^v[\d.]+-phases$/ should be skipped
+    // Directory that doesn't match /^v\S+-phases$/ should be skipped
     const badDir = path.join(tmpDir, '.planning', 'milestones', 'not-a-phases-dir');
     fs.mkdirSync(path.join(badDir, '01-phase'), { recursive: true });
     const result = phaseLocator.findPhaseInternal(tmpDir, '1');
@@ -310,13 +310,23 @@ describe('getArchivedPhaseDirs', () => {
     tmpDir = createTempProject('gsd-pl-test-');
     const milestonesDir = path.join(tmpDir, '.planning', 'milestones');
     fs.mkdirSync(milestonesDir, { recursive: true });
-    // These should all be ignored (do not match /^v[\d.]+-phases$/):
+    // These should all be ignored (do not match /^v\S+-phases$/):
     for (const bad of ['v1.0.0', 'phases', 'v1.0.0-phase', 'v-phases', '1.0.0-phases']) {
       fs.mkdirSync(path.join(milestonesDir, bad), { recursive: true });
       fs.mkdirSync(path.join(milestonesDir, bad, '01-sub'), { recursive: true });
     }
     const result = phaseLocator.getArchivedPhaseDirs(tmpDir);
     assert.deepEqual(result, []);
+  });
+
+  test('finds phase in suffixed milestone archive dir (e.g. v3.0-B-phases) (#codex-review)', () => {
+    tmpDir = createTempProject('gsd-pl-test-');
+    const archiveDir = path.join(tmpDir, '.planning', 'milestones', 'v3.0-B-phases');
+    fs.mkdirSync(path.join(archiveDir, '01-feature'), { recursive: true });
+    const result = phaseLocator.getArchivedPhaseDirs(tmpDir);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].name, '01-feature');
+    assert.strictEqual(result[0].milestone, 'v3.0-B');
   });
 
   test('returns empty array for empty milestone archive dirs', () => {

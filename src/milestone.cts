@@ -548,7 +548,7 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
     let version: string | null = null;
     if (fs.existsSync(milestonesPath)) {
       const content = fs.readFileSync(milestonesPath, 'utf-8');
-      const match = content.match(/^##\s+(v[\d.]+)\s+(.+?)\s+\(Shipped:/m);
+      const match = content.match(/^##\s+(v\S+)\s+(.+?)\s+\(Shipped:/m);
       if (match) version = match[1];
     }
     if (!version) {
