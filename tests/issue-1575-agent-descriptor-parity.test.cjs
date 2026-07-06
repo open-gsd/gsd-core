@@ -98,7 +98,35 @@ describe('#1575 — golden-parity: surface path matches install path for descrip
           installContent,
           `${runtime}/${fileName}: surface content must be byte-identical to install content`,
         );
-      }
+  }
+
+  test('cursor with non-undefined attribution: surface agents byte-identical to install agents (M2 coverage)', (t) => {
+    // M2 regression guard: verify parity holds when resolveAttribution returns
+    // a real Co-Authored-By value, not just undefined. Proves the agentCtx
+    // threading is correct for both paths.
+    const attrResolver = () => 'Test Bot <test@example.com>';
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1575-attr-'));
+    t.after(() => { try { cleanup(configDir); } catch { /* best-effort */ } });
+
+    installRuntimeArtifacts('cursor', configDir, 'global', profile, attrResolver);
+
+    const agentsDir = path.join(configDir, 'agents');
+    const installSnap = snapshotAgents(agentsDir);
+    assert.ok(installSnap.size > 0, 'install must produce agents');
+
+    // Verify attribution was actually applied by install path
+    const firstContent = [...installSnap.values()][0];
+    assert.ok(firstContent.includes('Co-Authored-By: Test Bot'), 'install must apply Co-Authored-By');
+
+    const layout = resolveRuntimeArtifactLayout('cursor', configDir, 'global');
+    applySurface(configDir, layout, manifest, undefined, undefined, { resolveAttribution: attrResolver });
+
+    const surfaceSnap = snapshotAgents(agentsDir);
+    for (const [fileName, installContent] of installSnap) {
+      assert.strictEqual(surfaceSnap.get(fileName), installContent,
+        `cursor/${fileName}: content must be byte-identical with attribution`);
+    }
+  });
     });
   }
 

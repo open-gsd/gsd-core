@@ -337,22 +337,27 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   const agentCtx: AgentCtx = { runtime: layout.runtime, pathPrefix: _pathPrefix, attribution: _attribution };
 
   const tempDirsToClean: string[] = [];
-  // #1575: When the surface has no state modifications (no .gsd-surface.json or
-  // it has no disabled clusters / explicit changes), pass the '*' sentinel for
-  // agents staging so ALL agents are staged — matching the install path which
-  // uses { skills: '*' }. Without this, agents not referenced by any skill's
-  // _calls_agents_ manifest entry would be silently dropped from the surface path.
+  // #1575: When the surface has no state modifications AND the base profile is
+  // 'full', pass the '*' sentinel for agents staging so ALL agents are staged —
+  // matching the install path which uses { skills: '*' }. Without this, agents
+  // not referenced by any skill's _calls_agents_ manifest entry would be silently
+  // dropped from the surface path. For tiered profiles (core/standard) or when
+  // surface mods exist, pass the resolved set so only the filtered subset stages.
   const _surfaceState = readSurface(layout.configDir);
+  const _baseProfileName = (_surfaceState && _surfaceState.baseProfile)
+    ? _surfaceState.baseProfile
+    : (readActiveProfile(layout.configDir) || 'full');
   const _hasSurfaceMods = !!_surfaceState && (
     _surfaceState.disabledClusters.length > 0 ||
     _surfaceState.explicitAdds.length > 0 ||
     _surfaceState.explicitRemoves.length > 0
   );
+  const _isUnmodifiedFull = _baseProfileName === 'full' && !_hasSurfaceMods;
   try {
     for (const kind of layout.kinds) {
       let staged: string;
       if (kind.kind === 'agents') {
-        const agentProfile = _hasSurfaceMods ? resolved : { ...resolved, skills: '*' as const };
+        const agentProfile = _isUnmodifiedFull ? { ...resolved, skills: '*' as const } : resolved;
         staged = kind.stage(agentProfile, agentCtx);
       } else {
         staged = kind.stage(resolved);
@@ -548,7 +553,7 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     //   - namespaced command dirs: the whole dir is GSD-owned
     const shouldPruneAgents = !(kindName === 'agents' && (!manifest || manifest.size === 0));
     if (shouldPruneAgents) {
-      for (const file of fs.readdirSync(destDir).filter(f => f.endsWith('.md') || (isCopilotAgents && f.endsWith('.agent.md')))) {
+      for (const file of fs.readdirSync(destDir).filter(f => f.endsWith('.md'))) {
         if (kindName === 'agents' && !file.startsWith('gsd-')) continue;
         if (kindName === 'commands' && !namespacedByDir && kindPrefix && !file.startsWith(kindPrefix)) continue;
         if (!stagedDestNames.has(file)) {
