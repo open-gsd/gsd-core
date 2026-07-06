@@ -244,7 +244,7 @@ function migrateLegacyDevPreferencesToSkill(targetDir: string, saved: Map<string
  *   - agents: write as-is (files already carry their own `gsd-` prefix).
  * For kimi-agents kind: recursively copy generated YAML/prompt files.
  */
-function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: string): void {
+function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: string, runtime?: string): void {
   // Defense-in-depth: verify destDir is within the install root even if the
   // upstream assertDestWithinConfigHome check was somehow bypassed. This guards
   // the actual write site against any future call-site drift.
@@ -302,8 +302,11 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
 
     let destName: string;
     if (kind.kind === 'agents') {
-      // Agent files already carry the gsd- prefix in the source dir
-      destName = entry.name;
+      // Agent files already carry the gsd- prefix in the source dir.
+      // #1575: copilot agents get .agent.md suffix (mirrors inline loop line ~9118).
+      destName = runtime === 'copilot'
+        ? entry.name.replace(/\.md$/, '.agent.md')
+        : entry.name;
     } else if (namespacedByDir) {
       // Directory is the namespace; don't double-prefix the filename
       destName = entry.name;
@@ -619,7 +622,7 @@ function installRuntimeArtifacts(
         }
 
         _removeGsdEntries(dest, kind);
-        _copyStaged(item.sourceDir, dest, kind, configDir);
+        _copyStaged(item.sourceDir, dest, kind, configDir, runtime);
 
         // Restore user-owned dirs after the prune+copy
         for (const [dirName, snap] of toPreserve) {
@@ -629,7 +632,7 @@ function installRuntimeArtifacts(
         // For non-skills kinds (commands, agents): no user content to preserve;
         // just prune stale gsd-* entries and copy new ones.
         _removeGsdEntries(dest, kind);
-        _copyStaged(item.sourceDir, dest, kind, configDir);
+        _copyStaged(item.sourceDir, dest, kind, configDir, runtime);
       }
     }
   } finally {

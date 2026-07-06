@@ -83,20 +83,26 @@ const GOLDEN = {
 
   // ── copilot ──────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // #1575: agents kind added (copilot cutover — .agent.md rename handled by _copyStaged).
   'copilot/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'copilot/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── antigravity ──────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // #1575: agents kind added (antigravity cutover — scope-aware converter).
   'antigravity/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'antigravity/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── windsurf ─────────────────────────────────────────────────────────────────

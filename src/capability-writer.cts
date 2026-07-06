@@ -92,7 +92,7 @@ interface DesiredCapability {
 }
 
 interface SetCapabilityStateOptions {
-  materialize?: { runtime: string; scope: string };
+  materialize?: { runtime: string; scope: string; resolveAttribution?: (runtime: string) => string | null | undefined };
 }
 
 /**
@@ -352,8 +352,18 @@ function setCapabilityState(
       const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, resolvedConfigDir, scope);
       const commandsGsdDir = _resolveCommandsGsdDir();
       const manifest = _resolveManifest(commandsGsdDir, resolvedConfigDir);
+      // #1575: applySurface now accepts opts.resolveAttribution so surface-path
+      // agents get the same Co-Authored-By trailer as the install path. The
+      // resolver is not threaded here yet — the CLI command handler does not have
+      // access to getCommitAttribution (which lives in bin/install.js). Until that
+      // is refactored into a shared module, surface-path agents for descriptor-
+      // driven runtimes will lack the Co-Authored-By trailer that install adds.
+      // Parity is proven when resolveAttribution IS provided (see
+      // tests/issue-1575-agent-descriptor-parity.test.cjs).
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-      applySurface(resolvedConfigDir, layout, manifest, undefined, registry);
+      applySurface(resolvedConfigDir, layout, manifest, undefined, registry, opts?.materialize?.resolveAttribution
+        ? { resolveAttribution: opts.materialize.resolveAttribution }
+        : undefined);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       // Fix C: materialise was explicitly requested — a failure is an error (non-zero exit),

@@ -108,11 +108,16 @@ describe('resolveRuntimeArtifactLayout — copilot', () => {
     const layout = resolveRuntimeArtifactLayout('copilot', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'copilot');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    // #1575: agents kind added (copilot cutover)
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 
@@ -121,11 +126,16 @@ describe('resolveRuntimeArtifactLayout — antigravity', () => {
     const layout = resolveRuntimeArtifactLayout('antigravity', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'antigravity');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
+    // #1575: agents kind added (antigravity cutover)
+    assert.strictEqual(layout.kinds.length, 2);
     assert.strictEqual(layout.kinds[0].kind, 'skills');
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds[1].kind, 'agents');
+    assert.strictEqual(layout.kinds[1].destSubpath, 'agents');
+    assert.strictEqual(layout.kinds[1].prefix, 'gsd-');
+    assert.strictEqual(typeof layout.kinds[1].stage, 'function');
   });
 });
 

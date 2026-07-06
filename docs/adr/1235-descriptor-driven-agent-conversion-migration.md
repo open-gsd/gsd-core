@@ -80,6 +80,14 @@ Cross-cutting steps (a, b, c) are applied by the descriptor pipeline for the app
 5. **Codex** — fold the `.toml` sidecar into the descriptor (or declare it an explicit companion artifact); the `.md` + `.toml` must both reach parity.
 6. **Delete the inline loop** once every runtime is green; remove the now-dead `isKimi`/minimal special-casing that referenced it.
 
+### Cutover progress (#1575)
+
+- **Step 0 (parity harness):** shipped in `tests/issue-1575-agent-descriptor-parity.test.cjs`. Asserts `applySurface` output is byte-identical to `installRuntimeArtifacts` for all descriptor-driven runtimes. Covers stale-cleanup convergence (pre-existing legacy `.agent.md` pruned correctly).
+- **Step 1 (trivial converters):** cursor, windsurf, augment, trae, codebuddy — install-path cutover complete (PR #1438); surface-path parity shipped (#1575: `applySurface` now builds `agentCtx` and passes it to `kind.stage()` for agents, applying path-rewrite + attribution + converter + normalize).
+- **Step 2 (scope-aware):** copilot and antigravity — cutover complete (#1575: declared `agents` kind in `capability.json`, added to `_DESCRIPTOR_AGENTS_RUNTIMES`, copilot `.agent.md` rename handled in both `_copyStaged` and `_syncGsdDir`).
+- **Cline:** deferred — rules-only local branch + local/global complication not handled by the descriptor-driven path.
+- **Remaining:** steps 3–6 (config-reading, no-converter, codex, inline-loop deletion).
+
 ## Risks / trade-offs
 
 - **Silent install regression** across ~15 runtimes is the dominant risk; the byte-for-byte golden gate is the mitigation, and per-runtime sequencing bounds the blast radius of any single step.
