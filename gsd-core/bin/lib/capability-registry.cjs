@@ -424,6 +424,93 @@ const capabilities = {
       }
     }
   },
+  "claude-orchestration": {
+    "id": "claude-orchestration",
+    "role": "feature",
+    "version": "1.7.0-rc.3",
+    "title": "Claude orchestration (Workflow backend)",
+    "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When the runtime exposes the Workflow tool and claude_orchestration.execution_backend resolves to 'workflow', execute-phase emits a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, resumeFromRunId wired to the phase run id, shared token budget) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, restoring the parallelism + plan-checker + verifier that the #853 backgrounded-agent nesting limitation forces inline on Claude Code. Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "claude"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "commands": [
+      {
+        "family": "claude-orchestration",
+        "module": "claude-orchestration-command-router.cjs",
+        "router": "routeClaudeOrchestrationCommand",
+        "subcommands": [
+          "detect-backend",
+          "emit-workflow"
+        ]
+      }
+    ],
+    "activationKey": "claude_orchestration.enabled",
+    "config": {
+      "claude_orchestration.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle for the Claude orchestration capability. Default-off + BETA: the Workflow-tool execution backend and the ultraplan plan-offload surface are inert unless this is true. When false, loop behaviour is byte-identical to a non-Claude runtime (inline/manual dispatch)."
+      },
+      "claude_orchestration.execution_backend": {
+        "type": "enum",
+        "values": [
+          "auto",
+          "workflow",
+          "inline"
+        ],
+        "default": "auto",
+        "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability."
+      },
+      "claude_orchestration.min_agent_sdk_version": {
+        "type": "string",
+        "default": "0.3.149",
+        "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
+      }
+    },
+    "steps": [],
+    "contributions": [
+      {
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "# Claude orchestration — Workflow execution backend (BETA)\n\n> Injected at `execute:wave:post` `into: executor` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## When this contribution is active\n\nThe Claude orchestration capability is **default-off and BETA**. It activates only\nwhen ALL of the following hold:\n\n1. `claude_orchestration.enabled` is `true` in `.planning/config.json`, AND\n2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent\n   SDK-specific), AND\n3. `claude_orchestration.execution_backend` resolves to `workflow` — either\n   explicitly, or via `auto` — **and** the Agent SDK version is\n   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK\n   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release\n   or older SDK never activates the preview backend).\n\nDetection is fail-closed: any miss degrades to **inline, manual, one-agent-per-\nmessage dispatch** — exactly today's behaviour. On a non-Claude runtime this\ncontribution is a no-op.\n\n## What the executor does when the Workflow backend is active\n\nInstead of the orchestrator fanning out one `Agent(subagent_type=gsd-executor,\nisolation=worktree, run_in_background=true)` per message (which on Claude Code\ncannot nest further subagents — #853 — and so degrades to sequential inline\nexecution), execute-phase **emits a generated Workflow script** and lets the main\nloop orchestrate it:\n\n- **waves → `parallel()` barriers** — each wave is one barrier; the next wave\n  waits for the previous to complete.\n- **plans → `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree' })`**\n  — the SAME executor agent and worktree isolation the inline path uses, so the\n  produced `SUMMARY.md` and commits are identical.\n- **`files_modified` overlap → separate sequential stages** — two plans that\n  touch the same file are placed in different stages within the wave (the same\n  overlap rule execute-phase already applies inline).\n- **`resumeFromRunId`** — wired to the phase run id, so an interrupted phase\n  resumes without re-running completed plans.\n- **`budget(tokens)`** — a shared token pool across the whole phase when the\n  orchestrator passes a `budgetTokens` value to `emitWorkflowScript` (it is a\n  function parameter, not a config key; the orchestrator decides the budget).\n\nThe emitter is a pure function exposed through the capability command surface:\n`gsd-tools claude-orchestration emit-workflow --waves <manifest.json> --run-id <id>\n[--phase-dir <dir>] [--budget <n>]` (or `require('gsd-core/bin/lib/claude-orchestration.cjs').emitWorkflowScript`\ndirectly). It maps the phase's wave/plan manifest to the Workflow script string\nand never invokes the Workflow tool itself; the orchestrator runs the emitted\nscript. Use `gsd-tools claude-orchestration detect-backend` to resolve whether\nthe Workflow backend should activate for the current runtime.\n\n## Fallback contract\n\nIf detection resolves to `inline` (tool absent, SDK too old, runtime not Claude,\nor the capability disabled), execute-phase MUST proceed with the standard inline\nwave dispatch. The executor MUST NOT assume parallelism, a shared budget, or\nresume-from-run-id semantics in that mode.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "claude_orchestration.enabled",
+        "onError": "skip"
+      },
+      {
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "# Claude orchestration — ultraplan plan-offload ownership (BETA)\n\n> Injected at `plan:post` `into: planner` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## Ownership declaration\n\nThe `gsd-ultraplan-phase` plan-offload surface (offloading GSD's plan phase to\nClaude Code's ultraplan cloud) is **owned by this capability**, not by a\nstandalone BETA skill. Both surfaces share one runtime gate\n(`claude_orchestration.enabled`), one BETA boundary, and one Claude-Code-only\ndetection seam.\n\n## When the planner should consider ultraplan offload\n\nWhen this contribution is active (capability enabled, Claude Code runtime), the\nplanner MAY offer the `/gsd-ultraplan-phase` path as an alternative to local\n`/gsd-plan-phase` for phases where cloud-assisted planning adds value. This is\nadvisory, not mandatory — the stable local planner remains the default.\n\n## Fallback contract\n\nIf the capability is disabled, or the runtime is not Claude Code, ultraplan\noffload is **not surfaced** and the planner proceeds with the standard local\n`/gsd-plan-phase`. The `gsd-ultraplan-phase` command itself remains installed\n(its own runtime gate already no-ops on non-Claude runtimes); this contribution\nonly governs whether the capability manifest advertises it as part of the\norchestration surface.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "claude_orchestration.enabled",
+        "onError": "skip"
+      }
+    ],
+    "gates": []
+  },
   "cline": {
     "id": "cline",
     "role": "runtime",
@@ -2846,6 +2933,21 @@ const byLoopPoint = {
     ],
     "contributions": [
       {
+        "capId": "claude-orchestration",
+        "point": "plan:post",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/plan-post.md",
+          "inline": "# Claude orchestration — ultraplan plan-offload ownership (BETA)\n\n> Injected at `plan:post` `into: planner` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## Ownership declaration\n\nThe `gsd-ultraplan-phase` plan-offload surface (offloading GSD's plan phase to\nClaude Code's ultraplan cloud) is **owned by this capability**, not by a\nstandalone BETA skill. Both surfaces share one runtime gate\n(`claude_orchestration.enabled`), one BETA boundary, and one Claude-Code-only\ndetection seam.\n\n## When the planner should consider ultraplan offload\n\nWhen this contribution is active (capability enabled, Claude Code runtime), the\nplanner MAY offer the `/gsd-ultraplan-phase` path as an alternative to local\n`/gsd-plan-phase` for phases where cloud-assisted planning adds value. This is\nadvisory, not mandatory — the stable local planner remains the default.\n\n## Fallback contract\n\nIf the capability is disabled, or the runtime is not Claude Code, ultraplan\noffload is **not surfaced** and the planner proceeds with the standard local\n`/gsd-plan-phase`. The `gsd-ultraplan-phase` command itself remains installed\n(its own runtime gate already no-ops on non-Claude runtimes); this contribution\nonly governs whether the capability manifest advertises it as part of the\norchestration surface.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "claude_orchestration.enabled",
+        "onError": "skip"
+      },
+      {
         "capId": "external-job",
         "point": "plan:post",
         "into": "planner",
@@ -2885,6 +2987,21 @@ const byLoopPoint = {
   "execute:wave:post": {
     "steps": [],
     "contributions": [
+      {
+        "capId": "claude-orchestration",
+        "point": "execute:wave:post",
+        "into": "executor",
+        "fragment": {
+          "path": "fragments/execute-wave-post.md",
+          "inline": "# Claude orchestration — Workflow execution backend (BETA)\n\n> Injected at `execute:wave:post` `into: executor` only when\n> `claude_orchestration.enabled` is true. Default-off; `onError: skip`.\n\n## When this contribution is active\n\nThe Claude orchestration capability is **default-off and BETA**. It activates only\nwhen ALL of the following hold:\n\n1. `claude_orchestration.enabled` is `true` in `.planning/config.json`, AND\n2. the active runtime is **Claude Code** (the Workflow tool is Claude / Agent\n   SDK-specific), AND\n3. `claude_orchestration.execution_backend` resolves to `workflow` — either\n   explicitly, or via `auto` — **and** the Agent SDK version is\n   `>= claude_orchestration.min_agent_sdk_version` (default `0.3.149`). The SDK\n   floor applies in both `auto` and `workflow` modes (fail-closed: a pre-release\n   or older SDK never activates the preview backend).\n\nDetection is fail-closed: any miss degrades to **inline, manual, one-agent-per-\nmessage dispatch** — exactly today's behaviour. On a non-Claude runtime this\ncontribution is a no-op.\n\n## What the executor does when the Workflow backend is active\n\nInstead of the orchestrator fanning out one `Agent(subagent_type=gsd-executor,\nisolation=worktree, run_in_background=true)` per message (which on Claude Code\ncannot nest further subagents — #853 — and so degrades to sequential inline\nexecution), execute-phase **emits a generated Workflow script** and lets the main\nloop orchestrate it:\n\n- **waves → `parallel()` barriers** — each wave is one barrier; the next wave\n  waits for the previous to complete.\n- **plans → `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree' })`**\n  — the SAME executor agent and worktree isolation the inline path uses, so the\n  produced `SUMMARY.md` and commits are identical.\n- **`files_modified` overlap → separate sequential stages** — two plans that\n  touch the same file are placed in different stages within the wave (the same\n  overlap rule execute-phase already applies inline).\n- **`resumeFromRunId`** — wired to the phase run id, so an interrupted phase\n  resumes without re-running completed plans.\n- **`budget(tokens)`** — a shared token pool across the whole phase when the\n  orchestrator passes a `budgetTokens` value to `emitWorkflowScript` (it is a\n  function parameter, not a config key; the orchestrator decides the budget).\n\nThe emitter is a pure function exposed through the capability command surface:\n`gsd-tools claude-orchestration emit-workflow --waves <manifest.json> --run-id <id>\n[--phase-dir <dir>] [--budget <n>]` (or `require('gsd-core/bin/lib/claude-orchestration.cjs').emitWorkflowScript`\ndirectly). It maps the phase's wave/plan manifest to the Workflow script string\nand never invokes the Workflow tool itself; the orchestrator runs the emitted\nscript. Use `gsd-tools claude-orchestration detect-backend` to resolve whether\nthe Workflow backend should activate for the current runtime.\n\n## Fallback contract\n\nIf detection resolves to `inline` (tool absent, SDK too old, runtime not Claude,\nor the capability disabled), execute-phase MUST proceed with the standard inline\nwave dispatch. The executor MUST NOT assume parallelism, a shared budget, or\nresume-from-run-id semantics in that mode.\n"
+        },
+        "produces": [],
+        "consumes": [
+          "PLAN.md"
+        ],
+        "when": "claude_orchestration.enabled",
+        "onError": "skip"
+      },
       {
         "capId": "external-job",
         "point": "execute:wave:post",
@@ -3095,6 +3212,9 @@ const byLoopPoint = {
 const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.assumption_delta": "assumption-delta",
+  "claude_orchestration.enabled": "claude-orchestration",
+  "claude_orchestration.execution_backend": "claude-orchestration",
+  "claude_orchestration.min_agent_sdk_version": "claude-orchestration",
   "workflow.code_review": "code-review",
   "workflow.code_review_depth": "code-review",
   "workflow.drift_threshold": "drift",
@@ -3145,6 +3265,29 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Enable the assumption-delta architecture checkpoint during planning. When a pluralization/optional/chosen signal is detected in the phase scope, the planner is prompted to re-ask whether the primary key / identity model still names the right thing. Advisory (non-blocking)."
+  },
+  "claude_orchestration.enabled": {
+    "owner": "claude-orchestration",
+    "type": "boolean",
+    "default": false,
+    "description": "Master toggle for the Claude orchestration capability. Default-off + BETA: the Workflow-tool execution backend and the ultraplan plan-offload surface are inert unless this is true. When false, loop behaviour is byte-identical to a non-Claude runtime (inline/manual dispatch)."
+  },
+  "claude_orchestration.execution_backend": {
+    "owner": "claude-orchestration",
+    "type": "enum",
+    "default": "auto",
+    "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability.",
+    "values": [
+      "auto",
+      "workflow",
+      "inline"
+    ]
+  },
+  "claude_orchestration.min_agent_sdk_version": {
+    "owner": "claude-orchestration",
+    "type": "string",
+    "default": "0.3.149",
+    "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
   },
   "workflow.code_review": {
     "owner": "code-review",
@@ -4777,6 +4920,11 @@ const commandFamilies = {
     "module": "audit-command-router.cjs",
     "router": "routeAuditUat"
   },
+  "claude-orchestration": {
+    "capId": "claude-orchestration",
+    "module": "claude-orchestration-command-router.cjs",
+    "router": "routeClaudeOrchestrationCommand"
+  },
   "extract-messages": {
     "capId": "profile-pipeline",
     "module": "profile-pipeline-command-router.cjs",
@@ -4916,6 +5064,7 @@ const _requiresGraph = {
   "audit": [],
   "augment": [],
   "claude": [],
+  "claude-orchestration": [],
   "cline": [],
   "code-review": [],
   "codebuddy": [],
