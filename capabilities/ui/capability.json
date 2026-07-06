@@ -1,7 +1,7 @@
 {
   "id": "ui",
   "role": "feature",
-  "version": "1.7.0-rc.2",
+  "version": "1.7.0-rc.3",
   "title": "UI design contracts",
   "description": "UI-SPEC design contract + retrospective UI audit for frontend phases.",
   "tier": "full",
