@@ -217,6 +217,13 @@ describe('extractPhaseToken', () => {
   test('stops at first non-numeric-starting segment', () => {
     assert.strictEqual(phaseId.extractPhaseToken('01-02-name-03'), '01-02');
   });
+
+  test('does not treat a single-digit slug word as part of the phase token', () => {
+    assert.strictEqual(
+      phaseId.extractPhaseToken('46-6-rs-pipeline-orchestrator'),
+      '46'
+    );
+  });
 });
 
 // ─── phaseTokenMatches ────────────────────────────────────────────────────────
