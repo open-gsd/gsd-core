@@ -1734,7 +1734,7 @@ function cmdValidateHealth(
     if (fs.existsSync(milestonesArchiveDir)) {
       const archiveFiles = fs.readdirSync(milestonesArchiveDir);
       const archivedVersions = archiveFiles
-        .map((f) => f.match(/^(v\d+\.\d+(?:\.\d+)?)-ROADMAP\.md$/))
+        .map((f) => f.match(/^(v\S+)-ROADMAP\.md$/))
         .filter(Boolean)
         .map((m) => m![1]);
 
@@ -1938,7 +1938,7 @@ function cmdValidateHealth(
                 const snapshot = safeReadFile(snapshotPath);
                 const titleMatch = snapshot && snapshot.match(/^#\s+(.+)$/m);
                 const milestoneName = titleMatch
-                  ? titleMatch[1].replace(/^Milestone\s+/i, '').replace(/^v[\d.]+\s*/, '').trim()
+                  ? titleMatch[1].replace(/^Milestone\s+/i, '').replace(/^v\S+\s*/, '').trim()
                   : ver;
                 const entry =
                   `## ${ver}${milestoneName && milestoneName !== ver ? ` ${milestoneName}` : ''} (Backfilled: ${today})\n\n**Note:** Synthesized from archive snapshot by \`${slash('health')} --backfill\`. Original completion date unknown.\n\n---\n\n`;

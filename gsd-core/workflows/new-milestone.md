@@ -206,7 +206,10 @@ SDK handler above — do not hand-edit STATE.md here.
 
 Delete MILESTONE-CONTEXT.md if exists (consumed).
 
-Clear leftover phase directories from the previous milestone:
+Clear leftover phase directories from the previous milestone only when their
+contents already match the latest shipped milestone archive. This command is
+fail-closed: if archival was skipped or the archive differs, it stops instead of
+deleting phase traces. Do not pass `--force` from this workflow.
 
 ```bash
 gsd_run query phases.clear --confirm
@@ -247,14 +250,11 @@ Skip the parallel research spawn step and generate the roadmap inline.
 If `--reset-phase-numbers` is active:
 
 1. Set starting phase number to `1` for the upcoming roadmap.
-2. If `phase_dir_count > 0`, archive the old phase directories before roadmapping so new `01-*` / `02-*` directories cannot collide with stale milestone directories.
+2. If `phase_dir_count > 0` after Step 6, archive the old phase directories before roadmapping so new `01-*` / `02-*` directories cannot collide with stale milestone directories.
 
 If `phase_dir_count > 0` and `phase_archive_path` is available:
 
-```bash
-mkdir -p "${phase_archive_path}"
-find .planning/phases -mindepth 1 -maxdepth 1 -type d -exec mv {} "${phase_archive_path}/" \;
-```
+- Stop and tell the user to run `/gsd:complete-milestone <version>` again after ensuring the implementation passes `--archive-phases`, or to manually inspect and invoke the clear command with `--confirm` plus an explicit `--force` override only if they intentionally want deletion. This workflow must not pass `--force`. Do not force-clear or move backlog dirs.
 
 Then verify `.planning/phases/` no longer contains old milestone directories before continuing.
 

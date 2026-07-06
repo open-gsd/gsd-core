@@ -202,7 +202,18 @@ function phaseTokenMatches(dirName: string, normalized: string): boolean {
   return false;
 }
 
+/**
+ * Determine whether a value represents a backlog phase token (999.x).
+ */
+function isBacklogPhaseToken(value: unknown): boolean {
+  const token = extractPhaseToken(String(value));
+  const stripped = token.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const normalized = normalizePhaseName(stripped);
+  return /^999(?:\.|$)/.test(normalized);
+}
+
 export = {
+  isBacklogPhaseToken,
   escapeRegex,
   normalizePhaseName,
   getMilestoneFromPhaseId,

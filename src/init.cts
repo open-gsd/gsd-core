@@ -58,7 +58,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { normalizePhaseName, phaseTokenMatches } = phaseId;
+const { normalizePhaseName, phaseTokenMatches, isBacklogPhaseToken } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -90,7 +90,7 @@ function getLatestCompletedMilestone(cwd: string): { version: string; name: stri
   const content = platformReadSync(milestonesPath);
   if (content === null) return null;
 
-  const match = content.match(/^##\s+(v[\d.]+)\s+(.+?)\s+\(Shipped:/m);
+  const match = content.match(/^##\s+(v\S+)\s+(.+?)\s+\(Shipped:/m);
   if (!match) return null;
   return {
     version: match[1],
@@ -651,7 +651,7 @@ function cmdInitNewMilestone(cwd: string, raw: boolean): void {
       const isDirInMilestone = getMilestonePhaseFilter(cwd);
       phaseDirCount = fs
         .readdirSync(phasesDir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && isDirInMilestone(entry.name))
+        .filter((entry) => entry.isDirectory() && !isBacklogPhaseToken(entry.name) && isDirInMilestone(entry.name))
         .length;
     }
   } catch {
@@ -1414,7 +1414,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   const recommendedActions: Record<string, unknown>[] = [];
   for (const phase of phases) {
     if (phase['disk_status'] === 'complete') continue;
-    if (/^999(?:\.|$)/.test(phase['number'] as string)) continue;
+    if (isBacklogPhaseToken(phase['number'])) continue;
 
     if (phase['disk_status'] === 'planned' && phase['deps_satisfied']) {
       recommendedActions.push({
@@ -1474,7 +1474,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     return true;
   });
 
-  const nonBacklogPhases = phases.filter((p) => !/^999(?:\.|$)/.test(p['number'] as string));
+  const nonBacklogPhases = phases.filter((p) => !isBacklogPhaseToken(p['number']));
   const completedCount = nonBacklogPhases.filter((p) => p['disk_status'] === 'complete').length;
 
   const sanitizeFlags = (rawVal: unknown): string => {

@@ -11,10 +11,10 @@ requires: [audit-milestone, discuss-phase, execute-phase, new-milestone, phase, 
 ---
 
 <objective>
-Mark milestone {{version}} complete, archive to milestones/, and update ROADMAP.md and REQUIREMENTS.md.
+Mark milestone {{version}} complete, archive to milestones/ (including matching phase directories when requested), and update ROADMAP.md and REQUIREMENTS.md.
 
-Purpose: Create historical record of shipped version, archive milestone artifacts (roadmap + requirements), and prepare for next milestone.
-Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tagged.
+Purpose: Create historical record of shipped version, archive milestone artifacts (roadmap + requirements + phase directories), and prepare for next milestone.
+Output: Milestone archived (roadmap + requirements + phase directories), PROJECT.md evolved, git tagged.
 </objective>
 
 <execution_context>
@@ -90,6 +90,7 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 4. **Archive milestone:**
 
    - Create `.planning/milestones/v{{version}}-ROADMAP.md`
+   - Create `.planning/milestones/v{{version}}-phases/` with matching phase directories (when `--archive-phases` is passed)
    - Extract full phase details from ROADMAP.md
    - Fill milestone-archive.md template
    - Update ROADMAP.md to one-line summary with link
@@ -100,7 +101,6 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
    - Mark all v1 requirements as complete (checkboxes checked)
    - Note requirement outcomes (validated, adjusted, dropped)
    - Delete `.planning/REQUIREMENTS.md` (fresh one created for next milestone)
-
 6. **Update PROJECT.md:**
 
    - Add "Current State" section with shipped version
@@ -120,9 +120,9 @@ Output: Milestone archived (roadmap + requirements), PROJECT.md evolved, git tag
 </process>
 
 <success_criteria>
-
 - Milestone archived to `.planning/milestones/v{{version}}-ROADMAP.md`
 - Requirements archived to `.planning/milestones/v{{version}}-REQUIREMENTS.md`
+- Phase directories archived to `.planning/milestones/v{{version}}-phases/` (when requested)
 - `.planning/REQUIREMENTS.md` deleted (fresh for next milestone)
 - ROADMAP.md collapsed to one-line entry
 - PROJECT.md updated with current state
