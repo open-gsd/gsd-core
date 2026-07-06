@@ -1,0 +1,85 @@
+{
+  "id": "claude-orchestration",
+  "role": "feature",
+  "version": "1.7.0-rc.3",
+  "title": "Claude orchestration (Workflow backend)",
+  "description": "Default-off, BETA, claude-only capability that adopts Claude Code's Workflow tool (the engine behind /effort ultracode) as an optional parallel-execution backend for the GSD loop. When the runtime exposes the Workflow tool and claude_orchestration.execution_backend resolves to 'workflow', execute-phase emits a generated Workflow script (waves -> parallel() barriers, plans -> agent({ agentType: 'gsd-executor', isolation: 'worktree' }), files_modified overlap -> separate sequential stages, resumeFromRunId wired to the phase run id, shared token budget) that composes the SAME gsd-executor agent and worktree isolation the inline path uses, restoring the wave parallelism the #853 backgrounded-agent nesting limitation forces inline on Claude Code. (The plan-checker and verifier remain inline until separately wired — this capability delivers the parallel-execution backend, not those gates.) Also folds the ultraplan plan-offload under one runtime gate (plan:* surface). On any runtime lacking the Workflow tool, or when the capability is disabled, behaviour is byte-identical to today (inline/manual dispatch). Detection + emission live in gsd-core/bin/lib/claude-orchestration.cjs (pure, fail-closed). Mirrors the existing gsd-ultraplan-phase BETA-isolation posture.",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.7.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "claude"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "commands": [
+    {
+      "family": "claude-orchestration",
+      "module": "claude-orchestration-command-router.cjs",
+      "router": "routeClaudeOrchestrationCommand",
+      "subcommands": [
+        "detect-backend",
+        "emit-workflow"
+      ]
+    }
+  ],
+  "activationKey": "claude_orchestration.enabled",
+  "config": {
+    "claude_orchestration.enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Master toggle for the Claude orchestration capability. Default-off + BETA: the Workflow-tool execution backend and the ultraplan plan-offload surface are inert unless this is true. When false, loop behaviour is byte-identical to a non-Claude runtime (inline/manual dispatch)."
+    },
+    "claude_orchestration.execution_backend": {
+      "type": "enum",
+      "values": [
+        "auto",
+        "workflow",
+        "inline"
+      ],
+      "default": "auto",
+      "description": "Which execute-phase dispatch backend to use when the capability is enabled. 'auto' (default) activates the Workflow backend only when the runtime is Claude AND the Workflow tool is detected AND the Agent SDK meets claude_orchestration.min_agent_sdk_version; otherwise it falls back to inline. 'workflow' forces the Workflow backend when the tool is present AND the Agent SDK meets the floor (still fails closed to inline if the tool is absent or the SDK is too old — the floor applies in both modes). 'inline' forces today's manual one-agent-per-message dispatch regardless of tool availability."
+    },
+    "claude_orchestration.min_agent_sdk_version": {
+      "type": "string",
+      "default": "0.3.149",
+      "description": "Minimum Agent SDK version required to activate the Workflow backend under execution_backend='auto'. Defaults to 0.3.149 (the release that introduced the Workflow tool). Raise to pin a higher floor; the detection seam fails closed to inline for any runtime reporting an older or unknown version."
+    }
+  },
+  "steps": [],
+  "contributions": [
+    {
+      "point": "execute:wave:post",
+      "into": "executor",
+      "fragment": {
+        "path": "fragments/execute-wave-post.md"
+      },
+      "produces": [],
+      "consumes": [
+        "PLAN.md"
+      ],
+      "when": "claude_orchestration.enabled",
+      "onError": "skip"
+    },
+    {
+      "point": "plan:post",
+      "into": "planner",
+      "fragment": {
+        "path": "fragments/plan-post.md"
+      },
+      "produces": [],
+      "consumes": [
+        "CONTEXT.md"
+      ],
+      "when": "claude_orchestration.enabled",
+      "onError": "skip"
+    }
+  ],
+  "gates": []
+}

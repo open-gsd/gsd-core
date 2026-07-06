@@ -86,3 +86,39 @@ These existing multi-model features (`execute-phase` `cross_ai_delegation`, the 
 - **Neutral:** no effect on non-Claude runtimes by construction; no behavior change until explicitly enabled.
 
 > **Governance note:** This ADR is a *draft design* accompanying feature request #1143. Per CONTRIBUTING, it is PR'd only after the issue receives `approved-feature`, and the capability is implemented only after #857 is released.
+
+## Amendment (2026-07-06): BETA v1 implementation landed
+
+#857 is **released** (CLOSED); the capability infrastructure is live. The BETA v1
+of this capability has shipped as `capabilities/claude-orchestration/` with the
+scope agreed in the Decision, refined to the lowest-risk first slice:
+
+- **Detection + emission** live as pure, fail-closed functions in
+  `gsd-core/bin/lib/claude-orchestration.cjs` (source `src/claude-orchestration.cts`):
+  `detectWorkflowBackend` (gate ladder: enabled → Claude runtime →
+  execution_backend ≠ inline → host dispatch nested+background → valid Agent SDK
+  → SDK ≥ `claude_orchestration.min_agent_sdk_version`, default `0.3.149`) and
+  `emitWorkflowScript` (waves → `parallel()` stage barriers, plans →
+  `agent({ agentType: 'gsd-executor', isolation: 'worktree' })`, `files_modified`
+  overlap → separate sequential stages, `resumeFromRunId` wired to the phase run
+  id, shared `budget(tokens)` pool). All interpolated values are validated as
+  script-safe identifiers or JSON-quoted (review Finding 1).
+- **Loop registration** is at the two **wired** points the loop host contract
+  actually renders: `execute:wave:post into:executor` (Workflow-backend guidance)
+  and `plan:post into:planner` (ultraplan ownership declaration). `execute:wave:pre`
+  and `execute:pre` are declared in the contract but **not wired** today, so the
+  capability registers at `wave:post` (the constraint `external-job` also documents).
+- **Config** is federated (`claude_orchestration.enabled` default false /
+  `activationKey`, `execution_backend` enum `auto|workflow|inline` default `auto`,
+  `min_agent_sdk_version`); the keys live only in the registry, so uninstall
+  removes them cleanly.
+- **ultraplan ownership** is declared in the manifest (`plan:post` contribution);
+  full install-profile migration of the `gsd-ultraplan-phase` skill into the
+  capability's `skills[]` is deferred to a follow-up (it triggers the CLUSTERS /
+  profile membership gate and is a heavier, install-machinery change).
+
+Status remains **Proposed** — the BETA is default-off and the end-to-end Workflow
+execution path (actual orchestration via the Workflow tool inside Claude Code) is
+not verifiable outside that runtime. The capability is structurally complete and
+tested at the contract level; flipping to Accepted follows maintainer sign-off on
+the E2E behaviour once exercised on Claude Code with the Workflow tool present.
