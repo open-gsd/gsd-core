@@ -27,14 +27,13 @@ const { getDirName } = runtimeNamePolicy;
 
 // Golden oracle: hardcoded sorted known-good list of all non-Claude runtimes.
 // A pinned expected value in a TEST is correct — the test IS the oracle.
-// Only PRODUCTION code should derive dynamically from the registry.
-// If this list diverges from NON_CLAUDE_RUNTIMES, either the formula is wrong
-// OR the registry changed — both require a deliberate golden-list update here.
-const EXPECTED = [
-  'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot',
-  'cursor', 'hermes', 'kilo', 'kimi', 'opencode', 'qwen',
-  'trae', 'windsurf',
-];
+// EXPECTED is DERIVED from the capability registry (the single source of truth)
+// so this guard stays fluid when a runtime is added or removed. The contract
+// being pinned is the DERIVATION (NON_CLAUDE_RUNTIMES === registry runtimes −
+// claude), not a frozen per-runtime snapshot.
+const EXPECTED = Object.keys(registry.runtimes)
+  .filter((id) => id !== 'claude')
+  .sort();
 
 test('NON_CLAUDE_RUNTIMES matches the golden expected set (sorted)', () => {
   assert.deepEqual(

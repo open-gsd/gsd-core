@@ -244,6 +244,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   codebuddy: "'.codebuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
+  zcode:     "'.zcode'",
 };
 
 /**
