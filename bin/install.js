@@ -8595,19 +8595,22 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // handles per-runtime path + branding rewrites, including Qwen/Hermes.
   // Cline global: emit skills to ~/.cline/skills/ (Cline >= v3.48.0 — #782).
   // Descriptor-driven (ADR-1016 / ADR-1239): a runtime takes the layout-driven
-  // skills-install path when its scoped artifactLayout declares a skills kind.
+  // installRuntimeArtifacts path when its scoped artifactLayout is non-empty
+  // (it declares any skills/commands/agents/kimi-agents kind for this scope).
   // This replaces the prior hardcoded `isCodex || isCopilot || ...` roster so a
-  // newly-added runtime with a skills layout installs without a per-runtime
-  // branch — the add-a-host tax ADR-1239 Phase B retires. opencode/kilo keep
-  // their specialized combined commands+skills path (copyFlattenedCommands +
-  // installOpencodeFamilySkills) below.
+  // newly-added runtime with an artifact layout installs without a per-runtime
+  // branch — the add-a-host tax ADR-1239 Phase B retires. Three legacy
+  // special-cased paths are preserved: opencode/kilo (combined commands+skills
+  // via copyFlattenedCommands + installOpencodeFamilySkills) and claude-local
+  // (copyWithPathReplacement + stale-skills cleanup).
   const _isSkillsRuntime = (() => {
-    if (isOpencode || isKilo) return false;
+    if (isOpencode || isKilo) return false;               // specialized combined path
+    if (runtime === 'claude' && !isGlobal) return false;  // claude-local legacy path
     const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
     const layout = cap && cap.runtime && cap.runtime.artifactLayout;
     if (!layout) return false;
     const scopeLayout = isGlobal ? layout.global : layout.local;
-    return Array.isArray(scopeLayout) && scopeLayout.some((k) => k && k.kind === 'skills');
+    return Array.isArray(scopeLayout) && scopeLayout.length > 0;
   })();
 
   if (_isSkillsRuntime) {
