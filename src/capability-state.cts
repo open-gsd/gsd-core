@@ -416,15 +416,19 @@ function _loadFlatCommandsGsdManifest(commandsParentDir: string): Map<string, st
     // Strip 'gsd-' prefix (4 chars) and '.md' suffix (3 chars) → stem.
     const stem = entry.name.slice(4, -3);
     if (!stem) continue;
-    let content = '';
+    // Mirror loadSkillsManifest's try/catch structure exactly: wrap read +
+    // parse + set together so an unreadable file OR a thrown parser degrades
+    // both keys to [] (parity; closes the latent catch-scope drift a reviewer
+    // flagged — both parsers are non-throwing today, but the structural
+    // match future-proofs the "identical Map shape" contract).
     try {
-      content = fs.readFileSync(path.join(commandsParentDir, entry.name), 'utf8');
+      const content = fs.readFileSync(path.join(commandsParentDir, entry.name), 'utf8');
+      manifest.set(stem, parseRequires(content));
+      manifest.set(`_calls_agents_${stem}`, parseCallsAgents(content));
     } catch {
-      // Unreadable file — register with empty deps + agents (parity with
-      // loadSkillsManifest's readFileSync catch branch).
+      manifest.set(stem, []);
+      manifest.set(`_calls_agents_${stem}`, []);
     }
-    manifest.set(stem, content ? parseRequires(content) : []);
-    manifest.set(`_calls_agents_${stem}`, content ? parseCallsAgents(content) : []);
   }
   return manifest;
 }

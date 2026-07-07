@@ -903,6 +903,47 @@ describe('regressions: flat commands/gsd-<stem>.md layout (#1858)', () => {
     }
   });
 
+  // Low-1 (review): boundary — empty stem (gsd-.md) skipped, single-char stem kept.
+  test('_loadFlatCommandsGsdManifest: skips gsd-.md (empty stem) and keeps single-char stem (slice boundary)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-edge-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-.md'), makeFlatCommandMd(''), 'utf8');
+      fs.writeFileSync(path.join(tmpDir, 'gsd-x.md'), makeFlatCommandMd('x'), 'utf8');
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(!manifest.has(''), 'gsd-.md must NOT register an empty-string stem');
+      assert.ok(!manifest.has('_calls_agents_'), 'no companion key for an empty stem');
+      assert.ok(manifest.has('x'), 'gsd-x.md -> single-char stem "x" (slice(4,-3) boundary)');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // Low-2 (review): unreadable file degrades both keys to [] (parity with nested
+  // loader's catch). POSIX-only AND must not run as root — root bypasses POSIX
+  // read permission bits, so chmod 0o000 would NOT make the file unreadable and
+  // the test would assert [] against the real parsed deps (false failure).
+  // Skip on win32 (DEFECT.WINDOWS-POSIX-MODE-BIT-ASSERT) and when getuid()==0.
+  const _skipUnreadable = process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
+  test('_loadFlatCommandsGsdManifest: unreadable file degrades to empty deps + agents (parity)', { skip: _skipUnreadable }, () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-unread-'));
+    let madeUnreadable = false;
+    try {
+      const skillPath = path.join(tmpDir, 'gsd-secure.md');
+      fs.writeFileSync(skillPath, '---\nname: gsd:secure\nrequires: [phase]\n---\nbody\n', { mode: 0o644 });
+      fs.chmodSync(skillPath, 0o000);
+      madeUnreadable = true;
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.deepStrictEqual(manifest.get('secure'), [], 'unreadable file -> empty requires (parity with nested catch)');
+      assert.deepStrictEqual(manifest.get('_calls_agents_secure'), [], 'unreadable file -> empty agents (parity with nested catch)');
+    } finally {
+      // Restore writability so cleanup() can rm the tmp tree.
+      if (madeUnreadable) {
+        try { fs.chmodSync(path.join(tmpDir, 'gsd-secure.md'), 0o644); } catch { /* best effort */ }
+      }
+      cleanup(tmpDir);
+    }
+  });
+
   // ── _resolveManifest picks the flat branch when nested is absent ────────────
 
   test('_resolveManifest: detects flat commands/gsd-<stem>.md layout when nested commands/gsd/ is absent (#1858)', () => {
@@ -986,6 +1027,14 @@ describe('regressions: flat commands/gsd-<stem>.md layout (#1858)', () => {
       const flatStems = [...flat.keys()].filter((k) => !k.startsWith('_calls_agents_')).sort();
       assert.deepStrictEqual(flatStems, nestedStems,
         'flat loader stem set must match nested loader stem set for the real command tree');
+      // Nit-2 (review): also compare _calls_agents_<stem> VALUES, not just the
+      // stem set — proves the shared parseCallsAgents output is identical.
+      for (const stem of flatStems) {
+        assert.deepStrictEqual(flat.get(`_calls_agents_${stem}`), nested.get(`_calls_agents_${stem}`),
+          `agent refs for stem "${stem}" must match between flat and nested loaders`);
+        assert.deepStrictEqual(flat.get(stem), nested.get(stem),
+          `requires for stem "${stem}" must match between flat and nested loaders`);
+      }
     } finally {
       cleanup(tmpFlat);
     }
