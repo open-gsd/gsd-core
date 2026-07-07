@@ -1132,6 +1132,23 @@ describe('Drift item W006-archived — MILESTONE_ARCHIVE_DIR_RE and PHASE_TOKEN_
     assert.strictEqual(re.exec('APP1-64-auth')?.[1], '64');
     assert.strictEqual(re.exec('APP_1-64-auth')?.[1], '64');
   });
+
+  test('PHASE_TOKEN_FROM_DIR_RE rejects a single-digit slug word after a phase number (#2043)', () => {
+    const gen = require('../gsd-core/bin/lib/validate.cjs');
+    const re = gen.PHASE_TOKEN_FROM_DIR_RE;
+    // Roadmap phase name "6 Rs Pipeline Orchestrator" slugifies to
+    // "6-rs-pipeline-orchestrator"; the resulting dir "46-6-rs-pipeline-orchestrator"
+    // must extract phase token "46", not "46-6" (was the pre-fix, buggy behavior).
+    assert.strictEqual(re.exec('46-6-rs-pipeline-orchestrator')?.[1], '46');
+    // Legit multi-segment (zero-padded) milestone-prefixed tokens are preserved.
+    assert.strictEqual(re.exec('02-01-setup')?.[1], '02-01');
+    // Single-digit letter-suffix phase ids ("1A"/"01A") and milestone-prefixed
+    // single-digit sub-phases ("M1-2" → "2") must still match (the fix tightens
+    // only the continuation, not the first component).
+    assert.strictEqual(re.exec('1A-foo')?.[1], '1A');
+    assert.strictEqual(re.exec('01A-foo')?.[1], '01A');
+    assert.strictEqual(re.exec('M1-2-setup')?.[1], '2');
+  });
 });
 
 // ── Drift Item I001: canonicalPlanStem ────────────────────────────────────────
@@ -1185,6 +1202,18 @@ describe('Drift item I001 — canonicalPlanStem: long PLAN stem matches short SU
     assert.strictEqual(gen.canonicalPlanStem('68-01'), '68-01');
     assert.strictEqual(gen.canonicalPlanStem('3A-01-feature'), '3A-01');
     assert.strictEqual(gen.canonicalPlanStem('no-match'), 'no-match');
+  });
+
+  test('canonicalPlanStem rejects a single-digit slug word after a phase number (#2043)', () => {
+    const gen = require('../gsd-core/bin/lib/validate.cjs');
+    // "46-6-rs-pipeline-orchestrator" is not a valid PLAN stem shape (the "6"
+    // is a slug word, not a sub-phase segment), so it must return the input
+    // unchanged rather than the pre-fix, buggy "46-6".
+    assert.notStrictEqual(gen.canonicalPlanStem('46-6-rs-pipeline-orchestrator'), '46-6');
+    // Legit multi-segment stems are still canonicalized correctly, including a
+    // single-digit letter-suffix phase id ("3A") whose plan component is zero-padded.
+    assert.strictEqual(gen.canonicalPlanStem('68-01-scaffolding'), '68-01');
+    assert.strictEqual(gen.canonicalPlanStem('3A-01-feature'), '3A-01');
   });
 });
   });

@@ -38,6 +38,14 @@ interface SetConfigValueResult {
   previousValue: unknown;
 }
 
+interface UnsetConfigValueResult {
+  updated: boolean;
+  unset: true;
+  key: string;
+  value: null;
+  previousValue: unknown;
+}
+
 interface WorkstreamContext {
   configPath?: string;
   [key: string]: unknown;
@@ -453,6 +461,87 @@ function _setNestedValue(
 }
 
 /**
+ * Deletes a value from the config object, allowing nested values via dot
+ * notation (e.g., "review.models.gemini"). Mirrors `_setNestedValue`'s
+ * prototype-pollution guard on every path segment (including intermediates).
+ *
+ * Unlike `_setNestedValue`, this NEVER creates missing intermediate objects —
+ * if any segment along the path is missing (or not a plain, non-array
+ * object), the key doesn't exist and we return early without mutating
+ * `config` at all.
+ *
+ * Does not prune now-empty parent objects after deletion (matches the
+ * conservative, structure-preserving behaviour callers expect from a bare
+ * unset).
+ *
+ * Returns { previousValue, existed } — existed is false when the leaf key
+ * (or an intermediate segment) was never present.
+ * Calls error() (process.exit(1)) on prototype-pollution attempts.
+ */
+function _unsetNestedValue(
+  config: Record<string, unknown>,
+  keyPath: string,
+): { previousValue: unknown; existed: boolean } {
+  const keys = keyPath.split('.');
+  let current: Record<string, unknown> = config;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const key = keys[i];
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor') {
+      error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+    const existingChild = current[key];
+    if (existingChild === undefined || existingChild === null || typeof existingChild !== 'object' || Array.isArray(existingChild)) {
+      // Path doesn't exist — nothing to unset, and we must not create it.
+      return { previousValue: undefined, existed: false };
+    }
+    current = existingChild as Record<string, unknown>;
+  }
+  const lastKey = keys[keys.length - 1];
+  if (lastKey === '__proto__' || lastKey === 'prototype' || lastKey === 'constructor') {
+    error('Invalid config key (prototype pollution guard): ' + keyPath, ERROR_REASON.CONFIG_PARSE_FAILED);
+  }
+  const existed = Object.prototype.hasOwnProperty.call(current, lastKey);
+  const previousValue = current[lastKey];
+  if (existed) {
+    delete current[lastKey];
+  }
+  return { previousValue, existed };
+}
+
+/**
+ * Deletes a key from the config file, allowing nested values via dot
+ * notation. Mirrors `setConfigValue`'s load/lock/write cycle.
+ *
+ * Does not call `output()`, so can be used as one step in a command without triggering `exit(0)` in
+ * the happy path. But note that `error()` will still `exit(1)` out of the process.
+ */
+function unsetConfigValue(cwd: string, keyPath: string): UnsetConfigValueResult {
+  const configPath = path.join(planningDir(cwd), 'config.json');
+
+  return withPlanningLock(cwd, () => {
+    // Load existing config or start with empty object
+    let config: Record<string, unknown> = {};
+    try {
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      }
+    } catch (err) {
+      error('Failed to read config.json: ' + (err as Error).message, ERROR_REASON.CONFIG_PARSE_FAILED);
+    }
+
+    const { previousValue, existed } = _unsetNestedValue(config, keyPath);
+
+    // Write back
+    try {
+      platformWriteSync(configPath, JSON.stringify(config, null, 2));
+      return { updated: existed, unset: true, key: keyPath, value: null, previousValue };
+    } catch (err) {
+      error('Failed to write config.json: ' + (err as Error).message);
+    }
+  }) as UnsetConfigValueResult;
+}
+
+/**
  * Sets a value in the config file, allowing nested values via dot notation (e.g.,
  * "workflow.research").
  *
@@ -586,6 +675,7 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   let parsedValue: unknown = val;
   if (val === 'true') parsedValue = true;
   else if (val === 'false') parsedValue = false;
+  else if (val === 'null') parsedValue = null;
   // #1581: Number.isFinite (not !isNaN) so 'Infinity'/'-Infinity' are NOT
   // coerced to non-finite numbers that JSON.stringify later renders as `null`
   // (disk=null while the CLI echoed 'Infinity'). They fall through to the
@@ -594,6 +684,25 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   else if (Number.isFinite(Number(val)) && val !== '') parsedValue = Number(val);
   else if (typeof val === 'string' && (val.startsWith('[') || val.startsWith('{'))) {
     try { parsedValue = JSON.parse(val); } catch { /* keep as string */ }
+  }
+
+  // #2046: a bare `null` unsets (deletes) the key — the documented "Clear" action.
+  // Short-circuits before every typed per-key validator so clearing a typed key
+  // (enum/boolean/number) removes it rather than being rejected. Deleting (not
+  // persisting JSON null) is the correct "clear": a persisted null is still a
+  // present, truthy-adjacent value that consumers must special-case — worst for
+  // secret keys where a leftover value can be passed as a real credential.
+  if (parsedValue === null) {
+    const unsetResult = unsetConfigValue(cwd, kp);
+    if (isSecretKey(kp)) {
+      const maskedPrev = unsetResult.previousValue === undefined
+        ? undefined
+        : maskSecret(unsetResult.previousValue as Parameters<typeof maskSecret>[0]);
+      output({ ...unsetResult, value: null, previousValue: maskedPrev, masked: true }, raw, `${kp} unset`);
+      return;
+    }
+    output(unsetResult, raw, `${kp} unset`);
+    return;
   }
 
   // #1581: project_code is an identifier string — never number-coerce it. A
