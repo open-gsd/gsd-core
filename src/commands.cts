@@ -30,7 +30,7 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone, stripShippedMilestones: _stripShippedMilestones, getMilestoneInfo, getMilestonePhaseFilter, getRoadmapPhaseInternal } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { resolveModelInternal, resolveModelForTier, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
 import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -487,7 +487,9 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   opts = opts || {};
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  const model = resolveModelInternal(cwd, agentType!);
+  // #3024 — model must escalate from the same tier source as effort; falls back
+  // to resolveModelInternal when dynamic_routing is disabled.
+  const model = resolveModelForTier(cwd, agentType!, (opts.attempt !== undefined && opts.attempt !== null) ? opts.attempt : 0);
 
   const effortOpts: Record<string, unknown> = {};
   if (typeof opts.effortOverride === 'string') effortOpts['override'] = opts.effortOverride;

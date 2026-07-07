@@ -2606,6 +2606,59 @@ describe('#443 resolve-execution CLI command', () => {
   });
 });
 
+// ─── resolve-execution model escalation (#3024) ───────────────────────────────
+
+describe('#3024 resolve-execution: dynamic routing escalates model', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    // HOME isolation to prevent ~/.gsd/defaults.json bleed
+    process.env._GSD_TEST_HOME_OVERRIDE = tmpDir;
+  });
+  afterEach(() => {
+    cleanup(tmpDir);
+    delete process.env._GSD_TEST_HOME_OVERRIDE;
+  });
+
+  test('--attempt escalates model through tier_models (standard -> heavy)', () => {
+    writeConfig(tmpDir, {
+      dynamic_routing: {
+        enabled: true,
+        tier_models: { light: 'haiku-custom', standard: 'sonnet-custom', heavy: 'opus-custom' },
+        escalate_on_failure: true,
+        max_escalations: 2,
+      },
+    });
+    // gsd-executor is 'standard' tier
+    const result0 = runGsdTools(
+      ['resolve-execution', 'gsd-executor', '--attempt', '0'],
+      tmpDir,
+      { HOME: tmpDir }
+    );
+    const result1 = runGsdTools(
+      ['resolve-execution', 'gsd-executor', '--attempt', '1'],
+      tmpDir,
+      { HOME: tmpDir }
+    );
+    assert.ok(result0.success && result1.success);
+    const out0 = JSON.parse(result0.output);
+    const out1 = JSON.parse(result1.output);
+    assert.strictEqual(out0.model, 'sonnet-custom');
+    assert.strictEqual(out1.model, 'opus-custom');
+  });
+
+  test('dynamic_routing absent -> model matches resolveModelInternal', () => {
+    const result = runGsdTools(
+      ['resolve-execution', 'gsd-executor', '--attempt', '1'],
+      tmpDir,
+      { HOME: tmpDir }
+    );
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.model, resolveModelInternal(tmpDir, 'gsd-executor'));
+  });
+});
+
 // ─── resolve-model now emits effort (replaces reasoning_effort) ───────────────
 
 describe('#443 resolve-model emits effort (unified)', () => {
