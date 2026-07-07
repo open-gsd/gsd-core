@@ -722,6 +722,9 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
         fast_mode: (globalDefaults['fast_mode']) || null,
         agent_skills: (globalDefaults['agent_skills']) || {},
         response_language: (globalDefaults['response_language']) || null,
+        model_policy: (globalDefaults['model_policy']) || null,
+        model_profile_overrides: (globalDefaults['model_profile_overrides']) || null,
+        runtime: (globalDefaults['runtime']) || null,
       };
       // Branch D: global-defaults
       try {

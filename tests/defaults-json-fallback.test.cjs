@@ -13,7 +13,7 @@ const path = require('path');
 const os = require('os');
 const { cleanup } = require('./helpers.cjs');
 
-const { loadConfig } = require('../gsd-core/bin/lib/config-loader.cjs');
+const { loadConfig, loadConfigResolved } = require('../gsd-core/bin/lib/config-loader.cjs');
 
 /** Create a bare temp dir (no .planning/) to simulate pre-project context */
 function createBareTmpDir() {
@@ -124,6 +124,33 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     assert.strictEqual(config.model_profile, 'quality');
     assert.strictEqual(config.unknown_key, undefined);
     assert.strictEqual(config.another_unknown, undefined);
+  });
+
+  test('pre-project, defaults.json with model_policy/model_profile_overrides/runtime → forwarded', (t) => {
+    const tmpDir = createBareTmpDir();
+
+    const gsdDir = path.join(tmpDir, '.gsd');
+    fs.mkdirSync(gsdDir, { recursive: true });
+    const modelPolicy = { provider: 'anthropic', budget: 'standard' };
+    const profileOverrides = { quality: { planner: 'opus' } };
+    const runtime = { name: 'claude-code' };
+    fs.writeFileSync(
+      path.join(gsdDir, 'defaults.json'),
+      JSON.stringify({
+        model_policy: modelPolicy,
+        model_profile_overrides: profileOverrides,
+        runtime,
+      })
+    );
+
+    process.env.GSD_HOME = tmpDir;
+    t.after(() => { delete process.env.GSD_HOME; cleanup(tmpDir); });
+
+    const result = loadConfigResolved(tmpDir);
+    assert.strictEqual(result.source, 'global-defaults');
+    assert.deepStrictEqual(result.config.model_policy, modelPolicy);
+    assert.deepStrictEqual(result.config.model_profile_overrides, profileOverrides);
+    assert.deepStrictEqual(result.config.runtime, runtime);
   });
 
   test('defaults.json with invalid JSON → returns hardcoded defaults', (t) => {
