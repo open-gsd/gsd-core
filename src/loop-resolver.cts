@@ -475,6 +475,12 @@ function cmdLoopRenderHooks(
   const runtimeConfigDir = typeof options['configDir'] === 'string'
     ? options['configDir']
     : undefined;
+  // #2003: thread an explicit --runtime override into the capability-state
+  // resolver so the config-dir resolution bypasses the persisted-runtime
+  // fallback (GSD_RUNTIME → config.runtime). Without this, a repo with persisted
+  // runtime:"codex" resolves the config dir to ~/.codex and execute:post /
+  // verify:post hooks silently no-op when the operator drives from Claude Code.
+  const runtimeOverride = typeof options['runtime'] === 'string' ? options['runtime'] : undefined;
   // Load the config snapshot ONCE and share it with both the capability-state
   // resolver (via configOverride) and loop-hook resolution, so federated keys
   // present in loadConfig resolve identically for `active` and for hook when/
@@ -488,7 +494,7 @@ function cmdLoopRenderHooks(
   } catch {
     config = {};
   }
-  const state = resolveCapabilityRuntimeState(cwd, runtimeConfigDir, config) as {
+  const state = resolveCapabilityRuntimeState(cwd, runtimeConfigDir, config, runtimeOverride) as {
     warnings?: string[];
     capabilities: Array<{ id: string; enabled?: boolean; active: boolean }>;
   };

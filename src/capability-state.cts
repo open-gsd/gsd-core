@@ -441,6 +441,7 @@ function resolveCapabilityRuntimeState(
   cwd: string,
   runtimeConfigDir: string | undefined | null,
   configOverride?: Record<string, unknown>,
+  runtimeOverride?: string,
 ): ResolveCapabilityRuntimeStateResult {
   const warnings: string[] = [];
 
@@ -460,15 +461,35 @@ function resolveCapabilityRuntimeState(
       const runtimeHomes = require('./runtime-homes.cjs') as {
         getGlobalConfigDir: (runtime: string) => string;
       };
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const runtimeSlash = require('./runtime-slash.cjs') as {
-        resolveRuntime: (projectDir: string | null | undefined) => string;
-      };
-      // Detect the active runtime via GSD_RUNTIME → config.runtime → 'claude'.
-      // resolveRuntime reads config.json directly (no side effects) and returns
-      // a lowercased canonical runtime name.
-      const detectedRuntime = runtimeSlash.resolveRuntime(cwd);
-      resolvedConfigDir = runtimeHomes.getGlobalConfigDir(detectedRuntime);
+      // #2003: an explicit --runtime override bypasses the persisted-runtime
+      // fallback (GSD_RUNTIME → config.runtime → 'claude') so, e.g., a repo with
+      // persisted runtime:"codex" resolves the Claude config dir when the operator
+      // is driving from Claude Code. Canonicalize via runtime-name-policy (handles
+      // aliases like codex-app → codex); if canonicalization yields nothing, fall
+      // through to the persisted-runtime resolution below. Mirrors the update-
+      // context / effort sync precedent (read/diagnostic paths accepting both
+      // --config-dir and --runtime).
+      if (typeof runtimeOverride === 'string' && runtimeOverride.trim() !== '') {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const runtimeNamePolicy = require('./runtime-name-policy.cjs') as {
+          canonicalizeRuntimeName: (value: unknown) => string | null;
+        };
+        const canonical = runtimeNamePolicy.canonicalizeRuntimeName(runtimeOverride);
+        if (canonical) {
+          resolvedConfigDir = runtimeHomes.getGlobalConfigDir(canonical);
+        }
+      }
+      if (!resolvedConfigDir) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const runtimeSlash = require('./runtime-slash.cjs') as {
+          resolveRuntime: (projectDir: string | null | undefined) => string;
+        };
+        // Detect the active runtime via GSD_RUNTIME → config.runtime → 'claude'.
+        // resolveRuntime reads config.json directly (no side effects) and returns
+        // a lowercased canonical runtime name.
+        const detectedRuntime = runtimeSlash.resolveRuntime(cwd);
+        resolvedConfigDir = runtimeHomes.getGlobalConfigDir(detectedRuntime);
+      }
     } catch {
       // Defensive fallback: use ~/.claude if the canonical resolver throws.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -569,9 +590,12 @@ function cmdCapabilityState(
   cwd: string,
   runtimeConfigDir: string | undefined | null,
   raw: boolean,
-  _options: Record<string, unknown> = {},
+  options: Record<string, unknown> = {},
 ): void {
-  const result = resolveCapabilityRuntimeState(cwd, runtimeConfigDir);
+  // #2003: thread an explicit --runtime override so the config-dir resolution
+  // bypasses the persisted-runtime fallback (GSD_RUNTIME → config.runtime).
+  const runtimeOverride = typeof options['runtime'] === 'string' ? options['runtime'] : undefined;
+  const result = resolveCapabilityRuntimeState(cwd, runtimeConfigDir, undefined, runtimeOverride);
   for (const warning of result.warnings) {
     coreError(`capability state: ${warning}`);
   }
