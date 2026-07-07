@@ -1289,31 +1289,7 @@ For each VERIFICATION.md found, look for test file references:
 
 Collect all unique test file paths into `REGRESSION_FILES`.
 
-**Step 3: Run regression tests (if any found)**
-
-```bash
-# Resolve test command: project config > Makefile > language sniff
-REG_TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" 2>/dev/null || true)
-if [ -z "$REG_TEST_CMD" ]; then
-  if [ -f "Makefile" ] && grep -q "^test:" Makefile; then
-    REG_TEST_CMD="make test"
-  elif [ -f "Justfile" ] || [ -f "justfile" ]; then
-    REG_TEST_CMD="just test"
-  elif [ -f "package.json" ]; then
-    REG_TEST_CMD="npm test"
-  elif [ -f "Cargo.toml" ]; then
-    REG_TEST_CMD="cargo test"
-  elif [ -f "go.mod" ]; then
-    REG_TEST_CMD="go test ./..."
-  elif [ -f "requirements.txt" ] || [ -f "pyproject.toml" ]; then
-    REG_TEST_CMD="python -m pytest ${REGRESSION_FILES} -q --tb=short"
-  else
-    REG_TEST_CMD="true"
-  fi
-fi
-# Detect test runner and run prior phase tests
-eval "$REG_TEST_CMD" 2>&1
-```
+**Step 3: Run regression tests (if any found)** — Read and execute `gsd-core/workflows/execute-phase/steps/regression-gate.md`. It resolves the project test command, normalizes it to a one-shot form (defeating vitest/jest watch mode via the shared `normalize-test-command` helper), runs it under `workflow.test_gate_timeout`, and aborts on timeout with a watch-mode hint (#1857). On `REGRESSION GATE ABORTED` (exit 124), HALT — do not proceed to verification.
 
 **Step 4: Report results**
 

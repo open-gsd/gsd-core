@@ -5,7 +5,7 @@
   "add-todo.md": 8996,
   "ai-integration-phase.md": 14805,
   "analyze-dependencies.md": 3887,
-  "audit-fix.md": 11032,
+  "audit-fix.md": 11717,
   "audit-milestone.md": 17681,
   "audit-uat.md": 7469,
   "autonomous.md": 42474,
@@ -24,7 +24,7 @@
   "docs-update.md": 55706,
   "edit-phase.md": 12927,
   "eval-review.md": 9967,
-  "execute-phase.md": 93528,
+  "execute-phase.md": 93132,
   "execute-plan.md": 32655,
   "explore.md": 10541,
   "extract-learnings.md": 12893,
@@ -88,6 +88,6 @@
   "undo.md": 10431,
   "update.md": 20914,
   "validate-phase.md": 10789,
-  "verify-phase.md": 40772,
+  "verify-phase.md": 40923,
   "verify-work.md": 38267
 }

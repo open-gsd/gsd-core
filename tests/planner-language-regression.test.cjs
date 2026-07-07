@@ -122,9 +122,9 @@ const ALLOWLIST = {
   'review.md': ['time_sizing'],
   // Fast uses "under 2 minutes wall time" as operational constraint
   'fast.md': ['time_sizing'],
-  // Execute-phase uses "timeout: 5 minutes" for test runner
+  // Execute-phase uses a configurable test-gate timeout (workflow.test_gate_timeout, #1857)
   'execute-phase.md': ['time_sizing'],
-  // Verify-phase uses "timeout: 5 minutes" for test runner
+  // Verify-phase uses a configurable test-gate timeout (workflow.test_gate_timeout, #1857)
   'verify-phase.md': ['time_sizing'],
   // Map-codebase documents subagent_timeout
   'map-codebase.md': ['time_sizing'],

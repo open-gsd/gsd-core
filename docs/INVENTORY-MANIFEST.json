@@ -373,6 +373,7 @@
       "model-catalog.cjs",
       "model-profiles.cjs",
       "model-resolver.cjs",
+      "normalize-test-command.cjs",
       "onboard-projection.cjs",
       "package-identity.cjs",
       "package-legitimacy.cjs",
