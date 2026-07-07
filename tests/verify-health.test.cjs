@@ -351,6 +351,68 @@ describe('validate health command', () => {
     );
   });
 
+  test('accepts adaptive model_profile as valid', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'adaptive' })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W004'),
+      `Should not warn for adaptive model_profile: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('warns W022 when models.<phase_type> has an invalid tier', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: 'not-a-tier' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const w022 = output.warnings.find(w => w.code === 'W022');
+    assert.ok(w022, `Expected W022 in warnings: ${JSON.stringify(output.warnings)}`);
+    assert.ok(
+      w022.message.includes('models.planning "not-a-tier"'),
+      `Expected W022 to name the offending key and value: ${JSON.stringify(w022)}`
+    );
+  });
+
+  test('does not emit W022 for a valid models tier', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: { planning: 'haiku' } })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn for valid models tier: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
   // ─── Check 6: Phase directory naming (NN-name format) ─────────────────────
 
   test('warns about incorrectly named phase directories', () => {

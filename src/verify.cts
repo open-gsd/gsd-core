@@ -1357,7 +1357,7 @@ function cmdValidateHealth(
     try {
       const rawCfg = fs.readFileSync(configPath, 'utf-8');
       const parsed = JSON.parse(rawCfg) as Record<string, unknown>;
-      const validProfiles = ['quality', 'balanced', 'budget', 'inherit'];
+      const validProfiles = ['quality', 'balanced', 'budget', 'adaptive', 'inherit'];
       if (parsed['model_profile'] && !validProfiles.includes(parsed['model_profile'] as string)) {
         addIssue(
           'warning',
@@ -1365,6 +1365,21 @@ function cmdValidateHealth(
           `config.json: invalid model_profile "${parsed['model_profile'] as string}"`,
           `Valid values: ${validProfiles.join(', ')}`,
         );
+      }
+      // models.<phase_type> tiers outside this set are silently ignored by the resolver
+      const validTiers = ['opus', 'sonnet', 'haiku', 'inherit'];
+      const models = parsed['models'];
+      if (models && typeof models === 'object' && !Array.isArray(models)) {
+        for (const [key, value] of Object.entries(models as Record<string, unknown>)) {
+          if (typeof value === 'string' && !validTiers.includes(value)) {
+            addIssue(
+              'warning',
+              'W022',
+              `config.json: models.${key} "${value}" is not a valid tier and will be ignored`,
+              `Valid values: ${validTiers.join(', ')}`,
+            );
+          }
+        }
       }
     } catch (err) {
       addIssue(
