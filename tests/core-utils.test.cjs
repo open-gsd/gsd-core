@@ -533,6 +533,21 @@ describe('extractCanonicalPlanId', () => {
     assert.ok(typeof result === 'string');
     assert.ok(result.length > 0);
   });
+
+  test('rejects single-digit slug word (#2043)', () => {
+    // "46-6-rs-pipeline-orchestrator" is not a valid phase-token filename shape
+    // (the "6" is a slug word, not a sub-phase segment) — must not collapse to
+    // the pre-fix, buggy "46-6".
+    assert.notStrictEqual(
+      coreUtils.extractCanonicalPlanId('46-6-rs-pipeline-orchestrator'),
+      '46-6',
+    );
+    // Legit multi-segment phase-token filenames are still extracted correctly,
+    // including a single-digit letter-suffix phase id ("3A") — the "3A" token is
+    // found and paired with its zero-padded plan index, not left unpaired.
+    assert.strictEqual(coreUtils.extractCanonicalPlanId('01-02-PLAN.md'), '01-02');
+    assert.strictEqual(coreUtils.extractCanonicalPlanId('3A-01-feature-PLAN.md'), '3A-01');
+  });
 });
 
 // ─── countMatchedSummaries (#1988) ───────────────────────────────────────────
