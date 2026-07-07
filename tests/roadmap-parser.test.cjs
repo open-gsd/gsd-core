@@ -428,6 +428,34 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.strictEqual(filter('02-03-other'), false, '02-03 not in milestone');
   });
 
+  test('single-digit slug word after a phase number is not wrongly excluded (#2043)', () => {
+    // The roadmap uses milestone-prefixed hyphenated phase IDs (e.g. "2-01"),
+    // which switches getMilestonePhaseFilter's dir-matching regex into
+    // hyphenated mode. Phase 46's roadmap name "6 Rs Pipeline Orchestrator"
+    // slugifies to a dir starting with a single-digit word ("46-6-rs-…").
+    // Before #2043, the hyphenated-mode regex over-collected that single
+    // digit into the phase token ("46-6"), which never matched the roadmap's
+    // "46" phase number, so the dir was wrongly excluded from the milestone.
+    writeState(tmpDir, { milestone: 'v1.0' });
+    writeRoadmap(tmpDir, [
+      '## v1.0: Current',
+      '### Phase 2-01: Alpha',
+      '**Goal:** first alpha phase',
+      '',
+      '### Phase 46: 6 Rs Pipeline Orchestrator',
+      '**Goal:** orchestrate the rs',
+    ].join('\n'));
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(
+      filter('46-6-rs-pipeline-orchestrator'),
+      true,
+      '46-6-rs-pipeline-orchestrator (phase 46, single-digit slug word "6") must match Phase 46',
+    );
+    // Legit milestone-prefixed dir still matches as before.
+    assert.strictEqual(filter('02-01-alpha'), true, '02-01-alpha matches Phase 2-01');
+  });
+
   test('versionOverride uses specified version slice', () => {
     writeRoadmap(tmpDir, [
       '## v1.0: Old',

@@ -469,8 +469,12 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
   }
 
   const roadmapUsesHyphenedIds = [...normalized].some(n => n.includes('-'));
+  // #2043: milestone-prefixed sub-phase components must be zero-padded (≥2 digits)
+  // — "-\d{2,}" instead of "-0*\d+" — so a single-digit slug word after the phase
+  // number (e.g. dir "46-6-rs-…") captures "46" and is not silently excluded from
+  // the milestone as a bogus "46-6" id.
   const numericRe = roadmapUsesHyphenedIds
-    ? /^0*(\d+(?:-0*\d+)*[A-Za-z]?(?:\.\d+)*)/
+    ? /^0*(\d+(?:-\d{2,})*[A-Za-z]?(?:\.\d+)*)/
     : /^0*(\d+[A-Za-z]?(?:\.\d+)*)/;
 
   function isDirInMilestone(dirName: string): boolean {

@@ -217,6 +217,27 @@ describe('extractPhaseToken', () => {
   test('stops at first non-numeric-starting segment', () => {
     assert.strictEqual(phaseId.extractPhaseToken('01-02-name-03'), '01-02');
   });
+
+  test('rejects a single-digit slug word after a phase number (#2043)', () => {
+    // A phase dir like "46-6-rs-pipeline-orchestrator" (roadmap phase name
+    // "6 Rs Pipeline Orchestrator" → slug "6-rs-...") must yield token "46",
+    // not "46-6" — the "6" is the slug's first word, not a sub-phase segment.
+    assert.strictEqual(phaseId.extractPhaseToken('46-6-rs-pipeline-orchestrator'), '46');
+    assert.strictEqual(phaseId.extractPhaseToken('68-6-rs'), '68');
+    // Legit cases are unaffected: a real zero-padded milestone-sub-phase pair
+    // stays intact, and a single-digit sub-phase after a letter-prefixed
+    // milestone id (e.g. "M1-2") is still valid.
+    assert.strictEqual(phaseId.extractPhaseToken('01-02-some-name'), '01-02');
+    assert.strictEqual(phaseId.extractPhaseToken('M1-2-brain'), 'M1-2');
+    // Milestone-prefixed convention: "M1-" strips as a project-code prefix, so
+    // the same rule fixes the slug-collision there too — a phase 46 named
+    // "6 Rs …" under milestone M1 yields "M1-46", not "M1-46-6". Phase 6 under
+    // M1 ("M1-6-rs") correctly stays "M1-6" (the 6 is the phase number).
+    assert.strictEqual(phaseId.extractPhaseToken('M1-46-6-rs-pipeline-orchestrator'), 'M1-46');
+    assert.strictEqual(phaseId.extractPhaseToken('M1-6-rs-pipeline'), 'M1-6');
+    // Single-digit + letter-suffix phase id ("1A") is a real token, not a slug word.
+    assert.strictEqual(phaseId.extractPhaseToken('1A-brain'), '1A');
+  });
 });
 
 // ─── phaseTokenMatches ────────────────────────────────────────────────────────

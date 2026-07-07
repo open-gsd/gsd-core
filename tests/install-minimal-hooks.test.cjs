@@ -54,6 +54,7 @@ const {
   EXPECTED_SH_HOOKS,
   EXPECTED_ALL_HOOKS,
   SKILL_RUNTIMES,
+  walk,
   simulateHookCopy,
   installerEnv,
   runMinimalInstall,
@@ -637,6 +638,82 @@ describe('#1755: .sh hooks are copied and executable after install', () => {
       const stat = fs.statSync(path.join(hooksDest, js));
       assert.ok((stat.mode & 0o111) !== 0, `${js} should be executable`);
     }
+  });
+});
+
+// ─── #1821: Kilo/ZCode (hooksSurface:none, no plugin) receive no dead hooks ────
+//
+// #1821 reported dead hook scripts staged for runtimes with hooksSurface:'none'.
+// OpenCode ALSO declares hooksSurface:'none', but its #1914 native plugin adapter
+// (plugins/gsd-core.js) spawns the staged hooks/*.js via OpenCode's event bus —
+// so for OpenCode the hooks are LIVE and must keep being copied. Kilo and ZCode
+// have no plugin surface, so their staged hooks are genuinely dead: this is the
+// case the fix removes. These tests assert the split: Kilo/ZCode get no hooks;
+// OpenCode (and Claude) still do.
+
+describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep their hooks', () => {
+  function gsdHookFilesUnder(configDir) {
+    const hooksDir = path.join(configDir, 'hooks');
+    if (!fs.existsSync(hooksDir)) return [];
+    return walk(hooksDir).filter((f) => {
+      const base = path.basename(f);
+      return /^gsd-.*\.(js|sh)$/.test(base);
+    });
+  }
+
+  function installAndCollect(runtime) {
+    const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-1821-${runtime}-`));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [INSTALL_SCRIPT, `--${runtime}`, '--global', '--config-dir', targetDir],
+        { encoding: 'utf8', env: installerEnv() },
+      );
+      assert.strictEqual(result.status, 0,
+        `installer exited with status ${result.status} for --${runtime} --global\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
+      // Collect results while targetDir still exists — cleanup() below removes it.
+      return {
+        hookFiles: gsdHookFilesUnder(targetDir),
+        hooksLibExists: fs.existsSync(path.join(targetDir, 'hooks', 'lib')),
+        pluginExists: fs.existsSync(path.join(targetDir, 'plugins', 'gsd-core.js')),
+      };
+    } finally {
+      cleanup(targetDir);
+    }
+  }
+
+  // Kilo and ZCode both declare hooksSurface:'none' with no plugin surface, so
+  // their staged hooks are dead weight (#1821).
+  for (const runtime of ['kilo', 'zcode']) {
+    test(`${runtime} --global install creates no gsd-*.js/.sh hook files or hooks/lib`, () => {
+      const { hookFiles, hooksLibExists } = installAndCollect(runtime);
+      assert.deepStrictEqual(hookFiles, [], `${runtime} install must not copy any gsd-*.js/.sh hook files, found: ${hookFiles.join(', ')}`);
+      assert.ok(!hooksLibExists, `${runtime} install must not create hooks/lib/`);
+    });
+  }
+
+  // Regression guard for #1914: OpenCode's plugin adapter spawns the staged
+  // hooks, so excluding OpenCode from the hook copy would break it. OpenCode
+  // must KEEP its hooks and receive the plugin.
+  test('opencode --global install still copies hooks and installs the #1914 plugin', () => {
+    const { hookFiles, pluginExists } = installAndCollect('opencode');
+    const basenames = hookFiles.map((f) => path.basename(f));
+    assert.ok(
+      basenames.includes('gsd-context-monitor.js'),
+      `opencode install must still copy gsd-*.js hooks (spawned by the #1914 plugin), found: ${basenames.join(', ')}`,
+    );
+    assert.ok(pluginExists, 'opencode install must install plugins/gsd-core.js (#1914 hook bridge)');
+  });
+
+  // Positive control: guards against over-exclusion breaking runtimes that
+  // legitimately need hooks (hooksSurface !== 'none').
+  test('claude --global install still copies gsd-*.js hooks', () => {
+    const { hookFiles } = installAndCollect('claude');
+    const basenames = hookFiles.map((f) => path.basename(f));
+    assert.ok(
+      basenames.includes('gsd-context-monitor.js'),
+      `claude install must still copy gsd-context-monitor.js, found: ${basenames.join(', ')}`,
+    );
   });
 });
 

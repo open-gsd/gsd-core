@@ -205,9 +205,29 @@ function extractPhaseToken(dirName: string): string {
 
   const segments = rest.split('-');
   const tokenSegments: string[] = [];
+  // #2043: distinguish a real (zero-padded, ≥2-digit) phase/sub-phase segment
+  // from a single-digit slug word. A pure-numeric leading segment ("46") only
+  // continues with ≥2-digit segments, so "46-6-rs-…" yields "46" (the "6" is the
+  // slug's first word), not "46-6". Milestone-prefixed ids like "M1-2" reach here
+  // with "M1-" already stripped as a project-code prefix (see
+  // PROJECT_CODE_PREFIX_CAPTURE_RE_I), so "2" is the leading segment and the same
+  // pure-numeric rule applies (M1-46-6-rs → "M1-46"). The firstLetterPrefixed
+  // carve-out covers letter+digit leading segments that survive prefix stripping
+  // because of punctuation (e.g. "P0.3-2"), whose single-digit continuation is
+  // intentionally preserved (unchanged from prior behaviour).
+  let firstLetterPrefixed = false;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    if (/^\d/.test(seg) || (i === 0 && /^[A-Za-z]{1,3}\d/.test(seg))) {
+    if (i === 0) {
+      if (/^\d/.test(seg)) {
+        tokenSegments.push(seg);
+      } else if (/^[A-Za-z]{1,3}\d/.test(seg)) {
+        tokenSegments.push(seg);
+        firstLetterPrefixed = true;
+      } else {
+        break;
+      }
+    } else if (/^\d{2,}/.test(seg) || (firstLetterPrefixed && /^\d/.test(seg))) {
       tokenSegments.push(seg);
     } else {
       break;

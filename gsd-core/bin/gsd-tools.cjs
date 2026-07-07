@@ -688,7 +688,7 @@ async function main() {
   // phase / roadmap / milestone / progress / etc.
   const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
     'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
-    'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, ' +
+    'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, ' +
     'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
@@ -1288,6 +1288,16 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         output: output,
       });
       if (!handled) config.cmdConfigGet(cwd, args[1], raw, defaultValue);
+      break;
+    }
+
+    case 'normalize-test-command': {
+      // #1857: rewrite a resolved test command to a one-shot form so a
+      // watch-mode runner (vitest/jest) cannot hang a verification gate. Shared
+      // by the regression gate and the post-merge gate. args[1] is the raw
+      // resolved command; --cwd (already parsed into `cwd`) locates package.json.
+      const testCommandNormalizer = require('./lib/normalize-test-command.cjs');
+      testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
       break;
     }
 

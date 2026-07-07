@@ -8161,7 +8161,7 @@ function reportInstallerMigrationResult(result) {
 }
 
 function install(isGlobal, runtime = 'claude', options = {}) {
-  const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  const { isOpencode, isKilo, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -9163,7 +9163,13 @@ function install(isGlobal, runtime = 'claude', options = {}) {
     failures.push('VERSION');
   }
 
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi) {
+  // #1821: Kilo and ZCode declare hooksSurface:'none' AND have no plugin surface,
+  // so the staged hook scripts are dead weight for them — exclude both here.
+  // OpenCode also declares hooksSurface:'none' but is deliberately NOT excluded:
+  // its native plugin adapter (#1914, installed above under plugins/gsd-core.js)
+  // spawns the staged hooks/*.js scripts via OpenCode's event bus and needs both
+  // them and the CommonJS package.json marker written below.
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -9255,11 +9261,14 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // Gate hooks/lib/ install on the same runtimes that receive hooks (see line ~8702).
   // Codex/Copilot/Cursor/Windsurf/Trae/Cline do not use the shared hooks/lib/ helpers
   // (Cursor uses standalone .js hook scripts registered via hooks.json; Codex uses
-  // hooks.json directly; the others skip hooks entirely), so they must not receive
-  // the hooks/lib/ helpers — otherwise the Codex comment downstream
-  // ("we deliberately do *not* copy hooks/lib/ for Codex") is contradicted in practice.
+  // hooks.json directly; the others skip hooks entirely); Kilo and ZCode also skip
+  // hooks entirely (hooksSurface:'none' with no plugin surface — #1821). OpenCode
+  // is NOT excluded: its #1914 plugin adapter spawns the staged hooks and requires
+  // hooks/lib/ helpers. None of the excluded runtimes must receive the hooks/lib/
+  // helpers — otherwise the Codex comment downstream ("we deliberately do *not*
+  // copy hooks/lib/ for Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);

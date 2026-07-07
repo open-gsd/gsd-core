@@ -103,7 +103,10 @@ function extractCanonicalPlanId(filename: string): string {
     .replace(/-SUMMARY\.md$/i, '')
     .replace(/\.md$/i, '');
   const parts = base.split('-').filter(Boolean);
-  const tokenRe = /^\d+[A-Z]?(?:\.\d+)*$/i;
+  // #2043: a phase/plan token component is either a zero-padded number (≥2 digits)
+  // or a single-digit-plus-letter id ("3A"); a *bare* single digit is a slug word,
+  // so "46-6-rs-…" is not paired into a "46-6" id while "3A-01" stays intact.
+  const tokenRe = /^(?:\d{2,}[A-Z]?|\d[A-Z])(?:\.\d+)*$/i;
   const phaseIdx = parts.findIndex((p) => tokenRe.test(p));
   if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && tokenRe.test(parts[phaseIdx + 1])) {
     return `${parts[phaseIdx]}-${parts[phaseIdx + 1]}`;
