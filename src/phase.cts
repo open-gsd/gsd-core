@@ -1447,8 +1447,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         roadmapContent = originalRoadmapContent;
 
         const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+        // Only whitespace/markdown emphasis may sit between "]" and "Phase" —
+        // a greedy `.*` lets an unchecked later phase match when its text
+        // merely mentions this phase (e.g. "after Phase 1 verification").
         const checkboxPattern = new RegExp(
-          `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
+          `(-\\s*\\[)[ ](\\]\\s*[*_~\`]*\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
           'i',
         );
         roadmapContent = roadmapContent.replace(

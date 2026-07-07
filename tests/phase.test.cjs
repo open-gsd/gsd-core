@@ -2577,6 +2577,90 @@ describe('phase complete command', () => {
     assert.ok(progressRow, 'Progress row must be updated to Complete with a date');
   });
 
+  test('already-checked phase is a checkbox no-op — later phase mentioning it stays unchecked', () => {
+    // Regression: the checkbox regex used a greedy `.*` between "]" and
+    // "Phase N", so with Phase 1 already [x] the first match was Phase 2's
+    // unchecked line (its text mentions "Phase 1") and Phase 2 got marked
+    // complete even though it never ran.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [x] **Phase 1: Core** - foundations
+- [ ] **Phase 2: Polish** - hardening (only as needed after Phase 1 verification)
+
+### Phase 1: Core
+**Goal:** Foundations
+**Plans:** 1 plans
+
+### Phase 2: Polish
+**Goal:** Hardening
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Current Phase Name:** Core\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working on phase 1\n`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-core');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-polish'), { recursive: true });
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      roadmap.includes('- [ ] **Phase 2: Polish** - hardening (only as needed after Phase 1 verification)'),
+      `Phase 2 line must stay unchecked and unmodified; got:\n${roadmap}`
+    );
+    assert.ok(
+      roadmap.includes('- [x] **Phase 1: Core** - foundations'),
+      'Phase 1 line must stay checked'
+    );
+  });
+
+  test('checkbox with bold **Phase N:** style is still checked off', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] **Phase 1: Core** - foundations
+- [ ] **Phase 2: Polish** - hardening
+
+### Phase 1: Core
+**Goal:** Foundations
+**Plans:** 1 plans
+
+### Phase 2: Polish
+**Goal:** Hardening
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Current Phase Name:** Core\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working on phase 1\n`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-core');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-polish'), { recursive: true });
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(
+      roadmap,
+      /- \[x\] \*\*Phase 1: Core\*\* - foundations \(completed \d{4}-\d{2}-\d{2}\)/,
+      `bold Phase 1 line must be checked with a completion date; got:\n${roadmap}`
+    );
+    assert.ok(roadmap.includes('- [ ] **Phase 2: Polish** - hardening'), 'Phase 2 must stay unchecked');
+  });
+
   test('detects last phase in milestone', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
