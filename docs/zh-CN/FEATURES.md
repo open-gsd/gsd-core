@@ -38,6 +38,7 @@
   - [模型配置](#26-model-profiles)
 - [棕地功能](#brownfield-features)
   - [代码库映射](#27-codebase-mapping)
+  - [现有代码库接入](#27b-现有代码库接入)
 - [实用功能](#utility-features)
   - [调试系统](#28-debug-system)
   - [待办事项管理](#29-todo-management)
@@ -783,7 +784,7 @@
 
 **命令：** `/gsd-map-codebase [area]`
 
-**目的：** 在启动新项目之前分析现有代码库，使 GSD 了解已有内容。
+**目的：** 在启动新项目之前，或作为 `/gsd-onboard` 的映射交接，分析现有代码库，使 GSD 了解已有内容。
 
 **需求：**
 - REQ-MAP-01：系统必须为每个分析领域派生并行映射智能体
@@ -804,6 +805,27 @@
 | `INTEGRATIONS.md` | 外部服务、API、第三方依赖 |
 
 **增量重映射 — `--paths` (#2003)：** 映射器接受可选的 `--paths <p1,p2,...>` 范围提示。提供时，它将探索限制在列出的仓库相对前缀，而非扫描整个代码树。这是执行后代码库漂移门控用于仅刷新阶段实际修改的子树的路径。每个生成的文档在其 YAML 前置元数据中携带 `last_mapped_commit`，以便相对于映射点（而非 HEAD）来测量漂移。
+
+### 27b. 现有代码库接入
+
+**命令：** `/gsd-onboard [--fast] [--text]`
+
+**目的：** 引导现有仓库完成首次设置，检查 brownfield 状态，并安全交接到代码库映射、docs 摄取和项目初始化。
+
+**需求：**
+- REQ-ONBOARD-01：系统必须检测现有代码、package manifest、规划文档、部分 `.planning/` 状态以及缺失的代码库映射文件。
+- REQ-ONBOARD-02：当 brownfield 缺少所需 `.planning/codebase/` 映射文件时，系统必须交接到 `/gsd-map-codebase` 或 `/gsd-map-codebase --fast`。fast 映射 readiness 是部分状态，不得视为足以运行 `/gsd-new-project`。
+- REQ-ONBOARD-03：当存在 ADR/PRD/SPEC/RFC 候选且 project 不存在时，系统必须在 `/gsd-new-project` 前提供 `/gsd-ingest-docs`。
+- REQ-ONBOARD-04：在 `PROJECT.md`、`REQUIREMENTS.md`、`ROADMAP.md`、`STATE.md` 全部存在前，系统不得报告 onboarding 完成。
+- REQ-ONBOARD-05：系统必须仅在 project setup 后创建或确认 `.planning/onboarding/SUMMARY.md`。
+- REQ-ONBOARD-06：系统必须为没有交互式菜单的运行时支持 `--text` 编号纯文本关卡。
+
+**产出：**
+| Artifact | 说明 |
+|----------|-------------|
+| `.planning/codebase/` | 由 `/gsd-map-codebase` 交接生成的代码库映射 |
+| `.planning/PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md` | 由 `/gsd-new-project` 或 `/gsd-ingest-docs` 生成的规划设置 |
+| `.planning/onboarding/SUMMARY.md` | Onboarding status、artifact index 和 next-command summary |
 
 ### 27a. 执行后代码库漂移检测
 

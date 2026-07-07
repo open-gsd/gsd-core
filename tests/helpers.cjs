@@ -423,6 +423,7 @@ function resetRuntimeWarningCaches() {
   const modelResolver = require('../gsd-core/bin/lib/model-resolver.cjs');
   configLoader._resetRuntimeWarningCacheForTests();
   modelResolver._resetModelPolicyWarningCacheForTests();
+  modelResolver._resetModelOverrideWarningCacheForTests();
 }
 
 module.exports = { runGsdTools, createTempDir, createTempProject, createTempGitProject, cleanup, parseFrontmatter, isUsageOutput, captureConsole, toPosixPath, runNpm, isolatedNpmEnv, withIsolatedProcessState, delay, waitFor, resetRuntimeWarningCaches, TOOLS_PATH };

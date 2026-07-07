@@ -273,10 +273,11 @@ npx @opengsd/gsd-core@latest --opencode --global
 
 ## Após a instalação
 
-Reinicie seu ambiente para carregar os novos comandos e agentes. Em seguida, inicie seu primeiro projeto:
+Reinicie seu ambiente para carregar os novos comandos e agentes. Em seguida, inicie um projeto novo ou faça onboarding de um repositório existente:
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # projeto greenfield
+/gsd-onboard       # base de código existente
 ```
 
 Se o comando não for encontrado após o reinício, verifique se o diretório de instalação corresponde ao caminho de configuração esperado pelo ambiente. A seção de edições de pré-lançamento acima cobre a incompatibilidade mais comum.

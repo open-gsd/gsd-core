@@ -166,7 +166,7 @@ and implemented by workflows/transition.md and workflows/complete-milestone.md.
 
 For existing codebases:
 
-1. **Map codebase first** via `/gsd:map-codebase`
+1. **Onboard or map codebase first** via `/gsd:onboard` (recommended first-time path) or `/gsd:map-codebase`
 
 2. **Infer Validated requirements** from existing code:
    - What does the codebase actually do?

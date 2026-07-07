@@ -78,6 +78,7 @@
 | 명령어 | 역할 | 소스 |
 |---------|------|--------|
 | `/gsd-new-project` | 심층 컨텍스트 수집 및 PROJECT.md로 새 프로젝트 초기화. | [commands/gsd/new-project.md](../../commands/gsd/new-project.md) |
+| `/gsd-onboard` | 기존 코드베이스를 매핑, 문서 수집, 프로젝트 설정, onboarding summary로 안내합니다. | [commands/gsd/onboard.md](../../commands/gsd/onboard.md) |
 | `/gsd-workspace` | GSD 워크스페이스 관리 — 격리된 워크스페이스 환경을 생성(`--new`), 목록(`--list`), 또는 제거(`--remove`). | [commands/gsd/workspace.md](../../commands/gsd/workspace.md) |
 | `/gsd-discuss-phase` | 계획 전 적응형 질문을 통한 단계 컨텍스트 수집. | [commands/gsd/discuss-phase.md](../../commands/gsd/discuss-phase.md) |
 | `/gsd-mvp-phase` | 수직 MVP 슬라이스로 단계 계획 — 사용자 스토리, SPIDR 분할, 이후 plan-phase. | [commands/gsd/mvp-phase.md](../../commands/gsd/mvp-phase.md) |
@@ -218,6 +219,7 @@
 | `milestone-summary.md` | 마일스톤 아티팩트에서 온보딩 및 검토용 마일스톤 요약 합성. | `/gsd-milestone-summary` |
 | `new-milestone.md` | 새 마일스톤 사이클 시작 — 프로젝트 컨텍스트 로드, 목표 수집, PROJECT.md/STATE.md 업데이트. | `/gsd-new-milestone` |
 | `new-project.md` | 통합 새 프로젝트 플로우 — 질문, 조사(선택), 요구사항, 로드맵. | `/gsd-new-project` |
+| `onboard.md` | Brownfield 온보딩 오케스트레이션 — 코드베이스 매핑, 문서 수집, planning 초기화, 다음 단계 요약. | `/gsd-onboard` |
 | `new-workspace.md` | 저장소 워크트리/클론과 독립적인 `.planning/`이 포함된 격리된 워크스페이스 생성. | `/gsd-workspace --new` |
 | `next.md` | 현재 프로젝트 상태를 감지하고 다음 논리적 단계로 자동 진행. | `/gsd-progress --next` |
 | `node-repair.md` | 실패한 태스크 검증을 위한 자율 수리 오퍼레이터; `execute-plan`에 의해 호출. | `execute-plan.md` (복구) |

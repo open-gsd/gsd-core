@@ -3770,6 +3770,190 @@ describe('#49 resolveModelPolicy: prototype-pollution guards', () => {
   });
 });
 
+// ─── #2041: model_overrides Claude full ID → Agent-tool alias on claude runtime ─
+//
+// Mirrors the #1133 model_policy alias-mapping tests (above) for the
+// model_overrides path. Bug: a full Claude model ID in model_overrides
+// (e.g. "claude-sonnet-5") was returned VERBATIM on the claude runtime and
+// handed to the Claude Agent tool, whose typed `model` parameter documents only
+// tier aliases (opus/sonnet/haiku/fable). The model_policy path already maps
+// full IDs → aliases via CLAUDE_POLICY_ID_TO_ALIAS (#1144); model_overrides
+// skipped that mapping entirely. The fix mirrors #1144 on the override path.
+// Non-Claude runtimes and non-Claude values pass through verbatim (parity).
+
+describe('#2041 model_overrides: Claude full ID → alias on claude runtime', () => {
+  let tmpDir;
+  beforeEach(() => {
+    tmpDir = makeTmp('2041');
+    resetRuntimeWarningCaches();
+  });
+  afterEach(() => {
+    rmr(tmpDir);
+    resetRuntimeWarningCaches();
+  });
+
+  // AC1 + AC2: mappable Claude full IDs resolve to their aliases on claude runtime
+  test('model_overrides claude-sonnet-5 → "sonnet" on runtime:claude (resolveModelInternal)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'sonnet');
+  });
+
+  test('model_overrides claude-opus-4-8 → "opus" on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-planner': 'claude-opus-4-8' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
+  });
+
+  test('model_overrides claude-haiku-4-5 → "haiku" on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-codebase-mapper': 'claude-haiku-4-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'haiku');
+  });
+
+  test('model_overrides claude-fable-5 → "fable" on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-planner': 'claude-fable-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'fable');
+  });
+
+  // AC3: bare aliases pass through verbatim
+  test('model_overrides bare "sonnet" alias passes through verbatim on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-executor': 'sonnet' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'sonnet');
+  });
+
+  test('model_overrides bare "fable" alias passes through verbatim on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-planner': 'fable' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'fable');
+  });
+
+  // AC1 (implicit claude): mapping fires when runtime key is absent (defaults to claude)
+  test('model_overrides claude-sonnet-5 → "sonnet" with implicit claude runtime (no runtime key)', () => {
+    writeConfig(tmpDir, {
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'sonnet');
+  });
+
+  // AC4: non-claude runtimes keep full IDs verbatim (parity with model_policy path)
+  test('model_overrides claude-sonnet-5 → verbatim ID on non-claude runtime (opencode)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'opencode',
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'claude-sonnet-5');
+  });
+
+  // AC5: unmappable Claude full ID warns once + falls through to tier alias
+  test('model_overrides unmappable claude ID (claude-opus-4-5) falls through to tier alias on claude', () => {
+    resetRuntimeWarningCaches();
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-planner': 'claude-opus-4-5' },
+    });
+    // gsd-planner balanced → opus tier; claude-opus-4-5 has no alias → warn + fall through → 'opus'
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'opus');
+  });
+
+  test('model_overrides unmappable claude ID emits a stderr warning exactly once (dedupe)', () => {
+    resetRuntimeWarningCaches();
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-planner': 'claude-opus-4-5' },
+    });
+    const writes = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    try {
+      resolveModelInternal(tmpDir, 'gsd-planner');
+      resolveModelInternal(tmpDir, 'gsd-planner'); // second call — dedupe must suppress
+    } finally {
+      process.stderr.write = original;
+    }
+    const warnings = writes.filter((w) => w.includes('model_overrides') && w.includes('claude-opus-4-5'));
+    assert.strictEqual(warnings.length, 1,
+      `expected exactly one override warning, got ${warnings.length}: ${JSON.stringify(writes)}`);
+  });
+
+  // AC6: resolveModelForTier (escalation / --attempt path) maps the same way
+  test('resolveModelForTier maps claude-sonnet-5 → "sonnet" on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+    });
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'sonnet');
+  });
+
+  test('resolveModelForTier keeps full ID verbatim on non-claude runtime', () => {
+    writeConfig(tmpDir, {
+      runtime: 'opencode',
+      model_overrides: { 'gsd-executor': 'claude-sonnet-5' },
+    });
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'claude-sonnet-5');
+  });
+
+  // MEDIUM-1 (review): exercise the unmappable-override fall-through branch in
+  // resolveModelForTier (closes the mutation-score gap — a future refactor that
+  // accidentally returned the verbatim override instead of falling through
+  // would otherwise survive the suite).
+  test('resolveModelForTier unmappable claude ID falls through to tier alias on claude', () => {
+    resetRuntimeWarningCaches();
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-planner': 'claude-opus-4-5' },
+    });
+    // unmappable override → fall through → no dynamic_routing → resolveModelInternal → 'opus'
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-planner', 0), 'opus');
+  });
+
+  // LOW-2 (review): pin the case-sensitive contract — a case-variant like
+  // "Claude-Sonnet-5" is NOT mapped (alias keys are case-sensitive, matching
+  // the model_policy path and the Claude API).
+  test('model_overrides case-variant "Claude-Sonnet-5" passes through verbatim (case-sensitive contract)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-executor': 'Claude-Sonnet-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'Claude-Sonnet-5');
+  });
+
+  // Regression guard: non-Claude custom / vendor values still pass through verbatim
+  // on the claude runtime (the fix must NOT touch values that aren't Claude IDs).
+  test('model_overrides non-Claude custom model passes through verbatim on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-planner': 'my-custom-model' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'my-custom-model');
+  });
+
+  test('model_overrides non-Claude vendor ID (openai/gpt-5) passes through verbatim on runtime:claude', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-executor': 'openai/gpt-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'openai/gpt-5');
+  });
+});
+
 // ─── resolveModelForTier: model_policy beats dynamic_routing ─────────────────
 
 describe('#49 resolveModelForTier: model_policy beats dynamic_routing', () => {

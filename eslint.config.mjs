@@ -56,6 +56,8 @@ export default tseslint.config(
       'coverage/**',
       '**/*.generated.cjs',
       // ADR-457: tsc-generated runtime artifact — lint the src/*.cts source, not the emitted .cjs.
+      'gsd-core/bin/lib/claude-orchestration.cjs',
+      'gsd-core/bin/lib/claude-orchestration-command-router.cjs',
       'gsd-core/bin/lib/semver-compare.cjs',
       'gsd-core/bin/lib/host-integration.cjs',
       'gsd-core/bin/lib/handshake-serialized.cjs',
@@ -163,6 +165,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/eval.cjs',
       'gsd-core/bin/lib/eval-command-router.cjs',
       'gsd-core/bin/lib/init-command-router.cjs',
+      'gsd-core/bin/lib/onboard-projection.cjs',
       'gsd-core/bin/lib/agent-command-router.cjs',
       'gsd-core/bin/lib/agent-install-check.cjs',
       'gsd-core/bin/lib/task-command-router.cjs',

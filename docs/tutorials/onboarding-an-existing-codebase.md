@@ -44,15 +44,21 @@ claude --dangerously-skip-permissions
 
 ---
 
-## Step 3 — Map the codebase
+## Step 3 — Start brownfield onboarding
 
-Before creating a project, let GSD Core learn what already exists. This is the step that makes brownfield planning accurate.
+Before creating a project, let GSD Core inspect the repo state and tell you the safe next top-level command. This is the step that prevents brownfield setup from skipping codebase context or overwriting existing planning files.
+
+```text
+/gsd-onboard
+```
+
+If code exists and `.planning/codebase/` is missing, GSD Core asks you to map the codebase first. Choose the recommended mapping option, then run the printed handoff command:
 
 ```text
 /gsd-map-codebase
 ```
 
-GSD Core spawns four parallel mapper sub-agents (you'll see "Spawning 4 parallel codebase mapper agents…" — this takes 1–5 minutes; do not interrupt). Each agent focuses on a different concern:
+Use `/gsd-onboard --fast` if you want the onboarding gate to prefer `/gsd-map-codebase --fast` for a lighter first pass. Fast mode is only enough for lightweight onboarding; `/gsd-onboard` still sends you back to the full mapper before `/gsd-new-project`. The full mapper spawns four parallel mapper sub-agents (you'll see "Spawning 4 parallel codebase mapper agents…" — this takes 1–5 minutes; do not interrupt). Each agent focuses on a different concern:
 
 | Agent | Focus |
 |-------|-------|
@@ -84,7 +90,7 @@ Open `.planning/codebase/CONCERNS.md`. This is the most useful file to read befo
 
 ---
 
-## Step 4 — Clear context and create the project
+## Step 4 — Rerun onboarding and initialize the project
 
 Clear the session window:
 
@@ -92,11 +98,19 @@ Clear the session window:
 /clear
 ```
 
-Now create the project. Because GSD Core found existing code in the last step, it already knows this is a brownfield project. When you run `/gsd-new-project`, the questions focus on what you are *adding*, not rebuilding what already exists:
+Now rerun onboarding:
+
+```text
+/gsd-onboard
+```
+
+If GSD Core detects ADRs, PRDs, specs, RFCs, or top-level requirements docs, choose the recommended docs-ingest handoff first and rerun `/gsd-onboard` afterward. Once codebase context and any existing docs are handled, onboarding prints the project-initialization handoff:
 
 ```text
 /gsd-new-project
 ```
+
+Because GSD Core found existing code in the previous step, `/gsd-new-project` knows this is a brownfield project. The questions focus on what you are *adding*, not rebuilding what already exists:
 
 GSD Core asks what you want to build. Answer with the feature you are adding, not a description of the whole codebase:
 
@@ -137,6 +151,20 @@ Approve the roadmap.
 ```
 
 Notice that `.planning/codebase/` is already there from Step 3. GSD Core read those files when writing `PROJECT.md`, which is why it could populate the Validated requirements without you describing them.
+
+Run onboarding one more time after project setup completes:
+
+```text
+/gsd-onboard
+```
+
+Now that `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, and `STATE.md` all exist, onboarding creates or confirms:
+
+```text
+.planning/onboarding/SUMMARY.md
+```
+
+This summary is a lightweight index of the setup artifacts and the next command to run.
 
 ---
 
@@ -206,12 +234,13 @@ You now have a project with a codebase map, a discuss decision record, and verif
 /gsd-ship 1
 ```
 
-For every future feature, run `/gsd-map-codebase` again whenever the structure changes significantly, so the codebase map stays fresh.
+For every future feature, run `/gsd-map-codebase` again whenever the structure changes significantly, so the codebase map stays fresh. Rerun `/gsd-onboard` only when you want to re-check first-time setup completeness or regenerate the onboarding summary.
 
 ---
 
 ## What you've learned
 
+- How `/gsd-onboard` safely sequences brownfield setup without nesting interactive commands or overwriting existing planning files.
 - How `/gsd-map-codebase` runs four parallel agents to produce `STACK.md`, `ARCHITECTURE.md`, `CONVENTIONS.md`, `CONCERNS.md`, `STRUCTURE.md`, `TESTING.md`, and `INTEGRATIONS.md` in `.planning/codebase/`.
 - How `/gsd-new-project` in a brownfield repo focuses questions on what you are *adding* and populates Validated requirements from existing code.
 - How the codebase map shapes every question in `/gsd-discuss-phase` — file paths, patterns, and conventions come from your actual code.
@@ -222,5 +251,5 @@ For every future feature, run `/gsd-map-codebase` again whenever the structure c
 ## Related
 
 - [Your first project](your-first-project.md) — the full greenfield loop from install to PR
-- [Map codebase via Commands](../COMMANDS.md) — all `/gsd-map-codebase` flags and subcommands
+- [Commands](../COMMANDS.md) — `/gsd-onboard`, plus all `/gsd-map-codebase` flags and subcommands
 - [Documentation index](../README.md)

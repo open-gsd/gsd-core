@@ -1,7 +1,7 @@
 {
   "id": "windsurf",
   "role": "runtime",
-  "version": "1.7.0-rc.3",
+  "version": "1.7.0-rc.4",
   "title": "Windsurf",
   "description": "Windsurf (Codeium) — workspace workflow artifact layout for slash commands; no hook surface; no hook events; tier-2 support.",
   "tier": "core",

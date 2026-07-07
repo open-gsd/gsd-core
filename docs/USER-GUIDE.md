@@ -79,7 +79,7 @@ The core GSD loop is: **discuss → plan → execute → verify → ship**, repe
 
 See [Your first project](tutorials/your-first-project.md).
 
-For onboarding an existing codebase before starting a new milestone, see [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md).
+For onboarding an existing codebase before starting a new milestone, run `/gsd-onboard` or see [Onboarding an existing codebase](tutorials/onboarding-an-existing-codebase.md).
 
 **Relevant flags at a glance:**
 
@@ -536,10 +536,12 @@ claude --dangerously-skip-permissions
 ### Existing Codebase
 
 ```bash
-/gsd-map-codebase           # Analyse what exists (parallel agents)
-/gsd-new-project            # Questions focus on what you're ADDING
+/gsd-onboard                # Safely map, ingest docs, and initialize planning
+# Follow the printed top-level handoff commands, then rerun /gsd-onboard
 # (normal phase workflow from here)
 ```
+
+`/gsd-onboard` routes through `/gsd-map-codebase`, `/gsd-ingest-docs`, and `/gsd-new-project` without nesting interactive workflows or overwriting existing planning files silently.
 
 **Post-execute drift detection (#2003).** After every `/gsd-execute-phase`, GSD checks whether the phase introduced enough structural change to make `.planning/codebase/STRUCTURE.md` stale. Flip the behavior with:
 
@@ -986,7 +988,8 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
     themes/
       default.css         # Shared CSS variables for all sketches
     MANIFEST.md           # Index of all sketches with winners
-  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase)
+  codebase/               # Brownfield codebase mapping (from /gsd-map-codebase or /gsd-onboard)
+  onboarding/             # Brownfield onboarding summary (from /gsd-onboard)
   phases/
     XX-phase-name/
       XX-YY-PLAN.md       # Atomic execution plans

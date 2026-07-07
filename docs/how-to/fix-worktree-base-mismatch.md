@@ -1,16 +1,16 @@
 # How to fix the worktree base-mismatch (exit 42) error
 
-**Goal:** Understand why `/gsd-execute-phase` halts with `FATAL: worktree base mismatch` / exit 42 when your branch is ahead of the default branch, and choose the right fix to restore normal — or parallel — execution.
+**Goal:** Understand why `/gsd-execute-phase` or `/gsd-quick` halts with `FATAL: worktree base mismatch` / exit 42 when your branch is ahead of the default branch, and choose the right fix to restore normal — or parallel — execution.
 
-**Prerequisites:** GSD Core is installed and you have an active project. You have run `/gsd-execute-phase` and either seen the exit-42 error or the one-line `⚠ Worktree base mismatch` warning.
+**Prerequisites:** GSD Core is installed and you have an active project. You have run `/gsd-execute-phase` or `/gsd-quick` and either seen the exit-42 error or the one-line `⚠ Worktree base mismatch` warning.
 
 ---
 
 ## What you will see
 
-When you run `/gsd-execute-phase` on a branch that is ahead of the repository's default branch (for example, an unmerged milestone branch, a long-lived feature branch, or a branch with commits not yet in `origin/HEAD`), you may see one of two messages:
+When you run `/gsd-execute-phase` or `/gsd-quick` on a branch that is ahead of the repository's default branch (for example, an unmerged milestone branch, a long-lived feature branch, or a branch with commits not yet in `origin/HEAD`), you may see one of two messages:
 
-**Automatic-degrade warning (phase still completes):**
+**Automatic-degrade warning (phase or quick task still completes):**
 
 ```
 ⚠ Worktree base mismatch: HEAD (abc12345) differs from origin/HEAD (def67890).
@@ -19,7 +19,7 @@ To keep parallel worktrees, set worktree.baseRef:"head" in
 .claude/settings.local.json (or run: gsd-tools worktree set-baseref). See #683.
 ```
 
-The phase runs to completion sequentially; nothing is blocked. This is the runtime mitigation.
+The phase or quick task runs to completion sequentially; nothing is blocked. This is the runtime mitigation (`/gsd-execute-phase`: #683/#1369; `/gsd-quick`: #1941).
 
 **Exit-42 halt (older installs or misconfigured environments):**
 

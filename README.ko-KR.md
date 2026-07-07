@@ -47,13 +47,14 @@ npx @opengsd/gsd-core@latest
 
 다른 런타임이나 Node.js가 없는 환경은 [런타임에 설치하기](docs/ko-KR/how-to/install-on-your-runtime.md)를 참조하세요.
 
-설치 후 첫 번째 프로젝트를 시작합니다:
+설치 후 새 프로젝트를 시작하거나 기존 저장소를 온보딩합니다:
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # 그린필드 프로젝트
+/gsd-onboard       # 기존 코드베이스
 ```
 
-처음 사용하시나요? [첫 번째 프로젝트](docs/ko-KR/tutorials/your-first-project.md)를 따라 설치부터 첫 단계 출시까지 안내받으세요.
+처음 사용하시나요? [첫 번째 프로젝트](docs/ko-KR/tutorials/your-first-project.md)를 따라 설치부터 첫 단계 출시까지 안내받으세요. 기존 저장소라면 [기존 코드베이스 온보딩](docs/ko-KR/tutorials/onboarding-an-existing-codebase.md)을 참고하세요.
 
 ---
 

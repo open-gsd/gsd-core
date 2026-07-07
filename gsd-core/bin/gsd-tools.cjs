@@ -179,14 +179,23 @@
  *
  * Loop Extension Point Queries (ADR-857 phase 3c):
  *   loop render-hooks <point>            Resolve + render active Capability hooks at a loop point
+ *                                        [--config-dir <path>] [--runtime <r>] [--active-cap <capId>]
  *                                        Returns JSON envelope { point, activeHooks, rendered }
  *                                        Valid points: discuss:pre/post, plan:pre/post,
  *                                        execute:pre/wave:pre/wave:post/post, verify:pre/post, ship:pre/post
+ *                                        --runtime: override the auto-detected runtime (#2003) so the config
+ *                                                   dir resolves to that runtime's home even when
+ *                                                   .planning/config.json persists a different runtime.
  *
  * Capability State (ADR-857 phase 4b):
- *   capability state [--config-dir <path>]  Resolve per-capability install/surface/hook-activation state
+ *   capability state [--config-dir <path>] [--runtime <r>]  Resolve per-capability install/surface/hook-activation state
  *                                           Returns JSON envelope { runtimeConfigDir, capabilities[] }
  *                                           --config-dir: runtime config dir (default: auto-detect current runtime)
+ *                                           --runtime: override the auto-detected runtime (#2003); bypasses the
+ *                                                      GSD_RUNTIME → config.runtime → 'claude' precedence so a
+ *                                                      repo with a persisted runtime can still resolve another
+ *                                                      runtime's config dir (e.g. driving Claude Code from a
+ *                                                      repo that persists runtime:"codex").
  *
  * GSD-2 Migration:
  *   from-gsd2 [--path <dir>] [--force] [--dry-run]
@@ -1598,9 +1607,28 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           }
           loopActiveCap = value;
         }
+        // --runtime <r> (#2003): explicit runtime override so the config-dir
+        // resolution bypasses the persisted-runtime fallback (GSD_RUNTIME →
+        // config.runtime). Mirrors the --config-dir dual-form (--runtime X /
+        // --runtime=X) and the capability-set --runtime precedent.
+        let loopRuntime = undefined;
+        const runtimeEqArg = args.find(arg => arg.startsWith('--runtime='));
+        const runtimeIdx = args.indexOf('--runtime');
+        if (runtimeEqArg) {
+          const value = runtimeEqArg.slice('--runtime='.length).trim();
+          if (!value) error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          loopRuntime = value;
+        } else if (runtimeIdx !== -1) {
+          const value = args[runtimeIdx + 1];
+          if (!value || value.startsWith('--')) {
+            error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          }
+          loopRuntime = value;
+        }
         loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
           configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
           activeCap: loopActiveCap,
+          runtime: loopRuntime,
         });
       } else {
         error(
@@ -1752,7 +1780,24 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
           configDir = configDirVal;
         }
         const resolvedConfigDir = configDir ? path.resolve(configDir) : null;
-        capabilityState.cmdCapabilityState(cwd, resolvedConfigDir, raw, {});
+        // --runtime <r> (#2003): explicit runtime override so the config-dir
+        // resolution bypasses the persisted-runtime fallback. Dual-form like
+        // --config-dir (--runtime X / --runtime=X).
+        let stateRuntime = undefined;
+        const stateRuntimeEqArg = args.find(arg => arg.startsWith('--runtime='));
+        const stateRuntimeIdx = args.indexOf('--runtime');
+        if (stateRuntimeEqArg) {
+          const value = stateRuntimeEqArg.slice('--runtime='.length).trim();
+          if (!value) error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          stateRuntime = value;
+        } else if (stateRuntimeIdx !== -1) {
+          const value = args[stateRuntimeIdx + 1];
+          if (!value || value.startsWith('--')) {
+            error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+          }
+          stateRuntime = value;
+        }
+        capabilityState.cmdCapabilityState(cwd, resolvedConfigDir, raw, { runtime: stateRuntime });
       } else if (capSubcommand === 'set') {
         // capability set <id> [--on|--off|--enable|--disable] [--gate <key>=<bool>]... [--config-dir <dir>] [--runtime <r>] [--scope <s>]
         const capId = args[2];

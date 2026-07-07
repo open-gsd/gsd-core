@@ -527,7 +527,8 @@ Caminhos equivalentes para outros runtimes:
 │   ├── FEATURES.md
 │   ├── ARCHITECTURE.md
 │   └── PITFALLS.md
-├── codebase/               # Mapeamento de brownfield (do /gsd-map-codebase)
+├── codebase/               # Mapeamento de brownfield (do /gsd-map-codebase ou /gsd-onboard)
+├── onboarding/             # Resumo de onboarding brownfield (do /gsd-onboard)
 │   ├── STACK.md            # Frontmatter YAML carrega `last_mapped_commit`
 │   ├── ARCHITECTURE.md     # para o portão de desvio pós-execução (#2003)
 │   ├── CONVENTIONS.md

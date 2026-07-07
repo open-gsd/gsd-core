@@ -64,6 +64,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [1769-state-md-transition-module.md](1769-state-md-transition-module.md) | STATE.md Transition Module — intent-based transitions over scattered RMW callbacks | Proposed |
 | [1817-state-md-rebuild-derivability-contract.md](1817-state-md-rebuild-derivability-contract.md) | STATE.md rebuild — derivability contract (capstone 11th transition) | Accepted |
 | [2008-command-exit-zero-gate.md](2008-command-exit-zero-gate.md) | Generic gate-predicate evaluator with a `command-exit-zero` kind (#2008) | Accepted |
+| [1990-existing-code-onboarding.md](1990-existing-code-onboarding.md) | Existing Code Onboarding Module owns deterministic repo-state detection and onboarding route selection | Proposed |
 
 ## Seam map
 

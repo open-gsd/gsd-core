@@ -1599,6 +1599,9 @@ describe('cmdInitNewProject', () => {
   test('brownfield with codebase map does not need map', () => {
     fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"test"}');
     fs.mkdirSync(path.join(tmpDir, '.planning', 'codebase'), { recursive: true });
+    for (const name of ['STACK', 'ARCHITECTURE', 'STRUCTURE', 'CONVENTIONS', 'TESTING', 'INTEGRATIONS', 'CONCERNS']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'codebase', `${name}.md`), `# ${name}\n`);
+    }
 
     const result = runGsdTools('init new-project', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);

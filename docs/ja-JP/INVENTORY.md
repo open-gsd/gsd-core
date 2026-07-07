@@ -78,6 +78,7 @@
 | コマンド | 役割 | ソース |
 |----------|------|--------|
 | `/gsd-new-project` | 深いコンテキスト収集と PROJECT.md で新しいプロジェクトを初期化。 | [commands/gsd/new-project.md](../../commands/gsd/new-project.md) |
+| `/gsd-onboard` | 既存コードベースをマッピング、ドキュメント取り込み、プロジェクト設定、onboarding summary へ案内。 | [commands/gsd/onboard.md](../../commands/gsd/onboard.md) |
 | `/gsd-workspace` | GSD ワークスペースを管理 — 独立したワークスペース環境を作成（`--new`）、一覧表示（`--list`）、削除（`--remove`）。 | [commands/gsd/workspace.md](../../commands/gsd/workspace.md) |
 | `/gsd-discuss-phase` | 計画前にアダプティブな質問でフェーズコンテキストを収集。 | [commands/gsd/discuss-phase.md](../../commands/gsd/discuss-phase.md) |
 | `/gsd-mvp-phase` | フェーズを垂直 MVP スライスとして計画 — ユーザーストーリー、SPIDR 分割、その後 plan-phase。 | [commands/gsd/mvp-phase.md](../../commands/gsd/mvp-phase.md) |
@@ -218,6 +219,7 @@
 | `milestone-summary.md` | マイルストーンサマリー合成 — マイルストーンアーティファクトからオンボーディングとレビューアーティファクトを作成。 | `/gsd-milestone-summary` |
 | `new-milestone.md` | 新しいマイルストーンサイクルを開始 — プロジェクトコンテキストを読み込み、目標を収集して PROJECT.md/STATE.md を更新。 | `/gsd-new-milestone` |
 | `new-project.md` | 統合新プロジェクトフロー — 質問、調査（任意）、要件、ロードマップ。 | `/gsd-new-project` |
+| `onboard.md` | Brownfield onboarding orchestration — コードベースをマップし、docs を取り込み、planning を初期化し、次のステップを要約。 | `/gsd-onboard` |
 | `new-workspace.md` | リポジトリのワークツリー/クローンと独立した `.planning/` を持つ独立したワークスペースを作成。 | `/gsd-workspace --new` |
 | `next.md` | 現在のプロジェクト状態を検出して次の論理的なステップに自動的に進む。 | `/gsd-progress --next` |
 | `node-repair.md` | タスク検証が失敗した場合の自律修復オペレーター。`execute-plan` から呼び出し。 | `execute-plan.md` (recovery) |

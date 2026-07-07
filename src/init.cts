@@ -51,6 +51,15 @@ const { checkAgentsInstalled } = agentInstallCheck;
 import gitBaseBranch = require('./git-base-branch.cjs');
 const { gitWorktreeInfoInternal } = gitBaseBranch;
 import { makeResolution } from './resolution.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- onboard-projection.cjs is an export= CommonJS module
+import onboardProjection = require('./onboard-projection.cjs');
+const {
+  REQUIRED_CODEBASE_MAP_FILES,
+  buildOnboardProjection,
+  hasCodeFilesInternal,
+  hasPackageFileInternal,
+  listCodebaseMapFiles,
+} = onboardProjection;
 
 const { output, error } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
@@ -625,68 +634,11 @@ function cmdInitNewProject(cwd: string, raw: boolean): void {
   const exaKeyFile = path.join(homedir, '.gsd', 'exa_api_key');
   const hasExaSearch = !!(process.env['EXA_API_KEY'] || fs.existsSync(exaKeyFile));
 
-  let hasCode = false;
-  let hasPackageFile = false;
-  try {
-    const codeExtensions = new Set([
-      '.ts', '.js', '.py', '.go', '.rs', '.swift', '.java',
-      '.kt', '.kts',
-      '.c', '.cpp', '.h',
-      '.cs',
-      '.rb',
-      '.php',
-      '.dart',
-      '.m', '.mm',
-      '.scala',
-      '.groovy',
-      '.lua',
-      '.r', '.R',
-      '.zig',
-      '.ex', '.exs',
-      '.clj',
-    ]);
-    const skipDirs = new Set([
-      'node_modules', '.git', '.planning', '.claude', '.codex',
-      '__pycache__', 'target', 'dist', 'build',
-    ]);
-    function findCodeFiles(dir: string, depth: number): boolean {
-      if (depth > 3) return false;
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return false;
-      }
-      for (const entry of entries) {
-        if (entry.isFile() && codeExtensions.has(path.extname(entry.name))) return true;
-        if (entry.isDirectory() && !skipDirs.has(entry.name)) {
-          if (findCodeFiles(path.join(dir, entry.name), depth + 1)) return true;
-        }
-      }
-      return false;
-    }
-    hasCode = findCodeFiles(cwd, 0);
-  } catch {
-    /* intentionally empty — best-effort detection */
-  }
-
-  hasPackageFile =
-    pathExistsInternal(cwd, 'package.json') ||
-    pathExistsInternal(cwd, 'requirements.txt') ||
-    pathExistsInternal(cwd, 'Cargo.toml') ||
-    pathExistsInternal(cwd, 'go.mod') ||
-    pathExistsInternal(cwd, 'Package.swift') ||
-    pathExistsInternal(cwd, 'build.gradle') ||
-    pathExistsInternal(cwd, 'build.gradle.kts') ||
-    pathExistsInternal(cwd, 'pom.xml') ||
-    pathExistsInternal(cwd, 'Gemfile') ||
-    pathExistsInternal(cwd, 'composer.json') ||
-    pathExistsInternal(cwd, 'pubspec.yaml') ||
-    pathExistsInternal(cwd, 'CMakeLists.txt') ||
-    pathExistsInternal(cwd, 'Makefile') ||
-    pathExistsInternal(cwd, 'build.zig') ||
-    pathExistsInternal(cwd, 'mix.exs') ||
-    pathExistsInternal(cwd, 'project.clj');
+  const hasCode = hasCodeFilesInternal(cwd);
+  const hasPackageFile = hasPackageFileInternal(cwd);
+  const isBrownfield = hasCode || hasPackageFile;
+  const codebaseMapFiles = listCodebaseMapFiles(cwd);
+  const hasCodebaseMap = codebaseMapFiles.length === REQUIRED_CODEBASE_MAP_FILES.length;
 
   const result: Record<string, unknown> = {
     researcher_model: resolveModelInternal(cwd, 'gsd-project-researcher'),
@@ -696,14 +648,13 @@ function cmdInitNewProject(cwd: string, raw: boolean): void {
     commit_docs: config.commit_docs,
 
     project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),
-    has_codebase_map: pathExistsInternal(cwd, '.planning/codebase'),
+    has_codebase_map: hasCodebaseMap,
     planning_exists: pathExistsInternal(cwd, '.planning'),
 
     has_existing_code: hasCode,
     has_package_file: hasPackageFile,
-    is_brownfield: hasCode || hasPackageFile,
-    needs_codebase_map:
-      (hasCode || hasPackageFile) && !pathExistsInternal(cwd, '.planning/codebase'),
+    is_brownfield: isBrownfield,
+    needs_codebase_map: isBrownfield && !hasCodebaseMap,
 
     ...getInitGitState(cwd),
 
@@ -837,6 +788,25 @@ function cmdInitIngestDocs(cwd: string, raw: boolean): void {
     project_path: '.planning/PROJECT.md',
     commit_docs: config.commit_docs,
   };
+  output(withProjectRoot(cwd, result), raw);
+}
+
+function cmdInitOnboard(
+  cwd: string,
+  raw: boolean,
+  options: Record<string, unknown> = {},
+): void {
+  const config = loadConfig(cwd);
+  const workflowConfig = (config.workflow ?? {}) as Record<string, unknown>;
+  const result = {
+    ...buildOnboardProjection(cwd, {
+      commitDocs: !!config.commit_docs,
+      fast: options['fast'] === true,
+      textMode: options['text'] === true || !!config.text_mode || !!workflowConfig['text_mode'],
+    }),
+    ...getInitGitState(cwd),
+  };
+
   output(withProjectRoot(cwd, result), raw);
 }
 
@@ -2606,6 +2576,7 @@ export = {
   cmdInitNewMilestone,
   cmdInitQuick,
   cmdInitIngestDocs,
+  cmdInitOnboard,
   cmdInitResume,
   cmdInitVerifyWork,
   cmdInitPhaseOp,

@@ -288,13 +288,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Init 命令（复合上下文加载）
 
-通过单次调用加载特定工作流所需的所有上下文。返回包含项目信息、配置、状态和工作流专属数据的 JSON。
+通过单次调用加载特定工作流所需的所有上下文。返回包含项目信息、配置、状态和工作流专属数据的 JSON。`init onboard [--fast] [--text]` 会为 `/gsd-onboard` 返回 brownfield 信号、planning 文档候选、代码库映射完整性、fast 映射就绪状态、文本模式路由、部分 planning 状态和 onboarding summary 状态。
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>

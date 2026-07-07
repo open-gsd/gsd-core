@@ -5,7 +5,7 @@ argument-hint: ""
 allowed-tools:
   - Read
   - Skill
-requires: [new-project, new-milestone, complete-milestone, audit-milestone, milestone-summary, import, ingest-docs, profile-user, review-backlog]
+requires: [new-project, onboard, new-milestone, complete-milestone, audit-milestone, milestone-summary, import, ingest-docs, profile-user, review-backlog]
 ---
 
 Route to the appropriate project / milestone skill based on the user's intent.
@@ -15,6 +15,7 @@ inline as part of `gsd-audit-milestone`'s output.
 | User wants | Invoke |
 |---|---|
 | Start a new project | gsd-new-project |
+| Onboard an existing codebase | gsd-onboard |
 | Create a new milestone | gsd-new-milestone |
 | Complete the current milestone | gsd-complete-milestone |
 | Audit a milestone for issues | gsd-audit-milestone |

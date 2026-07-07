@@ -23,6 +23,8 @@
 │   ├── architecture.md
 │   ├── stack.md
 │   └── ...
+├── onboarding/                         # 브라운필드 온보딩 요약 (선택)
+│   └── SUMMARY.md
 ├── intel/                              # 쿼리 가능한 심볼 인덱스 (선택, intel.enabled)
 │   └── API-SURFACE.md
 └── phases/
@@ -48,7 +50,7 @@
 | | |
 |---|---|
 | **목적** | 표준 프로젝트 아이덴티티: 무엇인지, 누구를 위한 것인지, 핵심 가치, 요구사항, 제약 사항, 주요 결정. 제품이 발전함에 따라 프로젝트 생명주기 전반에 걸쳐 업데이트됩니다. |
-| **생성자** | `/gsd-new-project` (최초 생성); 결정이 검증됨에 따라 `/gsd-complete-milestone`에 의해 업데이트됩니다. |
+| **생성자** | `/gsd-new-project` (최초 생성, `/gsd-onboard` handoff 포함); 결정이 검증됨에 따라 `/gsd-complete-milestone`에 의해 업데이트됩니다. |
 | **소비자** | 모든 플래닝 워크플로; `gsd-phase-researcher`, `gsd-planner` (컨텍스트); `discuss-phase` (이전 결정); `gsd-plan-checker` (프로젝트 제약 사항). |
 
 ### `ROADMAP.md`
@@ -56,7 +58,7 @@
 | | |
 |---|---|
 | **목적** | 목표, 요구사항 ID, 성공 기준, 페이즈별 표준 참조가 있는 마일스톤 및 페이즈 목록. 프로젝트가 무엇을 빌드하고 어떤 순서로 하는지에 대한 단일 진실의 원천. |
-| **생성자** | `/gsd-new-project` (최초 생성); `/gsd-phase --insert`와 `/gsd-complete-milestone`에 의해 업데이트됩니다. |
+| **생성자** | `/gsd-new-project` (최초 생성, `/gsd-onboard` handoff 포함); `/gsd-phase --insert`와 `/gsd-complete-milestone`에 의해 업데이트됩니다. |
 | **소비자** | `/gsd-discuss-phase`, `/gsd-plan-phase`, `/gsd-execute-phase`; 페이즈 정보가 필요한 모든 오케스트레이션 명령; `gsd-planner`, `gsd-plan-checker`, `gsd-phase-researcher`. |
 
 ### `REQUIREMENTS.md`
@@ -64,7 +66,7 @@
 | | |
 |---|---|
 | **목적** | 프로젝트의 번호가 매겨진 체크 가능한 인수 기준. 각 요구사항은 로드맵 페이즈에 매핑되는 ID(예: `AUTH-01`)를 가집니다. 페이즈가 실행됨에 따라 요구사항을 완료로 표시합니다. |
-| **생성자** | `/gsd-new-project` (최초 생성); `execute-phase`에 의해 요구사항이 완료로 표시됩니다. |
+| **생성자** | `/gsd-new-project` (최초 생성, `/gsd-onboard` handoff 포함); `execute-phase`에 의해 요구사항이 완료로 표시됩니다. |
 | **소비자** | `gsd-planner` (플랜은 모든 페이즈 요구사항 ID를 처리해야 함); `gsd-plan-checker` Dimension 1 (요구사항 커버리지); `discuss-phase` (이전 요구사항). |
 
 ### `STATE.md`
@@ -72,7 +74,7 @@
 | | |
 |---|---|
 | **목적** | 살아있는 위치 추적기 — 현재 페이즈와 플랜, 진행 지표, 누적된 결정, 세션 연속성 노트. 모든 워크플로 실행 시작 시 읽힙니다. 중요한 작업 이후 업데이트됩니다. |
-| **생성자** | `/gsd-new-project` (최초 생성); 모든 페이즈 워크플로, `/gsd-pause-work`, `/gsd-resume-work`에 의해 지속적으로 업데이트됩니다. |
+| **생성자** | `/gsd-new-project` (최초 생성, `/gsd-onboard` handoff 포함); 모든 페이즈 워크플로, `/gsd-pause-work`, `/gsd-resume-work`에 의해 지속적으로 업데이트됩니다. |
 | **소비자** | 모든 오케스트레이션 워크플로; `/gsd-progress`; `/gsd-quick`을 통한 임시 태스크 실행; `gsd-planner` 및 `gsd-phase-researcher` (프로젝트 결정). |
 
 전체 필드 참조는 [STATE.md 스키마](state-md.md)를 참조하세요.
@@ -86,6 +88,14 @@
 | **소비자** | 모든 워크플로 및 서브에이전트 — `gsd-tools query config-get`을 통해 초기화 시점에 읽습니다. |
 
 전체 스키마는 [CONFIGURATION](../../CONFIGURATION.md)을 참조하세요.
+
+### `onboarding/SUMMARY.md` (선택)
+
+| | |
+|---|---|
+| **목적** | 브라운필드 온보딩 인덱스. 아티팩트 상태, 코드베이스 매핑 완료 여부, 초기 설정 후 권장되는 다음 GSD 명령을 기록합니다. |
+| **생성자** | `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `STATE.md`가 모두 존재한 뒤 `/gsd-onboard`. |
+| **소비자** | 초기 설정을 검토하는 사람; 기존 온보딩 상태를 확인하는 향후 `/gsd-onboard` 실행. |
 
 ### `MILESTONES.md` (선택)
 

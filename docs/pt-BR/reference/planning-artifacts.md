@@ -23,6 +23,8 @@ O diretório `.planning/` é a memória compartilhada do GSD Core para um projet
 │   ├── architecture.md
 │   ├── stack.md
 │   └── ...
+├── onboarding/                         # Resumo de onboarding brownfield (opcional)
+│   └── SUMMARY.md
 ├── intel/                              # Índice de símbolos consultável (opcional, intel.enabled)
 │   └── API-SURFACE.md
 └── phases/
@@ -48,7 +50,7 @@ O diretório `.planning/` é a memória compartilhada do GSD Core para um projet
 | | |
 |---|---|
 | **Finalidade** | Identidade canônica do projeto: o que é, para quem é, valor central, requisitos, restrições e decisões-chave. Atualizado ao longo do ciclo de vida do projeto conforme o produto evolui. |
-| **Produzido por** | `/gsd-new-project` (criação inicial); atualizado por `/gsd-complete-milestone` à medida que as decisões são validadas. |
+| **Produzido por** | `/gsd-new-project` (criação inicial, incluindo handoff do `/gsd-onboard`); atualizado por `/gsd-complete-milestone` à medida que as decisões são validadas. |
 | **Consumido por** | Todos os fluxos de trabalho de planejamento; `gsd-phase-researcher`, `gsd-planner` (contexto); `discuss-phase` (decisões anteriores); `gsd-plan-checker` (restrições do projeto). |
 
 ### `ROADMAP.md`
@@ -56,7 +58,7 @@ O diretório `.planning/` é a memória compartilhada do GSD Core para um projet
 | | |
 |---|---|
 | **Finalidade** | Listagem de marcos e fases com objetivos, IDs de requisitos, critérios de sucesso e referências canônicas por fase. A fonte única de verdade sobre o que o projeto está construindo e em que ordem. |
-| **Produzido por** | `/gsd-new-project` (criação inicial); atualizado por `/gsd-phase --insert` e `/gsd-complete-milestone`. |
+| **Produzido por** | `/gsd-new-project` (criação inicial, incluindo handoff do `/gsd-onboard`); atualizado por `/gsd-phase --insert` e `/gsd-complete-milestone`. |
 | **Consumido por** | `/gsd-discuss-phase`, `/gsd-plan-phase`, `/gsd-execute-phase`; todos os comandos de orquestração que precisam de informações de fase; `gsd-planner`, `gsd-plan-checker`, `gsd-phase-researcher`. |
 
 ### `REQUIREMENTS.md`
@@ -64,7 +66,7 @@ O diretório `.planning/` é a memória compartilhada do GSD Core para um projet
 | | |
 |---|---|
 | **Finalidade** | Critérios de aceitação numerados e verificáveis para o projeto. Cada requisito possui um ID (ex.: `AUTH-01`) que mapeia para as fases do roadmap. Marca os requisitos como concluídos conforme as fases são executadas. |
-| **Produzido por** | `/gsd-new-project` (criação inicial); requisitos marcados como concluídos por `execute-phase`. |
+| **Produzido por** | `/gsd-new-project` (criação inicial, incluindo handoff do `/gsd-onboard`); requisitos marcados como concluídos por `execute-phase`. |
 | **Consumido por** | `gsd-planner` (os planos devem contemplar todos os IDs de requisitos da fase); `gsd-plan-checker` Dimensão 1 (cobertura de requisitos); `discuss-phase` (requisitos anteriores). |
 
 ### `STATE.md`
@@ -72,7 +74,7 @@ O diretório `.planning/` é a memória compartilhada do GSD Core para um projet
 | | |
 |---|---|
 | **Finalidade** | Rastreador de posição em andamento — fase e plano atuais, métricas de progresso, decisões acumuladas, notas de continuidade de sessão. Lido no início de toda execução de fluxo de trabalho. Atualizado após cada ação significativa. |
-| **Produzido por** | `/gsd-new-project` (criação inicial); atualizado continuamente por todos os fluxos de fase, `/gsd-pause-work`, `/gsd-resume-work`. |
+| **Produzido por** | `/gsd-new-project` (criação inicial, incluindo handoff do `/gsd-onboard`); atualizado continuamente por todos os fluxos de fase, `/gsd-pause-work`, `/gsd-resume-work`. |
 | **Consumido por** | Todos os fluxos de orquestração; `/gsd-progress`; execução de tarefas avulsas via `/gsd-quick`; `gsd-planner` e `gsd-phase-researcher` (decisões do projeto). |
 
 Consulte o [esquema de STATE.md](state-md.md) para a referência completa de campos.
@@ -86,6 +88,14 @@ Consulte o [esquema de STATE.md](state-md.md) para a referência completa de cam
 | **Consumido por** | Todos os fluxos de trabalho e subagentes — lido no momento de inicialização via `gsd-tools query config-get`. |
 
 Consulte [CONFIGURATION](../CONFIGURATION.md) para o esquema completo.
+
+### `onboarding/SUMMARY.md` (opcional)
+
+| | |
+|---|---|
+| **Finalidade** | Índice de onboarding brownfield que registra status dos artefatos, se o mapeamento do código-base está completo e o próximo comando GSD recomendado após a configuração inicial. |
+| **Produzido por** | `/gsd-onboard` depois que `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md` e `STATE.md` existem. |
+| **Consumido por** | Humanos revisando a configuração inicial; futuras execuções de `/gsd-onboard` ao confirmar o estado de onboarding existente. |
 
 ### `MILESTONES.md` (opcional)
 

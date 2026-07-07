@@ -28,6 +28,7 @@ interface InitModule {
   cmdInitPlanPhase(cwd: string, phase: string | undefined, raw: boolean, opts: Record<string, string | boolean | null>): void;
   cmdInitNewProject(cwd: string, raw: boolean): void;
   cmdInitNewMilestone(cwd: string, raw: boolean): void;
+  cmdInitOnboard(cwd: string, raw: boolean, opts?: Record<string, string | boolean | null>): void;
   cmdInitQuick(cwd: string, name: string, raw: boolean): void;
   cmdInitIngestDocs(cwd: string, raw: boolean): void;
   cmdInitResume(cwd: string, raw: boolean): void;
@@ -71,6 +72,10 @@ function routeInitCommand({ init, args, cwd, raw, error }: RouteInitCommandOptio
       },
       'new-project': () => init.cmdInitNewProject(cwd, raw),
       'new-milestone': () => init.cmdInitNewMilestone(cwd, raw),
+      onboard: () => {
+        const namedArgs = parseNamedArgs(args, [], ['fast', 'text']);
+        init.cmdInitOnboard(cwd, raw, { fast: namedArgs['fast'], text: namedArgs['text'] });
+      },
       quick: () => init.cmdInitQuick(cwd, args.slice(2).join(' '), raw),
       'ingest-docs': () => init.cmdInitIngestDocs(cwd, raw),
       resume: () => init.cmdInitResume(cwd, raw),

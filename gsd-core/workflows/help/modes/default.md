@@ -11,11 +11,12 @@ Plan-driven development for solo agentic work with Claude Code. GSD Core turns a
 
 ```text
 /gsd:new-project        # Greenfield: questioning → research → requirements → roadmap
+/gsd:onboard            # Existing codebase: map → ingest docs → initialize planning
 /gsd:plan-phase 1       # Create a detailed plan for phase 1
 /gsd:execute-phase 1    # Execute all plans in the phase
 ```
 
-Existing codebase? Run `/gsd:map-codebase` first to ground GSD in your code.
+Existing codebase? Run `/gsd:onboard` to map the repo, ingest existing docs, and initialize planning safely.
 
 ## Common commands
 

@@ -1,0 +1,485 @@
+/**
+ * Claude Orchestration Capability — Workflow-tool backend detection + emitter
+ *
+ * #1143 — adopts Claude Code's Workflow tool (the engine behind `/effort ultracode`)
+ * as an optional, runtime-gated parallel-execution backend for the GSD loop.
+ *
+ * This module is the pure, testable core of the capability. It owns two seams:
+ *
+ *   detectWorkflowBackend({ runtimeId, hostIntegration, config, agentSdkVersion })
+ *     → { available: boolean, backend: 'workflow'|'inline', reason: string }
+ *     Fail-closed: every miss degrades to `inline` (today's behaviour), so the
+ *     core loop is byte-identical unless every gate opens. This is criteria 3 + 6.
+ *
+ *   emitWorkflowScript({ phaseDir, waves, runId, budgetTokens? })
+ *     → { ok:true, script, summary } | { ok:false, reason }
+ *     Maps GSD's wave/plan model 1:1 onto Workflow primitives:
+ *       wave  → sequential `parallel()` stage barriers,
+ *       plan  → `agent(brief, { agentType:'gsd-executor', isolation:'worktree' })`,
+ *       files_modified overlap → forces plans into separate sequential stages
+ *         (the same overlap rule execute-phase already applies inline),
+ *       resumeFromRunId → wired to the phase run id,
+ *       budgetTokens → a shared token pool.
+ *     The emitted script composes the SAME gsd-executor agent and worktree
+ *     isolation the inline path uses, so it produces the same artifacts/commits
+ *     (criterion 2). It is a generated string consumed by the orchestrator; this
+ *     module never invokes the Workflow tool itself.
+ *
+ * Design laws:
+ *   - Gall's Law: ship a small working slice that composes existing primitives
+ *     (gsd-executor + worktree isolation) rather than reinventing them.
+ *   - Greenspun's Tenth Rule (cited in #1143): adopt the Workflow tool's
+ *     barrier/pipeline/budget/resume semantics instead of hand-rolling them.
+ *   - Postel's Law: liberal in input (missing fields → inline), conservative in
+ *     output (workflow only when every gate opens).
+ *   - Fail-closed: an unknown version, a missing descriptor, or a disabled
+ *     toggle all resolve to `inline`, never to `workflow`.
+ *
+ * Zero external dependencies. Pure functions. Never throws on bad input.
+ */
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+/**
+ * The Agent SDK version that introduced the Workflow tool (#1143 prior art).
+ * Used as the default floor when config does not override it. A runtime reporting
+ * an agentSdkVersion below this cannot host the Workflow backend.
+ */
+const WORKFLOW_TOOL_FLOOR_VERSION = '0.3.149';
+
+/** Closed enum for the `claude_orchestration.execution_backend` config key. */
+const BACKEND_VALUES = new Set<string>(['auto', 'workflow', 'inline']);
+
+/** Only this runtime can host the Workflow tool (Claude Code / Agent SDK). */
+const WORKFLOW_RUNTIME = 'claude';
+
+// ─── Semver helpers ───────────────────────────────────────────────────────────
+
+/** Official-ish strict SemVer 2.0.0 numeric triple (+ optional pre/build). */
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/** True for a syntactically valid semver string. */
+function isValidSemver(s: unknown): s is string {
+  return typeof s === 'string' && SEMVER_RE.test(s);
+}
+
+/**
+ * Compare two semver strings.
+ * Returns -1/0/1 in the usual sense. Garbage in either position → -1 (fail-closed:
+ * an unparseable version is treated as "less than" any real floor, so detection
+ * never accidentally enables the preview backend on an unknown SDK).
+ *
+ * Pre-release/build metadata are ignored for the comparison — only the numeric
+ * major.minor.patch triple participates, matching how the Workflow-tool floor is
+ * specified (a plain "0.3.149").
+ */
+function compareSemver(a: string, b: string): number {
+  if (!isValidSemver(a) || !isValidSemver(b)) return -1;
+  // Split numeric triple from pre-release/build metadata.
+  const parseTriple = (s: string): number[] => {
+    const core = s.split('-')[0].split('+')[0].split('.');
+    return [parseInt(core[0], 10), parseInt(core[1], 10), parseInt(core[2], 10)];
+  };
+  const hasPre = (s: string): boolean => s.indexOf('-') !== -1;
+  const preIdentifiers = (s: string): string[] => (s.split('-')[1] || '').split('+')[0].split('.').filter((x) => x.length > 0);
+  const am = parseTriple(a);
+  const bm = parseTriple(b);
+  for (let i = 0; i < 3; i++) {
+    if (am[i] < bm[i]) return -1;
+    if (am[i] > bm[i]) return 1;
+  }
+  // Numeric triple is equal. SemVer 2.0.0 §11 precedence:
+  //   - a version WITH a pre-release tag is LOWER than the same triple WITHOUT one
+  //     (keeps the floor fail-closed for pre-release builds of the GA floor);
+  //   - two pre-releases of the same triple are ordered by their dot-separated
+  //     identifiers (numeric < alphanumeric; numeric compared numerically,
+  //     alphanumeric lexically; fewer identifiers < more).
+  const aPre = hasPre(a);
+  const bPre = hasPre(b);
+  if (aPre && !bPre) return -1;
+  if (!aPre && bPre) return 1;
+  if (aPre && bPre) {
+    const ai = preIdentifiers(a);
+    const bi = preIdentifiers(b);
+    const len = Math.min(ai.length, bi.length);
+    for (let i = 0; i < len; i++) {
+      const ax = ai[i];
+      const bx = bi[i];
+      const aNum = /^\d+$/.test(ax);
+      const bNum = /^\d+$/.test(bx);
+      if (aNum && bNum) {
+        const an = parseInt(ax, 10);
+        const bn = parseInt(bx, 10);
+        if (an < bn) return -1;
+        if (an > bn) return 1;
+      } else if (aNum && !bNum) {
+        return -1; // numeric identifiers always lower than alphanumeric
+      } else if (!aNum && bNum) {
+        return 1;
+      } else {
+        if (ax < bx) return -1;
+        if (ax > bx) return 1;
+      }
+    }
+    if (ai.length < bi.length) return -1;
+    if (ai.length > bi.length) return 1;
+  }
+  return 0;
+}
+
+// ─── detectWorkflowBackend ────────────────────────────────────────────────────
+
+interface HostIntegration {
+  dispatch?: {
+    nested?: boolean;
+    background?: boolean;
+    backgroundDispatch?: boolean;
+    [k: string]: unknown;
+  };
+  [k: string]: unknown;
+}
+
+interface BackendConfig {
+  'claude_orchestration.enabled'?: unknown;
+  'claude_orchestration.execution_backend'?: unknown;
+  'claude_orchestration.min_agent_sdk_version'?: unknown;
+  [k: string]: unknown;
+}
+
+interface DetectInput {
+  runtimeId?: string;
+  hostIntegration?: HostIntegration | null;
+  config?: BackendConfig | null;
+  agentSdkVersion?: string;
+}
+
+interface DetectResult {
+  available: boolean;
+  backend: 'workflow' | 'inline';
+  reason: string;
+}
+
+/** Inline result shorthand. */
+function inline(reason: string, available = false): DetectResult {
+  return { available, backend: 'inline', reason };
+}
+
+/**
+ * Resolve whether the Workflow-tool backend should activate.
+ *
+ * Gate ladder (all must pass for `workflow`; first miss wins, fail-closed):
+ *   1. capability enabled (claude_orchestration.enabled truthy)
+ *   2. runtime is Claude (the only runtime that exposes the Workflow tool)
+ *   3. execution_backend !== 'inline'
+ *   4. host descriptor signals nested+background dispatch (Workflow-tool capable)
+ *   5. agentSdkVersion is a known, valid semver
+ *   6. agentSdkVersion >= the configured floor (default WORKFLOW_TOOL_FLOOR_VERSION)
+ *   7. execution_backend === 'workflow' OR 'auto' (both reach here; 'inline' exited at 3)
+ *
+ * Never throws. Destructures defensively.
+ */
+function detectWorkflowBackend(input: DetectInput | null | undefined): DetectResult {
+  if (input === null || input === undefined || typeof input !== 'object') {
+    return inline('capability_disabled');
+  }
+
+  const cfg: BackendConfig =
+    (input.config !== null && input.config !== undefined && typeof input.config === 'object')
+      ? input.config
+      : {};
+
+  // 1. capability must be opted in (default-off — ships disabled).
+  if (!cfg['claude_orchestration.enabled']) {
+    return inline('capability_disabled');
+  }
+
+  // 2. only Claude can host the Workflow tool.
+  if (input.runtimeId !== WORKFLOW_RUNTIME) {
+    return inline('runtime_not_claude');
+  }
+
+  // 3. explicit inline opt-out short-circuits.
+  let backendRaw = cfg['claude_orchestration.execution_backend'];
+  if (typeof backendRaw !== 'string' || !BACKEND_VALUES.has(backendRaw)) {
+    backendRaw = 'auto';
+  }
+  if (backendRaw === 'inline') {
+    return inline('backend_inline');
+  }
+
+  // 4. the host dispatch descriptor must be the nesting-capable Claude-Code shape
+  //    (a proxy for Workflow-tool presence). This is Claude-specific and already
+  //    gated at step 2; `background:true` alone is true on several non-Claude hosts,
+  //    so the proxy is only meaningful after the runtime check above. Note: this is
+  //    NOT the canonical `shouldFlattenDispatch` rule (which keys on
+  //    `backgroundDispatch`); the Workflow backend works precisely because a single
+  //    tool-call orchestrates internally, sidestepping the backgroundDispatch:false
+  //    limitation. Missing/false/foreign descriptor → fail-closed.
+  const hi = input.hostIntegration;
+  if (hi === null || hi === undefined || typeof hi !== 'object' || Array.isArray(hi)) {
+    return inline('workflow_tool_unavailable');
+  }
+  const dispatch = (hi as { dispatch?: Record<string, unknown> }).dispatch;
+  if (typeof dispatch !== 'object' || dispatch === null || Array.isArray(dispatch)) {
+    return inline('workflow_tool_unavailable');
+  }
+  const nested = dispatch['nested'];
+  const background = dispatch['background'];
+  if (nested !== true || background !== true) {
+    return inline('workflow_tool_unavailable');
+  }
+
+  // 5. an unknown agentSdkVersion cannot be trusted to meet the floor.
+  if (!isValidSemver(input.agentSdkVersion)) {
+    return inline('agent_sdk_version_unknown');
+  }
+
+  // 6. version floor (config override > default constant).
+  const floorRaw = cfg['claude_orchestration.min_agent_sdk_version'];
+  const floor = typeof floorRaw === 'string' && isValidSemver(floorRaw) ? floorRaw : WORKFLOW_TOOL_FLOOR_VERSION;
+  if (compareSemver(input.agentSdkVersion, floor) < 0) {
+    return inline('agent_sdk_version_below_floor');
+  }
+
+  // 7. auto/workflow both reach the workflow backend once every gate passes.
+  return { available: true, backend: 'workflow', reason: 'workflow_backend_active' };
+}
+
+// ─── emitWorkflowScript ───────────────────────────────────────────────────────
+
+interface Plan {
+  id: string;
+  brief: string;
+  files_modified: string[];
+}
+
+interface Wave {
+  id: string;
+  plans: Plan[];
+}
+
+interface EmitInput {
+  phaseDir: string;
+  waves: Wave[];
+  runId: string;
+  budgetTokens?: number;
+}
+
+interface EmitOk {
+  ok: true;
+  script: string;
+  summary: {
+    waves: number;
+    plans: number;
+    stagesByWave: string[][][]; // wave → stage → planId[]
+    resumeRunId: string;
+    budgetTokens: number | null;
+  };
+}
+
+interface EmitErr {
+  ok: false;
+  reason: string;
+}
+
+/**
+ * Partition a wave's plans into a near-minimal number of sequential stages (via
+ * greedy first-fit — not guaranteed optimal for arbitrary overlap graphs, but
+ * correct: no two plans sharing a file ever cohabit a stage) such that no two
+ * plans in the same stage share a modified file. Each plan goes into the earliest
+ * stage where it does not overlap any plan already there.
+ *
+ * A plan with an EMPTY files_modified set declares no files; it overlaps nothing
+ * and coalesces into stage 0 (same behavior as the inline path, which also cannot
+ * guard against undeclared concurrent writes — declare filesModified accurately).
+ *
+ * This is the same overlap rule execute-phase applies inline — the only difference
+ * is the execution vehicle (Workflow `parallel()` vs one-agent-per-message).
+ */
+function partitionStages(plans: Plan[]): string[][] {
+  const stages: { plans: Plan[]; files: Set<string> }[] = [];
+  for (const plan of plans) {
+    const fileSet = new Set(plan.files_modified);
+    let placed = false;
+    for (const stage of stages) {
+      let overlap = false;
+      for (const f of fileSet) {
+        if (stage.files.has(f)) { overlap = true; break; }
+      }
+      if (!overlap) {
+        stage.plans.push(plan);
+        for (const f of fileSet) stage.files.add(f);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      stages.push({ plans: [plan], files: new Set(fileSet) });
+    }
+  }
+  return stages.map((s) => s.plans.map((p) => p.id));
+}
+
+/**
+ * Quote a free-text value for safe embedding as a JavaScript/Workflow double-quoted
+ * string literal. Uses JSON.stringify so every JS-relevant escape (backslash, quote,
+ * newline, tab, NUL, U+2028/U+2029, all control chars) is handled by the language
+ * itself — there is no hand-rolled escape table to drift. Returns the value already
+ * wrapped in its surrounding quotes.
+ */
+function quoteString(s: string): string {
+  return JSON.stringify(s);
+}
+
+/**
+ * True if `s` is a safe identifier/path token to interpolate into the generated
+ * script WITHOUT requiring a string-literal context — i.e. it contains no
+ * character that could terminate a comment line (`\n`/`\r`), break out of a
+ * string literal (`"` / `\`), or smuggle a NUL/control sequence. Used for
+ * `phaseDir`, `runId`, `wave.id`, and `plan.id`, which are identifiers/paths and
+ * must never legitimately contain such characters. Rejecting them at validation
+ * (rather than silently flattening) keeps the emitted script faithful to input.
+ */
+const UNSCRIPTABLE_CHAR_RE = /[\r\n"\\\x00-\x1f\x7f\u2028\u2029]/;
+function isScriptableIdentifier(s: unknown): boolean {
+  if (typeof s !== 'string' || s.length === 0) return false;
+  return !UNSCRIPTABLE_CHAR_RE.test(s);
+}
+
+/**
+ * Emit a Workflow script mapping the phase's wave/plan model onto Workflow
+ * primitives. Pure and deterministic: identical input yields an identical string.
+ *
+ * Returns ok:false (never throws) on invalid input — empty waves, missing runId,
+ * a wave with no plans, etc.
+ */
+function emitWorkflowScript(input: EmitInput | null | undefined): EmitOk | EmitErr {
+  if (input === null || input === undefined || typeof input !== 'object') {
+    return { ok: false, reason: 'invalid_input' };
+  }
+  const { phaseDir, waves, runId } = input;
+  // Identifiers/paths interpolated into the generated script must be free of any
+  // character that could terminate a comment, break out of a string literal, or
+  // smuggle control bytes — reject up front (security: #1143 review Finding 1).
+  if (!isScriptableIdentifier(phaseDir)) {
+    return { ok: false, reason: 'phaseDir must be a non-empty string without newlines/quotes/backslash/control chars' };
+  }
+  if (!isScriptableIdentifier(runId)) {
+    return { ok: false, reason: 'runId must be a non-empty string without newlines/quotes/backslash/control chars' };
+  }
+  if (!Array.isArray(waves) || waves.length === 0) {
+    return { ok: false, reason: 'waves must be a non-empty array' };
+  }
+  for (let i = 0; i < waves.length; i++) {
+    const w = waves[i];
+    if (w === null || typeof w !== 'object' || typeof w.id !== 'string') {
+      return { ok: false, reason: 'waves[' + i + '] must be { id, plans: non-empty[] }' };
+    }
+    if (!isScriptableIdentifier(w.id)) {
+      return { ok: false, reason: 'waves[' + i + '].id must not contain newlines/quotes/backslash/control chars' };
+    }
+    if (!Array.isArray(w.plans) || w.plans.length === 0) {
+      return { ok: false, reason: 'waves[' + i + '] must have a non-empty plans array' };
+    }
+    const seenIds = new Set<string>();
+    for (let j = 0; j < w.plans.length; j++) {
+      const p = w.plans[j];
+      if (p === null || typeof p !== 'object' || typeof p.id !== 'string' || typeof p.brief !== 'string' || !Array.isArray(p.files_modified)) {
+        return { ok: false, reason: 'waves[' + i + '].plans[' + j + '] must be { id, brief, files_modified[] }' };
+      }
+      if (!isScriptableIdentifier(p.id)) {
+        return { ok: false, reason: 'waves[' + i + '].plans[' + j + '].id must not contain newlines/quotes/backslash/control chars' };
+      }
+      if (seenIds.has(p.id)) {
+        return { ok: false, reason: 'waves[' + i + '] has duplicate plan id "' + p.id + '"' };
+      }
+      seenIds.add(p.id);
+      for (const f of p.files_modified) {
+        if (typeof f !== 'string' || f.length === 0) {
+          return { ok: false, reason: 'waves[' + i + '].plans[' + j + '].files_modified entries must be non-empty strings' };
+        }
+      }
+    }
+  }
+
+  const budgetTokens = (typeof input.budgetTokens === 'number' && Number.isFinite(input.budgetTokens) && input.budgetTokens > 0)
+    ? Math.floor(input.budgetTokens)
+    : null;
+
+  const lines: string[] = [];
+  lines.push('// GSD Workflow script — generated by the claude-orchestration capability (#1143)');
+  lines.push('// phase: ' + phaseDir);
+  lines.push('// BETA: preview-grade; on any failure the orchestrator falls back to inline dispatch.');
+  lines.push('// Composes the SAME gsd-executor agent + worktree isolation as the inline path,');
+  lines.push('// so artifacts (SUMMARY.md) and commits are produced identically.');
+  lines.push('resumeFromRunId(' + quoteString(runId) + ')');
+  if (budgetTokens !== null) {
+    lines.push('budget(' + budgetTokens + ')');
+  }
+  lines.push('');
+
+  const stagesByWave: string[][][] = [];
+  let totalPlans = 0;
+
+  for (let wi = 0; wi < waves.length; wi++) {
+    const wave = waves[wi];
+    const stages = partitionStages(wave.plans);
+    stagesByWave.push(stages);
+    totalPlans += wave.plans.length;
+
+    lines.push('// Wave ' + wave.id);
+    for (let si = 0; si < stages.length; si++) {
+      const stagePlanIds = stages[si];
+      // Resolve back to plan objects for briefs (ids are unique within a wave — validated above).
+      const stagePlans = stagePlanIds.map((id) => wave.plans.find((p) => p.id === id) as Plan);
+      if (stages.length > 1) {
+        lines.push('// Stage ' + si + (si > 0 ? ' (sequential — files_modified overlap)' : ''));
+      }
+      if (stagePlans.length === 1) {
+        const p = stagePlans[0];
+        lines.push('parallel(');
+        lines.push('  agent(' + quoteString(p.brief) + ', { agentType: "gsd-executor", isolation: "worktree" })');
+        lines.push(')');
+      } else {
+        lines.push('parallel(');
+        for (const p of stagePlans) {
+          lines.push('  agent(' + quoteString(p.brief) + ', { agentType: "gsd-executor", isolation: "worktree" }),');
+        }
+        // Replace trailing comma on the last agent line with nothing.
+        const lastIdx = lines.length - 1;
+        lines[lastIdx] = lines[lastIdx].replace(/,$/, '');
+        lines.push(')');
+      }
+    }
+    if (wi < waves.length - 1) lines.push('');
+  }
+
+  lines.push('// Each agent writes SUMMARY.md on its worktree branch; commits land there');
+  lines.push('// and are merged by the orchestrator exactly as in inline wave dispatch.');
+
+  const script = lines.join('\n');
+
+  return {
+    ok: true,
+    script,
+    summary: {
+      waves: waves.length,
+      plans: totalPlans,
+      stagesByWave,
+      resumeRunId: runId,
+      budgetTokens,
+    },
+  };
+}
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
+export = {
+  detectWorkflowBackend,
+  emitWorkflowScript,
+  compareSemver,
+  isValidSemver,
+  WORKFLOW_TOOL_FLOOR_VERSION,
+  BACKEND_VALUES,
+  WORKFLOW_RUNTIME,
+};

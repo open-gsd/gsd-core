@@ -297,6 +297,14 @@ export const INIT_COMMAND_ALIASES: CommandAlias[] = [
     "mutation": false
   },
   {
+    "canonical": "init.onboard",
+    "aliases": [
+      "init onboard"
+    ],
+    "subcommand": "onboard",
+    "mutation": false
+  },
+  {
     "canonical": "init.quick",
     "aliases": [
       "init quick"

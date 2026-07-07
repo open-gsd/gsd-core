@@ -15,13 +15,15 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, runGsdTools } = require('./helpers.cjs');
 
 const {
   resolveCapabilityState,
+  resolveCapabilityRuntimeState,
   isCapabilityActive,
   _isSafePropKey,
   _loadInstalledSkillsManifest,
+  _loadFlatCommandsGsdManifest,
   _resolveManifest,
 } = require('../gsd-core/bin/lib/capability-state.cjs');
 
@@ -822,6 +824,223 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 // _resolveManifest functions with a non-existent commandsGsdDir path so they
 // FAIL before the fix and PASS after, regardless of whether commands/gsd
 // happens to exist in the current checkout.
+
+describe('regressions: flat commands/gsd-<stem>.md layout (#1858)', () => {
+  // Flat command layout (Claude local project install shape): skills live at
+  // <repo>/commands/gsd-<stem>.md — the gsd- prefix is baked into the filename
+  // and there is NO commands/gsd/ subdir. _resolveManifest must detect this
+  // layout, strip the gsd- prefix, and produce the same stems the nested
+  // loader (commands/gsd/<stem>.md) would, or every skill-bearing capability
+  // is silently reported surfaced:false / enabled:false / active:false.
+  function makeFlatCommandMd(stem, requires) {
+    const req = requires ? `requires: [${requires.join(', ')}]` : 'requires: [phase]';
+    return [
+      '---',
+      `name: gsd:${stem}`,
+      `description: ${stem} skill`,
+      'argument-hint: "[phase number]"',
+      'allowed-tools:',
+      '  - Read',
+      req,
+      '---',
+      'Execute end-to-end.',
+    ].join('\n') + '\n';
+  }
+
+  // ── Unit tests for _loadFlatCommandsGsdManifest ─────────────────────────────
+
+  test('_loadFlatCommandsGsdManifest: returns empty map when parent dir absent', () => {
+    const missing = path.join(os.tmpdir(), 'cap-flat-missing-' + Date.now());
+    const manifest = _loadFlatCommandsGsdManifest(missing);
+    assert.ok(manifest instanceof Map, 'should return a Map');
+    assert.strictEqual(manifest.size, 0, 'should be empty when parent dir absent');
+  });
+
+  test('_loadFlatCommandsGsdManifest: scans gsd-<stem>.md and strips the gsd- prefix', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-scan-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-validate-phase.md'), makeFlatCommandMd('validate-phase'), 'utf8');
+      fs.writeFileSync(path.join(tmpDir, 'gsd-secure-phase.md'), makeFlatCommandMd('secure-phase'), 'utf8');
+      // Non-gsd file must be ignored
+      fs.writeFileSync(path.join(tmpDir, 'random-doc.md'), '# not a skill\n', 'utf8');
+      // Non-markdown gsd file must be ignored
+      fs.writeFileSync(path.join(tmpDir, 'gsd-notskill.txt'), 'nope\n', 'utf8');
+
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(manifest.has('validate-phase'), 'flat gsd-validate-phase.md -> stem validate-phase');
+      assert.ok(manifest.has('secure-phase'), 'flat gsd-secure-phase.md -> stem secure-phase');
+      assert.ok(!manifest.has('gsd-validate-phase'), 'must NOT keep the gsd- prefix on the stem');
+      assert.ok(!manifest.has('random-doc'), 'non-gsd file must be ignored');
+      assert.ok(!manifest.has('notskill'), 'non-.md gsd file must be ignored');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadFlatCommandsGsdManifest: parses requires via shared parseRequires (no drift)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-req-'));
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, 'gsd-my-skill.md'),
+        makeFlatCommandMd('my-skill', ['dep-a', 'dep-b']),
+        'utf8',
+      );
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.deepStrictEqual(manifest.get('my-skill'), ['dep-a', 'dep-b']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadFlatCommandsGsdManifest: companion _calls_agents_<stem> key present (parity with nested loader)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-agents-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-validate-phase.md'), makeFlatCommandMd('validate-phase'), 'utf8');
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(manifest.has('_calls_agents_validate-phase'),
+        'flat loader must emit the companion _calls_agents_ key (same Map shape as loadSkillsManifest)');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // Low-1 (review): boundary — empty stem (gsd-.md) skipped, single-char stem kept.
+  test('_loadFlatCommandsGsdManifest: skips gsd-.md (empty stem) and keeps single-char stem (slice boundary)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-edge-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-.md'), makeFlatCommandMd(''), 'utf8');
+      fs.writeFileSync(path.join(tmpDir, 'gsd-x.md'), makeFlatCommandMd('x'), 'utf8');
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(!manifest.has(''), 'gsd-.md must NOT register an empty-string stem');
+      assert.ok(!manifest.has('_calls_agents_'), 'no companion key for an empty stem');
+      assert.ok(manifest.has('x'), 'gsd-x.md -> single-char stem "x" (slice(4,-3) boundary)');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // Low-2 (review): unreadable file degrades both keys to [] (parity with nested
+  // loader's catch). POSIX-only AND must not run as root — root bypasses POSIX
+  // read permission bits, so chmod 0o000 would NOT make the file unreadable and
+  // the test would assert [] against the real parsed deps (false failure).
+  // Skip on win32 (DEFECT.WINDOWS-POSIX-MODE-BIT-ASSERT) and when getuid()==0.
+  const _skipUnreadable = process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
+  test('_loadFlatCommandsGsdManifest: unreadable file degrades to empty deps + agents (parity)', { skip: _skipUnreadable }, () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-unread-'));
+    let madeUnreadable = false;
+    try {
+      const skillPath = path.join(tmpDir, 'gsd-secure.md');
+      fs.writeFileSync(skillPath, '---\nname: gsd:secure\nrequires: [phase]\n---\nbody\n', { mode: 0o644 });
+      fs.chmodSync(skillPath, 0o000);
+      madeUnreadable = true;
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.deepStrictEqual(manifest.get('secure'), [], 'unreadable file -> empty requires (parity with nested catch)');
+      assert.deepStrictEqual(manifest.get('_calls_agents_secure'), [], 'unreadable file -> empty agents (parity with nested catch)');
+    } finally {
+      // Restore writability so cleanup() can rm the tmp tree.
+      if (madeUnreadable) {
+        try { fs.chmodSync(path.join(tmpDir, 'gsd-secure.md'), 0o644); } catch { /* best effort */ }
+      }
+      cleanup(tmpDir);
+    }
+  });
+
+  // ── _resolveManifest picks the flat branch when nested is absent ────────────
+
+  test('_resolveManifest: detects flat commands/gsd-<stem>.md layout when nested commands/gsd/ is absent (#1858)', () => {
+    const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-flat-repo-'));
+    try {
+      // Flat source layout: <repo>/commands/gsd-<stem>.md
+      // NO commands/gsd/ subdir, NO skills/ dir.
+      const commandsDir = path.join(tmpRepo, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      fs.writeFileSync(path.join(commandsDir, 'gsd-validate-phase.md'), makeFlatCommandMd('validate-phase'), 'utf8');
+      fs.writeFileSync(path.join(commandsDir, 'gsd-secure-phase.md'), makeFlatCommandMd('secure-phase'), 'utf8');
+
+      // commandsGsdDir = <repo>/commands/gsd (nested — does NOT exist).
+      // dirname(commandsGsdDir) = <repo>/commands (where the flat files live).
+      const commandsGsdDir = path.join(commandsDir, 'gsd');
+      // configDir = a separate empty tmp dir (no skills/ → installed fallback empty).
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-flat-cfg-'));
+      try {
+        const manifest = _resolveManifest(commandsGsdDir, configDir);
+        assert.ok(manifest.has('validate-phase'),
+          'flat layout must populate validate-phase stem (was empty pre-fix → all skill caps unsurfaced)');
+        assert.ok(manifest.has('secure-phase'), 'flat layout must populate secure-phase stem');
+        assert.ok(!manifest.has('gsd-validate-phase'), 'stem must have gsd- prefix stripped');
+      } finally {
+        cleanup(configDir);
+      }
+    } finally {
+      cleanup(tmpRepo);
+    }
+  });
+
+  test('_resolveManifest: flat branch does NOT shadow a populated installed skills dir when no flat files exist', () => {
+    // Precedence: nested > flat-source > installed. If the flat parent dir has
+    // NO gsd-*.md files, the flat loader returns an empty Map and _resolveManifest
+    // must fall through to the installed-skills branch (not return empty).
+    const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-precedence-'));
+    try {
+      const commandsDir = path.join(tmpRepo, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      // No gsd-*.md files in commands/ — flat loader yields empty.
+      // Installed skills present under configDir:
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-precedence-cfg-'));
+      try {
+        const secureDir = path.join(configDir, 'skills', 'gsd-secure-phase');
+        fs.mkdirSync(secureDir, { recursive: true });
+        fs.writeFileSync(path.join(secureDir, 'SKILL.md'),
+          '---\nname: gsd:secure-phase\nrequires: [phase]\n---\nbody\n', 'utf8');
+
+        const commandsGsdDir = path.join(commandsDir, 'gsd'); // nested absent
+        const manifest = _resolveManifest(commandsGsdDir, configDir);
+        assert.ok(manifest.has('secure-phase'),
+          'when flat dir is empty, installed-skills fallback must still work (precedence flat > installed only when flat non-empty)');
+      } finally {
+        cleanup(configDir);
+      }
+    } finally {
+      cleanup(tmpRepo);
+    }
+  });
+
+  // ── Parity: flat loader produces the same stems as the nested loader ────────
+  // (DEFECT.GENERATIVE-FIX — guards against silent divergence between the two
+  // parallel manifest-builders.)
+
+  test('flat loader and nested loader produce identical stems for the same command set (parity)', () => {
+    const realCommandsGsdDir = path.resolve(__dirname, '..', 'commands', 'gsd');
+    if (!fs.existsSync(realCommandsGsdDir)) return; // skip outside a repo checkout
+    // Build a flat mirror of the real nested commands/gsd/<stem>.md as
+    // commands/gsd-<stem>.md in a temp dir, then compare stem sets.
+    const tmpFlat = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-parity-flat-'));
+    try {
+      const nested = require('../gsd-core/bin/lib/install-profiles.cjs').loadSkillsManifest(realCommandsGsdDir);
+      for (const [stem] of nested) {
+        if (stem.startsWith('_calls_agents_')) continue;
+        const src = path.join(realCommandsGsdDir, stem + '.md');
+        if (!fs.existsSync(src)) continue;
+        fs.writeFileSync(path.join(tmpFlat, 'gsd-' + stem + '.md'), fs.readFileSync(src, 'utf8'), 'utf8');
+      }
+      const flat = _loadFlatCommandsGsdManifest(tmpFlat);
+      const nestedStems = [...nested.keys()].filter((k) => !k.startsWith('_calls_agents_')).sort();
+      const flatStems = [...flat.keys()].filter((k) => !k.startsWith('_calls_agents_')).sort();
+      assert.deepStrictEqual(flatStems, nestedStems,
+        'flat loader stem set must match nested loader stem set for the real command tree');
+      // Nit-2 (review): also compare _calls_agents_<stem> VALUES, not just the
+      // stem set — proves the shared parseCallsAgents output is identical.
+      for (const stem of flatStems) {
+        assert.deepStrictEqual(flat.get(`_calls_agents_${stem}`), nested.get(`_calls_agents_${stem}`),
+          `agent refs for stem "${stem}" must match between flat and nested loaders`);
+        assert.deepStrictEqual(flat.get(stem), nested.get(stem),
+          `requires for stem "${stem}" must match between flat and nested loaders`);
+      }
+    } finally {
+      cleanup(tmpFlat);
+    }
+  });
+});
 
 describe('regressions: installed-runtime capability surface (#1160)', () => {
   // Minimal valid SKILL.md content (frontmatter only — matches what install emits)
@@ -1807,6 +2026,179 @@ describe('#1459 IC-04: capability-state threads gsdHome to the overlay loader', 
       if (prev === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = prev;
       cleanup(home);
       cleanup(cwd);
+    }
+  });
+});
+
+describe('regressions: --runtime override bypasses persisted runtime (#2003)', () => {
+  // #2003: `capability state` and `loop render-hooks` parsed only --config-dir,
+  // never --runtime. resolveCapabilityRuntimeState derived the config dir from
+  // resolveRuntime(cwd) (GSD_RUNTIME → config.runtime → 'claude'), so a repo
+  // with persisted runtime:"codex" resolved the config dir to ~/.codex — where
+  // the Claude skill isn't installed → surfaced:false. Fix: thread an explicit
+  // --runtime override through both commands into resolveCapabilityRuntimeState
+  // so it bypasses the persisted-runtime fallback (mirrors the update-context /
+  // effort sync precedent).
+
+  function writePersistedRuntime(tmpDir, runtime) {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ runtime }),
+      'utf8',
+    );
+  }
+
+  test('resolveCapabilityRuntimeState: runtimeOverride="claude" bypasses persisted config.runtime:"codex"', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-override-'));
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const runtimeHomes = require('../gsd-core/bin/lib/runtime-homes.cjs');
+      const expectedClaudeDir = runtimeHomes.getGlobalConfigDir('claude');
+      const expectedCodexDir = runtimeHomes.getGlobalConfigDir('codex');
+      // Persisted runtime is codex; explicit override is claude. The override
+      // MUST win (resolveRuntime is never consulted when an override is given,
+      // so GSD_RUNTIME env cannot interfere either).
+      const result = resolveCapabilityRuntimeState(tmpDir, undefined, undefined, 'claude');
+      assert.strictEqual(result.runtimeConfigDir, expectedClaudeDir,
+        '--runtime claude must override persisted runtime:"codex"');
+      assert.notStrictEqual(result.runtimeConfigDir, expectedCodexDir,
+        'must NOT resolve to the codex config dir when --runtime claude is explicit');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('resolveCapabilityRuntimeState: no override still honours persisted config.runtime (unchanged, regression guard)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-no-override-'));
+    // Control GSD_RUNTIME so resolveRuntime deterministically reads config.runtime.
+    const savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const runtimeHomes = require('../gsd-core/bin/lib/runtime-homes.cjs');
+      const expectedCodexDir = runtimeHomes.getGlobalConfigDir('codex');
+      // No override → persisted codex wins (existing behavior preserved).
+      const result = resolveCapabilityRuntimeState(tmpDir, undefined, undefined, undefined);
+      assert.strictEqual(result.runtimeConfigDir, expectedCodexDir,
+        'without --runtime, persisted config.runtime:"codex" still drives resolution (unchanged)');
+    } finally {
+      if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = savedGsdRuntime;
+      cleanup(tmpDir);
+    }
+  });
+
+  test('resolveCapabilityRuntimeState: runtimeOverride canonicalizes aliases (codex-app -> codex)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-alias-'));
+    try {
+      writePersistedRuntime(tmpDir, 'claude');
+      const runtimeHomes = require('../gsd-core/bin/lib/runtime-homes.cjs');
+      const expectedCodexDir = runtimeHomes.getGlobalConfigDir('codex');
+      // Alias "codex-app" canonicalizes to "codex" via runtime-name-policy.
+      const result = resolveCapabilityRuntimeState(tmpDir, undefined, undefined, 'codex-app');
+      assert.strictEqual(result.runtimeConfigDir, expectedCodexDir,
+        '--runtime codex-app (alias) must canonicalize to codex');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('CLI: `capability state --runtime claude` reports the Claude config dir despite persisted runtime:"codex"', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-cli-'));
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const result = runGsdTools('capability state --runtime claude --raw', tmpDir);
+      assert.ok(result.success, `capability state --runtime should succeed: ${result.error || ''}`);
+      const parsed = JSON.parse(result.output);
+      const runtimeHomes = require('../gsd-core/bin/lib/runtime-homes.cjs');
+      assert.strictEqual(parsed.runtimeConfigDir, runtimeHomes.getGlobalConfigDir('claude'),
+        '`capability state --runtime claude` must resolve to the Claude config dir, not the persisted codex dir');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // L-2 (review): end-to-end CLI test for loop render-hooks --runtime — the exact
+  // command the bug report calls out as silently no-op'ing. Guards the copy-pasted
+  // arg parsing in gsd-tools.cjs from diverging from the capability-state branch.
+  test('CLI: `loop render-hooks verify:post --runtime claude` resolves against the Claude config dir', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-loop-cli-'));
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const result = runGsdTools('loop render-hooks verify:post --runtime claude --raw', tmpDir);
+      assert.ok(result.success, `loop render-hooks --runtime should succeed: ${result.error || ''}`);
+      const parsed = JSON.parse(result.output);
+      // The envelope carries activeHooks/rendered; the key assertion is that it
+      // ran without silently no-op'ing against the codex dir. A non-empty
+      // point + a rendered string (even "_No active hooks..._") proves the
+      // command executed against the resolved (claude) config dir rather than
+      // erroring or emitting nothing.
+      assert.strictEqual(parsed.point, 'verify:post', 'render-hooks must echo the requested point');
+      assert.ok(typeof parsed.rendered === 'string', 'render-hooks must produce a rendered string');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // M-1 + NIT-01 (review): unknown / crafted --runtime values are REJECTED by the
+  // closed-vocabulary canonicalizer, warn, and fall through to the persisted
+  // runtime (never embedded into a path). This is the security-load-bearing
+  // contract — pin it so a future refactor can't silently break it.
+  test('resolveCapabilityRuntimeState: unknown/crafted --runtime is rejected (closed vocabulary), warns, and falls through to persisted runtime', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-reject-'));
+    const savedGsdRuntime = process.env.GSD_RUNTIME;
+    delete process.env.GSD_RUNTIME;
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const runtimeHomes = require('../gsd-core/bin/lib/runtime-homes.cjs');
+      const expectedCodexDir = runtimeHomes.getGlobalConfigDir('codex');
+      const crafted = ['../../etc/passwd', '__proto__', 'constructor', '--config-dir', 'garbage', 'foo bar', 'cluade'];
+      for (const bad of crafted) {
+        const result = resolveCapabilityRuntimeState(tmpDir, undefined, undefined, bad);
+        assert.strictEqual(result.runtimeConfigDir, expectedCodexDir,
+          `crafted --runtime "${bad}" must fall through to persisted codex dir, not be embedded in a path`);
+        assert.ok(result.warnings.some((w) => w.includes('--runtime') && w.includes(bad)),
+          `crafted --runtime "${bad}" must emit a warning naming the rejected value`);
+      }
+    } finally {
+      if (savedGsdRuntime === undefined) delete process.env.GSD_RUNTIME;
+      else process.env.GSD_RUNTIME = savedGsdRuntime;
+      cleanup(tmpDir);
+    }
+  });
+
+  // N-1 (review): CLI arg-parsing boundary — --config-dir wins over --runtime
+  // (most-explicit input takes precedence), and missing --runtime value errors.
+  test('CLI: --config-dir takes precedence over --runtime when both are given', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-precedence-'));
+    const explicitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-explicit-cfg-'));
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const result = runGsdTools(
+        `capability state --config-dir ${explicitDir} --runtime claude --raw`,
+        tmpDir,
+      );
+      assert.ok(result.success, `capability state with both flags should succeed: ${result.error || ''}`);
+      const parsed = JSON.parse(result.output);
+      assert.strictEqual(parsed.runtimeConfigDir, explicitDir,
+        '--config-dir (explicit path) must win over --runtime when both are present');
+    } finally {
+      cleanup(explicitDir);
+      cleanup(tmpDir);
+    }
+  });
+
+  test('CLI: `capability state --runtime` with no value errors with USAGE', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rt-missing-'));
+    try {
+      writePersistedRuntime(tmpDir, 'codex');
+      const result = runGsdTools('capability state --runtime', tmpDir);
+      assert.ok(!result.success, 'missing --runtime value must produce a non-zero exit');
+      assert.ok(/Missing value for --runtime/.test(result.error || ''),
+        `error must name the missing --runtime value: ${result.error || ''}`);
+    } finally {
+      cleanup(tmpDir);
     }
   });
 });

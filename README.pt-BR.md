@@ -47,13 +47,14 @@ O instalador solicita seu ambiente de execução (Claude Code, OpenCode, Gemini 
 
 Em outro runtime ou sem Node.js? Consulte [Instalar no seu runtime](docs/pt-BR/how-to/install-on-your-runtime.md).
 
-Após a instalação, inicie seu primeiro projeto:
+Após a instalação, inicie um projeto novo ou integre um repositório existente:
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # projeto greenfield
+/gsd-onboard       # base de código existente
 ```
 
-É a primeira vez? Siga [Seu primeiro projeto](docs/pt-BR/tutorials/your-first-project.md) para um passo a passo guiado, desde a instalação até a primeira fase entregue.
+É a primeira vez? Siga [Seu primeiro projeto](docs/pt-BR/tutorials/your-first-project.md) para um passo a passo guiado, desde a instalação até a primeira fase entregue. Para um repositório existente, consulte [Integrar uma base de código existente](docs/pt-BR/tutorials/onboarding-an-existing-codebase.md).
 
 ---
 

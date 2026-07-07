@@ -33,6 +33,7 @@ export const CLUSTERS: ClusterMap = Object.freeze({
   core_loop: Object.freeze([
     'next',
     'new-project',
+    'onboard',
     'discuss-phase',
     'plan-phase',
     'execute-phase',

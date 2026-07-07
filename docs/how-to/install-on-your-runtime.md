@@ -465,10 +465,11 @@ npx @opengsd/gsd-core@latest --opencode --global
 
 ## After install
 
-Restart your runtime to pick up new commands and agents. Then start your first project:
+Restart your runtime to pick up new commands and agents. Then start a new project or onboard an existing repo:
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # greenfield project
+/gsd-onboard       # existing codebase
 ```
 
 If the command is not found after restart, verify the install directory matches the runtime's expected config path. The prerelease-editions section above covers the most common mismatch.

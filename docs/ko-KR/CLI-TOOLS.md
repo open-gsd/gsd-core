@@ -288,13 +288,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Init 명령 (복합 컨텍스트 로딩)
 
-하나의 호출로 특정 워크플로우에 필요한 모든 컨텍스트를 로드합니다. 프로젝트 정보, 설정, 상태, 워크플로우별 데이터가 포함된 JSON을 반환합니다.
+하나의 호출로 특정 워크플로우에 필요한 모든 컨텍스트를 로드합니다. 프로젝트 정보, 설정, 상태, 워크플로우별 데이터가 포함된 JSON을 반환합니다. `init onboard [--fast] [--text]`는 `/gsd-onboard`를 위해 brownfield 신호, 계획 문서 후보, 코드베이스 맵 완성도, fast 맵 준비 상태, 텍스트 모드 라우팅, 부분 planning 상태, 온보딩 요약 상태를 반환합니다.
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>

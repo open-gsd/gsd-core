@@ -40,8 +40,9 @@ Evaluate `$ARGUMENTS` against these routing rules. Apply the **first matching** 
 
 | If the text describes... | Route to | Why |
 |--------------------------|----------|-----|
-| Starting a new project, "set up", "initialize" | `/gsd:new-project` | Needs full project initialization |
-| Mapping or analyzing an existing codebase | `/gsd:map-codebase` | Codebase discovery |
+| Starting a new greenfield project, "set up", "initialize" | `/gsd:new-project` | Needs full project initialization |
+| First-time setup for an existing codebase, brownfield onboarding | `/gsd:onboard` | Safe map → docs ingest → project setup sequence |
+| Mapping or analyzing an existing codebase map | `/gsd:map-codebase` | Codebase discovery or refresh |
 | A bug, error, crash, failure, or something broken | `/gsd:debug` | Needs systematic investigation |
 | Spiking, "test if", "will this work", "experiment", "prove this out", validate feasibility | `/gsd:spike` | Throwaway experiment to validate feasibility |
 | Sketching, "mockup", "what would this look like", "prototype the UI", "design this", explore visual direction | `/gsd:sketch` | Throwaway HTML mockups to explore design |
@@ -61,7 +62,7 @@ Evaluate `$ARGUMENTS` against these routing rules. Apply the **first matching** 
 | Completing a milestone, shipping, releasing | `/gsd:complete-milestone` | Milestone lifecycle |
 | A specific, actionable, small task (add feature, fix typo, update config) | `/gsd:quick` | Self-contained, single executor |
 
-**Requires `.planning/` directory:** All routes except `/gsd:new-project`, `/gsd:map-codebase`, `/gsd:spike`, `/gsd:sketch`, and `/gsd:help`. If the project doesn't exist and the route requires it, suggest `/gsd:new-project` first.
+**Requires `.planning/` directory:** All routes except `/gsd:new-project`, `/gsd:onboard`, `/gsd:map-codebase`, `/gsd:spike`, `/gsd:sketch`, and `/gsd:help`. If the project doesn't exist and the route requires it, suggest `/gsd:onboard` for existing codebases or `/gsd:new-project` for greenfield projects.
 
 **Ambiguity handling:** If the text could reasonably match multiple routes, ask the user via AskUserQuestion with the top 2-3 options. For example:
 

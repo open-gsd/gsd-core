@@ -105,6 +105,66 @@ function _resetModelPolicyWarningCacheForTests(): void {
   _modelPolicyUnmappableWarned.clear();
 }
 
+// Dedupe stderr warnings for unmappable model_overrides Claude IDs (#2041).
+const _modelOverrideUnmappableWarned = new Set<string>();
+function warnModelOverrideUnmappable(agentType: string, overrideValue: string): void {
+  const key = `${agentType}::${overrideValue}`;
+  if (_modelOverrideUnmappableWarned.has(key)) return;
+  _modelOverrideUnmappableWarned.add(key);
+  // Cap emission length so an oversized or secret-shaped value cannot leak in
+  // full to stderr/logs (#2041 security review). MUST go to stderr — resolve-
+  // model's JSON result is parsed from stdout.
+  const safe = overrideValue.length > 64 ? overrideValue.slice(0, 64) + '…' : overrideValue;
+  process.stderr.write(
+    `gsd: warning — model_overrides value "${safe}" for ${agentType} ` +
+    `has no Claude agent alias; falling through to tier resolution.\n`,
+  );
+}
+
+// Test-only: reset the model_overrides warn-dedupe cache between cases (#2041).
+function _resetModelOverrideWarningCacheForTests(): void {
+  _modelOverrideUnmappableWarned.clear();
+}
+
+/**
+ * #2041 — Map a `model_overrides` value to its Claude Agent-tool alias on the
+ * claude runtime, mirroring the `model_policy` path (#1144). Claude Code's
+ * Agent tool `model` parameter documents only tier aliases (opus/sonnet/haiku/
+ * fable); a full Claude model ID returned verbatim is silently dropped by the
+ * spawner. Returns the value to return verbatim, or null to signal "fall
+ * through to normal tier/dynamic-routing resolution" (used when a Claude full
+ * ID has no alias — matches model_policy's warn-and-fall-through). Non-Claude
+ * runtimes and non-Claude values always pass through verbatim.
+ *
+ * Hardening (code+security review): a `typeof` guard preserves the pre-fix
+ * no-crash behavior if a malformed config surfaces a non-string value, and an
+ * `Object.hasOwn` lookup defeats `__proto__`/`constructor` lookups on the plain
+ * object literal so those reserved keys cannot return a truthy non-string.
+ */
+function mapClaudeOverrideForRuntime(
+  override: string,
+  configRuntime: string | null | undefined,
+  agentType: string,
+): string | null {
+  // Defensive: model_overrides is typed Record<string,string> but a malformed
+  // config could surface a non-string; pass through verbatim (preserving the
+  // pre-fix no-crash behaviour) and let the downstream Agent tool reject it.
+  if (typeof override !== 'string') return override;
+  const onClaude = !configRuntime || configRuntime === 'claude';
+  if (!onClaude) return override;
+  // Object.hasOwn guards against __proto__/constructor returning a truthy
+  // non-string from the plain object literal (#2041 security review).
+  if (Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, override)) {
+    return CLAUDE_POLICY_ID_TO_ALIAS[override];
+  }
+  if (CLAUDE_AGENT_ALIASES.has(override)) return override;
+  if (override.startsWith('claude-')) {
+    warnModelOverrideUnmappable(agentType, override);
+    return null;
+  }
+  return override;
+}
+
 /**
  * #49 — Provider-neutral model policy preset resolution.
  */
@@ -159,11 +219,15 @@ function resolveModelPolicy(policy: Record<string, unknown> | null | undefined, 
 function resolveModelInternal(cwd: string, agentType: string): string {
   const config = loadConfig(cwd);
 
-  // 1. Per-agent override
+  // 1. Per-agent override (#2041: map Claude full IDs → Agent-tool aliases on
+  // the claude runtime, mirroring the model_policy path #1144; non-Claude
+  // runtimes and non-Claude values pass through verbatim).
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   const override = modelOverrides?.[agentType];
   if (override) {
-    return override;
+    const mapped = mapClaudeOverrideForRuntime(override, config['runtime'] as string | null | undefined, agentType);
+    if (mapped !== null) return mapped;
+    // Unmappable Claude ID — fall through to tier resolution (matches model_policy).
   }
 
   // 2. Compute the tier
@@ -287,7 +351,11 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
 
   const modelOverrides = config['model_overrides'] as Record<string, string> | null | undefined;
   const override = modelOverrides?.[agentType];
-  if (override) return override;
+  if (override) {
+    const mapped = mapClaudeOverrideForRuntime(override, config['runtime'] as string | null | undefined, agentType);
+    if (mapped !== null) return mapped;
+    // Unmappable Claude ID — fall through to dynamic_routing / model_policy resolution.
+  }
 
   if (config['model_policy'] && config['runtime'] && config['runtime'] !== 'claude') {
     return resolveModelInternal(cwd, agentType);
@@ -508,6 +576,7 @@ export = {
   resolveModelPolicy,
   resolveModelInternal,
   _resetModelPolicyWarningCacheForTests,
+  _resetModelOverrideWarningCacheForTests,
   VALID_GRANULARITIES,
   resolveGranularityInternal,
   assertValidGranularityOverride,

@@ -47,13 +47,14 @@ npx @opengsd/gsd-core@latest
 
 使用其他运行时或没有 Node.js？请参阅[在你的运行时上安装](docs/zh-CN/how-to/install-on-your-runtime.md)。
 
-安装完成后，启动你的第一个项目：
+安装完成后，启动一个新项目或接入现有仓库：
 
 ```bash
-/gsd-new-project
+/gsd-new-project   # 新建项目
+/gsd-onboard       # 现有代码库
 ```
 
-初次使用？请按照[你的第一个项目](docs/zh-CN/tutorials/your-first-project.md)进行引导式操作，从安装到完成第一个交付阶段。
+初次使用？请按照[你的第一个项目](docs/zh-CN/tutorials/your-first-project.md)进行引导式操作，从安装到完成第一个交付阶段。对于现有仓库，请参阅[接入现有代码库](docs/zh-CN/tutorials/onboarding-an-existing-codebase.md)。
 
 ---
 

@@ -380,6 +380,14 @@ describe('resolveProfile', () => {
     }
   });
 
+  test('standard profile includes the onboard manager handoff dependency', () => {
+    const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+    const result = resolveProfile({ modes: ['standard'], manifest });
+    assert.ok(result.skills instanceof Set);
+    assert.ok(result.skills.has('onboard'), 'standard profile should include onboard');
+    assert.ok(result.skills.has('manager'), 'onboard handoff must install gsd-manager');
+  });
+
   test('resolves full profile — returns sentinel', () => {
     const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
     const result = resolveProfile({ modes: ['full'], manifest });

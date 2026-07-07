@@ -290,13 +290,14 @@ node gsd-tools.cjs scaffold phase-dir --phase N --name "phase name"
 
 ## Comandos Init (Carregamento de Contexto Composto)
 
-Carrega todo o contexto necessário para um fluxo de trabalho específico em uma única chamada. Retorna JSON com informações do projeto, configuração, estado e dados específicos do fluxo de trabalho.
+Carrega todo o contexto necessário para um fluxo de trabalho específico em uma única chamada. Retorna JSON com informações do projeto, configuração, estado e dados específicos do fluxo de trabalho. `init onboard [--fast] [--text]` retorna, para `/gsd-onboard`, sinais de brownfield, candidatos a docs de planning, completude do mapa de código, prontidão do mapa fast, roteamento em modo texto, estado parcial de planning e status do resumo de onboarding.
 
 ```bash
 node gsd-tools.cjs init execute-phase <phase>
 node gsd-tools.cjs init plan-phase <phase>
 node gsd-tools.cjs init new-project
 node gsd-tools.cjs init new-milestone
+node gsd-tools.cjs init onboard [--fast] [--text]
 node gsd-tools.cjs init quick <description>
 node gsd-tools.cjs init resume
 node gsd-tools.cjs init verify-work <phase>
