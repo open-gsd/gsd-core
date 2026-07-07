@@ -35,12 +35,16 @@ const RUNTIME_INSTALL_CONTRACTS = {
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
   kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
-  kilo: { surface: 'flat-command', settings: false, packageJson: true },
+  // #1821: Kilo (hooksSurface:none, no plugin surface) no longer receives the
+  // dead hook scripts or the CommonJS package.json marker.
+  kilo: { surface: 'flat-command', settings: false, packageJson: false },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
   windsurf: { surface: 'global-artifacts-noop', settings: false, packageJson: false },
-  zcode: { surface: 'flat-skills', settings: false, packageJson: true },
+  // #1821: ZCode (hooksSurface:none, no plugin surface) no longer receives the
+  // dead hook scripts or the CommonJS package.json marker.
+  zcode: { surface: 'flat-skills', settings: false, packageJson: false },
 };
 
 function sha256(content) {
