@@ -76,6 +76,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/external-job.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
+      'gsd-core/bin/lib/spec-section.cjs',
       'gsd-core/bin/lib/prohibition-enforcement.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',

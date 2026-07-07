@@ -381,6 +381,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 | `planner-load-graph-context.md` | Planner's load_graph_context step: knowledge-graph freshness + dependency-context query via the gsd_run launcher (extracted from gsd-planner.md). |
 | `skeleton-template.md` | SKELETON.md template emitted for new-project Walking Skeleton (Phase 1 + `--mvp`). |
 | `user-story-template.md` | User story format for MVP planning — "As a / I want to / So that" structured fields. |
+| `specless-probe-fallback.md` | Spec-less probe fallback protocol — gate (toggle + per-section absence via the shared `spec-section` helper), the deterministic edge probe (mirrors spec-phase 5.5), the in-planner prohibition recall, and the `must_haves` authoring lift; consumed by plan-phase step 7.95 when a phase SPEC omits `## Edge Coverage` / `## Prohibitions` (ADR-857 Phase 6). |
 | `spidr-splitting.md` | SPIDR splitting decomposition rules for handling large user stories in MVP mode. |
 
 > **Subdirectory:** `gsd-core/references/few-shot-examples/` contains additional few-shot examples (`plan-checker.md`, `verifier.md`) that are referenced from specific agents. These are not among the top-level references.
@@ -502,6 +503,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `semver-compare.cjs` | Shared semver comparison policy helpers (`compareSemverCore`, stable-triplet validation, normalized tuple parsing) consumed by update-check hooks, statusline dev-install detection, and changeset extract range logic (#10) |
 | `security.cjs` | Path traversal prevention, prompt injection detection, safe JSON/shell helpers |
 | `shell-command-projection.cjs` | Runtime-aware shell command projection for managed hook serialization: decides PowerShell call-operator usage by runtime/platform and normalizes Windows script path tokens |
+| `spec-section.cjs` | SPEC section-status helper (compiled from `src/spec-section.cts`, gitignored) — the single source of truth for the canonical SPEC headings (suffix-tolerant) and markdown-table row counting; `specSectionStatus`/`countSectionDataRows` decide per-section "supplied" for plan-phase's spec-less probe fallback, replacing ad-hoc awk (contract pinned by `tests/spec-section.test.cjs`) |
 | `state-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools state` |
 | `state.cjs` | STATE.md parsing, updating, progression, metrics |
 | `state-document.cjs` | Pure STATE.md field extraction, replacement, status normalization, and progress calculation transforms |
