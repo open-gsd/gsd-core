@@ -3909,6 +3909,32 @@ describe('#2041 model_overrides: Claude full ID → alias on claude runtime', ()
     assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-executor', 0), 'claude-sonnet-5');
   });
 
+  // MEDIUM-1 (review): exercise the unmappable-override fall-through branch in
+  // resolveModelForTier (closes the mutation-score gap — a future refactor that
+  // accidentally returned the verbatim override instead of falling through
+  // would otherwise survive the suite).
+  test('resolveModelForTier unmappable claude ID falls through to tier alias on claude', () => {
+    resetRuntimeWarningCaches();
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_profile: 'balanced',
+      model_overrides: { 'gsd-planner': 'claude-opus-4-5' },
+    });
+    // unmappable override → fall through → no dynamic_routing → resolveModelInternal → 'opus'
+    assert.strictEqual(resolveModelForTier(tmpDir, 'gsd-planner', 0), 'opus');
+  });
+
+  // LOW-2 (review): pin the case-sensitive contract — a case-variant like
+  // "Claude-Sonnet-5" is NOT mapped (alias keys are case-sensitive, matching
+  // the model_policy path and the Claude API).
+  test('model_overrides case-variant "Claude-Sonnet-5" passes through verbatim (case-sensitive contract)', () => {
+    writeConfig(tmpDir, {
+      runtime: 'claude',
+      model_overrides: { 'gsd-executor': 'Claude-Sonnet-5' },
+    });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-executor'), 'Claude-Sonnet-5');
+  });
+
   // Regression guard: non-Claude custom / vendor values still pass through verbatim
   // on the claude runtime (the fix must NOT touch values that aren't Claude IDs).
   test('model_overrides non-Claude custom model passes through verbatim on runtime:claude', () => {

@@ -111,9 +111,12 @@ function warnModelOverrideUnmappable(agentType: string, overrideValue: string): 
   const key = `${agentType}::${overrideValue}`;
   if (_modelOverrideUnmappableWarned.has(key)) return;
   _modelOverrideUnmappableWarned.add(key);
-  // MUST go to stderr — resolve-model's JSON result is parsed from stdout.
+  // Cap emission length so an oversized or secret-shaped value cannot leak in
+  // full to stderr/logs (#2041 security review). MUST go to stderr — resolve-
+  // model's JSON result is parsed from stdout.
+  const safe = overrideValue.length > 64 ? overrideValue.slice(0, 64) + '…' : overrideValue;
   process.stderr.write(
-    `gsd: warning — model_overrides value "${overrideValue}" for ${agentType} ` +
+    `gsd: warning — model_overrides value "${safe}" for ${agentType} ` +
     `has no Claude agent alias; falling through to tier resolution.\n`,
   );
 }
@@ -132,16 +135,28 @@ function _resetModelOverrideWarningCacheForTests(): void {
  * through to normal tier/dynamic-routing resolution" (used when a Claude full
  * ID has no alias — matches model_policy's warn-and-fall-through). Non-Claude
  * runtimes and non-Claude values always pass through verbatim.
+ *
+ * Hardening (code+security review): a `typeof` guard preserves the pre-fix
+ * no-crash behavior if a malformed config surfaces a non-string value, and an
+ * `Object.hasOwn` lookup defeats `__proto__`/`constructor` lookups on the plain
+ * object literal so those reserved keys cannot return a truthy non-string.
  */
 function mapClaudeOverrideForRuntime(
   override: string,
   configRuntime: string | null | undefined,
   agentType: string,
 ): string | null {
+  // Defensive: model_overrides is typed Record<string,string> but a malformed
+  // config could surface a non-string; pass through verbatim (preserving the
+  // pre-fix no-crash behaviour) and let the downstream Agent tool reject it.
+  if (typeof override !== 'string') return override;
   const onClaude = !configRuntime || configRuntime === 'claude';
   if (!onClaude) return override;
-  const alias = CLAUDE_POLICY_ID_TO_ALIAS[override];
-  if (alias) return alias;
+  // Object.hasOwn guards against __proto__/constructor returning a truthy
+  // non-string from the plain object literal (#2041 security review).
+  if (Object.hasOwn(CLAUDE_POLICY_ID_TO_ALIAS, override)) {
+    return CLAUDE_POLICY_ID_TO_ALIAS[override];
+  }
   if (CLAUDE_AGENT_ALIASES.has(override)) return override;
   if (override.startsWith('claude-')) {
     warnModelOverrideUnmappable(agentType, override);
@@ -562,7 +577,6 @@ export = {
   resolveModelInternal,
   _resetModelPolicyWarningCacheForTests,
   _resetModelOverrideWarningCacheForTests,
-  mapClaudeOverrideForRuntime,
   VALID_GRANULARITIES,
   resolveGranularityInternal,
   assertValidGranularityOverride,
