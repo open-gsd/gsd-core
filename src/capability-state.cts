@@ -477,6 +477,16 @@ function resolveCapabilityRuntimeState(
         const canonical = runtimeNamePolicy.canonicalizeRuntimeName(runtimeOverride);
         if (canonical) {
           resolvedConfigDir = runtimeHomes.getGlobalConfigDir(canonical);
+        } else {
+          // #2003: unknown runtime override — warn (don't silently ignore the
+          // explicit input) and fall through to persisted-runtime resolution.
+          // Avoids a silent-wrong-result on this diagnostic command for typos
+          // (e.g. "cluade") or runtimes known to runtime-homes but not yet to
+          // the alias manifest (e.g. "grok"). The warning surfaces via the
+          // `warnings[]` channel consumed by cmdCapabilityState/cmdLoopRenderHooks.
+          warnings.push(
+            `--runtime "${runtimeOverride}" is not a known runtime; falling back to auto-detected/persisted runtime resolution`,
+          );
         }
       }
       if (!resolvedConfigDir) {
