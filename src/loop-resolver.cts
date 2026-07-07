@@ -454,6 +454,27 @@ function renderLoopHooks(resolved: ResolveLoopHooksResult): string {
  * Missing <capId> value → coreError + non-zero exit.
  * Unknown/inactive capId → `false` (not an error).
  */
+// #2009: a capability id surfaced inside the runnable `gsd capability remove <id>`
+// remediation must match the canonical kebab-case id shape (identical to
+// capability-consent.cts / capability-ledger.cts) before it is embedded — a raw
+// overlay directory name is attacker-controlled and can carry shell/markdown
+// metacharacters (backticks, ';', '|', '$()'). An id that fails this check is
+// withheld and no runnable command is rendered for it.
+const LOAD_FAIL_CAP_ID_RE = /^[a-z][a-z0-9-]*$/;
+
+// #2009: neutralize control chars, newlines, and backticks from a third-party
+// load-failure reason so a malicious manifest cannot break out of the warning
+// line or inject markdown / prompt content into the surfaced message.
+function sanitizeLoadFailReason(reason: unknown): string {
+  const cleaned = String(reason)
+    // Strip C0 control chars, DEL, and backticks; collapse remaining whitespace.
+    .replace(/[\x00-\x1F\x7F`]/g, ' ')
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300);
+  return cleaned || '(no reason given)';
+}
+
 function cmdLoopRenderHooks(
   cwd: string,
   point: string,
@@ -519,25 +540,54 @@ function cmdLoopRenderHooks(
     return;
   }
 
-  // ── ADR-1244 D2 fail-closed gate injection ────────────────────────────────────
-  // For every skipped overlay capability that declared a gate at this point,
-  // inject a synthetic BLOCKING gate into the resolved output so the loop HALTS
-  // rather than silently proceeding as if the gate had passed. step/contribution
-  // overlays that were skipped are left open (skip-open is correct for them).
+  // ── ADR-1244 D2: load-failed capability gates FAIL OPEN with a loud warning ────
+  // Decision (#2009): a capability that failed to LOAD must not block the loop.
+  // The prior behavior injected a BLOCKING synthetic gate (blocking:true,
+  // onError:'halt') at every point where the skipped cap declared a gate, so a
+  // single incompatible capability halted every ship:pre / verify:post
+  // project-wide for a load error unrelated to what the gate checked — with no
+  // remediation surfaced. We now fail OPEN: no gate is injected (the loop proceeds
+  // and `--active-cap <failed-cap>` correctly reports it inactive), and a loud
+  // warning is emitted instead — to STDERR (which the operator, or the agent
+  // running the command, actually sees regardless of how the host workflow
+  // consumes stdout) AND in the envelope's `warnings` channel for structured
+  // consumers. The warning names the load reason and the exact
+  // `gsd capability remove <id>` remediation so the operator can clear the broken
+  // capability. blockedGates is still recorded by the loader; only the consequence
+  // changes from block to warn. step/contribution overlays were already skip-open.
+  //
+  // The gate injection was dropped rather than made non-blocking because no host
+  // workflow generically surfaces an arbitrary gate's message at ship:pre /
+  // verify:post (consumers dispatch on specific capIds / ref.skills), and the
+  // generic gate consumers expect an object-shaped `check`, not a prose string —
+  // so an injected advisory gate would be silently dropped or mis-dispatched. A
+  // stderr warning is the channel that is actually surfaced. (See #2009 review.)
   const overlayMeta = (registry as { _overlay?: { blockedGates?: Array<{ point: string; capId: string; reason: string }> } })['_overlay'];
+  const loadFailWarnings: string[] = [];
   if (overlayMeta && Array.isArray(overlayMeta.blockedGates)) {
     for (const blocked of overlayMeta.blockedGates) {
-      if (blocked.point === point) {
-        const syntheticGate: ActiveHook = {
-          capId: blocked.capId,
-          kind: 'gate',
-          blocking: true,
-          onError: 'halt',
-          check: `capability "${blocked.capId}" was skipped at load (${blocked.reason}); its gate at ${point} cannot be evaluated — failing closed`,
-        };
-        resolved.activeHooks.push(syntheticGate);
-      }
+      if (blocked.point !== point) continue;
+      // Security (#2009 review): capId/reason come from a third-party manifest or
+      // directory name. Validate capId before embedding it in the runnable
+      // remediation command; withhold it (no runnable command) if it is not a
+      // canonical id. Strip control chars/backticks from reason.
+      const idValid = LOAD_FAIL_CAP_ID_RE.test(String(blocked.capId));
+      const capLabel = idValid
+        ? `"${blocked.capId}"`
+        : 'with an invalid id (withheld) under .gsd/capabilities/';
+      const remediation = idValid
+        ? `Run \`gsd capability remove ${blocked.capId}\` to remove it, or fix the load error.`
+        : 'Remove the offending capability directory under .gsd/capabilities/, or fix the load error.';
+      loadFailWarnings.push(
+        `capability ${capLabel} failed to load (${sanitizeLoadFailReason(blocked.reason)}); ` +
+        `its gate at ${point} is SKIPPED and NOT enforced (failing open). ${remediation}`,
+      );
     }
+  }
+  // Emit loudly to stderr in EVERY output mode (including --active-cap), so a
+  // skipped gate is never silently invisible to the operator/agent.
+  for (const w of loadFailWarnings) {
+    process.stderr.write(`gsd: warning — ${w}\n`);
   }
 
   // --active-cap mode: print exactly 'true' or 'false' with no envelope
@@ -558,8 +608,12 @@ function cmdLoopRenderHooks(
     activeHooks: resolved.activeHooks,
     rendered,
   };
-  if (state.warnings && state.warnings.length > 0) {
-    envelope.warnings = state.warnings;
+  // Surface capability-state warnings and the #2009 load-failure fail-open
+  // warnings together in the structured `warnings` channel (in addition to the
+  // stderr emission above, which is the channel host workflows actually see).
+  const combinedWarnings = [...(state.warnings || []), ...loadFailWarnings];
+  if (combinedWarnings.length > 0) {
+    envelope.warnings = combinedWarnings;
   }
 
   coreOutput(envelope, raw);
