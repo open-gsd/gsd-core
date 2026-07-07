@@ -570,11 +570,13 @@ function main() {
   // progress (verified: no leaked handle / hang; --test-force-exit exits leaks
   // cleanly, so the timeout was pure slowness, NOT the leak the kill message guesses).
   // The per-chunk timeout is sized for a "healthy chunk (~4-5 min)"; keep chunks at
-  // roughly half a shard so each gets its own fresh 600s budget and a fresh node
-  // process (also relieving per-process memory pressure from 170+ files at once).
+  // roughly a third of a shard so each gets its own fresh 600s budget and a fresh
+  // node process (also relieving per-process memory pressure from 170+ files at once).
+  // Lowered from 90 to 60 after #1575 — macOS Node 22 shard 2/3 chunk 2 (~80 files
+  // including state.test.cjs, perf-*, worktree-cleanup) exceeded 600s with 90.
   const MAX_FILES_PER_CHUNK = process.env.RUN_TESTS_MAX_FILES_PER_CHUNK
     ? Number(process.env.RUN_TESTS_MAX_FILES_PER_CHUNK)
-    : 90;
+    : 60;
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)

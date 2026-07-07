@@ -29,6 +29,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCopilotSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCopilotAgent"
         }
       ],
       "local": [
@@ -39,6 +47,14 @@
           "nesting": "flat",
           "recursive": false,
           "converter": "convertClaudeCommandToCopilotSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToCopilotAgent"
         }
       ]
     },

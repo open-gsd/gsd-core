@@ -22,6 +22,7 @@ const {
   isCapabilityActive,
   _isSafePropKey,
   _loadInstalledSkillsManifest,
+  _loadFlatCommandsGsdManifest,
   _resolveManifest,
 } = require('../gsd-core/bin/lib/capability-state.cjs');
 
@@ -822,6 +823,223 @@ describe('cmdCapabilityState — end-to-end via gsd-tools CLI', () => {
 // _resolveManifest functions with a non-existent commandsGsdDir path so they
 // FAIL before the fix and PASS after, regardless of whether commands/gsd
 // happens to exist in the current checkout.
+
+describe('regressions: flat commands/gsd-<stem>.md layout (#1858)', () => {
+  // Flat command layout (Claude local project install shape): skills live at
+  // <repo>/commands/gsd-<stem>.md — the gsd- prefix is baked into the filename
+  // and there is NO commands/gsd/ subdir. _resolveManifest must detect this
+  // layout, strip the gsd- prefix, and produce the same stems the nested
+  // loader (commands/gsd/<stem>.md) would, or every skill-bearing capability
+  // is silently reported surfaced:false / enabled:false / active:false.
+  function makeFlatCommandMd(stem, requires) {
+    const req = requires ? `requires: [${requires.join(', ')}]` : 'requires: [phase]';
+    return [
+      '---',
+      `name: gsd:${stem}`,
+      `description: ${stem} skill`,
+      'argument-hint: "[phase number]"',
+      'allowed-tools:',
+      '  - Read',
+      req,
+      '---',
+      'Execute end-to-end.',
+    ].join('\n') + '\n';
+  }
+
+  // ── Unit tests for _loadFlatCommandsGsdManifest ─────────────────────────────
+
+  test('_loadFlatCommandsGsdManifest: returns empty map when parent dir absent', () => {
+    const missing = path.join(os.tmpdir(), 'cap-flat-missing-' + Date.now());
+    const manifest = _loadFlatCommandsGsdManifest(missing);
+    assert.ok(manifest instanceof Map, 'should return a Map');
+    assert.strictEqual(manifest.size, 0, 'should be empty when parent dir absent');
+  });
+
+  test('_loadFlatCommandsGsdManifest: scans gsd-<stem>.md and strips the gsd- prefix', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-scan-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-validate-phase.md'), makeFlatCommandMd('validate-phase'), 'utf8');
+      fs.writeFileSync(path.join(tmpDir, 'gsd-secure-phase.md'), makeFlatCommandMd('secure-phase'), 'utf8');
+      // Non-gsd file must be ignored
+      fs.writeFileSync(path.join(tmpDir, 'random-doc.md'), '# not a skill\n', 'utf8');
+      // Non-markdown gsd file must be ignored
+      fs.writeFileSync(path.join(tmpDir, 'gsd-notskill.txt'), 'nope\n', 'utf8');
+
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(manifest.has('validate-phase'), 'flat gsd-validate-phase.md -> stem validate-phase');
+      assert.ok(manifest.has('secure-phase'), 'flat gsd-secure-phase.md -> stem secure-phase');
+      assert.ok(!manifest.has('gsd-validate-phase'), 'must NOT keep the gsd- prefix on the stem');
+      assert.ok(!manifest.has('random-doc'), 'non-gsd file must be ignored');
+      assert.ok(!manifest.has('notskill'), 'non-.md gsd file must be ignored');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadFlatCommandsGsdManifest: parses requires via shared parseRequires (no drift)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-req-'));
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, 'gsd-my-skill.md'),
+        makeFlatCommandMd('my-skill', ['dep-a', 'dep-b']),
+        'utf8',
+      );
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.deepStrictEqual(manifest.get('my-skill'), ['dep-a', 'dep-b']);
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('_loadFlatCommandsGsdManifest: companion _calls_agents_<stem> key present (parity with nested loader)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-agents-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-validate-phase.md'), makeFlatCommandMd('validate-phase'), 'utf8');
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(manifest.has('_calls_agents_validate-phase'),
+        'flat loader must emit the companion _calls_agents_ key (same Map shape as loadSkillsManifest)');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // Low-1 (review): boundary — empty stem (gsd-.md) skipped, single-char stem kept.
+  test('_loadFlatCommandsGsdManifest: skips gsd-.md (empty stem) and keeps single-char stem (slice boundary)', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-edge-'));
+    try {
+      fs.writeFileSync(path.join(tmpDir, 'gsd-.md'), makeFlatCommandMd(''), 'utf8');
+      fs.writeFileSync(path.join(tmpDir, 'gsd-x.md'), makeFlatCommandMd('x'), 'utf8');
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.ok(!manifest.has(''), 'gsd-.md must NOT register an empty-string stem');
+      assert.ok(!manifest.has('_calls_agents_'), 'no companion key for an empty stem');
+      assert.ok(manifest.has('x'), 'gsd-x.md -> single-char stem "x" (slice(4,-3) boundary)');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  // Low-2 (review): unreadable file degrades both keys to [] (parity with nested
+  // loader's catch). POSIX-only AND must not run as root — root bypasses POSIX
+  // read permission bits, so chmod 0o000 would NOT make the file unreadable and
+  // the test would assert [] against the real parsed deps (false failure).
+  // Skip on win32 (DEFECT.WINDOWS-POSIX-MODE-BIT-ASSERT) and when getuid()==0.
+  const _skipUnreadable = process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
+  test('_loadFlatCommandsGsdManifest: unreadable file degrades to empty deps + agents (parity)', { skip: _skipUnreadable }, () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-flat-unread-'));
+    let madeUnreadable = false;
+    try {
+      const skillPath = path.join(tmpDir, 'gsd-secure.md');
+      fs.writeFileSync(skillPath, '---\nname: gsd:secure\nrequires: [phase]\n---\nbody\n', { mode: 0o644 });
+      fs.chmodSync(skillPath, 0o000);
+      madeUnreadable = true;
+      const manifest = _loadFlatCommandsGsdManifest(tmpDir);
+      assert.deepStrictEqual(manifest.get('secure'), [], 'unreadable file -> empty requires (parity with nested catch)');
+      assert.deepStrictEqual(manifest.get('_calls_agents_secure'), [], 'unreadable file -> empty agents (parity with nested catch)');
+    } finally {
+      // Restore writability so cleanup() can rm the tmp tree.
+      if (madeUnreadable) {
+        try { fs.chmodSync(path.join(tmpDir, 'gsd-secure.md'), 0o644); } catch { /* best effort */ }
+      }
+      cleanup(tmpDir);
+    }
+  });
+
+  // ── _resolveManifest picks the flat branch when nested is absent ────────────
+
+  test('_resolveManifest: detects flat commands/gsd-<stem>.md layout when nested commands/gsd/ is absent (#1858)', () => {
+    const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-flat-repo-'));
+    try {
+      // Flat source layout: <repo>/commands/gsd-<stem>.md
+      // NO commands/gsd/ subdir, NO skills/ dir.
+      const commandsDir = path.join(tmpRepo, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      fs.writeFileSync(path.join(commandsDir, 'gsd-validate-phase.md'), makeFlatCommandMd('validate-phase'), 'utf8');
+      fs.writeFileSync(path.join(commandsDir, 'gsd-secure-phase.md'), makeFlatCommandMd('secure-phase'), 'utf8');
+
+      // commandsGsdDir = <repo>/commands/gsd (nested — does NOT exist).
+      // dirname(commandsGsdDir) = <repo>/commands (where the flat files live).
+      const commandsGsdDir = path.join(commandsDir, 'gsd');
+      // configDir = a separate empty tmp dir (no skills/ → installed fallback empty).
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-flat-cfg-'));
+      try {
+        const manifest = _resolveManifest(commandsGsdDir, configDir);
+        assert.ok(manifest.has('validate-phase'),
+          'flat layout must populate validate-phase stem (was empty pre-fix → all skill caps unsurfaced)');
+        assert.ok(manifest.has('secure-phase'), 'flat layout must populate secure-phase stem');
+        assert.ok(!manifest.has('gsd-validate-phase'), 'stem must have gsd- prefix stripped');
+      } finally {
+        cleanup(configDir);
+      }
+    } finally {
+      cleanup(tmpRepo);
+    }
+  });
+
+  test('_resolveManifest: flat branch does NOT shadow a populated installed skills dir when no flat files exist', () => {
+    // Precedence: nested > flat-source > installed. If the flat parent dir has
+    // NO gsd-*.md files, the flat loader returns an empty Map and _resolveManifest
+    // must fall through to the installed-skills branch (not return empty).
+    const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-precedence-'));
+    try {
+      const commandsDir = path.join(tmpRepo, 'commands');
+      fs.mkdirSync(commandsDir, { recursive: true });
+      // No gsd-*.md files in commands/ — flat loader yields empty.
+      // Installed skills present under configDir:
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-rm-precedence-cfg-'));
+      try {
+        const secureDir = path.join(configDir, 'skills', 'gsd-secure-phase');
+        fs.mkdirSync(secureDir, { recursive: true });
+        fs.writeFileSync(path.join(secureDir, 'SKILL.md'),
+          '---\nname: gsd:secure-phase\nrequires: [phase]\n---\nbody\n', 'utf8');
+
+        const commandsGsdDir = path.join(commandsDir, 'gsd'); // nested absent
+        const manifest = _resolveManifest(commandsGsdDir, configDir);
+        assert.ok(manifest.has('secure-phase'),
+          'when flat dir is empty, installed-skills fallback must still work (precedence flat > installed only when flat non-empty)');
+      } finally {
+        cleanup(configDir);
+      }
+    } finally {
+      cleanup(tmpRepo);
+    }
+  });
+
+  // ── Parity: flat loader produces the same stems as the nested loader ────────
+  // (DEFECT.GENERATIVE-FIX — guards against silent divergence between the two
+  // parallel manifest-builders.)
+
+  test('flat loader and nested loader produce identical stems for the same command set (parity)', () => {
+    const realCommandsGsdDir = path.resolve(__dirname, '..', 'commands', 'gsd');
+    if (!fs.existsSync(realCommandsGsdDir)) return; // skip outside a repo checkout
+    // Build a flat mirror of the real nested commands/gsd/<stem>.md as
+    // commands/gsd-<stem>.md in a temp dir, then compare stem sets.
+    const tmpFlat = fs.mkdtempSync(path.join(os.tmpdir(), 'cap-parity-flat-'));
+    try {
+      const nested = require('../gsd-core/bin/lib/install-profiles.cjs').loadSkillsManifest(realCommandsGsdDir);
+      for (const [stem] of nested) {
+        if (stem.startsWith('_calls_agents_')) continue;
+        const src = path.join(realCommandsGsdDir, stem + '.md');
+        if (!fs.existsSync(src)) continue;
+        fs.writeFileSync(path.join(tmpFlat, 'gsd-' + stem + '.md'), fs.readFileSync(src, 'utf8'), 'utf8');
+      }
+      const flat = _loadFlatCommandsGsdManifest(tmpFlat);
+      const nestedStems = [...nested.keys()].filter((k) => !k.startsWith('_calls_agents_')).sort();
+      const flatStems = [...flat.keys()].filter((k) => !k.startsWith('_calls_agents_')).sort();
+      assert.deepStrictEqual(flatStems, nestedStems,
+        'flat loader stem set must match nested loader stem set for the real command tree');
+      // Nit-2 (review): also compare _calls_agents_<stem> VALUES, not just the
+      // stem set — proves the shared parseCallsAgents output is identical.
+      for (const stem of flatStems) {
+        assert.deepStrictEqual(flat.get(`_calls_agents_${stem}`), nested.get(`_calls_agents_${stem}`),
+          `agent refs for stem "${stem}" must match between flat and nested loaders`);
+        assert.deepStrictEqual(flat.get(stem), nested.get(stem),
+          `requires for stem "${stem}" must match between flat and nested loaders`);
+      }
+    } finally {
+      cleanup(tmpFlat);
+    }
+  });
+});
 
 describe('regressions: installed-runtime capability surface (#1160)', () => {
   // Minimal valid SKILL.md content (frontmatter only — matches what install emits)

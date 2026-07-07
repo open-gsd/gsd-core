@@ -8992,9 +8992,11 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // (by installRuntimeArtifacts at line 8912), which also performs its own
   // stale-file prune pass. The inline stale-removal + inline loop both skip them.
   // Trivial group (cursor/windsurf/augment/trae/codebuddy) cut over together.
-  // cline is excluded: it takes a rules-only local branch and has a local/global
-  // complication that the descriptor-driven path does not handle correctly.
-  const _DESCRIPTOR_AGENTS_RUNTIMES = new Set(['cursor', 'windsurf', 'augment', 'trae', 'codebuddy']);
+  // #1575: copilot and antigravity cut over — copilot gets .agent.md filename
+  // rename via _copyStaged(runtime); antigravity uses scope-aware converter.
+  // cline remains excluded: rules-only local branch + local/global complication
+  // that the descriptor-driven path does not handle correctly.
+  const _DESCRIPTOR_AGENTS_RUNTIMES = new Set(['cursor', 'windsurf', 'augment', 'trae', 'codebuddy', 'copilot', 'antigravity']);
 
   // Always remove stale gsd-* agents first so re-installing with
   // `--minimal` actually shrinks a previously-full install.

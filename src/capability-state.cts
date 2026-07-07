@@ -46,7 +46,7 @@ const { loadConfig } = configLoaderMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfilesMod = require('./install-profiles.cjs');
-const { readActiveProfile, loadSkillsManifest, resolveProfile, parseRequires } = installProfilesMod;
+const { readActiveProfile, loadSkillsManifest, resolveProfile, parseRequires, parseCallsAgents } = installProfilesMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import surfaceMod = require('./surface.cjs');
@@ -385,21 +385,83 @@ function _loadInstalledSkillsManifest(configDir: string): Map<string, string[]> 
 }
 
 /**
+ * #1858 — Build a skill dependency manifest from a FLAT commands/gsd-<stem>.md
+ * source layout (the Claude local project install shape, where the `gsd-`
+ * prefix is baked into each filename at the commands/ level and there is no
+ * commands/gsd/ subdir). Strips the `gsd-` prefix so stems match the nested
+ * loader's output (gsd-validate-phase.md → validate-phase, same as nested
+ * validate-phase.md).
+ *
+ * Map shape is identical to loadSkillsManifest: each stem maps to its
+ * `requires` deps (parsed via the same shared parseRequires) and carries a
+ * companion `_calls_agents_<stem>` key (parsed via parseCallsAgents) so the
+ * flat and nested paths cannot drift.
+ *
+ * Returns an empty Map when the parent directory does not exist or contains
+ * no gsd-*.md files (so _resolveManifest can use size>0 as the "flat layout
+ * present" signal and fall through to the installed-skills branch otherwise).
+ */
+function _loadFlatCommandsGsdManifest(commandsParentDir: string): Map<string, string[]> {
+  const manifest = new Map<string, string[]>();
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(commandsParentDir, { withFileTypes: true });
+  } catch {
+    return manifest;
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.startsWith('gsd-')) continue;
+    if (!entry.name.endsWith('.md')) continue;
+    // Strip 'gsd-' prefix (4 chars) and '.md' suffix (3 chars) → stem.
+    const stem = entry.name.slice(4, -3);
+    if (!stem) continue;
+    // Mirror loadSkillsManifest's try/catch structure exactly: wrap read +
+    // parse + set together so an unreadable file OR a thrown parser degrades
+    // both keys to [] (parity; closes the latent catch-scope drift a reviewer
+    // flagged — both parsers are non-throwing today, but the structural
+    // match future-proofs the "identical Map shape" contract).
+    try {
+      const content = fs.readFileSync(path.join(commandsParentDir, entry.name), 'utf8');
+      manifest.set(stem, parseRequires(content));
+      manifest.set(`_calls_agents_${stem}`, parseCallsAgents(content));
+    } catch {
+      manifest.set(stem, []);
+      manifest.set(`_calls_agents_${stem}`, []);
+    }
+  }
+  return manifest;
+}
+
+/**
  * Resolve the skill dependency manifest for capability-state resolution.
  *
- * Resolution order (fixes #1160 — installed-runtime capability surface):
- *   1. If commandsGsdDir exists, load from source (repo-checkout behavior).
- *   2. Otherwise, fall back to installed skills at configDir/skills/gsd-[stem]/SKILL.md.
+ * Resolution order:
+ *   1. If commandsGsdDir exists, load from the nested source layout
+ *      (repo-checkout behavior: <repo>/commands/gsd/*.md).
+ *   2. #1858 — otherwise, if the flat source layout is present (gsd-<stem>.md
+ *      files in dirname(commandsGsdDir)), load from there. This is the Claude
+ *      local project install shape where commands/gsd/ does not exist but
+ *      commands/gsd-<stem>.md files do.
+ *   3. #1160 — otherwise, fall back to installed skills at
+ *      configDir/skills/gsd-[stem]/SKILL.md.
  *
- * In an installed runtime the commands/gsd source tree is absent; only the
- * skills/ layout exists. Returning an empty manifest caused resolveSurface to
- * materialise the full-sentinel to an empty Set, making every capability appear
- * unsurfaced even when the skill was physically installed.
+ * In an installed runtime both source trees are absent; only the skills/
+ * layout exists. Returning an empty manifest caused resolveSurface to
+ * materialise the full-sentinel to an empty Set, making every skill-bearing
+ * capability appear unsurfaced even when the skill was physically installed
+ * (#1160) or authored as a flat command file (#1858).
  */
 function _resolveManifest(commandsGsdDir: string, configDir: string): Map<string, string[]> {
   if (fs.existsSync(commandsGsdDir)) {
     return loadSkillsManifest(commandsGsdDir);
   }
+  // #1858: flat source layout — gsd-<stem>.md files at dirname(commandsGsdDir).
+  // Only claim the flat branch when it actually has gsd-*.md files; otherwise
+  // fall through to the installed-skills branch (a commands/ dir with no gsd
+  // files must not shadow an installed skills/ tree).
+  const flat = _loadFlatCommandsGsdManifest(path.dirname(commandsGsdDir));
+  if (flat.size > 0) return flat;
   return _loadInstalledSkillsManifest(configDir);
 }
 
@@ -619,6 +681,7 @@ export = {
   // Exported for tests
   _resolveCommandsGsdDir,
   _loadInstalledSkillsManifest,
+  _loadFlatCommandsGsdManifest,
   _resolveManifest,
   _isSafePropKey,
 };
