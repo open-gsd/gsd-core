@@ -81,6 +81,7 @@ describe('config-field-docs', () => {
       verifier: 'workflow.verifier',
       nyquist_validation: 'workflow.nyquist_validation',
       ai_integration_phase: 'workflow.ai_integration_phase',
+      api_coverage_gate: 'workflow.api_coverage_gate',
       text_mode: 'workflow.text_mode',
       subagent_timeout: 'workflow.subagent_timeout',
       branching_strategy: 'git.branching_strategy',

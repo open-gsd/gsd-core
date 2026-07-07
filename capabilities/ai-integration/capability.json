@@ -30,6 +30,11 @@
       "type": "boolean",
       "default": true,
       "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+    },
+    "workflow.api_coverage_gate": {
+      "type": "boolean",
+      "default": true,
+      "description": "Require an explicit API-coverage decision (full-by-default, opt-out-not-opt-in) before a phase that integrates an external API/SDK/service can seal. At plan:pre the planner is prompted to enumerate the API surface into COVERAGE.md; at verify:pre a blocking gate fails the seal unless the matrix exists with every non-integrated capability an explicit, reasoned opt-out. Independent of ai_integration_phase (applies to any external-API integration, not only AI)."
     }
   },
   "steps": [
@@ -48,6 +53,32 @@
       "onError": "skip"
     }
   ],
-  "contributions": [],
-  "gates": []
+  "contributions": [
+    {
+      "point": "plan:pre",
+      "into": "planner",
+      "fragment": {
+        "path": "fragments/api-coverage-plan-pre.md"
+      },
+      "produces": [
+        "COVERAGE.md"
+      ],
+      "consumes": [
+        "CONTEXT.md"
+      ],
+      "when": "workflow.api_coverage_gate",
+      "onError": "skip"
+    }
+  ],
+  "gates": [
+    {
+      "point": "verify:pre",
+      "check": {
+        "query": "api-coverage.verify-pre"
+      },
+      "when": "workflow.api_coverage_gate",
+      "blocking": true,
+      "onError": "halt"
+    }
+  ]
 }

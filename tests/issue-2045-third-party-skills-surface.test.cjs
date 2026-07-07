@@ -29,7 +29,7 @@
  *   AC5:      first-party caps unaffected; writer still rejects truly-unknown ids.
  */
 
-const { describe, test, before, after } = require('node:test');
+const { describe, test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');

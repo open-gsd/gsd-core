@@ -52,7 +52,7 @@ points.
 
 | id | role | tier | engines.gsd | extension points | hook kinds | source |
 |---|---|---|---|---|---|---|
-| `ai-integration` | feature | full | `>=1.6.0` | `plan:pre` | step | first-party |
+| `ai-integration` | feature | full | `>=1.6.0` | `plan:pre`, `verify:pre` | step, contribution, gate | first-party |
 | `assumption-delta` | feature | full | `>=1.6.0` | `plan:pre` | contribution | first-party |
 | `audit` | feature | full | `>=1.6.0` | — | — | first-party |
 | `claude-orchestration` | feature | full | `>=1.7.0` | `plan:post`, `execute:wave:post` | contribution | first-party |

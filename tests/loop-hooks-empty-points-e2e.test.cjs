@@ -5,7 +5,10 @@
  * Hook points tested: discuss:pre, discuss:post, execute:pre, execute:wave:pre,
  *                     verify:pre, ship:post
  *
- * All 6 points have zero hooks in the real registry by design.
+ * 5 of these points have zero hooks in the real registry by design.
+ * verify:pre graduated out of the empty set in #1562 (it now carries the
+ * ai-integration `api-coverage.verify-pre` blocking gate); SECTION 5 pins the
+ * new contract + retains synthetic extension-point-mechanics coverage.
  * Tests pin: exact envelope shape, placeholder string contract (Hyrum's Law),
  * resolver-filter mechanics (schema default / config-override / capabilityStatesById),
  * CLI contract (missing-arg, invalid-point), and Postel-leniency (malformed config).
@@ -481,8 +484,13 @@ describe('execute:wave:pre — real registry empty-resolution + synthetic mechan
 // ─────────────────────────────────────────────────────────────────────────────
 // SECTION 5: verify:pre
 // ─────────────────────────────────────────────────────────────────────────────
+// NOTE: verify:pre was an empty extension point until #1562 added the
+// ai-integration `api-coverage.verify-pre` blocking gate (default-on, opt-out
+// via workflow.api_coverage_gate=false). The real-registry assertions below pin
+// the NEW contract; the synthetic BVA tests retain extension-point-mechanics
+// coverage. Empty-point coverage for the other 5 points is unaffected.
 
-describe('verify:pre — real registry empty-resolution + synthetic extension-point readiness', () => {
+describe('verify:pre — real registry carries the api-coverage gate (#1562); synthetic mechanics', () => {
   let tmpEmptyProjectDir;
   let tmpProjectDirAllOn;
   before(() => {
@@ -494,29 +502,47 @@ describe('verify:pre — real registry empty-resolution + synthetic extension-po
     cleanup(tmpProjectDirAllOn);
   });
 
-  it('[empty-resolution] verify:pre with real registry and no config yields empty activeHooks and exact placeholder (Gall\'s Law)', () => {
+  it('[default-on] verify:pre with real registry and no config yields the api-coverage blocking gate (full-coverage-by-default)', () => {
     const resolved = resolveLoopHooks({ point: 'verify:pre', registry: realRegistry, config: {} });
-    assert.strictEqual(resolved.activeHooks.length, 0);
-    assert.strictEqual(renderLoopHooks(resolved), '_No active hooks at verify:pre._');
+    const gate = resolved.activeHooks.find((h) => h.capId === 'ai-integration' && h.kind === 'gate');
+    assert.ok(gate, 'ai-integration api-coverage gate must register at verify:pre by default');
+    assert.strictEqual(gate.blocking, true);
+    assert.strictEqual(gate.check.query, 'api-coverage.verify-pre');
   });
 
-  it('[happy] verify:pre E2E subprocess returns well-formed 3-key JSON envelope with empty activeHooks (Hyrum\'s Law contract pin)', () => {
+  it('[happy] verify:pre E2E subprocess returns a well-formed envelope carrying the gate (Hyrum\'s Law contract pin)', () => {
     const result = spawnGsd(['loop', 'render-hooks', 'verify:pre', '--cwd', tmpEmptyProjectDir, '--raw'], tmpEmptyProjectDir);
     assert.strictEqual(result.status, 0, `expected exit 0. stderr: ${result.stderr}`);
     const envelope = JSON.parse(result.stdout.trim());
     assert.strictEqual(envelope.point, 'verify:pre');
-    assert.deepEqual(envelope.activeHooks, []);
-    assert.strictEqual(envelope.rendered, '_No active hooks at verify:pre._');
+    assert.ok(Array.isArray(envelope.activeHooks));
+    assert.ok(envelope.activeHooks.some((h) => h.capId === 'ai-integration' && h.kind === 'gate'));
     assert.deepEqual(Object.keys(envelope).sort(), ['activeHooks', 'point', 'rendered']);
   });
 
-  it('[negative] verify:pre with all capability config keys set to true still yields empty activeHooks — no leakage from other points', () => {
+  it('[opt-out] verify:pre with workflow.api_coverage_gate=false yields NO ai-integration gate — config opt-out empties the point', () => {
+    const resolved = resolveLoopHooks({
+      point: 'verify:pre',
+      registry: realRegistry,
+      config: { workflow: { api_coverage_gate: false } },
+    });
+    assert.strictEqual(
+      resolved.activeHooks.find((h) => h.capId === 'ai-integration'),
+      undefined,
+      'opting out api_coverage_gate must remove the gate from verify:pre'
+    );
+  });
+
+  it('[negative] verify:pre with unrelated capability keys on does not bleed non-verify:pre hooks into the point', () => {
     const resolved = resolveLoopHooks({
       point: 'verify:pre',
       registry: realRegistry,
       config: { workflow: { ui_phase: true, ui_review: true, ui_safety_gate: true } },
     });
-    assert.strictEqual(resolved.activeHooks.length, 0, 'UI and other capabilities must not bleed through to verify:pre');
+    // The only verify:pre hook is the api-coverage gate; UI/other hooks must not bleed in.
+    for (const h of resolved.activeHooks) {
+      assert.notStrictEqual(h.capId, 'ui', 'UI capability must not bleed through to verify:pre');
+    }
   });
 
   it('[bva] Synthetic step at verify:pre with configSchema default=true fires correctly — extension point readiness', () => {
@@ -547,7 +573,10 @@ describe('verify:pre — real registry empty-resolution + synthetic extension-po
       const result = spawnGsd(['loop', 'render-hooks', 'verify:pre', '--cwd', malformedDir, '--raw'], malformedDir);
       assert.strictEqual(result.status, 0, `must not crash on malformed config. stderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
-      assert.deepEqual(envelope.activeHooks, []);
+      // Malformed config degrades to defaults (gate default-on); the contract
+      // here is leniency (exit 0, well-formed envelope), not emptiness.
+      assert.strictEqual(envelope.point, 'verify:pre');
+      assert.ok(Array.isArray(envelope.activeHooks));
     } finally {
       cleanup(malformedDir);
     }
@@ -720,13 +749,12 @@ describe('CLI contract — missing/invalid point argument (shared across all 6 e
 // SECTION 8: Parametric empty-point sweep across all 6 points (E2E regression guard)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('Parametric E2E sweep — 5 empty points return correct envelope shape via real registry (ship:post excluded — mempalace registers 1 step there)', () => {
+describe('Parametric E2E sweep — 4 empty points return correct envelope shape via real registry (ship:post excluded — mempalace registers 1 step there; verify:pre excluded since #1562 added the api-coverage gate)', () => {
   const EMPTY_POINTS = [
     'discuss:pre',
     'discuss:post',
     'execute:pre',
     'execute:wave:pre',
-    'verify:pre',
   ];
 
   for (const point of EMPTY_POINTS) {

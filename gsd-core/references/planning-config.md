@@ -256,6 +256,7 @@ Set via `workflow.*` namespace in config.json (e.g., `"workflow": { "research": 
 | `workflow.node_repair` | boolean | `true` | `true`, `false` | Attempt automatic repair of failed plan nodes |
 | `workflow.node_repair_budget` | number | `2` | Any positive integer | Max repair retries per failed node |
 | `workflow.ai_integration_phase` | boolean | `true` | `true`, `false` | Run /gsd:ai-integration-phase before planning AI system phases |
+| `workflow.api_coverage_gate` | boolean | `true` | `true`, `false` | Require an explicit API-coverage decision (full-by-default, opt-out-not-opt-in) before a phase that integrates an external API/SDK/service can seal. At plan:pre prompts a COVERAGE.md matrix; at verify:pre a blocking gate fails the seal unless the matrix exists with every non-integrated capability an explicit, reasoned opt-out (#1562) |
 | `workflow.ui_phase` | boolean | `true` | `true`, `false` | Generate UI-SPEC.md for frontend phases |
 | `workflow.ui_safety_gate` | boolean | `true` | `true`, `false` | Require safety gate approval for UI changes |
 | `workflow.text_mode` | boolean | `false` | `true`, `false` | Use plain-text numbered lists instead of AskUserQuestion menus |
