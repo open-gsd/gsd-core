@@ -671,6 +671,26 @@ fi
 
 **Step 6: Spawn executor**
 
+Auto-degrade to sequential if HEAD has diverged from the worktree fork base (#1941, mirrors
+execute-phase's #683/#1369 guard). Claude Code's `isolation="worktree"` forks new worktrees from
+`origin/HEAD`, not the live local HEAD. If a prior quick task in this session (or the Step 5.6
+pre-dispatch plan commit above) advanced local HEAD without an intervening `git push`,
+`origin/HEAD` stays pinned to a stale ancestor and the executor's `worktree_branch_check` guard
+halts with a base-mismatch fatal — potentially many commits behind, not just one. Run this check
+immediately before capturing `EXPECTED_BASE` so it reflects the most current local state.
+
+```bash
+if [ "$RUNTIME" = "claude" ] && [ "${USE_WORKTREES:-true}" != "false" ]; then
+  _QUICK_SHOULD_DEGRADE=$(gsd_run query worktree.base-check --pick shouldDegrade 2>/dev/null || true)
+  if [ "$_QUICK_SHOULD_DEGRADE" = "true" ]; then
+    _QUICK_DEGRADE_MSG=$(gsd_run query worktree.base-check --pick message 2>/dev/null || true)
+    [ -n "$_QUICK_DEGRADE_MSG" ] && printf '%s\n' "$_QUICK_DEGRADE_MSG" >&2
+    echo "⚠ [#1941] Worktree fork base diverged from orchestrator HEAD — auto-degrading to sequential mode for this quick task to avoid a base-mismatch halt." >&2
+    USE_WORKTREES=false
+  fi
+fi
+```
+
 Capture current HEAD before spawning (used for worktree branch check):
 ```bash
 EXPECTED_BASE=$(git rev-parse HEAD)
