@@ -90,6 +90,46 @@ describe('init commands', () => {
     assert.strictEqual(output.uat_path, '.planning/phases/03-api/03-UAT.md');
   });
 
+  test('init plan-phase does not collapse unrelated prefixed task IDs into numeric phases', () => {
+    seedPhase(tmpDir, '01-stable-baseline-on-main', {
+      '01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Stable Baseline On Main\n**Goal:** Establish baseline\n**Plans:** 1 plan\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init plan-phase MEM-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, false);
+    assert.strictEqual(output.phase_dir, null);
+    assert.strictEqual(output.phase_number, null);
+  });
+
+  test('init plan-phase still accepts configured project-code-prefixed phase dirs', () => {
+    seedPhase(tmpDir, 'LKML-01-stable-baseline-on-main', {
+      'LKML-01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init plan-phase LKML-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true);
+    assert.strictEqual(output.phase_dir, '.planning/phases/LKML-01-stable-baseline-on-main');
+    assert.strictEqual(output.phase_number, 'LKML-01');
+  });
+
   test('init plan-phase exposes text_mode from config (defaults false)', () => {
     const result = runGsdTools('init plan-phase 03', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);

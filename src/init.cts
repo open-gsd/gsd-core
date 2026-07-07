@@ -73,7 +73,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix } = phaseId;
+const { escapeRegex, normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -94,6 +94,27 @@ void stripShippedMilestones;
 
 // Accept all bold/colon variants of the Requirements header (#2769)
 const REQUIREMENTS_HEADER_RE = /^\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([^\n]*)$/m;
+
+function parsePhasePrefix(phase: unknown): string | null {
+  const match = String(phase).match(/^([A-Z][A-Z0-9_]*)-(?=\d)/i);
+  return match ? match[1] : null;
+}
+
+function isForeignPrefixedPhaseQuery(phase: unknown, projectCode: unknown): boolean {
+  const prefix = parsePhasePrefix(phase);
+  if (!prefix) return false;
+  const configured = typeof projectCode === 'string' ? projectCode.trim() : '';
+  return !configured || prefix.toUpperCase() !== configured.toUpperCase();
+}
+
+function phaseInfoMatchesExactPrefix(phaseInfo: Record<string, unknown> | null, phase: string): boolean {
+  return String(phaseInfo?.['phase_number'] || '').toUpperCase() === String(phase).toUpperCase();
+}
+
+function roadmapPhaseMatchesExactPrefix(roadmapPhase: Record<string, unknown> | null, phase: string): boolean {
+  const section = typeof roadmapPhase?.['section'] === 'string' ? roadmapPhase['section'] as string : '';
+  return new RegExp(`^#{2,4}\\s*Phase\\s+${escapeRegex(phase)}(?:\\b|\\s|:)`, 'i').test(section);
+}
 
 function listPhaseSummaryFiles(phaseDir: string): string[] {
   return (scanPhasePlans(phaseDir) as unknown as Record<string, string[]>)['summaryFiles'];
@@ -429,9 +450,16 @@ function cmdInitPlanPhase(
   }
 
   const config = loadConfig(cwd);
+  const foreignPrefixedPhase = isForeignPrefixedPhaseQuery(phase, config.project_code);
   let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  if (foreignPrefixedPhase && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
+    phaseInfo = null;
+  }
 
-  const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  if (foreignPrefixedPhase && !roadmapPhaseMatchesExactPrefix(roadmapPhase, phase)) {
+    roadmapPhase = null;
+  }
 
   if (phaseInfo?.['archived'] && roadmapPhase?.['found']) {
     phaseInfo = null;
