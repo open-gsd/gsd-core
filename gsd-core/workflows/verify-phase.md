@@ -288,14 +288,15 @@ if [ -z "$TEST_CMD" ]; then
     echo "⚠ No test runner detected — skipping test suite"
   fi
 fi
-# Detect test runner and run all tests (timeout: 5 minutes)
+# Run all tests (timeout: 5 min). #1857: normalize to one-shot so watch mode exits.
+TEST_CMD=$(gsd_run query normalize-test-command "$TEST_CMD" --cwd . 2>/dev/null || echo "$TEST_CMD")
 TEST_EXIT=0
 timeout 300 bash -c "$TEST_CMD" 2>&1
 TEST_EXIT=$?
 if [ "${TEST_EXIT}" -eq 0 ]; then
   echo "✓ Test suite passed"
 elif [ "${TEST_EXIT}" -eq 124 ]; then
-  echo "⚠ Test suite timed out after 5 minutes"
+  echo "⚠ Test suite timed out after 5 minutes — likely watch/dev mode"
 else
   echo "✗ Test suite failed (exit code ${TEST_EXIT})"
 fi

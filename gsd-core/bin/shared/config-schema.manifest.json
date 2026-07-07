@@ -58,6 +58,7 @@
     "workflow.cross_ai_command",
     "workflow.cross_ai_timeout",
     "workflow.subagent_timeout",
+    "workflow.test_gate_timeout",
     "workflow.test_command",
     "workflow.build_command",
     "workflow.mvp_mode",
