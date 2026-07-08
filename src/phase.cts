@@ -1467,8 +1467,14 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         roadmapContent = originalRoadmapContent;
 
         const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+        // #2067: the gap between `]` and `Phase N` must allow only whitespace /
+        // markdown bold emphasis — NOT greedy `.*`. A greedy gap matched a later
+        // phase whose description merely mentioned the completed phase number,
+        // so completing an already-checked phase (idempotent re-run) checked the
+        // wrong phase's box. Mirrors the tight pattern used by phase-insert
+        // (`]\\s*(?:\\*\\*)?Phase`).
         const checkboxPattern = new RegExp(
-          `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
+          `(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
           'i',
         );
         roadmapContent = roadmapContent.replace(

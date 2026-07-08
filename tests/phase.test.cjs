@@ -2530,6 +2530,95 @@ describe('phase complete command', () => {
     assert.ok(roadmap.includes('completed'), 'completion date should be added');
   });
 
+  // #2067: the checkbox regex in cmdPhaseComplete used a greedy `.*` between
+  // `]` and `Phase N`, so completing Phase 1 (already checked → idempotent
+  // re-run) matched a LATER phase whose description merely mentioned "Phase 1".
+  // Non-global replace then checked the wrong phase's box. The gap between `]`
+  // and `Phase` must allow only whitespace / markdown emphasis.
+  test('#2067 — completing a phase must not check a later phase whose description mentions it (idempotent re-run)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [x] **Phase 1: Core Feed & Posting** - first slice (completed 2025-01-01)
+- [ ] **Phase 2: Polish & Edge Cases** - hardening (only as needed after Phase 1 verification)
+
+### Phase 1: Core Feed & Posting
+**Goal:** Ship feed
+**Plans:** 1 plans
+
+### Phase 2: Polish & Edge Cases
+**Goal:** Harden
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Current Phase Name:** Core Feed & Posting\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working on phase 1\n`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-core-feed-posting');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-polish-edge-cases'), { recursive: true });
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    // Phase 2's checkbox MUST remain unchecked — its description mentions
+    // "Phase 1" but it is NOT the phase being completed.
+    const phase2Line = roadmap.match(/^- \[([ x])\] \*\*Phase 2:.*$/m);
+    assert.ok(phase2Line, 'Phase 2 line must still be present in ROADMAP');
+    assert.strictEqual(phase2Line[1], ' ', 'Phase 2 checkbox must remain unchecked (#2067)');
+    // Phase 1 must remain checked.
+    const phase1Line = roadmap.match(/^- \[([ x])\] \*\*Phase 1:.*$/m);
+    assert.ok(phase1Line, 'Phase 1 line must still be present in ROADMAP');
+    assert.strictEqual(phase1Line[1], 'x', 'Phase 1 checkbox must remain checked (#2067)');
+  });
+
+  // #2067 companion: normal completion (Phase 1 unchecked) must still check
+  // Phase 1 — and must NOT also check a later phase whose description mentions
+  // Phase 1. Guards the tightened regex against over-restricting the happy path.
+  test('#2067 — normal completion checks only the target phase when a later phase mentions it', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] **Phase 1: Core Feed & Posting** - first slice
+- [ ] **Phase 2: Polish & Edge Cases** - hardening (only as needed after Phase 1 verification)
+
+### Phase 1: Core Feed & Posting
+**Goal:** Ship feed
+**Plans:** 1 plans
+
+### Phase 2: Polish & Edge Cases
+**Goal:** Harden
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Current Phase Name:** Core Feed & Posting\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working on phase 1\n`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-core-feed-posting');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-polish-edge-cases'), { recursive: true });
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    const phase1Line = roadmap.match(/^- \[([ x])\] \*\*Phase 1:.*$/m);
+    assert.ok(phase1Line, 'Phase 1 line must still be present in ROADMAP');
+    assert.strictEqual(phase1Line[1], 'x', 'Phase 1 checkbox must be checked');
+    const phase2Line = roadmap.match(/^- \[([ x])\] \*\*Phase 2:.*$/m);
+    assert.ok(phase2Line, 'Phase 2 line must still be present in ROADMAP');
+    assert.strictEqual(phase2Line[1], ' ', 'Phase 2 checkbox must remain unchecked (#2067)');
+  });
+
   test('#2012 — Progress row updated even when an earlier phase-numbered table precedes ## Progress', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
