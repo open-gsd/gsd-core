@@ -39,6 +39,11 @@ const capabilities = {
         "type": "boolean",
         "default": true,
         "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+      },
+      "workflow.api_coverage_gate": {
+        "type": "boolean",
+        "default": true,
+        "description": "Require an explicit API-coverage decision (full-by-default, opt-out-not-opt-in) before a phase that integrates an external API/SDK/service can seal. At plan:pre the planner is prompted to enumerate the API surface into COVERAGE.md; at verify:pre a blocking gate fails the seal unless the matrix exists with every non-integrated capability an explicit, reasoned opt-out. Independent of ai_integration_phase (applies to any external-API integration, not only AI)."
       }
     },
     "steps": [
@@ -57,8 +62,35 @@ const capabilities = {
         "onError": "skip"
       }
     ],
-    "contributions": [],
-    "gates": []
+    "contributions": [
+      {
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/api-coverage-plan-pre.md",
+          "inline": "# API Coverage Decision Checkpoint\n\n> Full API Coverage by Default — Opt Out, Never Opt In. Fires when a phase\n> integrates an external API / SDK / service. Most non-API phases will not fire\n> it — that is the point.\n\n## Why this exists\n\n\"We integrated the API\" too often silently means \"we integrated whatever the\nfirst use case exercised.\" Every un-built capability is then an invisible hole,\ndiscovered later by a user who reasonably expected it to work. The phase sealed\ngreen because its tasks completed; nobody decided the gaps were acceptable,\nbecause nobody enumerated them. This checkpoint makes the surface **visible and\ndecided** before the phase can seal.\n\n## Detect whether this phase integrates an external API\n\nThe detector is a deterministic scan over the phase scope. It strips fenced\ncode blocks first, so a trigger term inside a code snippet does not fire. It\nreturns a typed result: `{ detected, signals[], terms }`. Run it on the phase\nscope (the concatenation of this phase's ROADMAP section + the PLAN body):\n\n```bash\nSCOPE=\"$(cat \"${PHASE_DIR}\"/*-PLAN.md 2>/dev/null) $(gsd_run query roadmap.get-phase \"${PHASE}\" 2>/dev/null || true)\"\nAPI_COVERAGE_JSON=$(printf '%s' \"$SCOPE\" | node gsd-core/bin/lib/api-coverage.cjs --json 2>/dev/null || echo '{\"detected\":false,\"signals\":[]}')\n```\n\nRead `API_COVERAGE_JSON.detected`. Act on it only — do **not** pattern-match the\nprose yourself.\n\n**If `detected` is `false`:** this phase does not integrate an external API. Skip\nthe checkpoint entirely and continue planning. Do not raise it with the user.\n\n**If `detected` is `true`:** an external-API integration is in scope. You MUST\nproduce a **coverage matrix** before the plan is finalized.\n\n## Produce the coverage matrix\n\nEnumerate the external API's full **capability surface** — the verb/endpoint/method\nlist (e.g. for a music service: `search`, `play`, `pause`, `skip`, `set_volume`,\n`get_playlist`, `create_playlist`, `add_to_playlist`, …). For each capability\nrecord a decision, starting from **full coverage** as the default:\n\n| capability | decision | reason |\n|---|---|---|\n| `<capability-id>` | `INTEGRATE` \\| `OPT-OUT` | `<one-line reason if OPT-OUT>` |\n\nRules:\n\n- **`INTEGRATE` is the default.** Every capability starts as INTEGRATE; the\n  matrix is the *subtraction record*.\n- **Every `OPT-OUT` MUST carry a one-line reason** (`not needed`, `not needed\n  yet`, `explicitly out of scope`, …). An opt-out without a reason is an\n  un-decided hole — the exact failure mode this gate exists to close.\n- **A second integration against the same need** (e.g. a second platform for the\n  same capability) starts from the **same full-coverage baseline** as the first.\n  Do not carry over the first integration's opt-outs silently — re-decide each\n  capability for the new surface, so a first-class/fallback asymmetry cannot\n  accumulate.\n\nWrite the matrix to `${PHASE_DIR}/COVERAGE.md` (canonical markdown-table form):\n\n```markdown\n# API Coverage — <service>\n\n> Full coverage by default. Opt-outs are explicit, reasoned decisions.\n\n| capability | decision | reason |\n|---|---|---|\n| search | INTEGRATE | |\n| playlists | INTEGRATE | |\n| skip | OPT-OUT | not needed yet — tracked for follow-up phase |\n```\n\nA fenced ` ```coverage ` JSON block is also accepted for machine-generated\nmatrices; the markdown table is preferred (human-editable, diff-friendly).\n\n## The seal-time gate\n\nThis checkpoint is enforced. At `verify:pre` the `api-coverage.verify-pre` gate\nruns `check api-coverage.verify-pre <phase-dir>`:\n\n- If `COVERAGE.md` exists, it is validated — every row needs a valid decision and\n  every `OPT-OUT` a reason. A malformed/partial matrix **blocks the seal**.\n- If `COVERAGE.md` is absent, the detector runs again over the phase scope. If a\n  strong external-API-integration signal is found, the seal is **blocked** until a\n  matrix is produced. If no signal is found, the phase is treated as a non-API\n  phase and the seal proceeds.\n\nSo: an API-integrating phase cannot seal without a decided matrix. Produce it at\nplan time; do not leave it for seal time.\n\n## Tuning the vocabulary (optional)\n\nThe trigger vocabulary is a curated, additive-only set in\n`gsd-core/bin/lib/api-coverage.cjs` (`DEFAULT_API_COVERAGE_TERMS`). To widen it\nfor a project, override at the call site:\n\n```bash\nprintf '%s' \"$SCOPE\" | node gsd-core/bin/lib/api-coverage.cjs --json \\\n  --verbs integrate,wrap,connect,embed --nouns api,sdk,rest,grpc,webhook,plugin\n```\n\nThe whole checkpoint is toggleable via `workflow.api_coverage_gate` in\n`.planning/config.json`.\n"
+        },
+        "produces": [
+          "COVERAGE.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.api_coverage_gate",
+        "onError": "skip"
+      }
+    ],
+    "gates": [
+      {
+        "point": "verify:pre",
+        "check": {
+          "query": "api-coverage.verify-pre"
+        },
+        "when": "workflow.api_coverage_gate",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "antigravity": {
     "id": "antigravity",
@@ -2833,6 +2865,23 @@ const byLoopPoint = {
     ],
     "contributions": [
       {
+        "capId": "ai-integration",
+        "point": "plan:pre",
+        "into": "planner",
+        "fragment": {
+          "path": "fragments/api-coverage-plan-pre.md",
+          "inline": "# API Coverage Decision Checkpoint\n\n> Full API Coverage by Default — Opt Out, Never Opt In. Fires when a phase\n> integrates an external API / SDK / service. Most non-API phases will not fire\n> it — that is the point.\n\n## Why this exists\n\n\"We integrated the API\" too often silently means \"we integrated whatever the\nfirst use case exercised.\" Every un-built capability is then an invisible hole,\ndiscovered later by a user who reasonably expected it to work. The phase sealed\ngreen because its tasks completed; nobody decided the gaps were acceptable,\nbecause nobody enumerated them. This checkpoint makes the surface **visible and\ndecided** before the phase can seal.\n\n## Detect whether this phase integrates an external API\n\nThe detector is a deterministic scan over the phase scope. It strips fenced\ncode blocks first, so a trigger term inside a code snippet does not fire. It\nreturns a typed result: `{ detected, signals[], terms }`. Run it on the phase\nscope (the concatenation of this phase's ROADMAP section + the PLAN body):\n\n```bash\nSCOPE=\"$(cat \"${PHASE_DIR}\"/*-PLAN.md 2>/dev/null) $(gsd_run query roadmap.get-phase \"${PHASE}\" 2>/dev/null || true)\"\nAPI_COVERAGE_JSON=$(printf '%s' \"$SCOPE\" | node gsd-core/bin/lib/api-coverage.cjs --json 2>/dev/null || echo '{\"detected\":false,\"signals\":[]}')\n```\n\nRead `API_COVERAGE_JSON.detected`. Act on it only — do **not** pattern-match the\nprose yourself.\n\n**If `detected` is `false`:** this phase does not integrate an external API. Skip\nthe checkpoint entirely and continue planning. Do not raise it with the user.\n\n**If `detected` is `true`:** an external-API integration is in scope. You MUST\nproduce a **coverage matrix** before the plan is finalized.\n\n## Produce the coverage matrix\n\nEnumerate the external API's full **capability surface** — the verb/endpoint/method\nlist (e.g. for a music service: `search`, `play`, `pause`, `skip`, `set_volume`,\n`get_playlist`, `create_playlist`, `add_to_playlist`, …). For each capability\nrecord a decision, starting from **full coverage** as the default:\n\n| capability | decision | reason |\n|---|---|---|\n| `<capability-id>` | `INTEGRATE` \\| `OPT-OUT` | `<one-line reason if OPT-OUT>` |\n\nRules:\n\n- **`INTEGRATE` is the default.** Every capability starts as INTEGRATE; the\n  matrix is the *subtraction record*.\n- **Every `OPT-OUT` MUST carry a one-line reason** (`not needed`, `not needed\n  yet`, `explicitly out of scope`, …). An opt-out without a reason is an\n  un-decided hole — the exact failure mode this gate exists to close.\n- **A second integration against the same need** (e.g. a second platform for the\n  same capability) starts from the **same full-coverage baseline** as the first.\n  Do not carry over the first integration's opt-outs silently — re-decide each\n  capability for the new surface, so a first-class/fallback asymmetry cannot\n  accumulate.\n\nWrite the matrix to `${PHASE_DIR}/COVERAGE.md` (canonical markdown-table form):\n\n```markdown\n# API Coverage — <service>\n\n> Full coverage by default. Opt-outs are explicit, reasoned decisions.\n\n| capability | decision | reason |\n|---|---|---|\n| search | INTEGRATE | |\n| playlists | INTEGRATE | |\n| skip | OPT-OUT | not needed yet — tracked for follow-up phase |\n```\n\nA fenced ` ```coverage ` JSON block is also accepted for machine-generated\nmatrices; the markdown table is preferred (human-editable, diff-friendly).\n\n## The seal-time gate\n\nThis checkpoint is enforced. At `verify:pre` the `api-coverage.verify-pre` gate\nruns `check api-coverage.verify-pre <phase-dir>`:\n\n- If `COVERAGE.md` exists, it is validated — every row needs a valid decision and\n  every `OPT-OUT` a reason. A malformed/partial matrix **blocks the seal**.\n- If `COVERAGE.md` is absent, the detector runs again over the phase scope. If a\n  strong external-API-integration signal is found, the seal is **blocked** until a\n  matrix is produced. If no signal is found, the phase is treated as a non-API\n  phase and the seal proceeds.\n\nSo: an API-integrating phase cannot seal without a decided matrix. Produce it at\nplan time; do not leave it for seal time.\n\n## Tuning the vocabulary (optional)\n\nThe trigger vocabulary is a curated, additive-only set in\n`gsd-core/bin/lib/api-coverage.cjs` (`DEFAULT_API_COVERAGE_TERMS`). To widen it\nfor a project, override at the call site:\n\n```bash\nprintf '%s' \"$SCOPE\" | node gsd-core/bin/lib/api-coverage.cjs --json \\\n  --verbs integrate,wrap,connect,embed --nouns api,sdk,rest,grpc,webhook,plugin\n```\n\nThe whole checkpoint is toggleable via `workflow.api_coverage_gate` in\n`.planning/config.json`.\n"
+        },
+        "produces": [
+          "COVERAGE.md"
+        ],
+        "consumes": [
+          "CONTEXT.md"
+        ],
+        "when": "workflow.api_coverage_gate",
+        "onError": "skip"
+      },
+      {
         "capId": "assumption-delta",
         "point": "plan:pre",
         "into": "planner",
@@ -3101,7 +3150,18 @@ const byLoopPoint = {
   "verify:pre": {
     "steps": [],
     "contributions": [],
-    "gates": []
+    "gates": [
+      {
+        "capId": "ai-integration",
+        "point": "verify:pre",
+        "check": {
+          "query": "api-coverage.verify-pre"
+        },
+        "when": "workflow.api_coverage_gate",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
   },
   "verify:post": {
     "steps": [
@@ -3211,6 +3271,7 @@ const byLoopPoint = {
 
 const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
+  "workflow.api_coverage_gate": "ai-integration",
   "workflow.assumption_delta": "assumption-delta",
   "claude_orchestration.enabled": "claude-orchestration",
   "claude_orchestration.execution_backend": "claude-orchestration",
@@ -3259,6 +3320,12 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Prompt for an AI-SPEC design contract before planning phases that involve AI systems."
+  },
+  "workflow.api_coverage_gate": {
+    "owner": "ai-integration",
+    "type": "boolean",
+    "default": true,
+    "description": "Require an explicit API-coverage decision (full-by-default, opt-out-not-opt-in) before a phase that integrates an external API/SDK/service can seal. At plan:pre the planner is prompted to enumerate the API surface into COVERAGE.md; at verify:pre a blocking gate fails the seal unless the matrix exists with every non-integrated capability an explicit, reasoned opt-out. Independent of ai_integration_phase (applies to any external-API integration, not only AI)."
   },
   "workflow.assumption_delta": {
     "owner": "assumption-delta",

@@ -246,6 +246,7 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
       ui_phase: true,
       ui_safety_gate: true,
       ai_integration_phase: true,
+      api_coverage_gate: true,
       human_verify_mode: 'end-of-phase',
       context_guard_mode: 'warn',
       text_mode: false,

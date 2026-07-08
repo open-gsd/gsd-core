@@ -108,6 +108,7 @@ const CONFIG_DEFAULTS = {
   verifier: _getNestedConfigDefault('workflow', 'verifier'),
   nyquist_validation: _getNestedConfigDefault('workflow', 'nyquist_validation'),
   ai_integration_phase: _getNestedConfigDefault('workflow', 'ai_integration_phase'),
+  api_coverage_gate: _getNestedConfigDefault('workflow', 'api_coverage_gate'),
   parallelization: _getConfigDefault('parallelization'),
   brave_search: _getConfigDefault('brave_search'),
   firecrawl: _getConfigDefault('firecrawl'),

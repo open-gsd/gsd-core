@@ -331,6 +331,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `autonomous-smart-discuss.md` | Smart-discuss logic for autonomous mode. |
 | `ios-scaffold.md` | iOS application scaffolding patterns. |
 | `ai-evals.md` | AI evaluation design reference for `/gsd-ai-integration-phase`. |
+| `api-coverage.md` | API-coverage gate reference (full-coverage-by-default) for the `ai-integration` capability's `verify:pre` blocking gate (#1562) — matrix format, trigger, tuning, detector CLI. |
 | `ai-frameworks.md` | AI framework decision-matrix reference for `gsd-framework-selector`. |
 | `executor-examples.md` | Worked examples for the gsd-executor agent. |
 | `doc-conflict-engine.md` | Shared conflict-detection contract for ingest/import workflows. |
@@ -397,6 +398,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `active-workstream-store.cjs` | Workstream source precedence and selection (CLI `--ws` > `GSD_WORKSTREAM` env > stored pointer); name validation and environment propagation |
 | `adr-parser.cjs` | ADR decision parser for plan-phase ingest express path; normalizes section synonyms, parses status/decision/scope fences, and enforces status rejection gates |
 | `agent-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools agent` |
+| `api-coverage.cjs` | API-coverage detector + matrix validator (#1562) — pure `detectApiIntegration` (compound verb+noun signal + `<Service> API/SDK` surface; strips fenced code) and `validateCoverageMatrix`/`parseCoverageMatrix`/`renderCoverageMatrix` for the COVERAGE.md artifact; STDIN CLI (`echo "$SCOPE" \| node .../api-coverage.cjs [--json]`, exit 0=detected/1=none/2=error); consumed by the `ai-integration` capability's `plan:pre` contribution and blocking `verify:pre` gate (`check api-coverage.verify-pre`) |
 | `artifacts.cjs` | Canonical artifact registry — known `.planning/` root file names; used by `gsd-health` W019 lint |
 | `audit-command-router.cjs` | ADR-959 capability command router for `gsd-tools audit-uat` and `gsd-tools audit-open` — extracted from hardcoded cases in `gsd-tools.cjs`; dispatches to `uat.cjs:cmdAuditUat` and `audit.cjs:{auditOpenArtifacts,formatAuditReport}`; phase 4d-impl-3 |
 | `audit.cjs` | Audit dispatch, audit open sessions, audit storage helpers |
