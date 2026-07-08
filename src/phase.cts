@@ -61,7 +61,8 @@ const { evaluateUatPassed } = uatPredicate;
 import verificationMod = require('./verification.cjs');
 const { readVerificationStatus } = verificationMod;
 
-const { planningDir, withPlanningLock } = planningWorkspace;
+const { planningDir, withPlanningLock, listAvailableWorkstreams, getActiveWorkstream } =
+  planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 const {
   readModifyWriteStateMd,
@@ -1379,6 +1380,22 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
     error('phase number required for phase complete');
   }
 
+  // #2028: fail safe in workstream mode with no active workstream. With no active
+  // workstream and no --ws, planningDir(cwd) resolves to root .planning, so
+  // phase.complete would write STATE.md/ROADMAP.md (and mislabel milestone status)
+  // into the shared root that other workstreams read. Mirror the #1912 guard that
+  // init.progress got (resolution: GSD_WORKSTREAM env > stored active pointer; an
+  // explicit --ws sets GSD_WORKSTREAM upstream and satisfies the check).
+  const availableWorkstreams = listAvailableWorkstreams(cwd);
+  const resolvedWorkstream = process.env['GSD_WORKSTREAM'] || getActiveWorkstream(cwd);
+  if (availableWorkstreams.length > 0 && !resolvedWorkstream) {
+    error(
+      `phase.complete requires a workstream in workstream mode — no active workstream is set, so root STATE.md/ROADMAP.md (likely stale) would be written. ` +
+        `Pass --ws <name> or run ${formatGsdSlash('workstream set', resolveRuntime(cwd)) as string} first. ` +
+        `Available workstreams: ${availableWorkstreams.join(', ')}`,
+    );
+  }
+
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   const phasesDir = path.join(planningDir(cwd), 'phases');
@@ -1695,6 +1712,48 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               isLastPhase = false;
               break;
             }
+          }
+        } catch {
+          /* intentionally empty */
+        }
+      }
+
+      // #2028: don't stamp "Milestone complete" when a LOWER-numbered phase is
+      // still outstanding. The two blocks above only clear isLastPhase when a
+      // HIGHER-numbered phase exists, so completing the numerically-highest phase
+      // out of order (e.g. Phase 10 before Phase 9) wrongly read as milestone-end.
+      // A phase is complete iff its roadmap checkbox is `[x]` (phase.complete sets
+      // this on completion — including the one just marked above); any earlier
+      // phase in this milestone whose checkbox is still `[ ]` means the milestone
+      // is not done, and the LOWEST such phase is the real next actionable item —
+      // point next_phase at it so STATE.md advances to the gap rather than parking
+      // on the just-completed phase. Roadmaps without phase checkboxes (heading-
+      // only) retain the prior behavior — there is nothing to scan. The checkbox
+      // pattern mirrors the sibling phasePattern's anchoring (only whitespace/bold
+      // between the box and "Phase", a required `:`) so unrelated checklist lines
+      // that merely mention "Phase N" don't match.
+      if (isLastPhase && roadmapContent !== null) {
+        try {
+          const milestoneScope = extractCurrentMilestone(roadmapContent, cwd);
+          const cbPattern =
+            /-\s*\[(x| )\]\s*(?:\*\*|__)?\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n*]+)/gi;
+          let cbm: RegExpExecArray | null;
+          let lowestOutstanding: { num: string; name: string } | null = null;
+          while ((cbm = cbPattern.exec(milestoneScope)) !== null) {
+            const isChecked = cbm[1].toLowerCase() === 'x';
+            if (!isChecked && comparePhaseNum(cbm[2], phaseNum) < 0) {
+              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num) < 0) {
+                lowestOutstanding = {
+                  num: cbm[2],
+                  name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
+                };
+              }
+            }
+          }
+          if (lowestOutstanding !== null) {
+            isLastPhase = false;
+            nextPhaseNum = lowestOutstanding.num;
+            nextPhaseName = lowestOutstanding.name;
           }
         } catch {
           /* intentionally empty */
