@@ -932,6 +932,9 @@ function resolveKiloConfigPath(configDir) {
   return path.join(configDir, 'kilo.json');
 }
 
+// #2087 — attribution config-path resolvers, keyed by descriptor (hostBehaviors.attributionConfigResolver)
+const ATTRIBUTION_CONFIG_RESOLVERS = { opencode: resolveOpencodeConfigPath, kilo: resolveKiloConfigPath };
+
 /**
  * Strip JSONC comments (// and /* *​/) from a string to produce valid JSON.
  * Handles comments inside strings correctly (does not strip them).
@@ -1300,10 +1303,9 @@ function getCommitAttribution(runtime) {
 
   let result;
 
-  if (runtime === 'opencode' || runtime === 'kilo') {
-    const resolveConfigPath = runtime === 'opencode'
-      ? resolveOpencodeConfigPath
-      : resolveKiloConfigPath;
+  const _attrResolverKey = _hostBehaviors(runtime).attributionConfigResolver;
+  if (_attrResolverKey && ATTRIBUTION_CONFIG_RESOLVERS[_attrResolverKey]) {
+    const resolveConfigPath = ATTRIBUTION_CONFIG_RESOLVERS[_attrResolverKey];
     const config = readSettings(resolveConfigPath(getGlobalConfigDir(runtime, null)));
     result = (config && config.disable_ai_attribution === true) ? null : undefined;
   } else if (_hostBehaviors(runtime).attributionSource === 'settings-json-commit') {
@@ -5984,62 +5986,14 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
 // convertClaudeCommandToKiloSkill: moved to src/install-engine.cts (ADR-1239 Phase B).
 // Imported from installEngine above.
 
-/**
- * Copy commands to a flat structure for OpenCode
- * OpenCode expects: command/gsd-help.md (invoked as /gsd-help)
- * Source structure: commands/gsd/help.md
- * 
- * @param {string} srcDir - Source directory (e.g., commands/gsd/)
- * @param {string} destDir - Destination directory (e.g., command/)
- * @param {string} prefix - Prefix for filenames (e.g., 'gsd')
- * @param {string} pathPrefix - Path prefix for file references
- * @param {string} runtime - Target runtime ('claude', 'opencode', or 'kilo')
- */
 // applyOpencodeFamilyPathPrefix: moved to src/install-engine.cts (ADR-1239 Phase B).
 // Imported from installEngine above.
-
-function copyFlattenedCommands(srcDir, destDir, prefix, pathPrefix, runtime) {
-  if (!fs.existsSync(srcDir)) {
-    return;
-  }
-
-  // Remove old gsd-*.md files before copying new ones
-  if (fs.existsSync(destDir)) {
-    for (const file of fs.readdirSync(destDir)) {
-      if (file.startsWith(`${prefix}-`) && file.endsWith('.md')) {
-        fs.unlinkSync(path.join(destDir, file));
-      }
-    }
-  } else {
-    fs.mkdirSync(destDir, { recursive: true });
-  }
-
-  const entries = fs.readdirSync(srcDir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const srcPath = path.join(srcDir, entry.name);
-
-    if (entry.isDirectory()) {
-      // Recurse into subdirectories, adding to prefix
-      // e.g., commands/gsd/debug/start.md -> command/gsd-debug-start.md
-      copyFlattenedCommands(srcPath, destDir, `${prefix}-${entry.name}`, pathPrefix, runtime);
-    } else if (entry.name.endsWith('.md')) {
-      // Flatten: help.md -> gsd-help.md
-      const baseName = entry.name.replace('.md', '');
-      const destName = `${prefix}-${baseName}.md`;
-      const destPath = path.join(destDir, destName);
-
-      let content = fs.readFileSync(srcPath, 'utf8');
-      content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
-      content = processAttribution(content, getCommitAttribution(runtime));
-      content = runtime === 'kilo'
-        ? convertClaudeToKiloFrontmatter(content)
-        : convertClaudeToOpencodeFrontmatter(content);
-
-      fs.writeFileSync(destPath, content);
-    }
-  }
-}
+//
+// copyFlattenedCommands (OpenCode/Kilo flattened command/ writer): moved to
+// src/install-engine.cts as installOpencodeFamilyCommands (ADR-1239 / #2087).
+// OpenCode/Kilo installs now route through installRuntimeArtifacts's
+// combinedFamilyInstall path (installOpencodeFamilyArtifacts) instead of the
+// bespoke inline block that used to call this function.
 
 function listCodexSkillNames(skillsDir, prefix = 'gsd-') {
   if (!fs.existsSync(skillsDir)) return [];
@@ -6929,9 +6883,10 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // 4z. Remove the OpenCode native plugin adapter (#1914). Only GSD's own
   // plugin file is removed; the plugins/ dir is pruned only if it becomes
   // empty, preserving any user-authored OpenCode plugins.
-  if (isOpencode) {
-    const pluginsDir = path.join(targetDir, 'plugins');
-    const pluginPath = path.join(pluginsDir, 'gsd-core.js');
+  const _np = _hostBehaviors(runtime).nativePlugin;
+  if (_np) {
+    const pluginsDir = path.join(targetDir, _np.dir);
+    const pluginPath = path.join(pluginsDir, _np.file);
     if (fs.existsSync(pluginPath)) {
       try {
         fs.unlinkSync(pluginPath);
@@ -7110,7 +7065,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 6. For OpenCode, clean up permissions from opencode.json or opencode.jsonc
-  if (isOpencode) {
+  if (resolveInstallPlan(runtime).finishPermissionWriter === 'opencode') {
     const configPath = resolveOpencodeConfigPath(targetDir);
     if (fs.existsSync(configPath)) {
       try {
@@ -7558,7 +7513,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // Claude local uses flatCommandsDir instead for manifest recording.
   const flatCommandsDir = path.join(configDir, 'commands');
-  const opencodeCommandDir = path.join(configDir, 'command');
+  const opencodeCommandDir = path.join(configDir, _hostBehaviors(runtime).flatCommandDir || 'command');
   // Hermes nests GSD skills under skills/gsd/ as a single category (#2841).
   // All other runtimes that use the Codex-style skills layout use a flat skills/ root.
   const codexSkillsDir = isHermes
@@ -7597,14 +7552,14 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
       }
     }
   }
-  if ((isOpencode || isKilo) && fs.existsSync(opencodeCommandDir)) {
+  if (_hostBehaviors(runtime).flatCommandDir && fs.existsSync(opencodeCommandDir)) {
     for (const file of fs.readdirSync(opencodeCommandDir)) {
       if (file.startsWith('gsd-') && file.endsWith('.md')) {
         manifest.files['command/' + file] = fileHash(path.join(opencodeCommandDir, file));
       }
     }
   }
-  if ((isCodex || isCopilot || isAntigravity || isCursor || isWindsurf || isTrae || !isOpencode) && fs.existsSync(codexSkillsDir)) {
+  if (!_hostBehaviors(runtime).skipCodexSkillsManifest && fs.existsSync(codexSkillsDir)) {
     // All runtimes (including Hermes post-#947) use the canonical 'gsd-' prefix.
     const skillListPrefix = 'gsd-';
     for (const skillName of listCodexSkillNames(codexSkillsDir, skillListPrefix)) {
@@ -7716,10 +7671,11 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 
   // Track the OpenCode native plugin adapter (#1914) so update/drift detection
   // and uninstall can account for it.
-  if (isOpencode) {
-    const pluginInstallPath = path.join(configDir, 'plugins', 'gsd-core.js');
+  const _npM = _hostBehaviors(runtime).nativePlugin;
+  if (_npM) {
+    const pluginInstallPath = path.join(configDir, _npM.dir, _npM.file);
     if (fs.existsSync(pluginInstallPath)) {
-      manifest.files['plugins/gsd-core.js'] = fileHash(pluginInstallPath);
+      manifest.files[`${_npM.dir}/${_npM.file}`] = fileHash(pluginInstallPath);
     }
   }
 
@@ -8012,8 +7968,8 @@ function reportLocalPatches(configDir, runtime = DEFAULT_RUNTIME) {
   try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch { return []; }
 
   if (meta.files && meta.files.length > 0) {
-    const reapplyCommand = (runtime === 'opencode' || runtime === 'kilo' || runtime === 'copilot')
-      ? '/gsd-update --reapply'
+    const reapplyCommand = _hostBehaviors(runtime).reapplyCommand
+      ? _hostBehaviors(runtime).reapplyCommand
       : runtime === 'codex'
         ? '$gsd-update --reapply'
         : runtime === 'cursor'
@@ -8187,7 +8143,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const isWindowsHost = process.platform === 'win32';
   const pathPrefix = computePathPrefix({
     isGlobal,
-    isOpencode,
+    isOpencode: _hostBehaviors(runtime).skipHomePrefixSubstitution === true,
     isWindowsHost,
     resolvedTarget,
     homeDir,
@@ -8473,7 +8429,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   //   Hermes: writeHermesCategoryDescription (not a layout kind)
   //   Cline global: skills emitted via layout; .clinerules still written below (#782)
   //   Cline local: no skills (only .clinerules) — falls through to cline-rules surface
-  //   OpenCode/Kilo: copyFlattenedCommands (frontmatter conversion not in commandsKind)
   //   Claude local: copyWithPathReplacement + stale-skills cleanup
 
   // Layout-driven path for all skills-based runtimes (full and minimal modes).
@@ -8485,12 +8440,14 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // (it declares any skills/commands/agents/kimi-agents kind for this scope).
   // This replaces the prior hardcoded `isCodex || isCopilot || ...` roster so a
   // newly-added runtime with an artifact layout installs without a per-runtime
-  // branch — the add-a-host tax ADR-1239 Phase B retires. Three legacy
-  // special-cased paths are preserved: opencode/kilo (combined commands+skills
-  // via copyFlattenedCommands + installOpencodeFamilySkills) and claude-local
+  // branch — the add-a-host tax ADR-1239 Phase B retires. OpenCode/Kilo now
+  // route through this SAME path too: their hostBehaviors.combinedFamilyInstall
+  // flag makes installRuntimeArtifacts (in src/install-engine.cts) delegate to
+  // installOpencodeFamilyArtifacts for the combined commands+skills+native-plugin
+  // install (ADR-1239 / #2087), replacing the bespoke inline block this comment
+  // used to describe. Claude-local remains the one special-cased path
   // (copyWithPathReplacement + stale-skills cleanup).
   const _isSkillsRuntime = (() => {
-    if (isOpencode || isKilo) return false;               // specialized combined path
     if (_hostBehaviors(runtime).localInstallStyle === 'legacy-flat' && !isGlobal) return false;  // legacy flat local path (descriptor-driven; #2086)
     const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
     const layout = cap && cap.runtime && cap.runtime.artifactLayout;
@@ -8655,64 +8612,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         } else {
           failures.push('commands/gsd-*');
         }
-      }
-    }
-  } else if (isOpencode || isKilo) {
-    // OpenCode/Kilo: flat structure in command/ directory
-    const commandDir = path.join(targetDir, 'command');
-    fs.mkdirSync(commandDir, { recursive: true });
-
-    // Copy commands/gsd/*.md as command/gsd-*.md (flatten structure)
-    const gsdSrc = _stageSkills(_commandsDir);
-    copyFlattenedCommands(gsdSrc, commandDir, 'gsd', pathPrefix, runtime);
-    if (verifyInstalled(commandDir, 'command/gsd-*')) {
-      const count = fs.readdirSync(commandDir).filter(f => f.startsWith('gsd-')).length;
-      console.log(`  ${green}✓${reset} Installed ${count} commands to command/`);
-    } else {
-      failures.push('command/gsd-*');
-    }
-
-    // Also emit OpenCode-family skills (skills/<name>/SKILL.md). OpenCode and
-    // Kilo support native, on-demand skills in addition to flat commands — see
-    // resolveRuntimeArtifactLayout's opencode/kilo entries. Derive skills from
-    // the SAME staged command set (gsdSrc) so both surfaces match exactly. (#784)
-    const _skillCount = installOpencodeFamilySkills(runtime, targetDir, gsdSrc, pathPrefix, getCommitAttribution);
-    if (_skillCount > 0) {
-      console.log(`  ${green}✓${reset} Installed ${_skillCount} skills to skills/`);
-    } else {
-      failures.push('skills/gsd-*');
-    }
-
-    // OpenCode-only: install the native plugin adapter (#1914). OpenCode
-    // declares hooksSurface: 'none', so GSD's lifecycle hooks are never
-    // registered as settings.json hooks the way Claude Code does — the hook
-    // *scripts* ship to <configDir>/hooks/ but nothing invokes them. This
-    // plugin bridges OpenCode's event bus onto those existing hook scripts
-    // (prompt guard, read guard, injection scanner, context monitor, ...),
-    // spawning them as subprocesses. OpenCode auto-discovers plugin files under
-    // <configDir>/plugins/ at startup — no opencode.json registration needed
-    // (its `plugin` array is for npm packages, not local file paths).
-    //
-    // The file MUST land as `.js`: OpenCode's loader globs
-    // `{plugin,plugins}/*.{ts,js}` (verified against its source) — a `.cjs`
-    // extension would never be discovered. The config dir carries a
-    // `{"type":"commonjs"}` package.json (written above), so the `.js` file is
-    // interpreted as CommonJS, matching the adapter's module.exports/require.
-    // Kilo has no plugin surface, so this is gated to OpenCode only.
-    if (isOpencode) {
-      const pluginSrc = path.join(src, '.opencode', 'plugins', 'gsd-core.js');
-      const pluginDestDir = path.join(targetDir, 'plugins');
-      const pluginDest = path.join(pluginDestDir, 'gsd-core.js');
-      if (fs.existsSync(pluginSrc)) {
-        fs.mkdirSync(pluginDestDir, { recursive: true });
-        fs.copyFileSync(pluginSrc, pluginDest);
-        if (fs.existsSync(pluginDest)) {
-          console.log(`  ${green}✓${reset} Installed OpenCode plugin (bridges GSD hooks)`);
-        } else {
-          failures.push('plugins/gsd-core.js');
-        }
-      } else {
-        failures.push('plugins/gsd-core.js');
       }
     }
   } else if (isCline) {
@@ -8963,7 +8862,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         }
         content = processAttribution(content, getCommitAttribution(runtime));
         // Convert frontmatter for runtime compatibility (agents need different handling)
-        if (isOpencode) {
+        if (_hostBehaviors(runtime).frontmatterDialect === 'opencode') {
           // Resolve per-agent model for OpenCode agents.
           // Precedence: model_overrides[agent] > model_profile_overrides.opencode.<tier> > omit.
           // model_overrides (#2256): explicit per-agent override, highest precedence.
@@ -8982,7 +8881,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
             }
           }
           content = convertClaudeToOpencodeFrontmatter(content, { isAgent: true, modelOverride: _ocModelOverride });
-        } else if (isKilo) {
+        } else if (_hostBehaviors(runtime).frontmatterDialect === 'kilo') {
           content = convertClaudeToKiloFrontmatter(content, { isAgent: true });
         } else if (isCodex) {
           content = convertClaudeAgentToCodexAgent(content);
@@ -10018,7 +9917,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // installAllRuntimes can register it at finalize time when the user opts
   // in (#2795). Computed here (not in finishInstall) so the same buildHookCommand
   // / localCmd resolution logic is shared with the other JS hooks.
-  const updateBannerCommand = isOpencode || isKilo
+  const updateBannerCommand = _hostBehaviors(runtime).skipUpdateBannerCommand
     ? null
     : (isGlobal
       ? buildHookCommand(targetDir, 'gsd-update-banner.js', hookOpts)
@@ -10105,7 +10004,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
-  if (shouldInstallStatusline && plan.writesSharedSettings && !isOpencode) {
+  if (shouldInstallStatusline && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {
     if (!isGlobal && !forceStatusline) {
       // Local installs skip statusLine by default: repo settings.json takes precedence over
       // profile-level settings.json in Claude Code, so writing here would silently clobber
@@ -10131,7 +10030,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // settings.json hooks block — opencode/kilo/codex/cursor/windsurf/trae/
   // cline either lack the surface or use a different config schema.
   const { shouldInstallBanner, bannerCommand } = bannerOpts;
-  if (shouldInstallBanner && settings && plan.writesSharedSettings && !isOpencode) {
+  if (shouldInstallBanner && settings && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {
     if (!bannerCommand) {
       console.warn(`  ${yellow}⚠${reset}  Skipped update banner registration — Node executable path unavailable. See #2979 / #3002.`);
     } else {

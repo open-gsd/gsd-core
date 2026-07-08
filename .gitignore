@@ -250,3 +250,7 @@ reports/mutation/
 # Local Crabbox machine configuration
 .crabbox.yaml
 .crabbox.local.yaml
+
+# Memtrace local daemon/runtime state (per-machine; never committed)
+.memdb/
+.memtrace/

@@ -940,6 +940,9 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "undocumented"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply"
       }
     }
   },
@@ -1502,6 +1505,14 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "kilo",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "kilo",
+        "skipUpdateBannerCommand": true
       }
     }
   },
@@ -1880,15 +1891,31 @@ const capabilities = {
           "namedDispatch": true,
           "nested": "undocumented",
           "maxDepth": "undocumented",
-          "background": false,
+          "background": true,
           "subagentToolkit": "full",
-          "backgroundDispatch": "undocumented"
+          "backgroundDispatch": true
         },
         "modelMode": "active",
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "opencode",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "opencode",
+        "nativePlugin": {
+          "dir": "plugins",
+          "file": "gsd-core.js",
+          "source": ".opencode/plugins/gsd-core.js"
+        },
+        "skipHomePrefixSubstitution": true,
+        "skipSettingsUi": true,
+        "skipUpdateBannerCommand": true,
+        "skipCodexSkillsManifest": true
       }
     }
   },
@@ -4233,6 +4260,9 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "undocumented"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply"
       }
     }
   },
@@ -4500,6 +4530,14 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "kilo",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "kilo",
+        "skipUpdateBannerCommand": true
       }
     }
   },
@@ -4654,15 +4692,31 @@ const runtimes = {
           "namedDispatch": true,
           "nested": "undocumented",
           "maxDepth": "undocumented",
-          "background": false,
+          "background": true,
           "subagentToolkit": "full",
-          "backgroundDispatch": "undocumented"
+          "backgroundDispatch": true
         },
         "modelMode": "active",
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "opencode",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "opencode",
+        "nativePlugin": {
+          "dir": "plugins",
+          "file": "gsd-core.js",
+          "source": ".opencode/plugins/gsd-core.js"
+        },
+        "skipHomePrefixSubstitution": true,
+        "skipSettingsUi": true,
+        "skipUpdateBannerCommand": true,
+        "skipCodexSkillsManifest": true
       }
     }
   },

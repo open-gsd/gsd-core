@@ -555,6 +555,9 @@ const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Ob
   opencode: Object.freeze([
     'session.created', 'session.idle', 'experimental.session.compacting',
     'tool.execute.before', 'tool.execute.after', 'file.edited',
+    // #2087 — additional documented plugin events GSD binds (opencode.ai/docs/plugins):
+    // permission decisions + session error surface.
+    'permission.asked', 'permission.replied', 'session.error',
   ]),
   pi: Object.freeze(['tool_call']),
   none: Object.freeze([]),
