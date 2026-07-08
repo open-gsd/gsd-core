@@ -3750,6 +3750,199 @@ describe('phase complete milestone-scoped next-phase', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #2028 — phase.complete milestone-end inference + workstream root-fallback guard
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#2028 — phase complete milestone-end + workstream guard', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // A complement phase numbered AFTER Phase 9 but executed first. Completing the
+  // numerically-highest phase must not read as milestone-end while a lower phase
+  // is still outstanding (the isLastPhase blocks only checked for HIGHER phases).
+  test('does NOT stamp "Milestone complete" when a lower-numbered phase is still outstanding', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n- [ ] Phase 9: Introspection\n- [ ] Phase 10: Complement\n\n### Phase 9: Introspection\n**Goal:** baseline\n\n### Phase 10: Complement\n**Goal:** complement\n`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 10\n**Status:** In progress\n**Current Plan:** 10-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`
+    );
+    const p10 = path.join(tmpDir, '.planning', 'phases', '10-complement');
+    fs.mkdirSync(p10, { recursive: true });
+    fs.writeFileSync(path.join(p10, '10-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p10, '10-01-SUMMARY.md'), '# Summary');
+
+    const result = runVerifiedPhaseComplete('phase complete 10', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.is_last_phase,
+      false,
+      'Phase 10 is numerically highest but Phase 9 is outstanding → not milestone-end',
+    );
+    // The outstanding lower phase IS the real next actionable item — STATE.md must
+    // advance to it (the gap), not park on the just-completed Phase 10.
+    assert.strictEqual(String(Number(output.next_phase)), '9', 'next_phase should point at the outstanding Phase 9');
+
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      !/Milestone complete/i.test(state),
+      'STATE.md must NOT flip to "Milestone complete" while a lower phase is outstanding',
+    );
+    assert.ok(/Ready to plan/i.test(state), 'status should be "Ready to plan"');
+    assert.match(
+      state,
+      /\*\*Current Phase:\*\*\s*0*9\b/,
+      'Current Phase must advance to the outstanding Phase 9, not stay on the completed Phase 10',
+    );
+    assert.doesNotMatch(
+      state,
+      /\*\*Current Phase:\*\*\s*10\b/,
+      'Current Phase must NOT remain on the just-completed Phase 10',
+    );
+  });
+
+  // Guard against over-correction: when every earlier phase is [x], completing
+  // the numerically-highest phase IS still the milestone end.
+  test('still detects milestone-end when all lower phases are checked complete', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n- [x] Phase 9: Introspection\n- [ ] Phase 10: Complement\n\n### Phase 9: Introspection\n**Goal:** baseline\n\n### Phase 10: Complement\n**Goal:** complement\n`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 10\n**Status:** In progress\n**Current Plan:** 10-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`
+    );
+    const p10 = path.join(tmpDir, '.planning', 'phases', '10-complement');
+    fs.mkdirSync(p10, { recursive: true });
+    fs.writeFileSync(path.join(p10, '10-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p10, '10-01-SUMMARY.md'), '# Summary');
+
+    const result = runVerifiedPhaseComplete('phase complete 10', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.is_last_phase, true, 'all lower phases complete → Phase 10 is milestone-end');
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(/Milestone complete/i.test(state), 'status should be "Milestone complete"');
+  });
+
+  // The lower-phase scan must not treat an unrelated checklist line that merely
+  // mentions "Phase N" (no `:` after the number) as an outstanding phase — the
+  // checkbox regex is anchored like the sibling phase scan.
+  test('does not treat an unrelated checklist line mentioning a phase number as outstanding', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n- [ ] Add regression coverage for Phase 3 rollback\n- [ ] Phase 5: Final\n\n### Phase 5: Final\n**Goal:** end\n`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 05\n**Status:** In progress\n**Current Plan:** 05-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`
+    );
+    const p5 = path.join(tmpDir, '.planning', 'phases', '05-final');
+    fs.mkdirSync(p5, { recursive: true });
+    fs.writeFileSync(path.join(p5, '05-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p5, '05-01-SUMMARY.md'), '# Summary');
+
+    const result = runVerifiedPhaseComplete('phase complete 5', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const output = JSON.parse(result.output);
+    assert.strictEqual(
+      output.is_last_phase,
+      true,
+      'the "Phase 3 rollback" prose line must NOT be read as an outstanding Phase 3',
+    );
+  });
+
+  // #1912 parity: in workstream mode with no active workstream, planningDir(cwd)
+  // resolves to root .planning — writing STATE.md/ROADMAP.md into the shared root
+  // that other workstreams read. Refuse instead of silently writing root.
+  test('refuses to write root in workstream mode when no workstream is resolved', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'alpha'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'beta'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# State\n\n**Current Phase:** 01\n**Status:** In progress\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n- [ ] Phase 1: A\n\n### Phase 1: A\n**Goal:** x\n',
+    );
+
+    const result = runGsdTools('phase complete 1', tmpDir);
+    assert.equal(result.success, false, 'should refuse rather than silently writing root STATE/ROADMAP');
+    assert.match(result.error || '', /workstream|--ws/i, 'error should name the workstream requirement');
+  });
+
+  // An explicit --ws satisfies the guard (it sets GSD_WORKSTREAM upstream) AND
+  // targets that workstream — the write must land in the workstream's own
+  // STATE.md/ROADMAP.md, leaving root untouched.
+  test('--ws satisfies the guard and writes the workstream, not root', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'workstreams', 'beta'), { recursive: true });
+    const wsDir = path.join(tmpDir, '.planning', 'workstreams', 'alpha');
+    fs.mkdirSync(path.join(wsDir, 'phases', '01-only'), { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'ROADMAP.md'), '# Roadmap\n\n### Phase 1: Only\n**Goal:** x\n');
+    fs.writeFileSync(
+      path.join(wsDir, 'STATE.md'),
+      '# State\n\n**Current Phase:** 01\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** W\n',
+    );
+    fs.writeFileSync(path.join(wsDir, 'phases', '01-only', '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(wsDir, 'phases', '01-only', '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(
+      path.join(wsDir, 'phases', '01-only', '01-VERIFICATION.md'),
+      '---\nstatus: passed\n---\n# Verification\n',
+    );
+
+    // A distinct root STATE.md that must be left byte-for-byte untouched.
+    const rootState = '# ROOT State\n\n**Current Phase:** 99\n**Status:** Root sentinel\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), rootState);
+
+    const result = runGsdTools('phase complete 1 --ws alpha', tmpDir);
+    assert.ok(result.success, `--ws alpha should complete in the workstream: ${result.error}`);
+
+    // Root STATE.md must be untouched — the write landed in the workstream.
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'),
+      rootState,
+      'root STATE.md must NOT be written when --ws targets a workstream',
+    );
+    // The workstream's own STATE.md advanced (single phase → milestone complete).
+    const wsState = fs.readFileSync(path.join(wsDir, 'STATE.md'), 'utf-8');
+    assert.match(wsState, /Milestone complete/i, "the workstream's STATE.md should be the one updated");
+  });
+
+  // The guard only fires in workstream mode — a flat project (no workstreams dir)
+  // completes normally.
+  test('flat mode (no workstreams dir) still completes normally', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap\n\n### Phase 1: Only\n**Goal:** x\n`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`
+    );
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-only');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `flat mode should still complete: ${result.error}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // exact token matching (no prefix collisions)
 // ─────────────────────────────────────────────────────────────────────────────
 
