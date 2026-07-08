@@ -181,9 +181,10 @@ candidate is processed. A single broken overlay cannot poison the rest of the se
 
 ---
 
-## The one place where skipping is dangerous: gates
+## The one place where a skip must be loud: gates
 
-Skipping a broken overlay is the safe default for most surfaces — but not for *gates*.
+Skipping a broken overlay is the safe default for every surface — including gates, though
+gates get special treatment.
 
 A capability's loop hooks come in three kinds:
 
@@ -195,21 +196,28 @@ For steps and contributions, skipping a capability means the loop simply proceed
 **without** that addition. That is *fail-open*, and it is correct: the loop is missing an
 optional step, not doing something unsafe.
 
-A gate is the opposite. The whole purpose of a gate is to *stop* the loop when a
-condition is not met — a deploy gate, a house-style verification gate, a safety check. If
-GSD skipped a broken gate-declaring capability and proceeded, it would behave exactly as
-if the gate had *passed* — silently waving through the very thing the gate existed to
-block. That is a fail-open on a security-relevant control, and it is unacceptable.
+A gate looks different at first glance. The whole purpose of a gate is to *stop* the loop
+when a condition is not met — a deploy gate, a house-style verification gate, a safety
+check. Silently skipping a broken gate-declaring capability and proceeding as if the gate
+had *passed* would wave through the very thing the gate existed to block, with no signal
+to the operator at all.
 
-So composition treats gates asymmetrically from steps and contributions. When a
-capability that declares a gate is skipped, GSD records its gate points in
-`_overlay.incompatibleGateCapIds` and `_overlay.blockedGates`, and the loop resolver
-**injects a synthetic blocking gate** at each of those extension points. The loop
-**fails closed**: rather than proceed as if the gate passed, it halts with a message
-naming the skipped capability and why its gate could not be evaluated.
+So, per the maintainer decision on [#2009](https://github.com/open-gsd/gsd-core/issues/2009),
+composition treats gates like steps and contributions for control flow — the loop always
+proceeds — but never silently. When a capability that declares a gate is skipped, GSD
+records its gate points in `_overlay.incompatibleGateCapIds` and `_overlay.blockedGates`,
+and the loop resolver **injects no gate** at each of those extension points. The loop
+**fails open**, but loudly: it emits a warning through two channels — stderr (the channel
+host workflows/agents see when they run `gsd_run loop render-hooks <point>`) and the
+`loop render-hooks` JSON envelope's top-level `warnings` array. The warning names the
+skipped capability, why it could not be loaded (for example, an incompatible
+`engines.gsd` range), and the exact remediation — `gsd capability remove <id>` — so the
+operator sees the missing control on every pass through the loop until they act on it,
+instead of the loop halting project-wide over a single incompatible overlay.
 
 The discriminator is therefore *not* "is this overlay broken?" but "what does failing
-to load it mean?" — and for a gate, failing to load it means you must not proceed.
+to load it mean?" — and for a gate, failing to load it means the operator must be told,
+unmistakably, until they resolve it.
 
 ---
 
@@ -230,10 +238,12 @@ details make this safe rather than merely convenient:
   behind a path that a runtime dispatcher might `require()` a command module from.
 - Every dropped overlay's **gates are recorded as blocked** — using the same extraction
   as the per-candidate path — so a gate-declaring overlay that vanishes in the fallback
-  still **fails closed**, never open.
+  still **surfaces a loud warning** (stderr + envelope `warnings`) at its gate points
+  rather than vanishing silently (#2009).
 
 The principle is the same at every layer: when GSD cannot compose an overlay, it removes
-the overlay's *additions* but never weakens a *control*.
+the overlay's *additions* but never silences a *control* — a missing gate always
+surfaces, even though, per #2009, it no longer blocks the loop.
 
 ---
 
@@ -262,16 +272,20 @@ The overlay model rests on a few rules applied consistently:
 - **First-party always wins** every collision — id, skill/agent stem, config key,
   command family, reserved prefix. An overlay can only add, never override.
 - A bad overlay is **skipped, not crashed** — the loop always gets a usable registry.
-- Skipping **fails open** for steps and contributions (a missing optional addition) but
-  **fails closed** for gates (a missing control must block, not pass).
+- Skipping **fails open** for steps and contributions (a missing optional addition) and,
+  per [#2009](https://github.com/open-gsd/gsd-core/issues/2009), **fails open** for gates
+  too (a missing control, no gate injected) — but loudly, via a warning (stderr + the
+  envelope's `warnings` array) that names the load failure and its
+  `gsd capability remove <id>` remediation.
 - A whole-set compose failure **falls back to first-party**, clearing command roots and
-  still blocking dropped gates.
+  still surfacing dropped gates as loud warnings.
 - One canonical builder materialises both first-party and overlay views, so an accepted
   overlay has true parity with a shipped capability.
 
 Every one of these choices answers the same question — *what does it mean if this
-composition step fails?* — and resolves it in favour of first-party authority and a
-fail-closed security posture.
+composition step fails?* — and resolves it in favour of first-party authority and,
+per #2009, a loud fail-open posture: never silent, never a project-wide halt over a
+single incompatible overlay.
 
 ---
 

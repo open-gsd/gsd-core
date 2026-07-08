@@ -1039,79 +1039,136 @@ describe('Phase 4 regression: capabilityStatesById gates on active (not enabled)
   });
 });
 
-// ─── ADR-1244 D2 fail-closed gate injection ────────────────────────────────────
+// ─── ADR-1244 D2: load-failed capability gates FAIL OPEN with a loud warning (#2009) ──
 
-describe('ADR-1244 D2: fail-closed gate injection for skipped overlay caps with gates', () => {
-  // Verifies that cmdLoopRenderHooks injects a BLOCKING synthetic gate at the
-  // declared point when an overlay capability that declares a gate is skipped at
-  // load time due to an incompatible engines.gsd version constraint.
-  //
-  // Fixture: overlay cap declares a gate at execute:wave:post with engines.gsd: ">=99.0.0"
-  // → loadRegistry skips it → records it in _overlay.blockedGates
-  // → cmdLoopRenderHooks injects a blocking=true, onError=halt gate at execute:wave:post
+describe('ADR-1244 D2: load-failed capability gates fail OPEN with a loud warning (#2009)', () => {
+  // Decision (#2009): a capability that fails to LOAD must not block the loop.
+  // cmdLoopRenderHooks injects NO gate (the loop proceeds — fail open) and emits a
+  // loud warning naming the load reason and the exact `gsd capability remove <id>`
+  // remediation, both to STDERR (the channel host workflows actually surface) and
+  // in the envelope's `warnings` array. Previously it injected a blocking=true,
+  // onError=halt gate that halted every declared point project-wide.
 
-  test('skipped gate-kind overlay cap → BLOCKING synthetic gate at its declared point', (t) => {
-    const overlayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-fail-closed-'));
-    t.after(() => cleanup(overlayHome));
-
-    // Write an overlay capability that:
-    // - declares a gate at execute:wave:post
-    // - has engines.gsd: ">=99.0.0" (incompatible → will be skipped at load)
-    const capId = 'fail-closed-gate-cap';
+  // Helper: write an overlay cap with an incompatible engines.gsd (→ skipped at load)
+  // that declares gate(s) at the given point(s). `capId` may be an invalid id to
+  // exercise the sanitization path.
+  function writeSkippedGateCap(overlayHome, capId, gatePoints) {
     const capDir = path.join(overlayHome, '.gsd', 'capabilities', capId);
     fs.mkdirSync(capDir, { recursive: true });
     const capManifest = {
       id: capId,
       role: 'feature',
       version: '1.0.0',
-      title: 'Fail Closed Gate Cap',
-      description: 'ADR-1244 D2 fail-closed wiring test',
+      title: 'Load-Failed Gate Cap',
+      description: 'ADR-1244 D2 fail-open wiring test',
       tier: 'standard',
       requires: [],
-      engines: { gsd: '>=99.0.0' },  // intentionally incompatible → always skipped
+      engines: { gsd: '>=99.0.0' },  // intentionally incompatible → always skipped at load
       runtimeCompat: { supported: ['*'], unsupported: [] },
       skills: [], agents: [], hooks: [], config: {}, steps: [], contributions: [],
-      gates: [{ point: 'execute:wave:post', check: 'always-pass', blocking: true, onError: 'halt' }],
+      gates: gatePoints.map((point) => ({ point, check: { query: 'always-pass' }, blocking: true, onError: 'halt' })),
     };
     fs.writeFileSync(path.join(capDir, 'capability.json'), JSON.stringify(capManifest), 'utf8');
+  }
 
-    // Invoke gsd-tools via subprocess so stdout is the real fd-1 (io.cjs writes via writeSync).
-    // Set GSD_HOME to the overlay home so loadRegistry picks up the incompatible cap.
+  function renderHooks(overlayHome, point, extraArgs = []) {
     const result = spawnSync(
       process.execPath,
-      [GSD_TOOLS, 'loop', 'render-hooks', 'execute:wave:post', '--cwd', overlayHome],
-      {
-        cwd: ROOT,
-        encoding: 'utf8',
-        env: { ...process.env, GSD_HOME: overlayHome },
-      },
+      [GSD_TOOLS, 'loop', 'render-hooks', point, '--cwd', overlayHome, ...extraArgs],
+      { cwd: ROOT, encoding: 'utf8', env: { ...process.env, GSD_HOME: overlayHome } },
     );
+    assert.strictEqual(result.status, 0, `Expected exit 0 at ${point}. stderr: ` + (result.stderr || ''));
+    return result;
+  }
 
-    assert.strictEqual(result.status, 0, 'Expected exit 0. stderr: ' + (result.stderr || ''));
-
-    let envelope;
+  function parseEnvelope(result) {
     try {
-      envelope = JSON.parse(result.stdout.trim());
+      return JSON.parse(result.stdout.trim());
     } catch {
       assert.fail('loop render-hooks output must be valid JSON; got: ' + result.stdout.slice(0, 300));
     }
+  }
 
-    // The synthetic blocking gate must be present in activeHooks
-    const syntheticGate = Array.isArray(envelope.activeHooks)
-      ? envelope.activeHooks.find((h) => h.capId === capId && h.kind === 'gate')
+  test('load-failed gate-kind overlay cap → NO gate injected (fail open) + loud warning on stderr and in envelope', (t) => {
+    const overlayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-fail-open-'));
+    t.after(() => cleanup(overlayHome));
+
+    const capId = 'load-failed-gate-cap';
+    writeSkippedGateCap(overlayHome, capId, ['execute:wave:post']);
+
+    const result = renderHooks(overlayHome, 'execute:wave:post');
+    const envelope = parseEnvelope(result);
+
+    // AC2 / AC-a: fail OPEN — NO gate (blocking or otherwise) is injected for the
+    // load-failed cap, so the loop proceeds.
+    const anyGate = Array.isArray(envelope.activeHooks)
+      ? envelope.activeHooks.find((h) => h.capId === capId)
       : undefined;
-    assert.ok(
-      syntheticGate !== undefined,
-      `activeHooks must contain a synthetic gate attributed to ${capId} (fail-closed injection). ` +
-      'Got: ' + JSON.stringify(envelope.activeHooks),
+    assert.strictEqual(
+      anyGate, undefined,
+      'no hook must be injected for a load-failed cap (fail open). Got: ' + JSON.stringify(envelope.activeHooks),
     );
-    assert.strictEqual(syntheticGate.blocking, true, 'synthetic gate must be blocking=true');
-    assert.strictEqual(syntheticGate.onError, 'halt', 'synthetic gate must have onError=halt');
 
-    // The rendered markdown must also reference the gate cap
+    // AC-b: a loud warning is surfaced in the envelope `warnings` channel...
+    const warnEnv = (envelope.warnings || []).find((w) => w.includes(capId));
+    assert.ok(warnEnv, 'envelope.warnings must name the load-failed cap. Got: ' + JSON.stringify(envelope.warnings));
+    // AC1: ...carrying the exact remediation, and making clear the gate is not enforced.
     assert.ok(
-      typeof envelope.rendered === 'string' && envelope.rendered.includes(capId),
-      'rendered output must reference the fail-closed gate cap. Got: ' + envelope.rendered,
+      warnEnv.includes(`gsd capability remove ${capId}`),
+      'warning must include the `gsd capability remove <id>` remediation. Got: ' + warnEnv,
+    );
+    assert.match(warnEnv, /skipped|not enforced|failing open/i, 'warning must say the gate is not enforced. Got: ' + warnEnv);
+
+    // ...and ALSO to stderr (the channel host workflows actually see).
+    assert.ok(
+      result.stderr.includes(`gsd capability remove ${capId}`),
+      'stderr must carry the loud fail-open warning with remediation. Got: ' + result.stderr,
+    );
+  });
+
+  test('load-failed cap declaring gates at ship:pre AND verify:post → neither point blocks (project can ship & verify)', (t) => {
+    const overlayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-fail-open-2pt-'));
+    t.after(() => cleanup(overlayHome));
+
+    const capId = 'load-failed-two-point-cap';
+    writeSkippedGateCap(overlayHome, capId, ['ship:pre', 'verify:post']);
+
+    for (const point of ['ship:pre', 'verify:post']) {
+      const result = renderHooks(overlayHome, point);
+      const envelope = parseEnvelope(result);
+      const injected = envelope.activeHooks.find((h) => h.capId === capId);
+      assert.strictEqual(
+        injected, undefined,
+        `${point} must NOT inject any hook for a load-failed cap (fail open). Got: ` + JSON.stringify(envelope.activeHooks),
+      );
+      const warn = (envelope.warnings || []).find((w) => w.includes(`gsd capability remove ${capId}`));
+      assert.ok(warn, `${point} must surface a fail-open warning with remediation. Got: ` + JSON.stringify(envelope.warnings));
+    }
+  });
+
+  test('security: an invalid (non-kebab) capability id is withheld — no runnable remove command is rendered (#2009 review)', (t) => {
+    const overlayHome = fs.mkdtempSync(path.join(os.tmpdir(), 'loop-fail-open-evil-'));
+    t.after(() => cleanup(overlayHome));
+
+    // A directory name that is a valid POSIX filename but NOT a valid capability
+    // id, and contains a shell metacharacter. It must never appear inside a
+    // runnable `gsd capability remove <id>` command in the surfaced warning.
+    const evilId = 'Bad;Cap';
+    writeSkippedGateCap(overlayHome, evilId, ['ship:pre']);
+
+    const result = renderHooks(overlayHome, 'ship:pre');
+    const envelope = parseEnvelope(result);
+
+    const combined = (envelope.warnings || []).join('\n') + '\n' + result.stderr;
+    // The raw metacharacter id must not be embedded in a runnable remove command.
+    assert.ok(
+      !combined.includes(`gsd capability remove ${evilId}`),
+      'invalid capability id must NOT be placed in a runnable remove command. Got: ' + combined,
+    );
+    // A warning is still surfaced (fail-open is loud), using the withheld-id form.
+    assert.match(
+      combined, /invalid id \(withheld\)/,
+      'an invalid id must be reported via the withheld-id placeholder. Got: ' + combined,
     );
   });
 });

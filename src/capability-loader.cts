@@ -17,10 +17,12 @@
  *     `gsd-core-` / `anthropic-` id prefix) is rejected.
  *   - Load-time re-gate (default-resilient): an overlay that fails validation or
  *     whose `engines.gsd` does not satisfy the running GSD version is SKIPPED
- *     with a warning — it never crashes the loop. EXCEPTION (per-hook-kind
- *     policy): a skipped capability that declares a `gate` is recorded in
- *     `_overlay.incompatibleGateCapIds` so the loop resolver can fail CLOSED for
- *     that gate rather than silently proceeding as if it had passed.
+ *     with a warning — it never crashes the loop. A skipped capability that
+ *     declares a `gate` is additionally recorded in
+ *     `_overlay.incompatibleGateCapIds` / `_overlay.blockedGates` so the loop
+ *     resolver can surface a loud fail-OPEN advisory for that gate (#2009): the
+ *     un-evaluable gate is skipped (not enforced) with a remediation message,
+ *     rather than silently vanishing.
  *
  * The merged registry is materialized by the canonical `buildRegistry`
  * (re-exported from the generator, which ships) over a cap-map reconstructed
@@ -845,12 +847,12 @@ export function loadRegistry(options: LoadRegistryOptions = {}): Registry {
     // to load. Clear the map (the first-party base never lists overlay commandRoots — first-party
     // command modules ship in bin/lib/, not via _overlay.commandRoots).
     meta.commandRoots = {};
-    // #1461 OVL-2 fail-CLOSED on compose failure (HIGH): the fallback DROPS every accepted overlay,
-    // so any accepted overlay that DECLARED a gate would have its gate silently vanish → a blocking
-    // gate FAILS OPEN, violating ADR-1244 (a skipped capability declaring a gate must FAIL CLOSED).
+    // #1461 OVL-2 (HIGH): on compose failure the fallback DROPS every accepted overlay, so any
+    // accepted overlay that DECLARED a gate would have its gate silently vanish with no trace.
     // Record each dropped gate-declaring overlay's gate as blocked using the SAME extraction the
-    // per-candidate `skip()` closure uses (gatePointsOf), so loop-resolver injects the synthetic
-    // blocking gate at each declared point exactly as it would for a per-candidate skip.
+    // per-candidate `skip()` closure uses (gatePointsOf), so loop-resolver surfaces the loud
+    // fail-OPEN advisory (#2009) at each declared point exactly as it would for a per-candidate
+    // skip — the gate does not silently disappear.
     for (const cap of overlayCaps) {
       const gatePoints = gatePointsOf(cap);
       if (gatePoints.length === 0) continue;
