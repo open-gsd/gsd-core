@@ -564,9 +564,11 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
   const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string, explicitDir?: string | null): string };
   // Use install-time resolvers: they merge ~/.gsd/defaults.json with project config,
-  // matching the exact logic used when agents were originally installed.
+  // matching the exact logic used when agents were originally installed. #2071: these
+  // live in the shipped sibling install-effort-resolver.cjs (extracted from the
+  // package-root bin/install.js, which the installer never copies into a runtime home).
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('../../../bin/install.js') as {
+  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('./install-effort-resolver.cjs') as {
     readGsdEffectiveEffortConfig(cwd: string): Record<string, unknown>;
     resolveInstallTimeEffort(cfg: Record<string, unknown>, agentName: string): string;
   };

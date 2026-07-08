@@ -273,60 +273,20 @@ const {
 } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
 const {
   resolveTierEntry: gsdResolveTierEntry,
-  EFFORT_SET: GSD_EFFORT_SET,
 } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
-// #443 — model-catalog and config-defaults.manifest.json exports needed only
-// by effort-resolution code paths (resolveInstallTimeEffort /
-// generateCodexAgentToml / Claude .md effort injection).  Loaded lazily the
-// first time they are needed so that requiring install.js in test contexts that
-// never trigger an install does NOT produce module-load-time side effects (the
-// manifest read + hard throw) that could alter subprocess exit codes or stderr.
-let _gsdEffortCatalogCache = null;
-function _getGsdEffortCatalog() {
-  if (_gsdEffortCatalogCache) return _gsdEffortCatalogCache;
-
-  const { AGENT_DEFAULT_TIERS, renderEffortForRuntime } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
-
-  const manifestPath = path.join(
-    __dirname,
-    '..',
-    'gsd-core',
-    'bin',
-    'shared',
-    'config-defaults.manifest.json'
-  );
-  let manifestData;
-  try {
-    manifestData = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  } catch (_err) {
-    // Fail loudly — a missing manifest is a broken install, not a soft degradation.
-    throw new Error(
-      `gsd install: cannot load config-defaults.manifest.json at ${manifestPath}: ${_err.message}`
-    );
-  }
-
-  const tierDefaults =
-    (manifestData.effort &&
-      manifestData.effort.routing_tier_defaults &&
-      typeof manifestData.effort.routing_tier_defaults === 'object' &&
-      !Array.isArray(manifestData.effort.routing_tier_defaults))
-      ? manifestData.effort.routing_tier_defaults
-      : { light: 'low', standard: 'high', heavy: 'xhigh' }; // guard: unreachable if manifest is valid
-
-  const effortDefault =
-    (manifestData.effort && typeof manifestData.effort.default === 'string')
-      ? manifestData.effort.default
-      : 'high'; // guard: unreachable if manifest is valid
-
-  _gsdEffortCatalogCache = {
-    AGENT_DEFAULT_TIERS,
-    renderEffortForRuntime,
-    EFFORT_MANIFEST_TIER_DEFAULTS: tierDefaults,
-    EFFORT_MANIFEST_DEFAULT: effortDefault,
-  };
-  return _gsdEffortCatalogCache;
-}
+// #2071 — install-time effort resolution (readGsdEffectiveEffortConfig /
+// resolveInstallTimeEffort, plus their _getGsdEffortCatalog + _readGsdConfigFile
+// helpers) was extracted into the shipped gsd-core/bin/lib/install-effort-resolver.cjs
+// so `gsd-tools effort sync` can require it from the installed runtime instead of this
+// package-root bin/install.js, which the installer never copies (#2071 crash). The
+// installer imports it back here — single source of truth for both surfaces.
+const {
+  readGsdEffectiveEffortConfig,
+  resolveInstallTimeEffort,
+  _getGsdEffortCatalog,
+  _readGsdConfigFile,
+} = require(path.join(_gsdLibDir, 'install-effort-resolver.cjs'));
 
 const {
   MINIMAL_SKILL_ALLOWLIST,
@@ -1072,126 +1032,6 @@ function readGsdEffectiveModelOverrides(targetDir = null) {
 }
 
 /**
- * #443 — Read the merged `effort` config block for install-time effort resolution.
- *
- * Probes the same config sources as readGsdRuntimeProfileResolver (per-project
- * `.planning/config.json` wins over `~/.gsd/defaults.json`) but extracts the
- * `effort` object instead of the model-profile fields.
- *
- * Returns the merged `effort` object or null when neither source defines one.
- * The caller can pass this to resolveInstallTimeEffort() which is pure and
- * requires no filesystem access beyond what this helper already performs.
- *
- * @param {string|null} targetDir  Runtime install root (walks up to find .planning/).
- * @returns {object|null}
- */
-function readGsdEffectiveEffortConfig(targetDir = null) {
-  const homeDefaults = _readGsdConfigFile(
-    path.join(os.homedir(), '.gsd', 'defaults.json'),
-    '~/.gsd/defaults.json'
-  );
-
-  let projectConfig = null;
-  if (targetDir) {
-    let probeDir = path.resolve(targetDir);
-    for (let depth = 0; depth < 8; depth += 1) {
-      const candidate = path.join(probeDir, '.planning', 'config.json');
-      if (fs.existsSync(candidate)) {
-        projectConfig = _readGsdConfigFile(candidate, '.planning/config.json');
-        break;
-      }
-      const parent = path.dirname(probeDir);
-      if (parent === probeDir) break;
-      probeDir = parent;
-    }
-  }
-
-  const homeEffort = (homeDefaults && homeDefaults.effort && typeof homeDefaults.effort === 'object' && !Array.isArray(homeDefaults.effort))
-    ? homeDefaults.effort
-    : null;
-  const projectEffort = (projectConfig && projectConfig.effort && typeof projectConfig.effort === 'object' && !Array.isArray(projectConfig.effort))
-    ? projectConfig.effort
-    : null;
-
-  if (!homeEffort && !projectEffort) return null;
-
-  // Per-project wins on conflict within each sub-field. Merge field-by-field so
-  // a project config that only sets agent_overrides still inherits global
-  // routing_tier_defaults and default.
-  return {
-    ...(homeEffort || {}),
-    ...(projectEffort || {}),
-    // Deep-merge agent_overrides (project wins per-key)
-    agent_overrides: {
-      ...((homeEffort && homeEffort.agent_overrides) || {}),
-      ...((projectEffort && projectEffort.agent_overrides) || {}),
-    },
-  };
-}
-
-
-/**
- * #443 — Resolve install-time effort for a given agent, using the same
- * precedence chain as resolveEffortInternal() in core.cjs, but operating
- * on a pre-loaded effortCfg object (no loadConfig side-effects at install).
- *
- * Precedence (mirrors resolveEffortInternal):
- *   1. effortCfg.agent_overrides[agentName]
- *   2. effortCfg.routing_tier_defaults[agentTier]  (if effortCfg present)
- *      — OR manifest tier defaults when effortCfg is null
- *   3. effortCfg.default
- *   4. 'high' (hardcoded fallback)
- *
- * @param {object|null} effortCfg   Result of readGsdEffectiveEffortConfig().
- * @param {string} agentName        e.g. 'gsd-planner'
- * @returns {string}                Universal effort string (low/medium/high/xhigh/max/minimal)
- */
-function resolveInstallTimeEffort(effortCfg, agentName) {
-  // Validates each candidate against the canonical EFFORT_SET (sourced once
-  // from core.cjs) before accepting it, mirroring resolveEffortInternal exactly.
-  // Invalid values fall through to the next precedence layer; final fallback 'high'.
-
-  // Step 1: agent_overrides
-  if (effortCfg) {
-    const ao = effortCfg.agent_overrides;
-    if (ao && typeof ao === 'object' && !Array.isArray(ao)) {
-      const v = ao[agentName];
-      if (typeof v === 'string' && GSD_EFFORT_SET.has(v)) return v;
-    }
-  }
-
-  // Step 2: routing_tier_defaults keyed by the agent's catalog tier
-  const { AGENT_DEFAULT_TIERS, EFFORT_MANIFEST_TIER_DEFAULTS, EFFORT_MANIFEST_DEFAULT } = _getGsdEffortCatalog();
-  const agentTier = AGENT_DEFAULT_TIERS[agentName];
-  if (agentTier) {
-    if (effortCfg && effortCfg.routing_tier_defaults &&
-        typeof effortCfg.routing_tier_defaults === 'object' &&
-        !Array.isArray(effortCfg.routing_tier_defaults)) {
-      const v = effortCfg.routing_tier_defaults[agentTier];
-      if (typeof v === 'string' && GSD_EFFORT_SET.has(v)) return v;
-    } else if (!effortCfg) {
-      // No effort config — use manifest tier defaults
-      const v = EFFORT_MANIFEST_TIER_DEFAULTS[agentTier];
-      if (typeof v === 'string' && GSD_EFFORT_SET.has(v)) return v;
-    }
-    // effortCfg exists but has no routing_tier_defaults — fall through
-  }
-
-  // Step 3: effort.default
-  if (effortCfg) {
-    const d = effortCfg.default;
-    if (typeof d === 'string' && GSD_EFFORT_SET.has(d)) return d;
-  }
-
-  // Step 4: manifest default (sourced from config-defaults.manifest.json effort.default)
-  // If even the manifest default is invalid, fall back to 'high'.
-  if (typeof EFFORT_MANIFEST_DEFAULT === 'string' && GSD_EFFORT_SET.has(EFFORT_MANIFEST_DEFAULT)) {
-    return EFFORT_MANIFEST_DEFAULT;
-  }
-  return 'high';
-}
-
-/**
  * #443 — Inject `effort: <value>` into YAML frontmatter of a Claude .md agent
  * file in a newline-agnostic way (LF and CRLF source files are both handled).
  *
@@ -1295,29 +1135,6 @@ const READONLY_AGENT_DISALLOWED_TOOLS = {
   'gsd-eval-auditor': 'Edit, MultiEdit',
   'gsd-ui-auditor': 'Edit, MultiEdit',
 };
-
-/**
- * #2517 — Read a single GSD config file (defaults.json or per-project
- * config.json) into a plain object, returning null on missing/empty files
- * and warning to stderr on JSON parse failures so silent corruption can't
- * mask broken configs (review finding #5).
- */
-function _readGsdConfigFile(absPath, label) {
-  if (!fs.existsSync(absPath)) return null;
-  let raw;
-  try {
-    raw = fs.readFileSync(absPath, 'utf-8');
-  } catch (err) {
-    process.stderr.write(`gsd: warning — could not read ${label} (${absPath}): ${err.message}\n`);
-    return null;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch (err) {
-    process.stderr.write(`gsd: warning — invalid JSON in ${label} (${absPath}): ${err.message}\n`);
-    return null;
-  }
-}
 
 /**
  * #2517 — Build a runtime-aware tier resolver for the install path.

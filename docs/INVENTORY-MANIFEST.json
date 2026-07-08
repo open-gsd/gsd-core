@@ -356,6 +356,7 @@
       "host-integration.cjs",
       "init-command-router.cjs",
       "init.cjs",
+      "install-effort-resolver.cjs",
       "install-engine.cjs",
       "install-profiles.cjs",
       "installer-migration-authoring.cjs",
