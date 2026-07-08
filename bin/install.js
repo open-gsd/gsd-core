@@ -321,7 +321,7 @@ try {
 // {} and silently route a claude LOCAL install to the repo-shared, committed
 // `settings.json` instead of the gitignored `settings.local.json` (#338) — leaking
 // engineer-specific absolute paths. Keyed by runtime id (a DATA lookup, not a
-// `runtime === 'claude'` branch) so behavior degrades CLOSED (safe), never open.
+// hardcoded string-equality branch) so behavior degrades CLOSED (safe), never open.
 // The live descriptor (capabilities/claude/capability.json) remains the source of
 // truth; this mirrors only the privacy-load-bearing subset. (ADR-1239 / #2086)
 const FALLBACK_HOST_BEHAVIORS = Object.freeze({

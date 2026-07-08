@@ -134,7 +134,14 @@ test('claude descriptor declares runtime.hostBehaviors (the folded-in host behav
 
 test('bin/install.js contains no `runtime === "claude"` / `runtime !== "claude"` string-equality branches (AC2)', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'bin', 'install.js'), 'utf8');
-  const offenders = src.match(/runtime\s*[!=]==\s*'claude'/g) || [];
+  // Strip comments + backtick/inline-code spans so PROSE mentions of the old
+  // pattern (a comment explaining "not a string-equality branch") do not
+  // false-positive — only LIVE code counts.
+  const codeOnly = src
+    .replace(/\/\*[\s\S]*?\*\//g, '')   // block comments
+    .replace(/\/\/[^\r\n]*/g, '')        // line comments (CRLF-safe)
+    .replace(/`[^`]*`/g, '');            // backtick / inline-code spans
+  const offenders = codeOnly.match(/runtime\s*[!=]==\s*'claude'/g) || [];
   assert.deepEqual(
     offenders,
     [],
