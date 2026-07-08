@@ -173,14 +173,21 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
 
   test(
     'sabCount === 1 after a call that undergoes >= 1 retry (post-fix assertion)',
-    { timeout: 8000 },
+    { timeout: 15000 },
     async () => {
-      // ── Worker A: hold the lock for 1000ms ─────────────────────────────────
+      // ── Worker A: hold the lock until the writer signals contention ─────────
       // The holder releases the lock only when the writer signals its first
       // failed lock attempt (see WRITER_WORKER_CODE), so the writer is guaranteed
-      // to contend at least once regardless of worker-spawn latency. holdMs is now
-      // only a safety cap in case that signal never arrives.
-      const holdMs = 1000;
+      // to contend at least once. holdMs is ONLY a safety cap for a dead/hung
+      // writer — it MUST be large enough that it never elapses while Worker B is
+      // still spawning + requiring state.cjs + installing its stubs. Under load
+      // (full suite in a container) that spawn+init can exceed 1s; a 1s cap let A
+      // time out and remove the lock before B contended, so B's first openSync
+      // succeeded (lockAttempts:1) and the retry-path witness failed. 30s is
+      // comfortably beyond B's worst-case init yet still bounded; the test's own
+      // timeout caps wall-clock, and afterEach terminate()s A the moment B posts
+      // its result, so the normal path adds no delay.
+      const holdMs = 30000;
       const releaseSab = new SharedArrayBuffer(4);
       let resolveLockWritten;
       const lockWritten = new Promise((resolve) => { resolveLockWritten = resolve; });
