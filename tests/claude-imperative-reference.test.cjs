@@ -36,6 +36,11 @@ const CLAUDE_CAP = JSON.parse(
 );
 const CLAUDE_AXES = CLAUDE_CAP.runtime.hostIntegration;
 
+// Requiring the installer (not as main) never runs the CLI; GSD_TEST_MODE is set
+// defensively to match the install-test convention.
+process.env.GSD_TEST_MODE = process.env.GSD_TEST_MODE || '1';
+const installMod = require('../bin/install.js');
+
 // -- AC2: driven through the public interface (imperative adapter) -----------
 
 test('createImperativeAdapter classifies claude as imperative + composes the registry', () => {
@@ -135,4 +140,37 @@ test('bin/install.js contains no `runtime === "claude"` / `runtime !== "claude"`
     [],
     `AC2: every hardcoded runtime==='claude'/!=='claude' branch must be descriptor-driven; found: ${offenders.join(', ')}`,
   );
+});
+
+// -- Reviewer #2106 (elevated): #338 privacy fail-safe on registry-load failure --
+// If the first-party capability registry fails to load, `_hostBehaviors('claude')`
+// would return {} and route a claude LOCAL install to the repo-shared settings.json
+// instead of the gitignored settings.local.json — silently reintroducing #338. The
+// reference host must degrade CLOSED (safe) for its privacy-critical keys.
+
+test('claude #338-critical host behaviors degrade CLOSED when the capability registry cannot load', () => {
+  // Simulate a broken bundle: registry is undefined.
+  const degraded = installMod._resolveHostBehaviors('claude', undefined);
+  assert.equal(degraded.settingsFileByScope.local, 'settings.local.json',
+    '#338: a claude LOCAL install must still route to the gitignored settings.local.json');
+  assert.equal(degraded.settingsFileByScope.global, 'settings.json');
+  assert.equal(degraded.permissionsSchema, 'claude', 'permission cleanup/merge must still apply');
+  assert.equal(degraded.sourceMarkerFile, '.gsd-source');
+});
+
+test('with the registry present, claude host behaviors come from the live descriptor (superset of the fail-safe floor)', () => {
+  const reg = require('../gsd-core/bin/lib/capability-registry.cjs');
+  const declared = installMod._resolveHostBehaviors('claude', reg);
+  assert.equal(declared.settingsFileByScope.local, 'settings.local.json');
+  assert.equal(declared.localInstallStyle, 'legacy-flat');
+  assert.equal(declared.authorsCanonicalWorkflow, true);
+  // The fail-safe floor is a strict subset of what the descriptor declares.
+  for (const k of Object.keys(installMod.FALLBACK_HOST_BEHAVIORS.claude)) {
+    assert.ok(k in declared, `descriptor must still declare the #338-critical key '${k}'`);
+  }
+});
+
+test('a non-reference runtime has no fail-safe fallback (degrades to the generic path)', () => {
+  assert.deepEqual(installMod._resolveHostBehaviors('opencode', undefined), {});
+  assert.deepEqual(installMod._resolveHostBehaviors('codex', undefined), {});
 });

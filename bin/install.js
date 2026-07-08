@@ -315,16 +315,46 @@ try {
   _capabilityRegistry = undefined;
 }
 
+// Fail-safe floor for the reference host's #338-privacy-critical behaviors, used
+// ONLY when the first-party capability registry cannot be loaded (a broken bundle).
+// Without it, a registry-load failure would make `_hostBehaviors('claude')` return
+// {} and silently route a claude LOCAL install to the repo-shared, committed
+// `settings.json` instead of the gitignored `settings.local.json` (#338) — leaking
+// engineer-specific absolute paths. Keyed by runtime id (a DATA lookup, not a
+// `runtime === 'claude'` branch) so behavior degrades CLOSED (safe), never open.
+// The live descriptor (capabilities/claude/capability.json) remains the source of
+// truth; this mirrors only the privacy-load-bearing subset. (ADR-1239 / #2086)
+const FALLBACK_HOST_BEHAVIORS = Object.freeze({
+  claude: Object.freeze({
+    settingsFileByScope: Object.freeze({ local: 'settings.local.json', global: 'settings.json' }),
+    permissionsSchema: 'claude',
+    sourceMarkerFile: '.gsd-source',
+  }),
+});
+
+/**
+ * Resolve a runtime's host behaviors from a capability registry, with the
+ * #338-privacy fail-safe floor when the registry (or the runtime's descriptor)
+ * is unavailable. Registry is passed in so this is unit-testable under a
+ * simulated registry-load failure. (ADR-1239 / #2086)
+ */
+function _resolveHostBehaviors(runtime, registry) {
+  const cap = registry && registry.runtimes && registry.runtimes[runtime];
+  const declared = cap && cap.runtime && cap.runtime.hostBehaviors;
+  if (declared) return declared;
+  return FALLBACK_HOST_BEHAVIORS[runtime] || {};
+}
+
 /**
  * Host-specific install behaviors, declared on the runtime descriptor
  * (capabilities/<runtime>/capability.json -> runtime.hostBehaviors) instead of
  * scattered `runtime === '<id>'` string checks (ADR-1239 / #2086). Returns {}
  * for runtimes that declare none, so every behavior branch degrades to the
- * generic path by default.
+ * generic path by default — EXCEPT the reference host's #338-critical keys, which
+ * fall back to FALLBACK_HOST_BEHAVIORS if the registry failed to load.
  */
 function _hostBehaviors(runtime) {
-  const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
-  return (cap && cap.runtime && cap.runtime.hostBehaviors) || {};
+  return _resolveHostBehaviors(runtime, _capabilityRegistry);
 }
 
 /**
@@ -11099,6 +11129,9 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #2086 — host-behavior resolution + the #338 privacy fail-safe floor (exported for tests)
+    _resolveHostBehaviors,
+    FALLBACK_HOST_BEHAVIORS,
     convertSlashCommandsToCodexSkillMentions,
     convertClaudeCommandToCodexSkill,
     convertClaudeCommandToKimiSkill,
