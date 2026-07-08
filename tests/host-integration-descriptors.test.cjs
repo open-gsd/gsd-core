@@ -275,7 +275,9 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     hermes:      true,
     kilo:        true,
     kimi:        true,
-    opencode:    true,
+    // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
+    // dispatch.background/backgroundDispatch true → NOT force-flattened.
+    opencode:    false,
     qwen:        true,
     trae:        true,
     windsurf:    true,
