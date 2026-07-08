@@ -113,6 +113,17 @@ function buildParityManifest(configDir, root) {
   const allFiles = walk(configDir);
   const unsorted = {};
 
+  // The claude LOCAL install resolves its config dir via realpath, which on macOS
+  // prepends `/private` to the temp root (`/var/folders/…` -> `/private/var/folders/…`)
+  // and embeds that resolved path in the projected agents/commands/workflows (`@…`
+  // references). On Linux the temp root has no `/private` symlink, so normalizing
+  // ONLY `root` left the `/private` prefix on macOS and produced platform-divergent
+  // hashes (#2086). Normalize the realpath form FIRST (it is the longer, `/private`-
+  // prefixed string) so both platforms collapse to `<HOME>`. No-op for the global
+  // fixtures (global install uses the literal `--config-dir`, never realpath-resolved).
+  let realRoot = root;
+  try { realRoot = fs.realpathSync(root); } catch { /* root already gone / not resolvable */ }
+
   for (const full of allFiles) {
     // Build POSIX-style relative path for cross-platform stability
     const rel = path.relative(configDir, full).split(path.sep).join('/');
@@ -125,7 +136,10 @@ function buildParityManifest(configDir, root) {
     // Normalize every occurrence of the temp root so hashes are stable across runs.
     // Also normalize the package version so the golden survives `npm version` bumps
     // (the rc release step bakes the new version into hook files before running tests).
-    const normalized = content.toString('utf8').split(root).join('<HOME>').split(PKG_VERSION).join('<VERSION>');
+    const normalized = content.toString('utf8')
+      .split(realRoot).join('<HOME>')
+      .split(root).join('<HOME>')
+      .split(PKG_VERSION).join('<VERSION>');
     const hash = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
     unsorted[rel] = hash;
   }
