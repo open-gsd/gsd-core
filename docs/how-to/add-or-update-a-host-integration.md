@@ -102,6 +102,51 @@ a first-party primitive, reviewed. To add one (e.g. a new `runtime` kind):
 The parity guard (`tests/host-integration-validator-parity.test.cjs`) fails if these two drift, so
 they must be updated together. Document the new value's meaning in the matrix legend.
 
+## 7. Fold an already-hardcoded host into the interface (worked example: `claude`)
+
+Sections 1–6 cover a *green-field* host (`pi`, `antigravity` — a fresh descriptor + reference
+binding). This section covers the other case: a host that already has a **real production install**
+driven by scattered `runtime === '<id>'` string-equality branches in `bin/install.js`, which you want
+to move onto the Host-Integration Interface **without changing a single installed byte**. `claude`
+(the tier-1 reference host, #2086) is the worked example.
+
+The pattern is byte-parity-safe by construction — each string check becomes a **descriptor lookup that
+yields the same truth value**, so behavior is unchanged and only the brittle coupling is removed:
+
+1. **Inventory the branches.** Find every `runtime === '<id>'` / `runtime !== '<id>'` in `bin/install.js`
+   for the host (`grep -nE "runtime\s*[!=]==\s*'claude'"`). Each is a host behavior encoded as a string
+   comparison rather than a declared capability.
+
+2. **Declare the behaviors on the descriptor.** Add a `runtime.hostBehaviors` object to the host's
+   `capability.json`. Each key names one behavior the branches gated on — e.g. for `claude`:
+   `permissionsSchema: "claude"`, `settingsFileByScope: { local: "settings.local.json", global: "settings.json" }`,
+   `sourceMarkerFile: ".gsd-source"`, `agentFrontmatterExtensions: ["effort"]`, `localInstallStyle: "legacy-flat"`,
+   `authorsCanonicalWorkflow: true`, `ownsClaudePaths: true`, `nativeModelAliases: true`,
+   `skillsGlobalOnboarding: true`, `attributionSource: "settings-json-commit"`. The validator
+   (`validateRuntimeBody`) is lenient toward these host-behavior keys; they carry install policy, not the
+   closed negotiated axes.
+
+3. **Replace each branch with a descriptor read.** `bin/install.js` exposes a `_hostBehaviors(runtime)`
+   helper (reads `_capabilityRegistry.runtimes[runtime].runtime.hostBehaviors`, `{}` if absent). Rewrite
+   `if (runtime === 'claude')` → `if (_hostBehaviors(runtime).permissionsSchema === 'claude')`, and
+   `if (runtime !== 'claude')` → `if (!_hostBehaviors(runtime).authorsCanonicalWorkflow)`. Only the host
+   declares the key, so every other runtime keeps the generic path.
+
+4. **Route install/uninstall through the public adapter.** Replace the direct
+   `installRuntimeArtifacts(...)` / `uninstallRuntimeArtifacts(...)` calls with
+   `createImperativeAdapter({ runtime }).install({...})` / `.uninstall({...})`. The imperative adapter
+   delegates to the *same* engine functions, so the output is byte-identical — that is the point: the
+   host is now driven **through** the interface, not around it.
+
+5. **Prove parity, both scopes.** `tests/golden-install-parity.test.cjs` captures a byte-stable manifest
+   of every emitted file. Assert the host's install is unchanged for **global and local** scopes
+   (regenerate a baseline from `origin/next` first, then confirm the migrated tree matches it). Exclude
+   only genuinely volatile / platform-varying files (`settings.json`, `settings.local.json`, `.gsd-source`).
+
+6. **Guard against regression.** Add a `*-imperative-reference.test.cjs` asserting the adapter classifies
+   the host correctly, negotiation fails closed on a corrupted descriptor, and — with a source-grep behind
+   an `// allow-test-rule:` exemption — that **no `runtime === '<id>'` branch remains** in `bin/install.js`.
+
 ---
 
 ## Related

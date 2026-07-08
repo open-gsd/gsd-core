@@ -43,6 +43,7 @@ const {
   readBaseRefFromSettings,
 } = require('../gsd-core/bin/lib/worktree-base-ref.cjs');
 const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
+const { createImperativeAdapter } = require('../gsd-core/bin/lib/adapter-imperative.cjs');
 const runtimeArtifactConversion = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
 // Canonical set of hook files shipped to users. Imported here so writeManifest()
 // records exactly the same set that build-hooks.js copies to hooks/dist/, making
@@ -126,6 +127,9 @@ function isCodexHooksFeatureKey(key) {
 //
 // Merge policy: additive, non-destructive \u2014 existing user entries are preserved;
 // GSD entries are appended only when not already present (idempotent).
+// The reference/default runtime (ADR-1239 reference host). Single-sourced here
+// instead of scattered literal 'claude' defaults/rosters (#2086).
+const DEFAULT_RUNTIME = 'claude';
 const GSD_CLAUDE_ALLOW_PERMISSIONS = Object.freeze([
   'Bash(npx gsd-core *)',
   'Read(.planning/*)',
@@ -309,6 +313,64 @@ try {
   _capabilityRegistry = require(path.join(_gsdLibDir, 'capability-registry.cjs'));
 } catch (_) {
   _capabilityRegistry = undefined;
+}
+
+// Fail-safe floor for the reference host's #338-privacy-critical behaviors, used
+// ONLY when the first-party capability registry cannot be loaded (a broken bundle).
+// Without it, a registry-load failure would make `_hostBehaviors('claude')` return
+// {} and silently route a claude LOCAL install to the repo-shared, committed
+// `settings.json` instead of the gitignored `settings.local.json` (#338) — leaking
+// engineer-specific absolute paths. Keyed by runtime id (a DATA lookup, not a
+// hardcoded string-equality branch) so behavior degrades CLOSED (safe), never open.
+// The live descriptor (capabilities/claude/capability.json) remains the source of
+// truth; this mirrors only the privacy-load-bearing subset. (ADR-1239 / #2086)
+const FALLBACK_HOST_BEHAVIORS = Object.freeze({
+  claude: Object.freeze({
+    settingsFileByScope: Object.freeze({ local: 'settings.local.json', global: 'settings.json' }),
+    permissionsSchema: 'claude',
+    sourceMarkerFile: '.gsd-source',
+  }),
+});
+
+/**
+ * Resolve a runtime's host behaviors from a capability registry, with the
+ * #338-privacy fail-safe floor when the registry (or the runtime's descriptor)
+ * is unavailable. Registry is passed in so this is unit-testable under a
+ * simulated registry-load failure. (ADR-1239 / #2086)
+ */
+function _resolveHostBehaviors(runtime, registry) {
+  const cap = registry && registry.runtimes && registry.runtimes[runtime];
+  const declared = cap && cap.runtime && cap.runtime.hostBehaviors;
+  if (declared) return declared;
+  return FALLBACK_HOST_BEHAVIORS[runtime] || {};
+}
+
+/**
+ * Host-specific install behaviors, declared on the runtime descriptor
+ * (capabilities/<runtime>/capability.json -> runtime.hostBehaviors) instead of
+ * scattered `runtime === '<id>'` string checks (ADR-1239 / #2086). Returns {}
+ * for runtimes that declare none, so every behavior branch degrades to the
+ * generic path by default — EXCEPT the reference host's #338-critical keys, which
+ * fall back to FALLBACK_HOST_BEHAVIORS if the registry failed to load.
+ */
+function _hostBehaviors(runtime) {
+  return _resolveHostBehaviors(runtime, _capabilityRegistry);
+}
+
+/**
+ * Construct the imperative Host-Integration adapter (ADR-1239 / #2086), FAIL-OPEN.
+ * `createImperativeAdapter` composes the capability registry via
+ * `loadRegistry({includeInstalled:true})`, which require()s several capability
+ * modules. If any is unavailable (e.g. a packaging regression), return null so
+ * the caller degrades to the engine directly rather than hard-crashing install/
+ * uninstall — matching the optional `capability-registry.cjs` load posture above.
+ */
+function _runtimeAdapter(runtime) {
+  try {
+    return createImperativeAdapter({ runtime });
+  } catch {
+    return null;
+  }
 }
 const {
   applyInstallerMigrationPlan,
@@ -1244,9 +1306,9 @@ function getCommitAttribution(runtime) {
       : resolveKiloConfigPath;
     const config = readSettings(resolveConfigPath(getGlobalConfigDir(runtime, null)));
     result = (config && config.disable_ai_attribution === true) ? null : undefined;
-  } else if (runtime === 'claude') {
+  } else if (_hostBehaviors(runtime).attributionSource === 'settings-json-commit') {
     // Claude Code
-    const settings = readSettings(path.join(getGlobalConfigDir('claude', explicitConfigDir), 'settings.json'));
+    const settings = readSettings(path.join(getGlobalConfigDir(runtime, explicitConfigDir), 'settings.json'));
     if (!settings || !settings.attribution || settings.attribution.commit === undefined) {
       result = undefined;
     } else if (settings.attribution.commit === '') {
@@ -6279,7 +6341,7 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
       // copyWithPathReplacement is the emit path for gsd-core/workflows/*.md;
       // _applyRuntimeRewrites is NOT invoked here, so this is what makes the fix
       // live in real installs (it is a no-op for files without those lines).
-      if (runtime !== 'claude') {
+      if (!_hostBehaviors(runtime).authorsCanonicalWorkflow) {
         content = _stampNonClaudeRuntimeDefaults(content, runtime);
       }
 
@@ -6481,7 +6543,7 @@ const GSD_UNINSTALL_HOOKS = [
  * @param {boolean} isGlobal - Whether to uninstall from global or local
  * @param {string} runtime - Target runtime ('claude', 'opencode', 'codex', 'copilot')
  */
-function uninstall(isGlobal, runtime = 'claude') {
+function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
@@ -6539,7 +6601,14 @@ function uninstall(isGlobal, runtime = 'claude') {
 
   // 1. Remove GSD commands/skills (layout-driven)
   const scope = isGlobal ? 'global' : 'local';
-  uninstallRuntimeArtifacts(runtime, targetDir, scope);
+  // ADR-1239 / #2086: drive uninstall through the public Host-Integration Interface.
+  // Fail-open to the engine directly if the composed-registry adapter can't load.
+  const _uninstallAdapter = _runtimeAdapter(runtime);
+  if (_uninstallAdapter) {
+    _uninstallAdapter.uninstall({ configDir: targetDir, scope });
+  } else {
+    uninstallRuntimeArtifacts(runtime, targetDir, scope);
+  }
   removedCount++;
 
   // 1a. Non-layout Codex side-effects: agent .toml files, config.toml sections, hooks.json
@@ -6705,7 +6774,7 @@ function uninstall(isGlobal, runtime = 'claude') {
 
   // 1c. Claude local: remove flat gsd-*.md commands from commands/ (current layout,
   //     #1367 fix). Also remove legacy commands/gsd/ subdirectory from prior installs.
-  if (!isGlobal && runtime === 'claude') {
+  if (!isGlobal && _hostBehaviors(runtime).localInstallStyle === 'legacy-flat') {
     const commandsDir = path.join(targetDir, 'commands');
     // Remove flat gsd-*.md files (current layout after #1367 fix)
     if (fs.existsSync(commandsDir)) {
@@ -7008,7 +7077,7 @@ function uninstall(isGlobal, runtime = 'claude') {
     // to preserve any user-added allow/deny entries.
     // Uses a local flag to avoid the shared `settingsModified` producing a false
     // "Removed GSD permissions" message when only hooks/statusline changed.
-    if (runtime === 'claude' && settings.permissions) {
+    if (_hostBehaviors(runtime).permissionsSchema === 'claude' && settings.permissions) {
       let permissionsModified = false;
       if (Array.isArray(settings.permissions.allow)) {
         const before = settings.permissions.allow.length;
@@ -7483,7 +7552,7 @@ function resolveInstallRelativePath(baseDir, relPath) {
 /**
  * Write file manifest after installation for future modification detection
  */
-function writeManifest(configDir, runtime = 'claude', options = {}) {
+function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
@@ -7521,7 +7590,7 @@ function writeManifest(configDir, runtime = 'claude', options = {}) {
   // Claude local (#1367): flat gsd-*.md files at commands/ level.
   // Only claude local writes gsd-*.md here; global installs don't emit commands,
   // so this branch is a no-op for global (no matching files to find).
-  if (runtime === 'claude' && fs.existsSync(flatCommandsDir)) {
+  if (_hostBehaviors(runtime).localInstallStyle === 'legacy-flat' && fs.existsSync(flatCommandsDir)) {
     for (const file of fs.readdirSync(flatCommandsDir)) {
       if (file.startsWith('gsd-') && file.endsWith('.md')) {
         manifest.files['commands/' + file] = fileHash(path.join(flatCommandsDir, file));
@@ -7934,7 +8003,7 @@ function saveLocalPatches(configDir, pristineCtx) {
 /**
  * After install, report backed-up patches for user to reapply.
  */
-function reportLocalPatches(configDir, runtime = 'claude') {
+function reportLocalPatches(configDir, runtime = DEFAULT_RUNTIME) {
   const patchesDir = path.join(configDir, PATCHES_DIR_NAME);
   const metaPath = path.join(patchesDir, 'backup-meta.json');
   if (!fs.existsSync(metaPath)) return [];
@@ -7977,7 +8046,7 @@ function reportInstallerMigrationResult(result) {
   }
 }
 
-function install(isGlobal, runtime = 'claude', options = {}) {
+function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const { isOpencode, isKilo, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
@@ -8422,7 +8491,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // (copyWithPathReplacement + stale-skills cleanup).
   const _isSkillsRuntime = (() => {
     if (isOpencode || isKilo) return false;               // specialized combined path
-    if (runtime === 'claude' && !isGlobal) return false;  // claude-local legacy path
+    if (_hostBehaviors(runtime).localInstallStyle === 'legacy-flat' && !isGlobal) return false;  // legacy flat local path (descriptor-driven; #2086)
     const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
     const layout = cap && cap.runtime && cap.runtime.artifactLayout;
     if (!layout) return false;
@@ -8433,7 +8502,21 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   if (_isSkillsRuntime) {
     // Layout-driven install for skills-based runtimes (full and minimal modes)
     const scope = isGlobal ? 'global' : 'local';
-    installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile, getCommitAttribution);
+    // ADR-1239 / #2086: drive install through the public Host-Integration Interface
+    // (imperative adapter). The adapter delegates to the SAME installRuntimeArtifacts
+    // engine call -> byte-identical output (gated by golden-install-parity). Fail-open
+    // to the engine directly if the composed-registry adapter can't load.
+    const _adapter = _runtimeAdapter(runtime);
+    if (_adapter) {
+      _adapter.install({
+        configDir: targetDir,
+        scope,
+        resolvedProfile: _resolvedProfile,
+        resolveAttribution: getCommitAttribution,
+      });
+    } else {
+      installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile, getCommitAttribution);
+    }
 
     // #1326 — Codex only: remove stale agents/openai.yaml sidecars from managed
     // gsd-* skill dirs. Prior installs wrote these files so Codex would show a
@@ -8733,11 +8816,14 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // other runtime/scope deploys commands/gsd, so its walk-up already resolves
   // and needs no marker. Guarded on source presence so a half-published
   // package never writes a dangling marker.
-  if (runtime === 'claude' && isGlobal) {
+  if (_hostBehaviors(runtime).sourceMarkerFile && isGlobal) {
     const gsdSourceCommands = path.join(src, 'commands', 'gsd');
     if (fs.existsSync(gsdSourceCommands)) {
       try {
-        fs.writeFileSync(path.join(targetDir, '.gsd-source'), gsdSourceCommands + '\n', 'utf8');
+        // ADR-1239 Phase B write-confinement: the descriptor-sourced marker filename
+        // must resolve under targetDir (parity with the other descriptor-driven writes).
+        const _markerPath = assertDestWithinConfigHome(targetDir, _hostBehaviors(runtime).sourceMarkerFile);
+        fs.writeFileSync(_markerPath, gsdSourceCommands + '\n', 'utf8');
       } catch (err) {
         // Non-fatal: install proceeds. But on the Claude-global layout walk-up
         // also fails (no commands/gsd source tree), so a silent write failure
@@ -8932,11 +9018,11 @@ function install(isGlobal, runtime = 'claude', options = {}) {
         // Claude Code reads per-subagent `effort:` frontmatter (anthropics/claude-code #31536).
         // Injection is per-runtime at install time because the canonical source
         // agents/*.md must stay runtime-safe (no effort: key in source).
-        if (runtime === 'claude') {
+        if ((_hostBehaviors(runtime).agentFrontmatterExtensions || []).includes('effort')) {
           const _effortCfg = readGsdEffectiveEffortConfig(targetDir);
           const _agentName = entry.name.replace(/\.md$/, '');
           const _universalEffort = resolveInstallTimeEffort(_effortCfg, _agentName);
-          const _renderedEffort = _getGsdEffortCatalog().renderEffortForRuntime('claude', _universalEffort).value;
+          const _renderedEffort = _getGsdEffortCatalog().renderEffortForRuntime(runtime, _universalEffort).value;
           content = injectEffortFrontmatter(content, _renderedEffort);
           const _disallowedTools = READONLY_AGENT_DISALLOWED_TOOLS[_agentName];
           if (_disallowedTools) content = injectDisallowedToolsFrontmatter(content, _disallowedTools);
@@ -9219,7 +9305,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   reportLocalPatches(targetDir, runtime);
 
   // Verify no leaked .claude paths in non-Claude runtimes (manifest-scoped)
-  if (runtime !== 'claude') {
+  if (!_hostBehaviors(runtime).ownsClaudePaths) {
     const leakedPaths = [];
     // Only scan files that were written by this install (manifest-tracked).
     // Scanning the entire targetDir can match user-authored content that
@@ -9742,9 +9828,14 @@ function install(isGlobal, runtime = 'claude', options = {}) {
   // #338: local Claude installs write to settings.local.json (Claude Code's per-user/gitignored slot)
   // so engineer-specific absolute paths (Node binary, home dir) never land in the repo-shared
   // settings.json. Global installs and all other runtimes continue to use settings.json.
-  const isLocalClaude = (runtime === 'claude' && !isGlobal);
-  const settingsFileName = isLocalClaude ? 'settings.local.json' : 'settings.json';
-  const settingsPath = path.join(targetDir, settingsFileName);
+  const _scopedSettings = _hostBehaviors(runtime).settingsFileByScope || null;
+  const isLocalClaude = (!isGlobal && !!(_scopedSettings && _scopedSettings.local));
+  const settingsFileName = isLocalClaude
+    ? _scopedSettings.local
+    : ((_scopedSettings && _scopedSettings.global) || 'settings.json');
+  // ADR-1239 Phase B write-confinement: the descriptor-sourced settings filename
+  // must resolve under targetDir (this path also drives a recursive mkdirSync).
+  const settingsPath = assertDestWithinConfigHome(targetDir, settingsFileName);
 
   // #338 migration: if a prior local Claude install wrote GSD-shaped entries to settings.json,
   // relocate them to settings.local.json and clear them from the shared file in the same run.
@@ -10010,7 +10101,7 @@ function install(isGlobal, runtime = 'claude', options = {}) {
 /**
  * Apply statusline config, then print completion message
  */
-function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = 'claude', isGlobal = true, configDir = null, bannerOpts = {}) {
+function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = DEFAULT_RUNTIME, isGlobal = true, configDir = null, bannerOpts = {}) {
   const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
@@ -10069,7 +10160,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // Merges GSD-owned entries non-destructively (preserves existing user permissions).
   // Scoped to Claude only: antigravity/qwen/hermes/codebuddy also write
   // settings.json but use different runtimes and do not use these permission strings.
-  if (runtime === 'claude') {
+  if (_hostBehaviors(runtime).permissionsSchema === 'claude') {
     mergeClaudePermissions(settings);
   }
 
@@ -10102,7 +10193,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // chat model instead of pinning the resolved model. See #1156 (default-to-omit
   // intent) and #1569 (preserve explicit true). Guard matches the #130-class pattern
   // on configureOpencodePermissions above.
-  if (runtime !== 'claude' && !process.env.GSD_TEST_MODE) {
+  if (!_hostBehaviors(runtime).nativeModelAliases && !process.env.GSD_TEST_MODE) {
     const gsdDir = path.join(os.homedir(), '.gsd');
     const defaultsPath = path.join(gsdDir, 'defaults.json');
     try {
@@ -10144,7 +10235,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // Restart is required for CC to pick up newly-installed skills, and the
   // slash-menu surface depends on CC version — so the instruction needs to
   // cover both invocation paths to avoid #2957-style "no commands appear".
-  if (runtime === 'claude' && isGlobal) {
+  if (_hostBehaviors(runtime).skillsGlobalOnboarding && isGlobal) {
     console.log(`
   ${green}Done!${reset} Restart ${program}, then in any directory either type ${cyan}${command}${reset} or ask Claude to run the ${cyan}gsd-new-project${reset} skill.
 
@@ -10303,7 +10394,7 @@ function parseRuntimeInput(answer) {
     }
   }
 
-  return selected.length > 0 ? selected : ['claude'];
+  return selected.length > 0 ? selected : [DEFAULT_RUNTIME];
 }
 
 function promptRuntime(callback) {
@@ -10922,7 +11013,7 @@ function installAllRuntimes(runtimes, isGlobal, isInteractive) {
     throw error;
   }
 
-  const statuslineRuntimes = ['claude'];
+  const statuslineRuntimes = [DEFAULT_RUNTIME];
   const primaryStatuslineResult = results.find(r => statuslineRuntimes.includes(r.runtime));
 
   const finalize = (shouldInstallStatusline, shouldInstallBanner) => {
@@ -11038,6 +11129,9 @@ module.exports = {
     install,
     installAllRuntimes,
     uninstall,
+    // #2086 — host-behavior resolution + the #338 privacy fail-safe floor (exported for tests)
+    _resolveHostBehaviors,
+    FALLBACK_HOST_BEHAVIORS,
     convertSlashCommandsToCodexSkillMentions,
     convertClaudeCommandToCodexSkill,
     convertClaudeCommandToKimiSkill,
@@ -11206,7 +11300,7 @@ if (require.main === module && !process.env.GSD_TEST_MODE) {
       console.error(`  ${yellow}--uninstall requires --global or --local${reset}`);
       process.exit(1);
     }
-    const runtimes = selectedRuntimes.length > 0 ? selectedRuntimes : ['claude'];
+    const runtimes = selectedRuntimes.length > 0 ? selectedRuntimes : [DEFAULT_RUNTIME];
     for (const runtime of runtimes) {
       uninstall(hasGlobal, runtime);
     }
@@ -11218,12 +11312,12 @@ if (require.main === module && !process.env.GSD_TEST_MODE) {
     }
   } else if (hasGlobal || hasLocal) {
     // Default to Claude if no runtime specified but location is
-    installAllRuntimes(['claude'], hasGlobal, false);
+    installAllRuntimes([DEFAULT_RUNTIME], hasGlobal, false);
   } else {
     // Interactive
     if (!process.stdin.isTTY) {
       console.log(`  ${yellow}Non-interactive terminal detected, defaulting to Claude Code global install${reset}\n`);
-      installAllRuntimes(['claude'], true, false);
+      installAllRuntimes([DEFAULT_RUNTIME], true, false);
     } else {
       promptRuntime((runtimes) => {
         promptLocation(runtimes);

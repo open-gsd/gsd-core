@@ -453,6 +453,23 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "attributionSource": "settings-json-commit",
+        "authorsCanonicalWorkflow": true,
+        "localInstallStyle": "legacy-flat",
+        "permissionsSchema": "claude",
+        "settingsFileByScope": {
+          "local": "settings.local.json",
+          "global": "settings.json"
+        },
+        "sourceMarkerFile": ".gsd-source",
+        "agentFrontmatterExtensions": [
+          "effort"
+        ],
+        "ownsClaudePaths": true,
+        "nativeModelAliases": true,
+        "skillsGlobalOnboarding": true
       }
     }
   },
@@ -3877,6 +3894,23 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "attributionSource": "settings-json-commit",
+        "authorsCanonicalWorkflow": true,
+        "localInstallStyle": "legacy-flat",
+        "permissionsSchema": "claude",
+        "settingsFileByScope": {
+          "local": "settings.local.json",
+          "global": "settings.json"
+        },
+        "sourceMarkerFile": ".gsd-source",
+        "agentFrontmatterExtensions": [
+          "effort"
+        ],
+        "ownsClaudePaths": true,
+        "nativeModelAliases": true,
+        "skillsGlobalOnboarding": true
       }
     }
   },
