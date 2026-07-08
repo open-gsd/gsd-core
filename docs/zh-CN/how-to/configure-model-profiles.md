@@ -88,8 +88,9 @@ npx @opengsd/gsd-core@latest --codex --global   # or --opencode, --kilo, etc.
 | `planning` | `gsd-planner`、`gsd-roadmapper`、`gsd-pattern-mapper` |
 | `research` | `gsd-phase-researcher`、`gsd-project-researcher`、`gsd-research-synthesizer`、`gsd-codebase-mapper`、`gsd-ui-researcher` |
 | `execution` | `gsd-executor`、`gsd-debugger`、`gsd-doc-writer` |
-| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier` |
-| `discuss`、`completion` | 保留——目前无子代理；已被模式接受以备向后兼容 |
+| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier`、`gsd-code-reviewer` |
+| `discuss` | `gsd-assumptions-analyzer` |
+| `completion` | 保留——目前无子代理；已被模式接受以备向后兼容 |
 
 `models` 块仅接受层级别名（`opus`、`sonnet`、`haiku`、`inherit`）。如需使用完全限定的模型 ID，请改用按代理设置的 `model_overrides`。
 

@@ -2676,10 +2676,10 @@ capture_thought({
 | スロット | 割り当てられたエージェント |
 |---------|----------------------|
 | `planning` | `gsd-planner`、`gsd-roadmapper`、`gsd-pattern-mapper` |
-| `discuss` | （将来のサブエージェント用に予約） |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | `gsd-phase-researcher`、`gsd-project-researcher`、`gsd-research-synthesizer`、`gsd-codebase-mapper`、`gsd-ui-researcher` |
 | `execution` | `gsd-executor`、`gsd-debugger`、`gsd-doc-writer` |
-| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier` |
+| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier`、`gsd-code-reviewer` |
 | `completion` | （将来のサブエージェント用に予約） |
 
 **受け入れられる値:** `"opus"` / `"sonnet"` / `"haiku"` / `"inherit"`

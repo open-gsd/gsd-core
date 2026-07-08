@@ -2751,10 +2751,10 @@ Users who run a memory / knowledge-base MCP server (for example, ExoCortex-style
 | Slot | Agents assigned |
 |------|-----------------|
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
-| `discuss` | (reserved for future subagent) |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
 | `completion` | (reserved for future subagent) |
 
 **Accepted values:** `"opus"` / `"sonnet"` / `"haiku"` / `"inherit"`

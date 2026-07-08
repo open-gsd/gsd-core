@@ -88,8 +88,9 @@ npx @opengsd/gsd-core@latest --codex --global   # または --opencode、--kilo 
 | `planning` | `gsd-planner`、`gsd-roadmapper`、`gsd-pattern-mapper` |
 | `research` | `gsd-phase-researcher`、`gsd-project-researcher`、`gsd-research-synthesizer`、`gsd-codebase-mapper`、`gsd-ui-researcher` |
 | `execution` | `gsd-executor`、`gsd-debugger`、`gsd-doc-writer` |
-| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier` |
-| `discuss`、`completion` | 予約済み — 現在はサブエージェントなし。スキーマの前方互換性のために受け入れられます |
+| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier`、`gsd-code-reviewer` |
+| `discuss` | `gsd-assumptions-analyzer` |
+| `completion` | 予約済み — 現在はサブエージェントなし。スキーマの前方互換性のために受け入れられます |
 
 `models` ブロックはティアエイリアス（`opus`、`sonnet`、`haiku`、`inherit`）のみを受け入れます。特定のエージェントに完全修飾のモデル ID を指定するには `model_overrides` を使用してください。
 

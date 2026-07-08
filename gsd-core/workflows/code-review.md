@@ -22,6 +22,9 @@ PHASE_ARG="${1}"
 INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer)
+# #2072: resolve the routed model so model_overrides / models.verification are honored
+# (the resolver maps gsd-code-reviewer → phaseType "verification"); thread it below.
+REVIEWER_MODEL=$(gsd_run query resolve-model gsd-code-reviewer --raw)
 ```
 
 Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `padded_phase`, `commit_docs`.
@@ -482,7 +485,7 @@ Spawn the gsd-code-reviewer agent:
 Print: `◆ Spawning code reviewer... (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)`
 
 ```
-Agent(subagent_type="gsd-code-reviewer", prompt="
+Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", prompt="
 <files_to_read>
 ${FILES_TO_READ}
 </files_to_read>

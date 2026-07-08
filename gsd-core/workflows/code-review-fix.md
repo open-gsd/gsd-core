@@ -23,6 +23,10 @@ INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS_FIXER=$(gsd_run query agent-skills gsd-code-fixer)
 AGENT_SKILLS_REVIEWER=$(gsd_run query agent-skills gsd-code-reviewer)
+# #2072: resolve the routed models so model_overrides / models.<phaseType> are honored
+# (gsd-code-reviewer → "verification", gsd-code-fixer → "execution"); thread them below.
+REVIEWER_MODEL=$(gsd_run query resolve-model gsd-code-reviewer --raw)
+FIXER_MODEL=$(gsd_run query resolve-model gsd-code-fixer --raw)
 ```
 
 Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `padded_phase`, `commit_docs`.
@@ -194,7 +198,7 @@ echo "Fix scope: ${FIX_SCOPE}"
 Use Agent() to spawn agent:
 
 ```text
-Agent(subagent_type="gsd-code-fixer", prompt="
+Agent(subagent_type="gsd-code-fixer", model="{FIXER_MODEL}", prompt="
 <files_to_read>
 ${REVIEW_PATH}
 </files_to_read>
@@ -277,7 +281,7 @@ if [ "$AUTO_MODE" = "true" ]; then
     
     # Spawn gsd-code-reviewer agent to re-review (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
     # (This overwrites REVIEW_PATH with latest review state)
-    Agent(subagent_type="gsd-code-reviewer", prompt="
+    Agent(subagent_type="gsd-code-reviewer", model="{REVIEWER_MODEL}", prompt="
 <config>
 depth: ${REVIEW_DEPTH}
 phase_dir: ${PHASE_DIR}
@@ -311,7 +315,7 @@ ${AGENT_SKILLS_REVIEWER}")
     # Still has issues — spawn fixer again (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)
     echo "Issues remain. Applying fixes for iteration ${ITERATION}..."
     
-    Agent(subagent_type="gsd-code-fixer", prompt="
+    Agent(subagent_type="gsd-code-fixer", model="{FIXER_MODEL}", prompt="
 <files_to_read>
 ${REVIEW_PATH}
 </files_to_read>

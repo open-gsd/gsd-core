@@ -1114,10 +1114,10 @@ for the change to take effect. See issue #2256.
 | Phase type | Agents |
 |---|---|
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
-| `discuss` | (reserved — no subagent today) |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
 | `completion` | (reserved — no subagent today) |
 
 `discuss` and `completion` are accepted by the schema for forward compatibility; setting them today is a no-op until a subagent maps to them.

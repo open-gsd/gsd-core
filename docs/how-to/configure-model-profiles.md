@@ -90,8 +90,9 @@ Phase types and their agents:
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
-| `discuss`, `completion` | Reserved — no subagent today; accepted by schema for forward compatibility |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
+| `discuss` | `gsd-assumptions-analyzer` |
+| `completion` | Reserved — no subagent today; accepted by schema for forward compatibility |
 
 The `models` block accepts tier aliases only (`opus`, `sonnet`, `haiku`, `inherit`). For a fully-qualified model ID, use `model_overrides` per agent instead.
 
