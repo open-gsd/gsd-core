@@ -18,6 +18,14 @@ import { execGit as execGitSeam, posixNormalize } from './shell-command-projecti
 // remote, stalled NFS mount, etc.).  Callers can override via deps.timeout.
 const DEFAULT_GIT_TIMEOUT_MS = 10000;
 
+// Canonical per-agent worktree branch namespace (#1995, #2924): the current
+// Claude Code `agent-<id>` isolation branches plus the legacy
+// `worktree-agent-<id>` form are both accepted. Single source of truth for the
+// CLI-lib tree — edit here to change the namespace. (The hooks tree keeps its
+// own mirror in hooks/lib/agent-namespace.js; the two runtime trees share no
+// module reachable at runtime, so keep them in sync.)
+const AGENT_NAMESPACE_BRANCH_RE = /^(worktree-)?agent-[A-Za-z0-9._/-]+$/;
+
 interface GitResult {
   exitCode: number;
   stdout: string;
@@ -432,7 +440,7 @@ function normalizeCleanupManifestEntry(entry: unknown): CleanupManifestEntry | n
   // the legacy `worktree-agent-<id>` namespace (#1995). Claude Code renamed its
   // `isolation="worktree"` branches from `worktree-agent-<id>` to `agent-<id>`;
   // the old anchored regex silently dropped every current entry.
-  if (!/^(worktree-)?agent-[A-Za-z0-9._/-]+$/.test(branch)) return null;
+  if (!AGENT_NAMESPACE_BRANCH_RE.test(branch)) return null;
   const rawAllowedBases = Array.isArray(e.allowed_bases) ? e.allowed_bases : [];
   const allowedBases = Array.from(new Set(
     [expectedBase, ...rawAllowedBases.filter((base): base is string => typeof base === 'string' && base.length > 0)]
@@ -943,7 +951,7 @@ function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields)
     return {
       ok: false,
       reason: 'invalid_entry',
-      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^(worktree-)?agent-[A-Za-z0-9._/-]+$ (got branch="${branch}"). Fix the field and re-run.`,
+      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ${AGENT_NAMESPACE_BRANCH_RE.source} (got branch="${branch}"). Fix the field and re-run.`,
       entry: null,
       manifest: null,
     };

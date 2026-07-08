@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { AGENT_NAMESPACE_BRANCH_RE } = require('./lib/agent-namespace.js');
 
 const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, windowsHide: true };
 
@@ -79,7 +80,7 @@ process.stdin.on('end', () => {
     // so the guard must be a no-op there. Detached HEAD / error → not GSD-managed → no-op.
     const branchResult = git(['symbolic-ref', '--short', 'HEAD'], cwd);
     const branch = branchResult.status === 0 && branchResult.stdout ? branchResult.stdout.trim() : '';
-    if (!/^(worktree-)?agent-[A-Za-z0-9._/-]+$/.test(branch)) {
+    if (!AGENT_NAMESPACE_BRANCH_RE.test(branch)) {
       process.exit(0); // not a GSD-managed executor worktree — no-op
     }
 

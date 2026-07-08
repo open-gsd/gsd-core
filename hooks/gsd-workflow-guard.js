@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { tokenize } = require('./lib/git-cmd.js');
+const { AGENT_NAMESPACE_PREFIX_RE } = require('./lib/agent-namespace.js');
 
 function forceGitAddCwds(command, defaultCwd) {
   const tokens = tokenize(command || '');
@@ -98,8 +99,9 @@ process.stdin.on('end', () => {
       for (const gitCwd of forceGitAddCwds(command, cwd)) {
         const branch = currentBranch(gitCwd);
         // #1995: match both the current `agent-<id>` and legacy `worktree-agent-<id>`
-        // Claude Code isolation namespaces.
-        if (/^(worktree-)?agent-/.test(branch)) {
+        // Claude Code isolation namespaces. Prefix-only on purpose — see
+        // lib/agent-namespace.js.
+        if (AGENT_NAMESPACE_PREFIX_RE.test(branch)) {
           process.stdout.write(JSON.stringify({
             decision: 'block',
             code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN',
