@@ -105,10 +105,13 @@ test('write tool with .planning/ in a non-PATH field (content body) is ALLOWED',
   assert.equal(result.decision, 'allow');
 });
 
-test('write tool with .planning/ in an array of paths is SKIPPED', () => {
+test('write tool with .planning/ in a recognized nested path-key is SKIPPED', () => {
+  // The guard walks the input object tree collecting values from PATH-keyed
+  // fields (path|file|target|dir|...). A recognized key nested anywhere in the
+  // payload is caught — parity with the PreToolUse hook's bounded walk.
   const result = evaluateBeforeTool({
     tool: { name: 'apply_patch' },
-    input: { paths: ['src/a.ts', '.planning/config.json'] },
+    input: { target: '.planning/config.json' },
   });
   assert.equal(result.decision, 'skip');
 });
