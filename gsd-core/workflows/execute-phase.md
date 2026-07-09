@@ -1056,15 +1056,13 @@ AUTO_MODE=$(gsd_run query check auto-mode --pick active 2>/dev/null || echo "fal
 ```
 
 When executor returns a checkpoint AND `AUTO_MODE` is `true`:
-- **human-verify** → Auto-spawn continuation agent with `{user_response}` = `"approved"`. Log `⚡ Auto-approved checkpoint`. **Except `gate="blocking-human"`** — see the carve-out below.
-- **decision** → Auto-spawn continuation agent with `{user_response}` = first option from checkpoint details. Log `⚡ Auto-selected: [option]`. **Except `gate="blocking-human"`** — see the carve-out below.
+- **human-verify** → Auto-spawn continuation agent with `{user_response}` = `"approved"`. Log `⚡ Auto-approved checkpoint`. **Except `blocking-human`.**
+- **decision** → Auto-spawn continuation agent with `{user_response}` = first option from checkpoint details. Log `⚡ Auto-selected: [option]`. **Except `blocking-human`.**
 - **human-action** → Present to user (existing behavior below). Auth gates cannot be automated.
 
-**`gate="blocking-human"` carve-out (overrides every branch above).** If the returned checkpoint task carries `gate="blocking-human"`, OR its `<what-built>` indicates package-legitimacy verification (mentions `Package verification required before install` or `Package install failed — human verification required`), then **do not auto-approve and do not auto-select** regardless of checkpoint type. Present to user via the standard flow below. Log `⛔ blocking-human gate — auto-mode suspended for this checkpoint`.
+**Carve-out — overrides all branches above.** If the checkpoint carries `gate="blocking-human"`, or its `<what-built>` mentions `Package verification required before install` or `Package install failed — human verification required`, never auto-approve or auto-select, regardless of type. Present to user (standard flow below). Log `⛔ blocking-human gate — auto-mode suspended`.
 
-`gsd-executor` refuses to auto-approve these checkpoints and escalates them precisely so a human sees them (`agents/gsd-executor.md`: "Use `gate=\"blocking-human\"` for package-legitimacy checkpoints so they are unambiguously excluded from auto-approval behavior"). Auto-approving here would nullify that refusal one layer up and let an unattended `--auto` / `--chain` run install a package no human ever vetted.
-
-**Standard flow (not auto-mode, `human-action` type, or a `blocking-human` gate):**
+**Standard flow (not auto-mode, human-action, or blocking-human):**
 
 1. Spawn agent for checkpoint plan
 2. Agent runs until checkpoint task or auth gate → returns structured state

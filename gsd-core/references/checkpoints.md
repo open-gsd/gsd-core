@@ -19,6 +19,8 @@ Plans execute autonomously. Checkpoints formalize interaction points where human
 | `gate="blocking-human"` | **Never bypassed.** Stops for a human in auto-mode too. | Irreversible or trust-establishing steps a human must actually see: package-legitimacy verification before install, and any decision whose default answer would be wrong to assume. |
 
 Reach for `gate="blocking-human"` whenever auto-approving the checkpoint would defeat its purpose. If the checkpoint exists because a human must *decide* something, `blocking` is the wrong gate — auto-mode will decide it for them.
+
+The gate spans two layers, and both must honor it. `gsd-executor` refuses to auto-approve a `gate="blocking-human"` checkpoint and escalates it via `checkpoint_return_format` precisely so a human sees it; `execute-phase`'s `checkpoint_handling` step then decides what the user is actually shown. An orchestrator that dispatches on checkpoint *type* alone would auto-approve the very checkpoint the executor just refused to auto-approve, nullifying that refusal one layer up and letting an unattended `--auto` / `--chain` run install a package no human ever vetted.
 </overview>
 
 <checkpoint_types>
