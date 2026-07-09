@@ -2507,7 +2507,7 @@ function rewriteStagedSkillBodies(stagedDir, opts) {
   const resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
   const homeDir = homedir().replace(/\\/g, '/');
   const isGlobal = scope === 'global';
-  const isOpencode = runtime === 'opencode';
+  const isOpencode = false;  // #2087: opencode installs via the combined-family engine path, never through the generic rewrite
   const isWindowsHost = platform === 'win32';
   const pathPrefix = computePathPrefix({ isGlobal, isOpencode, isWindowsHost, resolvedTarget, homeDir });
   const attribution = resolveAttribution ? resolveAttribution(runtime) : undefined;
@@ -2543,7 +2543,7 @@ function rewriteStagedCommandBodies(stagedDir, opts) {
   const resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
   const homeDir = homedir().replace(/\\/g, '/');
   const isGlobal = scope === 'global';
-  const isOpencode = runtime === 'opencode';
+  const isOpencode = false;  // #2087: opencode installs via the combined-family engine path, never through the generic rewrite
   const isWindowsHost = platform === 'win32';
   const pathPrefix = computePathPrefix({ isGlobal, isOpencode, isWindowsHost, resolvedTarget, homeDir });
   const attribution = resolveAttribution ? resolveAttribution(runtime) : undefined;
@@ -2672,6 +2672,11 @@ export = {
   neutralizeAgentReferences,
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,
+  // #2087 — opencode/kilo command-frontmatter converters, exported so the
+  // layout-driven `convertedCommandsKind` can resolve them by name (routes the
+  // opencode/kilo command install through the engine instead of the bespoke path).
+  convertClaudeToOpencodeFrontmatter,
+  convertClaudeToKiloFrontmatter,
   readGsdCommandNames,
   transformContentToHyphen,
   // #1383: version resolver (exported for regression test of the Codex

@@ -88,6 +88,14 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "bun"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "/gsd-update --reapply",
+      "attributionConfigResolver": "kilo",
+      "flatCommandDir": "command",
+      "combinedFamilyInstall": true,
+      "frontmatterDialect": "kilo",
+      "skipUpdateBannerCommand": true
     }
   }
 }
