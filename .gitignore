@@ -69,6 +69,7 @@ build/
 /tsconfig.build.tsbuildinfo
 /gsd-core/bin/lib/host-integration.cjs
 /gsd-core/bin/lib/host-integration-sdk.cjs
+/gsd-core/bin/lib/host-integration-adapters/imperative-hook-bus.cjs
 /gsd-core/bin/lib/handshake-serialized.cjs
 /gsd-core/bin/lib/install-effort-resolver.cjs
 /gsd-core/bin/lib/install-engine.cjs

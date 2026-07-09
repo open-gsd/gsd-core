@@ -66,7 +66,7 @@ test('cursor descriptor declares all 8 axes + 6 dispatch sub-axes (no undocument
   assert.equal(d.backgroundDispatch, true);
 });
 
-// -- AC4b: the Context3-verified dispatch UPGRADE (named/background nested) ---
+// -- AC4b: the Context7-verified dispatch UPGRADE (named/background nested) ---
 
 test('cursor descriptor declares background dispatch true/true + nested + maxDepth 2', () => {
   assert.equal(CUR_AXES.dispatch.background, true);
