@@ -1059,6 +1059,23 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+        "frontmatterDialect": "cursor",
+        "hooksJsonSurface": true,
+        "skipSharedHooksInstall": true,
+        "reportCommandsDir": true,
+        "skipUpdateBannerCommand": true,
+        "skipSettingsUi": true,
+        "managedHookEvents": [
+          "sessionStart",
+          "postToolUse",
+          "preToolUse",
+          "stop",
+          "subagentStart",
+          "subagentStop"
+        ]
       }
     }
   },
@@ -4392,6 +4409,23 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+        "frontmatterDialect": "cursor",
+        "hooksJsonSurface": true,
+        "skipSharedHooksInstall": true,
+        "reportCommandsDir": true,
+        "skipUpdateBannerCommand": true,
+        "skipSettingsUi": true,
+        "managedHookEvents": [
+          "sessionStart",
+          "postToolUse",
+          "preToolUse",
+          "stop",
+          "subagentStart",
+          "subagentStop"
+        ]
       }
     }
   },
