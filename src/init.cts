@@ -37,7 +37,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
 import commandsMod = require('./commands.cjs');
 import { validatePath, loadTrustedGlobalRoots } from './security.cjs';
-import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase } from './runtime-homes.cjs';
+import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
@@ -2372,10 +2372,23 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
           kind: 'skills',
         },
         {
-          root: '~/.codex/skills',
+          // ADR-1239 upgrade 3 (#2088): Codex's canonical skill root is
+          // $HOME/.agents/skills (per codex core-skills loader.rs), resolved via
+          // the skills-kind `home` override in getGlobalSkillsBase.
+          root: '~/.agents/skills',
           path: getGlobalSkillsBase('codex') as string,
           scope: 'global',
           kind: 'skills',
+        },
+        {
+          // Codex's deprecated fallback skill root ($CODEX_HOME/skills). Kept as a
+          // discovery-only legacy root so pre-move installs remain inventoried;
+          // GSD no longer installs here (#2088).
+          root: '~/.codex/skills',
+          path: path.join(getGlobalConfigDir('codex'), 'skills'),
+          scope: 'global',
+          kind: 'skills',
+          deprecated: true,
         },
         {
           root: '.claude/gsd-core/skills',

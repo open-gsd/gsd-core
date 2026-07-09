@@ -9957,7 +9957,9 @@ function readWorkflow() {
 describe('install.js --skills-root', () => {
   const CASES = [
     { runtime: 'claude', expected: path.join(os.homedir(), '.claude', 'skills') },
-    { runtime: 'codex', expected: path.join(os.homedir(), '.codex', 'skills') },
+    // #2088 (ADR-1239 upgrade 3): Codex skills resolve to the canonical
+    // $HOME/.agents/skills root (skills-kind home override), not $CODEX_HOME/skills.
+    { runtime: 'codex', expected: path.join(os.homedir(), '.agents', 'skills') },
     { runtime: 'copilot', expected: path.join(os.homedir(), '.copilot', 'skills') },
     { runtime: 'cursor', expected: path.join(os.homedir(), '.cursor', 'skills') },
     { runtime: 'trae', expected: path.join(os.homedir(), '.trae', 'skills') },
@@ -10182,10 +10184,15 @@ const INSTALL = path.join(__dirname, '..', 'bin', 'install.js');
  */
 function installAndRead(runtime) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-inst-${runtime}-`));
+  // Sandbox HOME/USERPROFILE to `dir`: Codex's skills-kind `home: ".agents"`
+  // override (ADR-1239 upgrade 3, #2088) resolves via os.homedir(), so an
+  // unsandboxed real install here would write a full (non-minimal) gsd-* skill
+  // set into the developer/CI machine's real $HOME/.agents/skills. Harmless
+  // no-op for cursor/claude, which have no skills-kind home override.
   const res = spawnSync(
     process.execPath,
     [INSTALL, `--${runtime}`, '--global', '--config-dir', dir],
-    { encoding: 'utf8', timeout: 120000 },
+    { encoding: 'utf8', timeout: 120000, env: { ...process.env, HOME: dir, USERPROFILE: dir } },
   );
   assert.strictEqual(res.status, 0, `install --${runtime} failed: ${res.stderr || res.stdout}`);
   const wf = path.join(dir, 'gsd-core', 'workflows', 'execute-phase.md');

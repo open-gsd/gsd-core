@@ -111,7 +111,7 @@ function createRuntimeArtifactInstallPlan(args) {
         items.push({
             kind: kind.kind,
             sourceDir,
-            destDir: assertDestWithinConfigHome(layout.configDir, kind.destSubpath),
+            destDir: assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath),
         });
     }
     return { ok: true, plan: { items, cleanupDirs } };
@@ -120,7 +120,7 @@ function createRuntimeArtifactUninstallPlan(layout) {
     return {
         items: layout.kinds.map((kind) => ({
             kind: kind.kind,
-            destDir: assertDestWithinConfigHome(layout.configDir, kind.destSubpath),
+            destDir: assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath),
         })),
     };
 }
