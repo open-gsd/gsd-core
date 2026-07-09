@@ -63,6 +63,31 @@ const {
   collectSkillBasenamesOnDisk,
 } = require('./helpers/install-shared.cjs');
 
+/**
+ * collectSkillBasenamesOnDisk(configDir, runtime, scope) re-resolves the
+ * runtime's skills-kind layout via os.homedir(). runMinimalInstall() already
+ * sandboxes HOME/USERPROFILE to `root` for the spawned install subprocess,
+ * but that sandboxing does not persist into this (parent) process — without
+ * re-sandboxing here, Codex's skills-kind `home: ".agents"` override
+ * (ADR-1239 upgrade 3, #2088) would resolve against the developer's REAL
+ * $HOME/.agents/skills instead of the sandboxed install root. Sandbox
+ * HOME/USERPROFILE to `root` for the synchronous duration of the on-disk scan.
+ */
+function collectSkillBasenamesOnDiskSandboxed(configDir, runtime, scope, root) {
+  const savedHome = process.env.HOME;
+  const savedUserProfile = process.env.USERPROFILE;
+  process.env.HOME = root;
+  process.env.USERPROFILE = root;
+  try {
+    return collectSkillBasenamesOnDisk(configDir, runtime, scope);
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  }
+}
+
 // ─── Section 9: install-profiles — MINIMAL_SKILL_ALLOWLIST ───────────────────
 
 describe('install-profiles: MINIMAL_SKILL_ALLOWLIST', () => {
@@ -391,7 +416,7 @@ describe('install: on-disk skill files match manifest for --minimal', () => {
         });
         try {
           assert.ok(manifest);
-          const onDisk = collectSkillBasenamesOnDisk(configDir);
+          const onDisk = collectSkillBasenamesOnDiskSandboxed(configDir, runtime, scope, root);
           const inManifest = manifestSkillSet(manifest);
           assert.deepStrictEqual([...onDisk].sort(), [...inManifest].sort());
           // Not the shared listAgentFiles() helper: asserts on the INSTALLED
@@ -542,10 +567,15 @@ describe('install: Codex full → minimal downgrade cleans stale agent state', (
       ].join('\n');
       fs.writeFileSync(path.join(targetDir, 'config.toml'), codexConfig);
 
+      // Sandbox HOME/USERPROFILE to targetDir: Codex's skills-kind `home: ".agents"`
+      // override (ADR-1239 upgrade 3, #2088) resolves via os.homedir(), so an
+      // unsandboxed spawn here would write gsd-* skill dirs into the developer's
+      // real $HOME/.agents/skills. This test only asserts on agents/ and
+      // config.toml (both under targetDir), so the sandbox has no effect on intent.
       const result = spawnSync(
         process.execPath,
         [INSTALL_SCRIPT, '--codex', '--global', '--config-dir', targetDir, '--minimal'],
-        { encoding: 'utf8', env: installerEnv() },
+        { encoding: 'utf8', env: installerEnv({ HOME: targetDir, USERPROFILE: targetDir }) },
       );
       assert.ok(result.stdout || result.stderr);
 

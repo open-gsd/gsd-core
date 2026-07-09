@@ -101,6 +101,12 @@ Sources consulted:
 | dispatch.subagentToolkit | full | https://developers.openai.com/codex/multi-agent | "Subagents inherit the sandbox policy and tool surface from the parent session." |
 | dispatch.backgroundDispatch | true | https://github.com/openai/codex/blob/main/codex-rs/core/templates/collab/experimental_prompt.md | "Sub-agents have access to the same set of tools as you do so you must tell them if they are allowed to spawn sub-agents themselves or not." The config (codex-rs/config/src/config_toml.rs) exposes an |
 
+**GSD integration status — Phase D dogfood complete (#2088, ADR-1239).** Codex installs through the `declarative` embedding adapter (`createDeclarativeAdapter` → `installRuntimeArtifacts`); the hardcoded `runtime === 'codex'`/`isCodex` projection is folded into descriptor-driven `runtime.hostBehaviors`, and install/uninstall output is byte-parity-gated (`tests/fixtures/golden-install-parity/codex.json`). Three capability upgrades land, each with a test driving the user-reachable surface:
+
+- **Skill root** — skills install to the canonical `$HOME/.agents/skills` (Codex core-skills `loader.rs` user-scope root), not the deprecated `$CODEX_HOME/skills` fallback. Declared via the skills-kind `home: ".agents"` override; pre-move installs are migrated (stale `~/.codex/skills/gsd-*` cleaned on both install and uninstall).
+- **Hook events** — GSD registers all documented `hooks.json` lifecycle events beyond `SessionStart`: `SubagentStart`, `Stop`, `PostToolUse` (#772), plus the six added in #2088 — `PreToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact`, `SubagentStop`, `UserPromptSubmit` — all routed through `gsd-context-monitor.js`. (The descriptor `extendedHookEvents` field reflects the schema-valid cross-runtime subset `SubagentStop`/`Stop`/`PreCompact`; Codex's full event set is codex-hooks-json-native, registered directly in `hooks.json`.)
+- **Dispatch tuning** — `[agents] max_depth = 1` is written explicitly into the managed `config.toml` block, pinning the `dispatch.maxDepth: 1` axis instead of relying on codex-cli's implicit default. Because `maxDepth === 1`, `degradationFor` flattens GSD-hosted wave dispatch to single-level even though `dispatch.nested`/`background`/`backgroundDispatch` are all `true`. The block is a bare `[agents]` AgentsToml scalar table (coexisting with the flattened `[agents.gsd-*]` role sub-tables); `validateCodexConfigSchema` permits a known-scalar-only `[agents]` while still rejecting `[[agents]]` and unknown-key forms.
+
 Sources consulted:
 - https://github.com/openai/codex (repo via gh CLI)
 - /openai/codex (Context7 library ID)
@@ -134,9 +140,9 @@ Documentation gaps:
 | dispatch.namedDispatch | true | https://opencode.ai/docs/agents | "\"Subagents can be invoked: Automatically by primary agents for specialized tasks based on their descriptions. Manually b" |
 | dispatch.nested | undocumented | no authoritative doc — searched: https://opencode.ai/docs/agents | — |
 | dispatch.maxDepth | undocumented | no authoritative doc — searched: https://opencode.ai/docs/agents | — |
-| dispatch.background | false | https://github.com/sst/opencode/issues/5887 | "\"Currently, sub-agent delegation in `opencode` appears to be synchronous or modal... There is no native 'fire-and-forget'" |
+| dispatch.background | true | https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/task.ts (v1.15.0, commit 22de34c4d) + src/effect/runtime-flags.ts (v1.17, commit 81f6e0668) | "New in v1.15.0: experimental background subagents — the Task tool gains a `background` parameter (`Schema.optional(Schema.Boolean)`) that launches subagents asynchronously with completion notifications. v1.17: `BACKGROUND_SUBAGENTS_ENABLED = true` (\"feat: enable background subagents by default\") — default-on, concurrent execution in all modes. (#2087, superseding the stale sst/opencode#5887 snapshot)" |
 | dispatch.subagentToolkit | full | https://opencode.ai/docs/agents | "The 'general' subagent \"Has full tool access (except todo), so it can make file changes when needed.\"" |
-| dispatch.backgroundDispatch | undocumented | no authoritative doc — https://github.com/anomalyco/opencode/issues/18100 and https://github.com/anomalyco/opencode/blob/dev/opencode/packages/opencode/src/tool/task.ts | Opencode supports background task dispatch via the Task tool's `background: true` parameter but whether a background-spawned agent can itself spawn further sub-agents is not documented. |
+| dispatch.backgroundDispatch | true | https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/effect/runtime-flags.ts (v1.17, commit 81f6e0668) + src/server/routes/instance/httpapi/handlers/experimental.ts | "v1.17 `BACKGROUND_SUBAGENTS_ENABLED = true` enables background subagent execution by default in all modes; the experimental capabilities endpoint exposes `{ backgroundSubagents: true }`. Background-spawned subagents run concurrently without blocking the main interaction flow. (#2087)" |
 
 Sources consulted:
 - https://opencode.ai/docs/plugins
@@ -180,6 +186,11 @@ Sources consulted:
 - https://cursor.com/docs/reference/sandbox
 - https://cursor.com/docs/enterprise/llm-safety-and-controls
 - /websites/cursor (Context7)
+
+**GSD integration status — Phase D dogfood complete (#2089, ADR-1239).** Cursor installs through the `imperative` embedding adapter (`createImperativeAdapter` → `installRuntimeArtifacts`); the hardcoded `runtime === 'cursor'` / `isCursor` projection is folded into descriptor-driven `runtime.hostBehaviors`, and install/uninstall output is byte-parity-gated (`tests/fixtures/golden-install-parity/cursor.json`). Two capability upgrades land, each with a test driving the user-reachable surface:
+
+- **Expanded hook-bus coverage** — GSD registers all 6 managed lifecycle events in `hooks.json` beyond the original `sessionStart`/`postToolUse`: `preToolUse`, `stop`, `subagentStart`, `subagentStop` (AC4a, cite https://cursor.com/docs/hooks). The hook-bus binding is descriptor-driven via `src/host-integration-adapters/imperative-hook-bus.cts` (reads `hostBehaviors.managedHookEvents`), not a hardcoded event pair.
+- **Named/background nested subagent dispatch** — `dispatch.background`/`backgroundDispatch`/`nested` are all `true` with `maxDepth: 2`; `shouldFlattenDispatch(cursor)` returns `false` so GSD's wave-based execution drives Cursor's native background + depth-2 nested subagent dispatch instead of flattening to inline sequential calls (AC4b, cite https://cursor.com/docs/subagents + https://cursor.com/docs/sdk/typescript).
 
 ---
 

@@ -82,6 +82,9 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "undocumented"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "/gsd-update --reapply"
     }
   }
 }

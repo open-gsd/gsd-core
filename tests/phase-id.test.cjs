@@ -22,6 +22,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+const fc = require('fast-check');
 
 // ─── escapeRegex ─────────────────────────────────────────────────────────────
 
@@ -448,5 +449,171 @@ describe('getPhaseDirFromPhaseId', () => {
     assert.ok(result !== null);
     assert.ok(!result.startsWith('-'));
     assert.ok(!result.endsWith('-'));
+  });
+});
+
+// ─── parsePhaseFromProse (#2121, anchored — fixes #2111) ─────────────────────
+
+describe('parsePhaseFromProse', () => {
+  test('null / empty input yields null phase and name', () => {
+    assert.deepEqual(phaseId.parsePhaseFromProse(null), { phase: null, name: null });
+    assert.deepEqual(phaseId.parsePhaseFromProse(''), { phase: null, name: null });
+  });
+
+  test('#2111: a milestone-completion string carries no phase', () => {
+    assert.equal(phaseId.parsePhaseFromProse('Milestone v0.5 complete').phase, null);
+    assert.equal(phaseId.parsePhaseFromProse('Milestone v1.0 complete').phase, null);
+    assert.equal(phaseId.parsePhaseFromProse('Milestone v2.10 complete').phase, null);
+  });
+
+  test('#2111: a bare version token or stray numeral is not a phase', () => {
+    assert.equal(phaseId.parsePhaseFromProse('v0.5').phase, null);
+    assert.equal(phaseId.parsePhaseFromProse('v1.0').phase, null);
+    assert.equal(phaseId.parsePhaseFromProse('Fixed 12 bugs in v2.3').phase, null);
+  });
+
+  test('a genuine phase value (starting with the token) is parsed', () => {
+    assert.deepEqual(phaseId.parsePhaseFromProse('3 of 4 (Delta)'), { phase: '3', name: 'Delta' });
+    assert.deepEqual(phaseId.parsePhaseFromProse('3A — Delta'), { phase: '3A', name: 'Delta' });
+    assert.equal(phaseId.parsePhaseFromProse('12.1: Setup').phase, '12.1');
+    assert.equal(phaseId.parsePhaseFromProse('29 of 30').phase, '29');
+    assert.equal(phaseId.parsePhaseFromProse('029').phase, '029');
+  });
+
+  test('a leading project-code prefix is tolerated but not captured (bare token)', () => {
+    assert.equal(phaseId.parsePhaseFromProse('MEM-01 — Foo').phase, '01');
+    assert.equal(phaseId.parsePhaseFromProse('AB-29 of 30').phase, '29');
+  });
+
+  test('an optional leading "Phase" label is tolerated', () => {
+    assert.equal(phaseId.parsePhaseFromProse('Phase 3A — Delta').phase, '3A');
+  });
+
+  test('a status-word parenthetical is filtered from the name (preserved behavior)', () => {
+    // parenName wins over the em-dash tail; "executing" is a status word → name null.
+    assert.deepEqual(phaseId.parsePhaseFromProse('3A — Delta (executing)'), { phase: '3A', name: null });
+    assert.equal(phaseId.parsePhaseFromProse('3 (complete)').name, null);
+  });
+
+  test('#2124 review: name quantifiers are length-bounded (ReDoS guard)', () => {
+    // A parenthetical within the bound extracts; one longer than the bound is
+    // NOT matched — the cap is what prevents O(n^2) backtracking on a crafted
+    // untrusted value. Removing the bound would extract the long name → fail.
+    assert.equal(phaseId.parsePhaseFromProse('3 (Delta)').name, 'Delta');
+    assert.equal(phaseId.parsePhaseFromProse(`3 (${'x'.repeat(201)})`).name, null);
+    // A long unterminated "(" run yields no name and still parses the phase.
+    assert.deepEqual(phaseId.parsePhaseFromProse(`3 ${'('.repeat(5000)}`), { phase: '3', name: null });
+  });
+
+  test('#2124 review: non-string input is coerced, never throws', () => {
+    assert.doesNotThrow(() => phaseId.parsePhaseFromProse(3));
+    assert.equal(phaseId.parsePhaseFromProse(3).phase, '3');
+    assert.deepEqual(phaseId.parsePhaseFromProse(true), { phase: null, name: null });
+  });
+});
+
+// ─── stripConfiguredProjectCodePrefix (#2121 / #2104, config-aware) ───────────
+
+describe('stripConfiguredProjectCodePrefix', () => {
+  test('#2104: a foreign prefix is preserved (not collapsed to a bare phase)', () => {
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('MEM-01', 'LKML'), 'MEM-01');
+  });
+
+  test('the configured prefix is stripped (case-insensitive)', () => {
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('CK-01', 'CK'), '01');
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('LKML-29', 'lkml'), '29');
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('AB-29', 'AB'), '29');
+  });
+
+  test('a value with no prefix is returned unchanged', () => {
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('01', 'CK'), '01');
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('029', 'CK'), '029');
+  });
+
+  test('an absent/empty projectCode preserves the value verbatim', () => {
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('MEM-01', ''), 'MEM-01');
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('MEM-01', null), 'MEM-01');
+    assert.equal(phaseId.stripConfiguredProjectCodePrefix('MEM-01', undefined), 'MEM-01');
+  });
+});
+
+// ─── isForeignPrefixedPhaseQuery (#2121 / #2056) ─────────────────────────────
+
+describe('isForeignPrefixedPhaseQuery', () => {
+  test('a prefix that is not the configured code is foreign', () => {
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('MEM-01', 'LKML'), true);
+  });
+
+  test('the configured prefix is not foreign (case-insensitive)', () => {
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('CK-01', 'CK'), false);
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('ck-01', 'CK'), false);
+  });
+
+  test('a value with no prefix is never foreign', () => {
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('01', 'CK'), false);
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('29', 'AB'), false);
+  });
+
+  test('a prefixed query with no configured code is foreign; a bare one is not', () => {
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('MEM-01', ''), true);
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('MEM-01', null), true);
+    assert.equal(phaseId.isForeignPrefixedPhaseQuery('01', ''), false);
+  });
+});
+
+// ─── roadmapPhaseLookupSources (#2121, owned here after the move) ─────────────
+
+describe('roadmapPhaseLookupSources', () => {
+  const PREFIX_TOLERANT = `${phaseId.OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}0*29`;
+
+  test('a bare numeric query yields the numeric then prefix-tolerant sources', () => {
+    const sources = phaseId.roadmapPhaseLookupSources('29');
+    assert.deepEqual(sources, ['0*29', PREFIX_TOLERANT]);
+  });
+
+  test('the bare numeric source precedes the prefix-tolerant fallback', () => {
+    const sources = phaseId.roadmapPhaseLookupSources('29');
+    assert.ok(sources.indexOf('0*29') < sources.indexOf(PREFIX_TOLERANT));
+  });
+
+  test('a project-code-prefixed query adds the exact source first (3 sources)', () => {
+    const sources = phaseId.roadmapPhaseLookupSources('AB-29');
+    assert.equal(sources.length, 3);
+    assert.equal(sources[0], 'AB-29');
+    assert.ok(sources.includes('0*29'));
+    assert.ok(sources.includes(PREFIX_TOLERANT));
+  });
+
+  test('zero-padding is tolerated: 029 resolves the same sources as 29', () => {
+    assert.deepEqual(phaseId.roadmapPhaseLookupSources('029'), phaseId.roadmapPhaseLookupSources('29'));
+  });
+
+  test('sources are deduplicated', () => {
+    const sources = phaseId.roadmapPhaseLookupSources('29');
+    assert.equal(sources.length, new Set(sources).size);
+  });
+});
+
+// ─── #2121 property tests (fast-check) ───────────────────────────────────────
+
+describe('phase-id canonical surface — properties', () => {
+  test('#2111 invariant: a "Milestone vX.Y complete" string never yields a phase', () => {
+    fc.assert(
+      fc.property(fc.nat(999), fc.nat(999), (major, minor) => {
+        return phaseId.parsePhaseFromProse(`Milestone v${major}.${minor} complete`).phase === null;
+      }),
+    );
+  });
+
+  test('parse↔normalize: a "N of M" prose value extracts N, and it normalizes stably', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 9999 }), fc.integer({ min: 1, max: 9999 }), (n, m) => {
+        const parsed = phaseId.parsePhaseFromProse(`${n} of ${m}`);
+        return (
+          parsed.phase === String(n) &&
+          phaseId.normalizePhaseName(parsed.phase) === phaseId.normalizePhaseName(String(n))
+        );
+      }),
+    );
   });
 });

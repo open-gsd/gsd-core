@@ -171,36 +171,71 @@ const path = require('node:path');
 const reviewPath = path.resolve(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
 const read = () => fs.readFileSync(reviewPath, 'utf-8');
 
-describe('bug #687: agy print mode must be bounded via its native --print-timeout', () => {
-  test('invokes agy with its own --print-timeout flag (not an external killer)', () => {
-    assert.match(read(), /agy --print-timeout \d+s? -p "\$\(cat/,
-      'review.md must cap agy through `agy --print-timeout <N> -p …` (the tool\'s own mechanism)');
+describe('bug #687 → #2073: agy print mode bounded by --print-timeout PAIRED with an external timeout', () => {
+  // #687 established that agy print mode must be bounded (its native
+  // --print-timeout, default 5m). #2073 superseded the "no external killer"
+  // half of that contract with documentation:
+  //   - agy's own print-mode guidance says to PAIR --print-timeout with an
+  //     external terminal `timeout` ("Pair with the terminal timeout= so the
+  //     outer call doesn't cut the run short"), because --print-timeout cannot
+  //     fire before agy creates a session (a pre-session stall otherwise hangs
+  //     unbounded). The external cap is set HIGHER than --print-timeout so it
+  //     only backstops a stall, never cuts a healthy run.
+  //   - agy gained `--model` in ~1.0.3 (issue #3782's "no --model flag" note
+  //     was correct at the time, stale now); review.models.agy is passed as
+  //     --model so a pinned model that 404s has an escape hatch.
+  //   - the prompt is now a file reference: inline `-p "$(cat …)"` overflows
+  //     the exec arg list on a large review prompt (Linux MAX_ARG_STRLEN
+  //     128 KB/single-arg → rc 126).
+
+  test('invokes agy with --print-timeout AND a paired external killer when available', () => {
+    const c = read();
+    assert.match(c, /--print-timeout \d+s?/, 'review.md must pass agy its native --print-timeout');
+    // Capability probe for GNU `timeout` / macOS `gtimeout` (stock macOS has neither).
+    assert.match(c, /command -v timeout/, 'review.md must probe for the `timeout` killer');
+    assert.match(c, /command -v gtimeout/, 'review.md must probe for `gtimeout` (macOS Homebrew)');
+    // The external cap (600s) is applied ahead of agy and is >= --print-timeout (540s).
+    assert.match(c, /600 agy --print-timeout 540s/,
+      'review.md must pair an external cap (600s) >= --print-timeout (540s) with agy (agy guidance)');
   });
 
-  test('discards partial output on non-zero exit so the fallback fires', () => {
+  test('external cap is >= --print-timeout, and falls back to bare agy on macOS', () => {
+    const c = read();
+    const bound = c.match(/(\d+)\s+agy --print-timeout (\d+)s/);
+    assert.ok(bound, 'review.md must encode the external-cap + --print-timeout pair');
+    assert.ok(
+      Number(bound[1]) >= Number(bound[2]),
+      'external cap (seconds) must be >= --print-timeout (seconds) so it only backstops a stall',
+    );
+    // Graceful fallback when no external killer is available (stock macOS).
+    assert.match(c, /else\n\s*agy --print-timeout/,
+      'review.md must fall back to --print-timeout alone when no external killer is available (macOS)');
+  });
+
+  test('uses a file-reference prompt, not inline "$(cat …)" (arg-list overflow, #2073)', () => {
+    const c = read();
+    assert.doesNotMatch(c, /agy[^\n]*-p "\$\(cat/,
+      'review.md must not feed agy the prompt inline via "$(cat …)" — a large review prompt overflows the exec arg list (rc 126)');
+    assert.match(c, /Read the file at \/tmp\/gsd-review-prompt-/,
+      'review.md should pass agy a file-reference prompt (mirrors the Cursor block)');
+  });
+
+  test('wires --model from review.models.agy (#2073 mode 2; agy gained --model in ~1.0.3)', () => {
+    assert.match(read(), /--model "\$AGY_MODEL"/,
+      'review.md must pass --model "$AGY_MODEL" when review.models.agy is set');
+  });
+
+  test('discards partial output on non-zero exit so the fallback fires (#687)', () => {
     const c = read();
     assert.match(c, /_AGY_RC.*-ne 0/, 'review.md must check the agy exit code');
     assert.match(c, /: > \/tmp\/gsd-review-antigravity-/,
       'review.md must truncate the output file when agy timed out / failed');
   });
 
-  test('agy is bounded only by its own --print-timeout, not an external process killer', () => {
-    const c = read();
-    // Print-mode reviewers invoke the tool directly; agy must self-terminate via
-    // --print-timeout, never via an external SIGKILL/timeout binary wrapped around it.
-    assert.doesNotMatch(c, /-s KILL/, 'must not SIGKILL agy from the outside');
-    // Any external timeout binary wrapping agy — `timeout 300s agy …`,
-    // `gtimeout 300 agy …`, `timeout -s KILL 300 agy …`. The lookbehind keeps
-    // agy's own `--print-timeout` flag from tripping it.
-    assert.doesNotMatch(c, /(?<!print-)\bg?timeout[ \t]+[^\n]*\bagy\b/,
-      'must not wrap agy in an external timeout binary — use its --print-timeout flag');
-    assert.doesNotMatch(c, /kill -9 "\$_AGY/, 'must not use a kill -9 watchdog on agy');
-  });
-
   test('no unguarded bare "agy -p" invocation remains at line start', () => {
-    // A bare `agy -p "$(cat …)"` with no cap was the original hang.
-    assert.doesNotMatch(read(), /^agy -p "\$\(cat/m,
-      'review.md must not invoke agy -p without --print-timeout');
+    // A bare `agy -p …` with no cap was the original #687 hang.
+    assert.doesNotMatch(read(), /^agy -p/m,
+      'review.md must not invoke a bare `agy -p` unbounded at line start');
   });
 });
   });

@@ -1118,8 +1118,12 @@ function matchSessionSection(body: string): RegExpMatchArray | null {
 function parseProsePhaseField(value: string | null): { phase: string | null; name: string | null } {
   if (!value) return { phase: null, name: null };
   const phaseMatch = value.match(/\b(\d+[A-Z]?(?:\.\d+)*)\b/i);
-  const parenName = value.match(/\(([^)]+)\)/);
-  const dashName = value.match(/—\s*([^(\n]+?)(?:\s*\(|$)/);
+  // #2124 review: length-bound the name quantifiers so a crafted long
+  // unterminated `(` / `—` run in an untrusted STATE.md field cannot drive
+  // O(n^2) backtracking (CPU DoS). (Phase 2 / #2125 supersedes this function
+  // by delegating to phase-id.cts:parsePhaseFromProse, which is bounded too.)
+  const parenName = value.match(/\(([^)]{1,200})\)/);
+  const dashName = value.match(/—\s*([^(\n]{1,200}?)(?:\s*\(|$)/);
   const rawName = parenName?.[1] ?? dashName?.[1] ?? null;
   const name = rawName && !/^(?:complete|executing|not started)$/i.test(rawName.trim())
     ? rawName.trim()

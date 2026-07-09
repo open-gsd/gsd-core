@@ -389,6 +389,41 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
         `expected final file-count chunking marker in stderr; STDERR:\n${r.stderr}`,
       );
     });
+
+    // #2088: install-heavy files (real installs) are weighted so they never all
+    // land in one chunk — otherwise the unsharded targeted lane packs the whole
+    // install surface into a single chunk that blows the 600s per-chunk backstop
+    // on the slow Windows runner.
+    test('install-heavy files carry more weight so they SPREAD across chunks (#2088)', () => {
+      // 4 install-* files at weight 3 = 12 against a 6-weight cap → 2 chunks
+      // (2 heavy each). The whole install load is never in a single chunk.
+      const heavy = Array.from({ length: 4 }, (_, i) => `install-weighttest-${i}.test.cjs`);
+      seed(tmpDir, heavy);
+      const rh = runHarness(tmpDir, [], {
+        RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
+        RUN_TESTS_MAX_FILES_PER_CHUNK: '6',
+        RUN_TESTS_HEAVY_FILE_WEIGHT: '3',
+      });
+      assert.strictEqual(rh.status, 0, `heavy: expected zero exit; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 1\/2 — 2 files/, `install-heavy files must split into 2 chunks; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 2\/2 — 2 files/, `STDERR:\n${rh.stderr}`);
+    });
+
+    test('light files of the same count stay in ONE chunk — split is weight-driven, not count-driven (#2088)', () => {
+      // Same file COUNT (4) but LIGHT (weight 1 each): 4 < 6 cap → a single
+      // chunk. Proves the split above is driven by install-heavy WEIGHT.
+      const light = Array.from({ length: 4 }, (_, i) => `lightweighttest-${i}.test.cjs`);
+      seed(tmpDir, light);
+      const rl = runHarness(tmpDir, [], {
+        RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
+        RUN_TESTS_MAX_FILES_PER_CHUNK: '6',
+        RUN_TESTS_HEAVY_FILE_WEIGHT: '3',
+      });
+      assert.strictEqual(rl.status, 0, `light: expected zero exit; STDERR:\n${rl.stderr}`);
+      // A single chunk emits NO `chunk N/M` split marker (it only prints when
+      // chunks.length > 1), so its absence proves the 4 light files stayed together.
+      assert.doesNotMatch(rl.stderr, /run-tests: chunk \d+\/\d+ — /, `4 light files must stay in one chunk (no split marker); STDERR:\n${rl.stderr}`);
+    });
   });
 
   describe('shard partitioning CLI (#1212)', () => {

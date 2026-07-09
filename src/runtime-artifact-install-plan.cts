@@ -32,6 +32,10 @@ interface ArtifactKind {
   destSubpath: string;
   prefix?: string;
   stage: (resolvedProfile: ResolvedProfile, agentCtx?: AgentCtx) => string;
+  /** Resolved absolute alternate install root for this kind, if the descriptor
+   *  specifies one (e.g. codex skills → $HOME/.agents). Undefined means the
+   *  kind installs under the runtime's normal configDir. */
+  home?: string;
 }
 
 interface Layout {
@@ -216,7 +220,7 @@ function createRuntimeArtifactInstallPlan(args: CreateRuntimeArtifactInstallPlan
     items.push({
       kind: kind.kind,
       sourceDir,
-      destDir: assertDestWithinConfigHome(layout.configDir, kind.destSubpath),
+      destDir: assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath),
     });
   }
 
@@ -227,7 +231,7 @@ function createRuntimeArtifactUninstallPlan(layout: Layout): UninstallPlan {
   return {
     items: layout.kinds.map((kind) => ({
       kind: kind.kind,
-      destDir: assertDestWithinConfigHome(layout.configDir, kind.destSubpath),
+      destDir: assertDestWithinConfigHome(kind.home ?? layout.configDir, kind.destSubpath),
     })),
   };
 }

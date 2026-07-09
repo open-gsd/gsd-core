@@ -340,10 +340,15 @@ test('plugin implements the full declared opencode extension-event surface (Clau
   }
   // Session/file events dispatch through the `event` handler.
   assert.equal(typeof handlers.event, 'function', 'plugin exposes an event dispatcher');
-  // Every declared surface event resolves to a plugin handler.
+  // Every declared surface event resolves to a plugin handler. Session /
+  // permission / error events dispatch through the `event` handler (not
+  // top-level handler keys). #2087 added permission.asked/replied + session.error.
+  const EVENT_DISPATCHED = new Set([
+    'session.created', 'session.idle', 'file.edited',
+    'permission.asked', 'permission.replied', 'session.error',
+  ]);
   for (const ev of surface) {
-    const covered = typeof handlers[ev] === 'function'
-      || ev === 'session.created' || ev === 'session.idle' || ev === 'file.edited';
+    const covered = typeof handlers[ev] === 'function' || EVENT_DISPATCHED.has(ev);
     assert.ok(covered, `plugin covers opencode extension event: ${ev}`);
   }
 });

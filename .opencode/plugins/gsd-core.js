@@ -663,6 +663,26 @@ const GsdCorePlugin = async ({ directory } = {}) => {
       if (event.type === "session.idle") {
         return;
       }
+
+      // permission.asked / permission.replied — OpenCode permission lifecycle
+      // (#2087, opencode.ai/docs/plugins). GSD gates tool INPUTS at
+      // tool.execute.before (read-guard, injection-scanner); the permission
+      // grant/deny decision itself carries no GSD workflow-phase contribution,
+      // so these are recognized sentinels — wired so a future permission-aware
+      // gate can attach without a plugin change (the engine owns phase
+      // sequencing; this host bus is session/tool/permission-scoped, never
+      // phase-scoped — ADR-1239 §OpenCode).
+      if (event.type === "permission.asked" || event.type === "permission.replied") {
+        return;
+      }
+
+      // session.error — OpenCode session-error lifecycle point (#2087). No GSD
+      // hook fires here today (loop state is already persisted to .planning/);
+      // recognized so the declared extension-event surface is fully wired and a
+      // future error-class hook can attach without a plugin change.
+      if (event.type === "session.error") {
+        return;
+      }
     },
   };
 };

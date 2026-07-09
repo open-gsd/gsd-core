@@ -37,9 +37,13 @@ const HOOKS_TO_COPY = [
   // so require('./managed-hooks-registry.cjs') resolves in the installed hooks/ dir.
   'managed-hooks-registry.cjs',
   'gsd-context-monitor.js',
-  // Cursor lifecycle hooks (issue #777): sessionStart context injection + postToolUse monitor
+  // Cursor lifecycle hooks (#777 + ADR-1239/#2089): 6 managed events
   'gsd-cursor-session-start.js',
   'gsd-cursor-post-tool.js',
+  'gsd-cursor-pre-tool.js',
+  'gsd-cursor-stop.js',
+  'gsd-cursor-subagent-start.js',
+  'gsd-cursor-subagent-stop.js',
   // Claude Code FileChanged hook (#770) — hot-reloads gsd config when
   // .planning/config.json changes mid-session. Must ship to dist so the
   // installer can copy it to the target hooks/ dir and register FileChanged.

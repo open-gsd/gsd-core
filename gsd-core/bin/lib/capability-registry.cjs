@@ -453,6 +453,23 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "attributionSource": "settings-json-commit",
+        "authorsCanonicalWorkflow": true,
+        "localInstallStyle": "legacy-flat",
+        "permissionsSchema": "claude",
+        "settingsFileByScope": {
+          "local": "settings.local.json",
+          "global": "settings.json"
+        },
+        "sourceMarkerFile": ".gsd-source",
+        "agentFrontmatterExtensions": [
+          "effort"
+        ],
+        "ownsClaudePaths": true,
+        "nativeModelAliases": true,
+        "skillsGlobalOnboarding": true
       }
     }
   },
@@ -797,7 +814,8 @@ const capabilities = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToCodexSkill"
+            "converter": "convertClaudeCommandToCodexSkill",
+            "home": ".agents"
           }
         ],
         "local": [
@@ -807,7 +825,8 @@ const capabilities = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToCodexSkill"
+            "converter": "convertClaudeCommandToCodexSkill",
+            "home": ".agents"
           }
         ]
       },
@@ -819,7 +838,11 @@ const capabilities = {
       "installSurface": "codex-toml",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": [],
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact"
+      ],
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -836,6 +859,13 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "$gsd-update --reapply",
+        "tomlConfigInstall": true,
+        "cleanupSkillSidecars": true,
+        "agentTomlFiles": true,
+        "frontmatterDialect": "codex"
       }
     }
   },
@@ -923,6 +953,9 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "undocumented"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply"
       }
     }
   },
@@ -1026,6 +1059,23 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+        "frontmatterDialect": "cursor",
+        "hooksJsonSurface": true,
+        "skipSharedHooksInstall": true,
+        "reportCommandsDir": true,
+        "skipUpdateBannerCommand": true,
+        "skipSettingsUi": true,
+        "managedHookEvents": [
+          "sessionStart",
+          "postToolUse",
+          "preToolUse",
+          "stop",
+          "subagentStart",
+          "subagentStop"
+        ]
       }
     }
   },
@@ -1485,6 +1535,14 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "kilo",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "kilo",
+        "skipUpdateBannerCommand": true
       }
     }
   },
@@ -1863,15 +1921,31 @@ const capabilities = {
           "namedDispatch": true,
           "nested": "undocumented",
           "maxDepth": "undocumented",
-          "background": false,
+          "background": true,
           "subagentToolkit": "full",
-          "backgroundDispatch": "undocumented"
+          "backgroundDispatch": true
         },
         "modelMode": "active",
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "opencode",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "opencode",
+        "nativePlugin": {
+          "dir": "plugins",
+          "file": "gsd-core.js",
+          "source": ".opencode/plugins/gsd-core.js"
+        },
+        "skipHomePrefixSubstitution": true,
+        "skipSettingsUi": true,
+        "skipUpdateBannerCommand": true,
+        "skipCodexSkillsManifest": true
       }
     }
   },
@@ -3877,6 +3951,23 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "attributionSource": "settings-json-commit",
+        "authorsCanonicalWorkflow": true,
+        "localInstallStyle": "legacy-flat",
+        "permissionsSchema": "claude",
+        "settingsFileByScope": {
+          "local": "settings.local.json",
+          "global": "settings.json"
+        },
+        "sourceMarkerFile": ".gsd-source",
+        "agentFrontmatterExtensions": [
+          "effort"
+        ],
+        "ownsClaudePaths": true,
+        "nativeModelAliases": true,
+        "skillsGlobalOnboarding": true
       }
     }
   },
@@ -4073,7 +4164,8 @@ const runtimes = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToCodexSkill"
+            "converter": "convertClaudeCommandToCodexSkill",
+            "home": ".agents"
           }
         ],
         "local": [
@@ -4083,7 +4175,8 @@ const runtimes = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToCodexSkill"
+            "converter": "convertClaudeCommandToCodexSkill",
+            "home": ".agents"
           }
         ]
       },
@@ -4095,7 +4188,11 @@ const runtimes = {
       "installSurface": "codex-toml",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": [],
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact"
+      ],
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -4112,6 +4209,13 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "$gsd-update --reapply",
+        "tomlConfigInstall": true,
+        "cleanupSkillSidecars": true,
+        "agentTomlFiles": true,
+        "frontmatterDialect": "codex"
       }
     }
   },
@@ -4199,6 +4303,9 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "undocumented"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply"
       }
     }
   },
@@ -4302,6 +4409,23 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+        "frontmatterDialect": "cursor",
+        "hooksJsonSurface": true,
+        "skipSharedHooksInstall": true,
+        "reportCommandsDir": true,
+        "skipUpdateBannerCommand": true,
+        "skipSettingsUi": true,
+        "managedHookEvents": [
+          "sessionStart",
+          "postToolUse",
+          "preToolUse",
+          "stop",
+          "subagentStart",
+          "subagentStop"
+        ]
       }
     }
   },
@@ -4466,6 +4590,14 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "kilo",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "kilo",
+        "skipUpdateBannerCommand": true
       }
     }
   },
@@ -4620,15 +4752,31 @@ const runtimes = {
           "namedDispatch": true,
           "nested": "undocumented",
           "maxDepth": "undocumented",
-          "background": false,
+          "background": true,
           "subagentToolkit": "full",
-          "backgroundDispatch": "undocumented"
+          "backgroundDispatch": true
         },
         "modelMode": "active",
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "attributionConfigResolver": "opencode",
+        "flatCommandDir": "command",
+        "combinedFamilyInstall": true,
+        "frontmatterDialect": "opencode",
+        "nativePlugin": {
+          "dir": "plugins",
+          "file": "gsd-core.js",
+          "source": ".opencode/plugins/gsd-core.js"
+        },
+        "skipHomePrefixSubstitution": true,
+        "skipSettingsUi": true,
+        "skipUpdateBannerCommand": true,
+        "skipCodexSkillsManifest": true
       }
     }
   },
