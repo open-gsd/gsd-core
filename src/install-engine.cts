@@ -276,15 +276,21 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
       '_copyStaged: configDir (install root) is required to confine writes — refusing to write',
     );
   }
+  // The install root is normally configDir, but a kind may declare an alternate
+  // `home` (ADR-1239 upgrade 3 / #2088, e.g. Codex skills -> $HOME/.agents) — in
+  // that case this defense-in-depth check must confine against the resolved
+  // alternate root instead, matching the upstream gate's own root selection in
+  // createRuntimeArtifactInstallPlan.
+  const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
   // Strict-subpath + NUL containment via the canonical gate (shared with the
   // layout-driven install plan); throws if destDir escapes the install root.
-  // destDir here is an absolute path; path.resolve(configDir, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to configDir.
-  const resolvedDest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, destDir);
-  // Symlink-escape guard: reject if any path component between configDir and
-  // destDir is a symlink that would redirect writes outside configDir.
-  if (hasExistingSymlinkBetween(path.resolve(configDir), resolvedDest)) {
+  // destDir here is an absolute path; path.resolve(installRoot, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to installRoot.
+  const resolvedDest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, destDir);
+  // Symlink-escape guard: reject if any path component between the install root and
+  // destDir is a symlink that would redirect writes outside the install root.
+  if (hasExistingSymlinkBetween(path.resolve(installRoot), resolvedDest)) {
     throw new Error(
-      `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${configDir}" — refusing to write`,
+      `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${installRoot}" — refusing to write`,
     );
   }
   // Use the validated absolute path for the actual writes below.
@@ -620,11 +626,17 @@ function installRuntimeArtifacts(
       if (!kind) throw new Error(`Install plan returned unknown artifact kind: ${item.kind}`);
       const dest = item.destDir;
       // Symlink-escape guard: reject before mkdir if dest (or any component
-      // between configDir and dest) is a symlink pointing outside configDir.
-      // mkdirSync follows symlinks, so this must run BEFORE the mkdir call.
-      if (hasExistingSymlinkBetween(path.resolve(configDir), dest)) {
+      // between the install root and dest) is a symlink pointing outside that
+      // root. mkdirSync follows symlinks, so this must run BEFORE the mkdir
+      // call. The install root is normally configDir, but a kind may declare
+      // an alternate `home` (ADR-1239 upgrade 3 / #2088, e.g. Codex skills ->
+      // $HOME/.agents) — in that case the guard must check against the
+      // resolved alternate root instead, matching assertDestWithinConfigHome's
+      // own root selection in createRuntimeArtifactInstallPlan.
+      const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
+      if (hasExistingSymlinkBetween(path.resolve(installRoot), dest)) {
         throw new Error(
-          `installRuntimeArtifacts: destDir "${dest}" contains a symlink escaping the install root "${configDir}" — refusing to create`,
+          `installRuntimeArtifacts: destDir "${dest}" contains a symlink escaping the install root "${installRoot}" — refusing to create`,
         );
       }
       fs.mkdirSync(dest, { recursive: true });

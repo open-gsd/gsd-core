@@ -73,6 +73,10 @@ interface ArtifactKind {
   /** For agents kind with a converter, accepts an optional AgentCtx as the second
    *  arg so cross-cutting can be applied pre-converter (ADR-1235 §1). */
   stage: (resolvedProfile: ResolvedProfile, agentCtx?: AgentCtx) => string;
+  /** Resolved absolute alternate install root for this kind, if the descriptor
+   *  specifies one (e.g. codex skills → $HOME/.agents). Undefined means the
+   *  kind installs under the runtime's normal configDir. */
+  home?: string;
 }
 
 interface Layout {
@@ -419,6 +423,10 @@ interface ArtifactKindDescriptor {
   nesting: 'flat' | 'nested';
   recursive: boolean;
   converter: string | null;
+  /** Optional alternate install home, relative to the user's home directory
+   *  (e.g. ".agents" for codex skills → $HOME/.agents/skills). When absent,
+   *  the kind installs under the runtime's normal configDir. */
+  home?: string;
 }
 
 interface ArtifactLayoutDescriptor {
@@ -445,18 +453,19 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
   const { kind, destSubpath, prefix, nesting, converter } = entry;
   const nested = nesting === 'nested';
 
+  let result: ArtifactKind;
   switch (kind) {
     case 'commands':
-      if (converter == null) {
-        return commandsKind(destSubpath, prefix, configDir);
-      }
-      return convertedCommandsKind(destSubpath, prefix, converter, configDir);
+      result = converter == null
+        ? commandsKind(destSubpath, prefix, configDir)
+        : convertedCommandsKind(destSubpath, prefix, converter, configDir);
+      break;
 
     case 'agents':
-      if (converter == null) {
-        return agentsKind(destSubpath, prefix, configDir);
-      }
-      return convertedAgentsKind(destSubpath, prefix, converter, configDir, scope);
+      result = converter == null
+        ? agentsKind(destSubpath, prefix, configDir)
+        : convertedAgentsKind(destSubpath, prefix, converter, configDir, scope);
+      break;
 
     case 'skills':
       if (converter == null) {
@@ -464,16 +473,24 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
           `resolveRuntimeArtifactLayout: skills entry for '${runtime}' has converter=null (converter is required for skills)`,
         );
       }
-      return skillsKind(destSubpath, prefix, converter, runtime, configDir, nested, scope);
+      result = skillsKind(destSubpath, prefix, converter, runtime, configDir, nested, scope);
+      break;
 
     case 'kimi-agents':
-      return kimiAgentsKind(destSubpath, prefix, configDir);
+      result = kimiAgentsKind(destSubpath, prefix, configDir);
+      break;
 
     default:
       throw new TypeError(
         `resolveRuntimeArtifactLayout: unknown kind '${kind}' in descriptor for runtime '${runtime}'`,
       );
   }
+
+  if (typeof entry.home === 'string' && entry.home !== '') {
+    result.home = path.join(os.homedir(), entry.home);
+  }
+
+  return result;
 }
 
 /**

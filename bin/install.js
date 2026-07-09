@@ -102,6 +102,45 @@ const reset = '\x1b[0m';
 // Codex config.toml constants
 const GSD_CODEX_MARKER = '# GSD Agent Configuration \u2014 managed by gsd-core installer';
 const GSD_CODEX_HOOKS_OWNERSHIP_PREFIX = '# GSD codex_hooks ownership: ';
+// Known scalar fields of Codex's `AgentsToml` struct (codex-rs/config/src/
+// config_toml.rs \u2014 `[agents]` table). Codex marks the struct
+// `#[schemars(deny_unknown_fields)]`, so a bare `[agents]` table is valid ONLY
+// when every direct key is one of these (named agent roles live in the flattened
+// `[agents.<name>]` sub-tables, a separate `AgentRoleToml`). GSD writes only
+// `max_depth` (ADR-1239 upgrade 2 / #2088); the full set is enumerated so the
+// schema check accepts a user's other legitimate AgentsToml scalars too.
+const CODEX_AGENTS_TOML_SCALAR_KEYS = new Set([
+  'max_threads',
+  'max_depth',
+  'job_max_runtime_seconds',
+  'interrupt_message',
+]);
+// GSD's managed dispatch-depth value. Codex's implicit default is also 1 (root
+// sessions start at depth 0); writing it EXPLICITLY pins the negotiated
+// `dispatch.maxDepth: 1` axis instead of relying on codex-cli's implicit default
+// (ADR-1239 upgrade 2 / #2088). Per the negotiated capability, GSD-hosted Codex
+// dispatch is single-level (maxDepth === 1 \u2192 `degradationFor` flattens waves).
+const GSD_CODEX_AGENTS_MAX_DEPTH = 1;
+// Codex hooks.json lifecycle events GSD registers beyond SessionStart (which has
+// its own dedicated path). This is Codex's OWN hook-event vocabulary (per
+// developers.openai.com/codex/config-reference), distinct from the cross-runtime
+// settings.json `extendedHookEvents` descriptor field (a claude/gemini-family
+// allowlist consumed only by hooksSurface==='settings-json' runtimes — Codex is
+// codex-hooks-json). All route through gsd-context-monitor.js. #772 wired the
+// first three; #2088 adds the remaining six documented events so GSD's monitor
+// fires at the same lifecycle points as in Claude Code. Install and uninstall
+// share this list so the registered set and the removed set never diverge.
+const CODEX_EXTENDED_HOOK_EVENTS = [
+  'SubagentStart',
+  'Stop',
+  'PostToolUse',
+  'PreToolUse',
+  'PermissionRequest',
+  'PreCompact',
+  'PostCompact',
+  'SubagentStop',
+  'UserPromptSubmit',
+];
 // Codex's hook-enabling feature flag (issue #3566). Codex itself marks
 // `codex_hooks` as a `legacy_key` in codex-rs/features/src/legacy.rs; the
 // canonical current key under [features] is `hooks`. The installer always
@@ -355,6 +394,22 @@ function _resolveHostBehaviors(runtime, registry) {
  */
 function _hostBehaviors(runtime) {
   return _resolveHostBehaviors(runtime, _capabilityRegistry);
+}
+
+/**
+ * Resolve the ACTUAL on-disk skills-install directory for a runtime, honoring a
+ * skills-kind `home` override (ADR-1239 upgrade 3 / #2088: e.g. Codex skills ->
+ * $HOME/.agents/skills instead of the runtime's configDir). Descriptor-driven
+ * (no runtime === '<id>' check) so the snapshot/rollback machinery and post-install
+ * verification look where the skills actually landed. Falls back to <targetDir>/skills.
+ */
+function _resolveSkillsRootDir(runtime, targetDir, scope) {
+  try {
+    const layout = resolveRuntimeArtifactLayout(runtime, targetDir, scope);
+    const skillsKind = layout.kinds.find((k) => k.kind === 'skills');
+    if (skillsKind) return path.join(skillsKind.home || targetDir, skillsKind.destSubpath);
+  } catch (_e) { /* fall through to the configDir default */ }
+  return path.join(targetDir, 'skills');
 }
 
 /**
@@ -3148,6 +3203,77 @@ function cleanupWindsurfLegacyDevinSkills(workspaceDir) {
 }
 
 /**
+ * Migrate a skills kind that moved to an alternate `home` (ADR-1239 split-home):
+ * remove now-stale `<prefix>*` skill dirs left at the OLD configDir-rooted
+ * location by installs from before the move. Without this, upgrading (e.g. Codex
+ * relocating skills to ~/.agents/skills) orphans the pre-move dirs at
+ * ~/.codex/skills. Only managed `<prefix>*` dirs are touched; user-owned content
+ * (non-prefixed dirs, gsd-dev-preferences, symlinks) is preserved. Fail-open.
+ * @param {string} oldSkillsDir absolute path to the pre-move skills location
+ * @param {string} prefix managed skill-dir prefix (e.g. 'gsd-')
+ * @returns {number} count of stale dirs removed
+ */
+function cleanupMovedSkillsOldLocation(oldSkillsDir, prefix) {
+  if (!fs.existsSync(oldSkillsDir)) return 0;
+
+  // Mirror the user-owned list from cleanupCodexSkillMetadataSidecars (#2973).
+  const _userOwnedSkillDirs = new Set(['gsd-dev-preferences']);
+  let removed = 0;
+
+  for (const entry of fs.readdirSync(oldSkillsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    if (_userOwnedSkillDirs.has(entry.name)) continue;
+
+    const dirToRemove = path.join(oldSkillsDir, entry.name);
+    try {
+      // Symlink guard (mirrors cleanupWindsurfLegacyDevinSkills): never delete
+      // through a symlinked gsd-* dir — it could escape the tree.
+      const stat = fs.lstatSync(dirToRemove);
+      if (stat.isSymbolicLink()) continue;
+
+      fs.rmSync(dirToRemove, { recursive: true, force: true });
+      removed++;
+    } catch (_err) {
+      // Fail open — a single bad dir must not block install/uninstall.
+    }
+  }
+
+  // Prune the old skills dir if now empty — leaves the configHome clean.
+  // Never remove a non-empty container (user may keep other content there).
+  try {
+    if (fs.existsSync(oldSkillsDir) && fs.readdirSync(oldSkillsDir).length === 0) {
+      fs.rmdirSync(oldSkillsDir);
+    }
+  } catch (_err) {
+    // best-effort container cleanup
+  }
+
+  return removed;
+}
+
+/**
+ * When a runtime's skills kind declares an alternate `home` (split-home move),
+ * return the now-stale configDir-rooted skills location that installs before the
+ * move used; null when no move is in effect (no home override, or home resolves
+ * to the same path). Descriptor-driven — no per-runtime hardcoding.
+ * @returns {string|null}
+ */
+function _resolveMovedSkillsOldDir(runtime, targetDir, scope) {
+  try {
+    const layout = resolveRuntimeArtifactLayout(runtime, targetDir, scope);
+    const skillsKind = layout.kinds.find((k) => k.kind === 'skills');
+    if (skillsKind && skillsKind.home) {
+      const oldDir = path.join(targetDir, skillsKind.destSubpath);
+      const newDir = path.join(skillsKind.home, skillsKind.destSubpath);
+      if (path.resolve(oldDir) !== path.resolve(newDir)) return oldDir;
+    }
+  } catch (_e) {
+    // No migration when the layout can't resolve — never block on this.
+  }
+  return null;
+}
+
+/**
  * Generate the GSD config block for Codex config.toml.
  * @param {Array<{name: string, description: string}>} agents
  */
@@ -3162,6 +3288,17 @@ function generateCodexConfigBlock(agents, targetDir) {
     '',
   ];
 
+  // ADR-1239 upgrade 2 / #2088 — explicit dispatch tuning. Pin `max_depth` on the
+  // `[agents]` (AgentsToml) table rather than relying on codex-cli's implicit
+  // default, realizing the negotiated `dispatch.maxDepth: 1` axis. This bare
+  // `[agents]` scalar table coexists with the flattened `[agents.<name>]` role
+  // sub-tables below (validated by validateCodexConfigSchema, which permits a
+  // known-scalar-only `[agents]`). Emitted before the role tables so the parent
+  // table is opened first.
+  lines.push('[agents]');
+  lines.push(`max_depth = ${GSD_CODEX_AGENTS_MAX_DEPTH}`);
+  lines.push('');
+
   for (const { name, description } of agents) {
     // #2727 — Codex 0.124.0 requires [agents.<name>] struct format, not [[agents]] sequence.
     // [[agents]] (introduced in #2645) is rejected by codex-cli 0.124.0 with
@@ -3173,6 +3310,52 @@ function generateCodexConfigBlock(agents, targetDir) {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Extract a user's pre-existing AgentsToml scalar assignments from a bare
+ * `[agents]` table — every known scalar EXCEPT `max_depth` (which GSD manages
+ * and always re-emits as 1). Returned as raw `key = value` line strings so
+ * mergeCodexConfig can PRESERVE them in the managed block instead of silently
+ * dropping the user's tuning when the bare `[agents]` table is purged (#2088
+ * review finding: the loosened validator declares such a table legitimate, so
+ * install must not destroy it). Only the first bare `[agents]` section is read;
+ * `[agents.<name>]` role tables are ignored. Fail-open → [].
+ * @returns {string[]}
+ */
+function extractCodexUserAgentsScalars(content) {
+  const preserved = [];
+  let section;
+  try {
+    section = getTomlTableSections(content).find((s) => !s.array && s.path === 'agents');
+  } catch (_e) {
+    return preserved;
+  }
+  if (!section) return preserved;
+  const body = content.slice(section.headerEnd, section.end);
+  for (const record of getTomlLineRecords(body)) {
+    if (record.startsInMultilineString || record.tableHeader) continue;
+    const trimmed = record.text.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    if (!record.keySegments || record.keySegments.length !== 1) continue;
+    const key = record.keySegments[0];
+    if (key === 'max_depth') continue; // GSD-managed — GSD's value wins.
+    if (!CODEX_AGENTS_TOML_SCALAR_KEYS.has(key)) continue;
+    preserved.push(trimmed);
+  }
+  return preserved;
+}
+
+/**
+ * Splice preserved user AgentsToml scalar lines into the managed GSD config
+ * block, immediately after the `[agents]` header and before GSD's `max_depth`
+ * line. Operates on the pre-EOL-normalization block (LF joins), matching only
+ * the bare `[agents]` header (never `[agents.<name>]`). Returns the block
+ * unchanged when there is nothing to preserve or the anchor is absent.
+ */
+function spliceCodexAgentsScalars(block, scalarLines) {
+  if (!scalarLines || scalarLines.length === 0) return block;
+  return block.replace(/(\n\[agents\]\n)(max_depth = )/, `$1${scalarLines.join('\n')}\n$2`);
 }
 
 /**
@@ -3195,6 +3378,16 @@ function stripCodexGsdAgentSections(content) {
     // Current `[agents.gsd-<name>]` struct tables (#2727, Codex 0.120.0+).
     if (!section.array && /^agents\.gsd-/.test(section.path)) {
       return true;
+    }
+
+    // GSD's managed `[agents]` scalar block (ADR-1239 upgrade 2 / #2088 — the
+    // `max_depth` dispatch-tuning table). Install purges any pre-existing bare
+    // `[agents]` and writes its own, so a known-scalar-only bare `[agents]` is
+    // GSD-owned; strip it on uninstall. (The marker path already removes it via
+    // the marker-to-EOF cut; this covers the no-marker fallback.)
+    if (!section.array && section.path === 'agents') {
+      const body = content.slice(section.headerEnd, section.end);
+      return codexBareAgentsHasOnlyKnownScalars(body);
     }
 
     // Legacy `[[agents]]` array-of-tables (#2645) — only strip blocks whose
@@ -3224,7 +3417,11 @@ function stripGsdFromCodexConfig(content) {
   const codexHooksOwnership = getManagedCodexHooksOwnership(content);
 
   if (markerIndex !== -1) {
-    // Has GSD marker — remove everything from marker to EOF
+    // Has GSD marker — remove everything from marker to EOF. First recover the
+    // user's own AgentsToml scalars (max_threads etc.) that install folded into
+    // the managed [agents] block (#2088), so a full install→uninstall cycle
+    // round-trips the user's tuning. GSD-managed max_depth is dropped.
+    const preservedScalars = extractCodexUserAgentsScalars(content.slice(markerIndex));
     let before = content.substring(0, markerIndex);
     before = stripCodexHooksFeatureAssignments(before, codexHooksOwnership);
     // Also strip GSD-injected feature keys above the marker (Case 3 inject)
@@ -3233,6 +3430,9 @@ function stripGsdFromCodexConfig(content) {
     before = before.replace(/^\[features\]\s*\n(?=\[|$)/m, '');
     before = before.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
     before = before.replace(/^(?:\r?\n)+/, '').trimEnd();
+    if (preservedScalars.length > 0) {
+      before = (before ? before + eol + eol : '') + '[agents]' + eol + preservedScalars.join(eol);
+    }
     if (!before) return null;
     return before + eol;
   }
@@ -3243,7 +3443,11 @@ function stripGsdFromCodexConfig(content) {
   cleaned = cleaned.replace(/^multi_agent\s*=\s*true\s*(?:\r?\n)?/m, '');
   cleaned = cleaned.replace(/^default_mode_request_user_input\s*=\s*true\s*(?:\r?\n)?/m, '');
 
-  // Remove [agents.gsd-*] sections (from header to next section or EOF)
+  // #2088: recover the user's own AgentsToml scalars before the [agents] table is
+  // stripped, so they survive uninstall even in the no-marker fallback path.
+  const preservedScalars = extractCodexUserAgentsScalars(cleaned);
+
+  // Remove [agents.gsd-*] sections + the managed known-scalar [agents] table.
   cleaned = stripCodexGsdAgentSections(cleaned);
 
   // Remove [features] section if now empty (only header, no keys before next section)
@@ -3253,6 +3457,10 @@ function stripGsdFromCodexConfig(content) {
   cleaned = cleaned.replace(/^\[agents\]\s*\n(?=\[|$)/m, '');
 
   cleaned = cleaned.replace(/^(?:\r?\n)+/, '').trimEnd();
+
+  if (preservedScalars.length > 0) {
+    cleaned = (cleaned ? cleaned + eol + eol : '') + '[agents]' + eol + preservedScalars.join(eol);
+  }
 
   if (!cleaned) return null;
   return cleaned + eol;
@@ -4725,6 +4933,33 @@ function parseTomlToObject(content) {
  *   - `hooks.<Event>` MUST be an array of tables when present (Codex ≥0.124
  *     rejects bare `[hooks.<Event>]` single-bracket maps).
  */
+/**
+ * True when a bare `[agents]` table body contains ONLY known AgentsToml scalar
+ * keys (CODEX_AGENTS_TOML_SCALAR_KEYS) — i.e. it is a valid AgentsToml struct
+ * that Codex's `deny_unknown_fields` will accept, not the break-causing form
+ * (#2760) that carries an unknown key. Comments and blank lines are ignored; an
+ * empty body is trivially valid. Mirrors isLegacyGsdAgentsSection's line scan.
+ */
+function codexBareAgentsHasOnlyKnownScalars(body) {
+  const lineRecords = getTomlLineRecords(body);
+  for (const record of lineRecords) {
+    // Conservative reject of anything not positively a single known-scalar
+    // assignment. A multiline-string value cannot be a valid AgentsToml scalar
+    // (max_threads/max_depth/job_max_runtime_seconds are integers,
+    // interrupt_message is a bool — none are strings), so codex would reject it
+    // too; rejecting here is correct, not a false negative.
+    if (record.startsInMultilineString) return false;
+    if (record.tableHeader) return false;
+    const trimmed = record.text.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    if (!record.keySegments || record.keySegments.length !== 1 ||
+        !CODEX_AGENTS_TOML_SCALAR_KEYS.has(record.keySegments[0])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function validateCodexConfigSchema(content) {
   let parsed;
   try {
@@ -4753,10 +4988,21 @@ function validateCodexConfigSchema(content) {
     }
 
     if (!section.array && section.path === 'agents') {
-      return {
-        ok: false,
-        reason: 'bare [agents] table is invalid in current Codex schema (expected [agents.<name>] struct form)',
-      };
+      // #2760 rejected ALL bare `[agents]` tables because a bare table holding a
+      // non-AgentsToml key (`default = "x"`, a role name, etc.) triggers Codex's
+      // "invalid type: ..., expected struct AgentsToml" and breaks every CLI
+      // invocation. But a bare `[agents]` whose keys are all valid AgentsToml
+      // scalars (max_depth/max_threads/...) IS a valid struct — that is exactly
+      // GSD's managed `max_depth` dispatch-tuning block (ADR-1239 upgrade 2 /
+      // #2088), and a user's own scalar tuning. Permit known-scalar-only; still
+      // reject any bare `[agents]` carrying an unknown key.
+      const body = content.slice(section.headerEnd, section.end);
+      if (!codexBareAgentsHasOnlyKnownScalars(body)) {
+        return {
+          ok: false,
+          reason: 'bare [agents] table with a non-AgentsToml key is invalid in current Codex schema (expected [agents.<name>] struct form, or only AgentsToml scalars like max_depth/max_threads)',
+        };
+      }
     }
 
     // hooks.state.* is Codex's persistent hook-trust namespace (added in
@@ -5032,7 +5278,13 @@ function mergeCodexConfig(configPath, gsdBlock) {
 
   const existing = fs.readFileSync(configPath, 'utf8');
   const eol = detectLineEnding(existing);
-  const normalizedGsdBlock = gsdBlock.replace(/\r?\n/g, eol);
+  // #2088 review: the bare `[agents]` table is purged below (Case 2/3 via
+  // stripLeakedGsdCodexSections) to keep a single managed `[agents]`. Preserve
+  // the user's own AgentsToml scalar tuning (max_threads, job_max_runtime_seconds,
+  // interrupt_message — everything except GSD-managed max_depth) by re-emitting
+  // it inside the managed block, so install never silently drops it.
+  const mergedGsdBlock = spliceCodexAgentsScalars(gsdBlock, extractCodexUserAgentsScalars(existing));
+  const normalizedGsdBlock = mergedGsdBlock.replace(/\r?\n/g, eol);
   const markerIndex = existing.indexOf(GSD_CODEX_MARKER);
 
   // Case 2: Has GSD marker — truncate and re-append
@@ -6565,8 +6817,24 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
   removedCount++;
 
+  // ADR-1239 split-home migration: the adapter/plan uninstall targets the new
+  // `home` location (e.g. Codex → ~/.agents/skills). A user who installed
+  // BEFORE the move and never reinstalled still has managed gsd-* skill dirs at
+  // the old configDir-rooted location (~/.codex/skills) — remove those too so
+  // uninstall leaves nothing behind. User-owned content is preserved.
+  {
+    const _movedOldSkillsDir = _resolveMovedSkillsOldDir(runtime, targetDir, scope);
+    if (_movedOldSkillsDir) {
+      const migrated = cleanupMovedSkillsOldLocation(_movedOldSkillsDir, 'gsd-');
+      if (migrated > 0) {
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed ${migrated} legacy skill dir(s) from ${_movedOldSkillsDir}`);
+      }
+    }
+  }
+
   // 1a. Non-layout Codex side-effects: agent .toml files, config.toml sections, hooks.json
-  if (isCodex) {
+  if (_hostBehaviors(runtime).tomlConfigInstall) {
     const codexAgentsDir = path.join(targetDir, 'agents');
     if (fs.existsSync(codexAgentsDir)) {
       const tomlFiles = fs.readdirSync(codexAgentsDir);
@@ -6605,8 +6873,10 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       console.log(`  ${green}✓${reset} Removed managed Codex SessionStart hook from hooks.json`);
     }
 
-    // #772: remove new Codex hook event registrations added by this enhancement.
-    for (const eventName of ['SubagentStart', 'Stop', 'PostToolUse']) {
+    // #772/#2088: remove every managed Codex extended hook-event registration.
+    // Shares CODEX_EXTENDED_HOOK_EVENTS with the install loop — removal set ==
+    // registration set, so no managed event is ever orphaned.
+    for (const eventName of CODEX_EXTENDED_HOOK_EVENTS) {
       const eventCleanup = removeCodexHooksJsonEvent(targetDir, eventName);
       if (eventCleanup.changed) {
         removedCount++;
@@ -7514,11 +7784,16 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // Claude local uses flatCommandsDir instead for manifest recording.
   const flatCommandsDir = path.join(configDir, 'commands');
   const opencodeCommandDir = path.join(configDir, _hostBehaviors(runtime).flatCommandDir || 'command');
-  // Hermes nests GSD skills under skills/gsd/ as a single category (#2841).
+  // Hermes nests GSD skills under skills/gsd/ as a single category (#2841) —
+  // already encoded in its layout descriptor's destSubpath ('skills/gsd').
   // All other runtimes that use the Codex-style skills layout use a flat skills/ root.
-  const codexSkillsDir = isHermes
-    ? path.join(configDir, 'skills', 'gsd')
-    : path.join(configDir, 'skills');
+  // ADR-1239 upgrade 3 (#2088): honor a skills-kind `home` override (e.g. Codex
+  // skills -> $HOME/.agents/skills instead of configDir/skills) via the same
+  // descriptor-driven helper used by the snapshot/rollback/verification paths,
+  // so the manifest records what's actually on disk. _resolveSkillsRootDir already
+  // resolves destSubpath (which includes hermes's 'skills/gsd' nesting) — do not
+  // re-append 'gsd' or the hermes dir gets double-nested to skills/gsd/gsd.
+  const codexSkillsDir = _resolveSkillsRootDir(runtime, configDir, options.scope === 'local' ? 'local' : 'global');
   const codexSkillsManifestPrefix = isHermes ? 'skills/gsd/' : 'skills/';
   const agentsDir = path.join(configDir, 'agents');
   const manifest = {
@@ -7970,9 +8245,7 @@ function reportLocalPatches(configDir, runtime = DEFAULT_RUNTIME) {
   if (meta.files && meta.files.length > 0) {
     const reapplyCommand = _hostBehaviors(runtime).reapplyCommand
       ? _hostBehaviors(runtime).reapplyCommand
-      : runtime === 'codex'
-        ? '$gsd-update --reapply'
-        : runtime === 'cursor'
+      : runtime === 'cursor'
           ? 'gsd-update --reapply (mention the skill name)'
         : runtime === 'kimi'
           ? '/skill:gsd-update --reapply'
@@ -8209,8 +8482,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Map<filename, Buffer> — content snapshot of each pre-existing gsd-* agent file.
   const codexPreInstallAgentContents = new Map();
   let codexPreInstallVersionBytes = null;
-  if (isCodex && !isMinimalMode(_effectiveInstallMode)) {
-    const _preSkillsDir = path.join(targetDir, 'skills');
+  if (_hostBehaviors(runtime).tomlConfigInstall && !isMinimalMode(_effectiveInstallMode)) {
+    const _preSkillsDir = _resolveSkillsRootDir(runtime, targetDir, isGlobal ? 'global' : 'local');
     if (fs.existsSync(_preSkillsDir)) {
       for (const entry of fs.readdirSync(_preSkillsDir, { withFileTypes: true })) {
         if (entry.isDirectory() && entry.name.startsWith('gsd-')) {
@@ -8263,10 +8536,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // atomic-write temp files. It is safe to call before any writes have happened.
   // The full restoreCodexSnapshot() (defined inside the config block) additionally
   // handles config.toml, which is not yet touched at this point in the pipeline.
-  const _codexPreConfigRollback = !isCodex || isMinimalMode(_effectiveInstallMode) ? null : () => {
+  const _codexPreConfigRollback = !_hostBehaviors(runtime).tomlConfigInstall || isMinimalMode(_effectiveInstallMode) ? null : () => {
     rollbackInstallerMigrations();
     // skills/gsd-* — pass 1: restore snapshot entries (may be absent if deleted mid-install).
-    const _earlySkillsDir = path.join(targetDir, 'skills');
+    const _earlySkillsDir = _resolveSkillsRootDir(runtime, targetDir, isGlobal ? 'global' : 'local');
     for (const skillName of codexPreInstallSkillNames) {
       const skillDirPath = path.join(_earlySkillsDir, skillName);
       const fileMap = codexPreInstallSkillContents.get(skillName);
@@ -8459,6 +8732,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   if (_isSkillsRuntime) {
     // Layout-driven install for skills-based runtimes (full and minimal modes)
     const scope = isGlobal ? 'global' : 'local';
+    // ADR-1239 upgrade 3 / #2088: a kind may declare an alternate install `home`
+    // (e.g. Codex skills -> $HOME/.agents/skills) instead of the runtime's normal
+    // configDir. Resolve the ACTUAL on-disk skills root here, descriptor-driven
+    // (no isCodex check), so downstream sidecar-cleanup and post-install
+    // verification look in the right place regardless of which runtime declares
+    // an alternate home for its skills kind.
+    const _skillsRootDir = _resolveSkillsRootDir(runtime, targetDir, scope);
     // ADR-1239 / #2086: drive install through the public Host-Integration Interface
     // (imperative adapter). The adapter delegates to the SAME installRuntimeArtifacts
     // engine call -> byte-identical output (gated by golden-install-parity). Fail-open
@@ -8481,8 +8761,23 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // index BOTH SKILL.md and the sidecar, causing each GSD skill to appear twice
     // in autocomplete. Cleaning them up fixes the duplication; SKILL.md alone is
     // sufficient for Codex discovery. User-owned dirs are never touched.
-    if (isCodex) {
-      cleanupCodexSkillMetadataSidecars(path.join(targetDir, 'skills'));
+    if (_hostBehaviors(runtime).cleanupSkillSidecars) {
+      cleanupCodexSkillMetadataSidecars(_skillsRootDir);
+    }
+
+    // ADR-1239 split-home migration: when a runtime's skills kind moved to an
+    // alternate `home` (e.g. Codex → ~/.agents/skills), pre-move installs left
+    // managed gsd-* skill dirs at the old configDir-rooted location
+    // (~/.codex/skills). Reinstalling here writes the new location but would
+    // otherwise orphan the old one — clean up the stale gsd-* dirs.
+    {
+      const _movedOldSkillsDir = _resolveMovedSkillsOldDir(runtime, targetDir, scope);
+      if (_movedOldSkillsDir) {
+        const migrated = cleanupMovedSkillsOldLocation(_movedOldSkillsDir, 'gsd-');
+        if (migrated > 0) {
+          console.log(`  ${green}✓${reset} Migrated ${migrated} skill dir(s) off the legacy ${_movedOldSkillsDir} location`);
+        }
+      }
     }
 
     // #1629 Finding B: Windsurf local only — remove legacy .devin/skills/gsd-*
@@ -8554,7 +8849,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         }
       }
     } else {
-      const skillsDir = path.join(targetDir, 'skills');
+      const skillsDir = _skillsRootDir;
       if (fs.existsSync(skillsDir)) {
         const count = fs.readdirSync(skillsDir, { withFileTypes: true })
           .filter(e => e.isDirectory() && e.name.startsWith('gsd-')).length;
@@ -8809,7 +9104,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     for (const file of fs.readdirSync(agentsDest)) {
       if (
         file.startsWith('gsd-') &&
-        (file.endsWith('.md') || (isCodex && file.endsWith('.toml')))
+        (file.endsWith('.md') || (_hostBehaviors(runtime).agentTomlFiles && file.endsWith('.toml')))
       ) {
         fs.unlinkSync(path.join(agentsDest, file));
       }
@@ -8827,7 +9122,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // Without stripping them here, a full → minimal reinstall would leave the
     // runtime advertising the old full agent surface even though the agent
     // files are gone. Reuse the same helper that powers `--uninstall`.
-    if (isCodex) {
+    if (_hostBehaviors(runtime).tomlConfigInstall) {
       const codexConfigPath = path.join(targetDir, 'config.toml');
       if (fs.existsSync(codexConfigPath)) {
         const existing = fs.readFileSync(codexConfigPath, 'utf8');
@@ -8883,7 +9178,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = convertClaudeToOpencodeFrontmatter(content, { isAgent: true, modelOverride: _ocModelOverride });
         } else if (_hostBehaviors(runtime).frontmatterDialect === 'kilo') {
           content = convertClaudeToKiloFrontmatter(content, { isAgent: true });
-        } else if (isCodex) {
+        } else if (_hostBehaviors(runtime).frontmatterDialect === 'codex') {
           content = convertClaudeAgentToCodexAgent(content);
         } else if (isCopilot) {
           content = convertClaudeAgentToCopilotAgent(content, isGlobal);
@@ -9197,7 +9492,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   // Write file manifest for future modification detection
-  writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
+  writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: isGlobal ? 'global' : 'local' });
   console.log(`  ${green}✓${reset} Wrote file manifest (${MANIFEST_NAME})`);
 
   // Report any backed-up local patches
@@ -9340,7 +9635,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       //     (copyCommandsAsCodexSkills removes pre-existing gsd-* dirs before re-writing)
       //     are restored even when they are absent from disk at rollback time (#3245 CR).
       //   • Dirs that did not pre-exist: remove entirely.
-      const _rollbackSkillsDir = path.join(targetDir, 'skills');
+      const _rollbackSkillsDir = _resolveSkillsRootDir(runtime, targetDir, isGlobal ? 'global' : 'local');
       // Pass 1 — restore snapshot entries (may be absent from disk if deleted mid-install).
       for (const skillName of codexPreInstallSkillNames) {
         const skillDirPath = path.join(_rollbackSkillsDir, skillName);
@@ -9451,7 +9746,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       // Re-write the manifest now that .toml agent files exist on disk.
       // The initial writeManifest call (before Codex config generation) could
       // not include agents/gsd-*.toml because those files did not yet exist.
-      writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
+      writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: isGlobal ? 'global' : 'local' });
     } else {
       console.log(`  ${dim}↳${reset} Skipping Codex agent config generation (minimal install)`);
     }
@@ -9591,24 +9886,23 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           }
         }
 
-        // ── Codex extended hook events (#772) ────────────────────────────────
-        // Codex CLI stabilised a full hook-event set in rust-v0.137.0. Register
-        // three new high-value lifecycle events — all routed through
-        // gsd-context-monitor.js so context-headroom warnings surface at:
-        //   SubagentStart — subagent session open (environment / agent-name aware)
-        //   Stop          — model stop / session final-response moment
-        //   PostToolUse   — after each tool invocation (mirrors Claude baseline)
-        //
-        // Note: UserPromptSubmit is NOT wired — gsd-prompt-guard exits unless
-        // tool_name is Write|Edit (PreToolUse payload shape), so it would be a
-        // silent no-op for the UserPromptSubmit payload.  Registration deferred
-        // to a follow-on issue.
+        // ── Codex extended hook events (#772, #2088) ─────────────────────────
+        // Codex CLI stabilised a full hook-event set in rust-v0.137.0. GSD
+        // registers CODEX_EXTENDED_HOOK_EVENTS (#2088 adds the 6 documented
+        // events beyond the original #772 three) — all routed through
+        // gsd-context-monitor.js so context-headroom warnings surface at each
+        // lifecycle point: SubagentStart/SubagentStop (subagent open/close),
+        // Stop (final-response), PreToolUse/PostToolUse (tool boundaries),
+        // PermissionRequest (approval prompts), Pre/PostCompact (context
+        // compaction), and UserPromptSubmit (per-turn context injection). The
+        // context-monitor script decides per-payload what to do; unregistered
+        // events simply never fire.
         //
         // Guard: only register when the context-monitor file exists and the node
         // runner is available — same guards as the SessionStart path above.
         const contextMonitorFile = path.join(targetDir, 'hooks', 'gsd-context-monitor.js');
         if (codexNodeRunner && fs.existsSync(contextMonitorFile)) {
-          for (const codexEvent of ['SubagentStart', 'Stop', 'PostToolUse']) {
+          for (const codexEvent of CODEX_EXTENDED_HOOK_EVENTS) {
             const eventWrite = ensureCodexHooksJsonEvent(targetDir, codexEvent, {
               absoluteRunner: codexNodeRunner,
               platform: process.platform,
@@ -9620,7 +9914,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
             }
           }
         } else if (!codexNodeRunner) {
-          console.warn(`  ${yellow}⚠${reset}  Skipped Codex SubagentStart/Stop/PostToolUse hook registration — Node runner unavailable.`);
+          console.warn(`  ${yellow}⚠${reset}  Skipped Codex extended hook-event registration — Node runner unavailable.`);
         }
         // ── end Codex extended hook events ────────────────────────────────────
       }
@@ -9694,7 +9988,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       console.log(`  ${green}✓${reset} Cursor lifecycle hooks already up to date`);
     }
     // Re-run the manifest pass so the hook scripts + hooks.json are hash-tracked.
-    writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
+    writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: isGlobal ? 'global' : 'local' });
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -9712,7 +10006,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     writeClineArtifacts(targetDir, isGlobal);
     // Re-run the manifest pass: these artifacts are written *after* the earlier
     // writeManifest() call, so a second pass is needed to hash-track them.
-    writeManifest(targetDir, runtime, { mode: _effectiveInstallMode });
+    writeManifest(targetDir, runtime, { mode: _effectiveInstallMode, scope: isGlobal ? 'global' : 'local' });
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -11009,6 +11303,13 @@ module.exports = {
     generateCodexAgentToml,
     cleanupCodexSkillMetadataSidecars,
     cleanupWindsurfLegacyDevinSkills,
+    cleanupMovedSkillsOldLocation,
+    _resolveMovedSkillsOldDir,
+    _resolveSkillsRootDir,
+    codexBareAgentsHasOnlyKnownScalars,
+    extractCodexUserAgentsScalars,
+    spliceCodexAgentsScalars,
+    CODEX_EXTENDED_HOOK_EVENTS,
     generateCodexConfigBlock,
     stripGsdFromCodexConfig,
     migrateCodexHooksMapFormat,

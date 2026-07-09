@@ -325,11 +325,14 @@ describe('generate-dev-preferences command', () => {
     const result = runGsdTools(
       ['generate-dev-preferences', '--analysis', analysisPath, '--raw'],
       tmpDir,
-      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex' }
+      // #2088 (ADR-1239 upgrade 3): Codex skills resolve to $HOME/.agents/skills
+      // (HOME-relative), so sandbox HOME to keep the dev-preferences write inside
+      // the temp dir rather than the developer's real ~/.agents/skills.
+      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex', HOME: codexHome, USERPROFILE: codexHome }
     );
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
-    assert.strictEqual(out.command_path, path.join(codexHome, 'skills', 'gsd-dev-preferences', 'SKILL.md'));
+    assert.strictEqual(out.command_path, path.join(codexHome, '.agents', 'skills', 'gsd-dev-preferences', 'SKILL.md'));
     assert.ok(fs.existsSync(out.command_path), 'runtime-aware output should be written');
   });
 
@@ -347,11 +350,12 @@ describe('generate-dev-preferences command', () => {
     const result = runGsdTools(
       ['generate-dev-preferences', '--analysis', analysisPath, '--raw'],
       tmpDir,
-      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex-app' }
+      // #2088: codex-app alias canonicalizes to codex → $HOME/.agents/skills.
+      { CODEX_HOME: codexHome, GSD_RUNTIME: 'codex-app', HOME: codexHome, USERPROFILE: codexHome }
     );
     assert.ok(result.success, `Failed: ${result.error}`);
     const out = JSON.parse(result.output);
-    assert.strictEqual(out.command_path, path.join(codexHome, 'skills', 'gsd-dev-preferences', 'SKILL.md'));
+    assert.strictEqual(out.command_path, path.join(codexHome, '.agents', 'skills', 'gsd-dev-preferences', 'SKILL.md'));
   });
 
   test('uses runtime-aware skills dir for cline by default (#782)', () => {

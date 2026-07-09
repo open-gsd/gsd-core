@@ -60,20 +60,33 @@ const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapt
 
 function runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
   const previousCodeHome = process.env.CODEX_HOME;
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
   const previousCwd = process.cwd();
   process.env.CODEX_HOME = codexHome;
+  // #2088: Codex skills now install to the canonical $HOME/.agents/skills root
+  // (os.homedir()-relative, independent of CODEX_HOME — per codex core-skills
+  // loader.rs). Sandbox HOME to codexHome so skills land under the temp dir
+  // (codexHome/.agents/skills) instead of polluting the developer's real home.
+  process.env.HOME = codexHome;
+  process.env.USERPROFILE = codexHome;
 
   try {
     process.chdir(cwd);
     return install(true, 'codex');
   } finally {
     process.chdir(previousCwd);
-    if (previousCodeHome === undefined) {
-      delete process.env.CODEX_HOME;
-    } else {
-      process.env.CODEX_HOME = previousCodeHome;
-    }
+    if (previousCodeHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodeHome;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
   }
+}
+// #2088: the canonical Codex skill-install root, sandboxed under codexHome.
+function codexSkillsRoot(codexHome) {
+  return path.join(codexHome, '.agents', 'skills');
 }
 
 function readCodexConfig(codexHome) {
@@ -722,17 +735,19 @@ describe('generateCodexConfigBlock', () => {
     assert.ok(result.startsWith(GSD_CODEX_MARKER), 'starts with marker');
   });
 
-  test('does not include feature flags or agents table header', () => {
+  test('emits the [agents] max_depth tuning block but no feature flags (#2088)', () => {
     const result = generateCodexConfigBlock(agents);
     assert.ok(!result.includes('[features]'), 'no features table');
     assert.ok(!result.includes('multi_agent'), 'no multi_agent');
     assert.ok(!result.includes('default_mode_request_user_input'), 'no request_user_input');
-    // Should not have bare [agents] table header (only [agents.<name>] structs).
-    assert.ok(!result.match(/^\[agents\]\s*$/m), 'no bare [agents] table');
+    // #2088: the managed block DOES pin dispatch depth via a bare [agents]
+    // AgentsToml scalar table (coexisting with the [agents.<name>] role structs).
+    assert.match(result, /^\[agents\]$/m, 'emits the [agents] tuning table');
+    assert.match(result, /^max_depth = 1$/m, 'pins max_depth = 1');
     // Should not emit [[agents]] sequence format (rejected by Codex 0.124.0).
     assert.ok(!result.includes('[[agents]]'), 'no [[agents]] sequence format');
-    assert.ok(!result.includes('max_threads'), 'no max_threads');
-    assert.ok(!result.includes('max_depth'), 'no max_depth');
+    // Only max_depth is managed — max_threads is intentionally left to the user.
+    assert.ok(!result.includes('max_threads'), 'no max_threads (only max_depth is GSD-managed)');
   });
 
   test('#2727: emits [agents.<name>] struct format (Codex 0.120.0+, replaces #2645 [[agents]])', () => {
@@ -2721,7 +2736,7 @@ describe('cleanupCodexSkillMetadataSidecars (#1326)', () => {
     const codexHome = path.join(tmpDir, 'codex-home');
     fs.mkdirSync(codexHome, { recursive: true });
     runCodexInstall(codexHome);
-    const skillsDir = path.join(codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(codexHome);
     assert.ok(fs.existsSync(skillsDir), 'Codex install must create a skills/ directory');
     const gsdSkillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(e => e.isDirectory() && e.name.startsWith('gsd-') && e.name !== 'gsd-dev-preferences');
@@ -2798,12 +2813,28 @@ before(() => {
 
 describe('#2698: CRLF stale gsd-update-check block is removed on Codex reinstall', () => {
   let tmpDir;
+  let _previousHome;
+  let _previousUserProfile;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-crlf-install-2698-'));
+    // #2088 (ADR-1239 upgrade 3): Codex's skills-kind `home: ".agents"` override
+    // applies to BOTH global and local scope and resolves via os.homedir(). This
+    // describe block calls install(false, 'codex') (local scope) directly —
+    // without sandboxing HOME/USERPROFILE to tmpDir, that in-process install
+    // would materialize a full gsd-* skill set into the developer/CI machine's
+    // REAL $HOME/.agents/skills instead of the temp dir.
+    _previousHome = process.env.HOME;
+    _previousUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
   });
 
   afterEach(() => {
+    if (_previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = _previousHome;
+    if (_previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = _previousUserProfile;
     // Use the shared 5s Windows-EBUSY retry budget instead of inline 1s.
     cleanup(tmpDir);
   });
@@ -2993,7 +3024,16 @@ if (previousGsdTestMode === undefined) {
 function runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
   const previousCodeHome = process.env.CODEX_HOME;
   const previousCwd = process.cwd();
+  // #2088 (ADR-1239 upgrade 3): Codex skills now install to the canonical
+  // $HOME/.agents/skills root (os.homedir()-relative, independent of
+  // CODEX_HOME). Sandbox HOME (and USERPROFILE) to codexHome so this
+  // in-process install never materializes skills under the developer/CI
+  // machine's real home directory.
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = codexHome;
+  process.env.USERPROFILE = codexHome;
   try {
     process.chdir(cwd);
     return install(true, 'codex');
@@ -3004,6 +3044,10 @@ function runCodexInstall(codexHome, cwd = path.join(__dirname, '..')) {
     } else {
       process.env.CODEX_HOME = previousCodeHome;
     }
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
   }
 }
 
@@ -4583,7 +4627,16 @@ before(() => {
 function runCodexInstall(codexHome) {
   const previousCodexHome = process.env.CODEX_HOME;
   const previousCwd = process.cwd();
+  // #2088 (ADR-1239 upgrade 3): Codex skills now install to the canonical
+  // $HOME/.agents/skills root (os.homedir()-relative, independent of
+  // CODEX_HOME). Sandbox HOME (and USERPROFILE) to codexHome so this
+  // in-process install never materializes skills under the developer/CI
+  // machine's real home directory.
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = codexHome;
+  process.env.USERPROFILE = codexHome;
   try {
     process.chdir(path.join(__dirname, '..'));
     return install(true, 'codex');
@@ -4594,6 +4647,10 @@ function runCodexInstall(codexHome) {
     } else {
       process.env.CODEX_HOME = previousCodexHome;
     }
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
   }
 }
 
@@ -4908,7 +4965,7 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
     assert.strictEqual(threw, true, 'install must throw when validation fails');
 
     // skills/ — GSD writes gsd-* subdirs here. All must be absent after rollback.
-    const skillsDir = path.join(codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(codexHome);
     if (fs.existsSync(skillsDir)) {
       const gsdSkills = fs.readdirSync(skillsDir, { withFileTypes: true })
         .filter(e => e.isDirectory() && e.name.startsWith('gsd-'));
@@ -4963,7 +5020,7 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
     assert.strictEqual(threw, true, 'install must throw when validation fails (very early failure)');
     // Rollback removes all gsd-* skill dirs it wrote. Even if skills/ was
     // created during the install, no gsd-* dirs should survive after rollback.
-    const skillsDir = path.join(codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(codexHome);
     const remainingGsdSkills = fs.existsSync(skillsDir)
       ? fs.readdirSync(skillsDir, { withFileTypes: true })
           .filter((e) => e.isDirectory() && e.name.startsWith('gsd-'))
@@ -4978,7 +5035,7 @@ describe('#3245 — idempotent rollback reverts skills/, agents/, and VERSION', 
 
   test('rollback does not remove pre-existing user skills that GSD did not write', () => {
     // If the user has a custom skill dir (not gsd-*) it must survive rollback.
-    const skillsDir = path.join(codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(codexHome);
     const userSkill = path.join(skillsDir, 'my-custom-skill');
     fs.mkdirSync(userSkill, { recursive: true });
     fs.writeFileSync(path.join(userSkill, 'SKILL.md'), '# Custom\n', 'utf8');
@@ -5248,7 +5305,16 @@ describe('#3285 — install succeeds when config.toml contains hooks.state entri
   function runCodexInstall() {
     const previousCodexHome = process.env.CODEX_HOME;
     const previousCwd = process.cwd();
+    // #2088 (ADR-1239 upgrade 3): Codex skills now install to the canonical
+    // $HOME/.agents/skills root (os.homedir()-relative, independent of
+    // CODEX_HOME). Sandbox HOME (and USERPROFILE) to tmpDir so this
+    // in-process install never materializes skills under the developer/CI
+    // machine's real home directory.
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
     process.env.CODEX_HOME = codexHome;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
     try {
       process.chdir(path.join(__dirname, '..'));
       return install(true, 'codex');
@@ -5259,6 +5325,10 @@ describe('#3285 — install succeeds when config.toml contains hooks.state entri
       } else {
         process.env.CODEX_HOME = previousCodexHome;
       }
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
     }
   }
 
@@ -5930,11 +6000,24 @@ describe('#3426 uninstall: gsd-check-update.cmd is removed from hooks dir on uni
 
   function withCodexHome(dir, fn) {
     const prev = process.env.CODEX_HOME;
+    // #2088 (ADR-1239 upgrade 3): Codex skills now resolve an alternate install
+    // home rooted at the REAL os.homedir() ($HOME/.agents), independent of
+    // CODEX_HOME. Fake $HOME (and $USERPROFILE) too so this in-process install
+    // never touches the developer/CI machine's real home directory — confined
+    // entirely to `dir`, which the caller cleans up.
+    const prevHome = process.env.HOME;
+    const prevUserProfile = process.env.USERPROFILE;
     process.env.CODEX_HOME = dir;
+    process.env.HOME = dir;
+    process.env.USERPROFILE = dir;
     try { return fn(); }
     finally {
       if (prev == null) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = prev;
+      if (prevHome == null) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevUserProfile == null) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = prevUserProfile;
     }
   }
 
@@ -6050,12 +6133,27 @@ const BUILD_HOOKS_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js
 
 function withCodexHome(codexHome, fn) {
   const prev = process.env.CODEX_HOME;
+  // #2088 (ADR-1239 upgrade 3): Codex skills now resolve an alternate install
+  // home rooted at the REAL os.homedir() ($HOME/.agents), independent of
+  // CODEX_HOME. Fake $HOME (and $USERPROFILE) too — using the sandbox root
+  // (codexHome's parent, since codexHome is conventionally `<tmpRoot>/.codex`
+  // in this file) — so this in-process install never touches the developer/CI
+  // machine's real home directory. tmpRoot is reclaimed by the caller's afterEach.
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const fakeHome = path.dirname(codexHome);
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
   try {
     return fn();
   } finally {
     if (prev == null) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prev;
+    if (prevHome == null) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
   }
 }
 
@@ -6107,22 +6205,32 @@ describe('#3427 + #3433 — Codex installer avoids duplicate skills and mixed ho
 
     withCodexHome(codexHome, () => install(true, 'codex'));
 
-    const skillsDir = path.join(codexHome, 'skills');
-    const entries = fs.existsSync(skillsDir)
-      ? fs.readdirSync(skillsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
+    // #2088: the managed gsd-* skill surface now regenerates at the
+    // canonical $HOME/.agents/skills root (fakeHome === tmpRoot here — see
+    // withCodexHome above), not under the legacy $CODEX_HOME/skills.
+    const newSkillsDir = codexSkillsRoot(tmpRoot);
+    const newEntries = fs.existsSync(newSkillsDir)
+      ? fs.readdirSync(newSkillsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
       : [];
 
-    // #3562: $gsd-* commands are discoverable only when skills/gsd-*/SKILL.md
-    // exists. The installer must regenerate (not remove) the managed gsd-*
-    // directories.
-    assert.equal(entries.includes('gsd-help'), true);
-    const refreshedBody = fs.readFileSync(path.join(skillsDir, 'gsd-help', 'SKILL.md'), 'utf8');
+    // #3562: $gsd-* commands are discoverable only when
+    // .agents/skills/gsd-*/SKILL.md exists. The installer must regenerate
+    // (not remove) the managed gsd-* directories.
+    assert.equal(newEntries.includes('gsd-help'), true);
+    const refreshedBody = fs.readFileSync(path.join(newSkillsDir, 'gsd-help', 'SKILL.md'), 'utf8');
     assert.notEqual(refreshedBody, legacySkillBody, 'stale legacy body must be overwritten');
     const frontmatter = parseFrontmatter(refreshedBody);
     assert.equal(frontmatter.name, 'gsd-help', 'refreshed SKILL.md frontmatter must declare name: gsd-help');
 
-    // Unrelated user skills are preserved — the regen scope is `gsd-*` only.
-    assert.equal(entries.includes('custom-user-skill'), true);
+    // #2088 migration: the installer cleans stale gsd-* dirs out of the old
+    // $CODEX_HOME/skills location on a pre-move install.
+    const legacyHelpDir = path.join(codexHome, 'skills', 'gsd-help');
+    assert.equal(fs.existsSync(legacyHelpDir), false, 'migration must remove the stale legacy gsd-help skill dir from $CODEX_HOME/skills');
+
+    // Unrelated user skills are preserved in place — migration only removes
+    // `gsd-*` dirs from the old location; non-gsd-* user dirs are untouched.
+    const userSkill = path.join(codexHome, 'skills', 'custom-user-skill', 'SKILL.md');
+    assert.equal(fs.existsSync(userSkill), true, 'unrelated user skill must survive the #2088 migration');
   });
 
   test('stores managed SessionStart update hook in hooks.json and removes inline gsd hook from config.toml', () => {
@@ -6239,12 +6347,27 @@ const BUILD_HOOKS_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js
 
 function withCodexHome(codexHome, fn) {
   const prev = process.env.CODEX_HOME;
+  // #2088 (ADR-1239 upgrade 3): Codex skills now resolve an alternate install
+  // home rooted at the REAL os.homedir() ($HOME/.agents), independent of
+  // CODEX_HOME. Fake $HOME (and $USERPROFILE) too — using the sandbox root
+  // (codexHome's parent, since codexHome is conventionally `<tmpRoot>/.codex`
+  // in this file) — so this in-process install never touches the developer/CI
+  // machine's real home directory. tmpRoot is reclaimed by the caller's afterEach.
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const fakeHome = path.dirname(codexHome);
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
   try {
     return fn();
   } finally {
     if (prev == null) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prev;
+    if (prevHome == null) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
   }
 }
 
@@ -6268,7 +6391,9 @@ describe('#3562 — Codex install produces discoverable $gsd-* skill surface', {
   test('global install creates skills/gsd-help/SKILL.md', () => {
     withCodexHome(codexHome, () => install(true, 'codex'));
 
-    const skillPath = path.join(codexHome, 'skills', 'gsd-help', 'SKILL.md');
+    // #2088: skills now install to the canonical $HOME/.agents/skills root.
+    // withCodexHome fakes $HOME to tmpRoot (codexHome's parent) above.
+    const skillPath = path.join(codexSkillsRoot(tmpRoot), 'gsd-help', 'SKILL.md');
     assert.ok(
       fs.existsSync(skillPath),
       `Codex install must create ${skillPath} so $gsd-help is discoverable. ` +
@@ -6279,7 +6404,7 @@ describe('#3562 — Codex install produces discoverable $gsd-* skill surface', {
   test('SKILL.md content has frontmatter expected by Codex skill discovery', () => {
     withCodexHome(codexHome, () => install(true, 'codex'));
 
-    const skillPath = path.join(codexHome, 'skills', 'gsd-help', 'SKILL.md');
+    const skillPath = path.join(codexSkillsRoot(tmpRoot), 'gsd-help', 'SKILL.md');
     assert.ok(fs.existsSync(skillPath), 'precondition: SKILL.md exists');
 
     const content = fs.readFileSync(skillPath, 'utf8');
@@ -6290,7 +6415,7 @@ describe('#3562 — Codex install produces discoverable $gsd-* skill surface', {
   test('multiple core $gsd-* skills are produced (not just gsd-help)', () => {
     withCodexHome(codexHome, () => install(true, 'codex'));
 
-    const skillsDir = path.join(codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(tmpRoot);
     assert.ok(fs.existsSync(skillsDir), 'skills/ directory must exist after install');
 
     const gsdSkills = fs
@@ -6384,12 +6509,27 @@ const BUILD_HOOKS_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js
 
 function withCodexHome(codexHome, fn) {
   const prev = process.env.CODEX_HOME;
+  // #2088 (ADR-1239 upgrade 3): Codex skills now resolve an alternate install
+  // home rooted at the REAL os.homedir() ($HOME/.agents), independent of
+  // CODEX_HOME. Fake $HOME (and $USERPROFILE) too — using the sandbox root
+  // (codexHome's parent, since codexHome is conventionally `<tmpRoot>/.codex`
+  // in this file) — so this in-process install never touches the developer/CI
+  // machine's real home directory. tmpRoot is reclaimed by the caller's afterEach.
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const fakeHome = path.dirname(codexHome);
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
   try {
     return fn();
   } finally {
     if (prev == null) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prev;
+    if (prevHome == null) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
   }
 }
 
@@ -6659,7 +6799,16 @@ function runCodexInstallCaptured() {
 
   const previousCodexHome = process.env.CODEX_HOME;
   const previousCwd = process.cwd();
+  // #2088 (ADR-1239 upgrade 3): Codex skills now resolve an alternate install
+  // home rooted at os.homedir() ($HOME/.agents), independent of CODEX_HOME.
+  // Sandbox $HOME (and $USERPROFILE) to codexHome too — otherwise this
+  // in-process install would materialize skills under the developer/CI
+  // machine's REAL home directory instead of the temp dir.
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = codexHome;
+  process.env.USERPROFILE = codexHome;
   process.env.GSD_TEST_MODE = '1';
   try {
     process.chdir(ROOT);
@@ -6678,6 +6827,16 @@ function runCodexInstallCaptured() {
       delete process.env.CODEX_HOME;
     } else {
       process.env.CODEX_HOME = previousCodexHome;
+    }
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
     }
     if (previousGsdTestMode === undefined) {
       delete process.env.GSD_TEST_MODE;
@@ -6703,7 +6862,7 @@ describe('bug-3582: Codex global install materializes the skill surface', { conc
   });
 
   test('writes the exact expected set of gsd-*/SKILL.md skills (deepEqual on name set)', () => {
-    const skillsDir = path.join(installRun.codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(installRun.codexHome);
     assert.ok(
       fs.existsSync(skillsDir),
       `Codex install must create ${skillsDir} (the 1.42.2 regression skipped this entirely)`,
@@ -6735,7 +6894,7 @@ describe('bug-3582: Codex global install materializes the skill surface', { conc
   });
 
   test('SKILL.md frontmatter declares hyphen-form name matching the directory', () => {
-    const skillsDir = path.join(installRun.codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(installRun.codexHome);
     const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(e => e.isDirectory() && e.name.startsWith('gsd-'))
       .map(e => e.name);
@@ -6767,7 +6926,7 @@ describe('bug-3582: Codex global install materializes the skill surface', { conc
     // review); the file on disk must contain its full output verbatim
     // (open tag, body, closing `</codex_skill_adapter>`). A truncated,
     // empty, or missing-closing-tag adapter cannot satisfy this assertion.
-    const skillsDir = path.join(installRun.codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(installRun.codexHome);
     const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(e => e.isDirectory() && e.name.startsWith('gsd-'))
       .map(e => e.name);
@@ -6807,7 +6966,7 @@ describe('bug-3582: Codex global install materializes the skill surface', { conc
       'gsd-new-project',
       'gsd-health',
     ];
-    const skillsDir = path.join(installRun.codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(installRun.codexHome);
     for (const name of representative) {
       const skillMd = path.join(skillsDir, name, 'SKILL.md');
       assert.ok(
@@ -6818,7 +6977,7 @@ describe('bug-3582: Codex global install materializes the skill surface', { conc
   });
 
   test('installed Codex skills do not ask agents to run bare gsd-tools commands', () => {
-    const skillsDir = path.join(installRun.codexHome, 'skills');
+    const skillsDir = codexSkillsRoot(installRun.codexHome);
     const skillDirs = fs.readdirSync(skillsDir, { withFileTypes: true })
       .filter(e => e.isDirectory() && e.name.startsWith('gsd-'))
       .map(e => e.name);
@@ -7075,12 +7234,27 @@ const BUILD_HOOKS_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js
 
 function withCodexHome(codexHome, fn) {
   const prev = process.env.CODEX_HOME;
+  // #2088 (ADR-1239 upgrade 3): Codex skills now resolve an alternate install
+  // home rooted at the REAL os.homedir() ($HOME/.agents), independent of
+  // CODEX_HOME. Fake $HOME (and $USERPROFILE) too — using the sandbox root
+  // (codexHome's parent, since codexHome is conventionally `<tmpRoot>/.codex`
+  // in this file) — so this in-process install never touches the developer/CI
+  // machine's real home directory. tmpRoot is reclaimed by the caller's afterEach.
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const fakeHome = path.dirname(codexHome);
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = fakeHome;
+  process.env.USERPROFILE = fakeHome;
   try {
     return fn();
   } finally {
     if (prev == null) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = prev;
+    if (prevHome == null) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
   }
 }
 

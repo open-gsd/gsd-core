@@ -187,11 +187,31 @@ function readAllSkillMd(dir) {
   return out.join('\n');
 }
 
+// Codex resolves its skills-kind destination via os.homedir() + a 'skills'-kind
+// 'home: ".agents"' layout override (ADR-1239 EoS upgrade 3, #2088), NOT
+// configDir/skills. Without sandboxing HOME, an in-process codex install would
+// write to (and an uninstall would mutate) the developer's REAL ~/.agents/skills.
+// Sandbox HOME/USERPROFILE to configDir before resolving the layout or invoking
+// install/uninstall so codex's resolved skills dir is configDir/.agents/skills.
+function sandboxHome(t, dir) {
+  const savedHome = process.env.HOME;
+  const savedUserProfile = process.env.USERPROFILE;
+  process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
+  t.after(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  });
+}
+
 describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill dirs', () => {
   for (const runtime of SKILLS_RUNTIMES_LAYOUT) {
     test(`${runtime}: gsd-prefixed skill dirs in skills/`, (t) => {
       const configDir = createTempDir(`gsd-ial-${runtime}-`);
       t.after(() => cleanup(configDir));
+      sandboxHome(t, configDir);
 
       assert.strictEqual(typeof installRuntimeArtifacts, 'function');
       installRuntimeArtifacts(runtime, configDir, 'global', RESOLVED_CORE);
@@ -200,7 +220,7 @@ describe('installRuntimeArtifacts — skills runtimes write gsd-prefixed skill d
       const skillsKind = layout.kinds.find(k => k.kind === 'skills');
       assert.ok(skillsKind, `${runtime} must have skills kind`);
 
-      const destDir = path.join(configDir, skillsKind.destSubpath);
+      const destDir = path.join(skillsKind.home || configDir, skillsKind.destSubpath);
       assert.ok(fs.existsSync(destDir));
       assert.ok(
         fs.existsSync(path.join(destDir, `${skillsKind.prefix}help`, 'SKILL.md')),
@@ -481,6 +501,7 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
     test(`${runtime}: gsd entries removed, foreign preserved`, (t) => {
       const configDir = createTempDir(`gsd-ual-${runtime}-`);
       t.after(() => cleanup(configDir));
+      sandboxHome(t, configDir);
 
       const { uninstallRuntimeArtifacts } = require('../bin/install.js');
       assert.strictEqual(typeof uninstallRuntimeArtifacts, 'function');
@@ -519,7 +540,7 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
       }
 
       for (const kind of layout.kinds) {
-        const destDir = path.join(configDir, kind.destSubpath);
+        const destDir = path.join(kind.home || configDir, kind.destSubpath);
         fs.mkdirSync(destDir, { recursive: true });
         if (kind.kind === 'skills') {
           writeSkillEntry(destDir, kind.prefix, 'help');
@@ -545,7 +566,7 @@ describe('uninstallRuntimeArtifacts — removes gsd-owned entries, preserves for
       uninstallRuntimeArtifacts(runtime, configDir, 'global');
 
       for (const kind of layout.kinds) {
-        const destDir = path.join(configDir, kind.destSubpath);
+        const destDir = path.join(kind.home || configDir, kind.destSubpath);
         if (kind.kind === 'skills') {
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}help`)));
           assert.ok(!fs.existsSync(path.join(destDir, `${kind.prefix}phase`)));

@@ -49,6 +49,9 @@ const PATH_RETURNING_FNS = [
   'resolveAgentDir',
   'getGlobalConfigDir',
   'getGlobalSkillsBase',
+  // #2088 (ADR-1239 upgrade 3): resolves the on-disk skills-install dir honoring
+  // a skills-kind `home` override (e.g. Codex → $HOME/.agents/skills).
+  '_resolveSkillsRootDir',
   'getGlobalSkillDir',
   'getGlobalSkillDisplayPath',
   'resolveSkillsBaseFromDescriptor',

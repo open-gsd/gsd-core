@@ -118,6 +118,9 @@ type ConfigHomeDescriptor =
 interface RuntimeArtifactKindDescriptor {
   kind: string;
   destSubpath: string;
+  // ADR-1239 upgrade 3 (#2088): optional split-home override (relative to
+  // os.homedir()), e.g. Codex skills → ".agents". Absent for most runtimes.
+  home?: string;
 }
 
 interface RuntimeDescriptor {
@@ -416,6 +419,14 @@ export function getGlobalSkillsBase(runtime: string): string | null {
   const runtimeEntry = getRegistry().runtimes[runtime];
   const descriptor = runtimeEntry?.runtime;
   const globalSkillsKind = descriptor?.artifactLayout?.global?.find((entry) => entry.kind === 'skills');
+  // ADR-1239 upgrade 3 (#2088): honor a skills-kind `home` override (e.g. Codex
+  // → $HOME/.agents/skills, independent of $CODEX_HOME) so the reported skills
+  // root matches where the installer actually writes (the artifact layout /
+  // _resolveSkillsRootDir). Without this, `--skills-root` and the sync-skills
+  // workflow would look under configHome/skills while skills live under ~/.agents.
+  if (globalSkillsKind?.home && globalSkillsKind?.destSubpath) {
+    return path.join(os.homedir(), globalSkillsKind.home, globalSkillsKind.destSubpath);
+  }
   if (descriptor?.configHome && globalSkillsKind?.destSubpath) {
     return resolveSkillsBaseFromDescriptor(
       descriptor.configHome,

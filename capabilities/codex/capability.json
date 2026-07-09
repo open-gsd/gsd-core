@@ -27,7 +27,8 @@
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
-          "converter": "convertClaudeCommandToCodexSkill"
+          "converter": "convertClaudeCommandToCodexSkill",
+          "home": ".agents"
         }
       ],
       "local": [
@@ -37,7 +38,8 @@
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
-          "converter": "convertClaudeCommandToCodexSkill"
+          "converter": "convertClaudeCommandToCodexSkill",
+          "home": ".agents"
         }
       ]
     },
@@ -49,7 +51,11 @@
     "installSurface": "codex-toml",
     "writesSharedSettings": false,
     "permissionWriter": null,
-    "extendedHookEvents": [],
+    "extendedHookEvents": [
+      "SubagentStop",
+      "Stop",
+      "PreCompact"
+    ],
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-file",
@@ -66,6 +72,13 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "node"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "$gsd-update --reapply",
+      "tomlConfigInstall": true,
+      "cleanupSkillSidecars": true,
+      "agentTomlFiles": true,
+      "frontmatterDialect": "codex"
     }
   }
 }

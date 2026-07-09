@@ -1618,12 +1618,24 @@ const BUILD_HOOKS_SCRIPT = path.join(__dirname, '..', 'scripts', 'build-hooks.js
 
 function withCodexHome(codexHome, fn) {
   const previousCodexHome = process.env.CODEX_HOME;
+  // #2088 (ADR-1239 upgrade 3): Codex skills now install to $HOME/.agents/skills
+  // (os.homedir()-relative, independent of CODEX_HOME). Sandbox HOME (and
+  // USERPROFILE) to codexHome so in-process installs never write to the
+  // developer/CI machine's real home directory.
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
   process.env.CODEX_HOME = codexHome;
+  process.env.HOME = codexHome;
+  process.env.USERPROFILE = codexHome;
   try {
     return fn();
   } finally {
     if (previousCodexHome == null) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
+    if (previousHome == null) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    if (previousUserProfile == null) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousUserProfile;
   }
 }
 
