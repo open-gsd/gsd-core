@@ -16,7 +16,7 @@ const { test, describe, before, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, parseFrontmatter } = require('./helpers.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -53,6 +53,34 @@ describe('milestone complete command', () => {
 
   beforeEach(() => { tmpDir = createTempProject(); });
   afterEach(() => { cleanup(tmpDir); });
+
+  test('preserves current_phase frontmatter through milestone complete (#2111)', () => {
+    // Seed STATE.md mid-phase-19: the real current_phase lives in frontmatter
+    // and the only body phase source is the `Phase:` prose line (no explicit
+    // `Current Phase:` field — matching what milestoneCompleteCore writes).
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `---\ncurrent_phase: "19"\n---\n# State\n\n**Status:** In progress\n` +
+      `**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n\n` +
+      `## Current Position\n\nPhase: 19 — EXECUTING\nPlan: 1 of 1\n` +
+      `Status: Executing\nLast activity: 2025-01-01 — Running phase\n`,
+    );
+    // No ROADMAP.md — mirrors 'handles missing ROADMAP.md gracefully' so the
+    // milestone-phase-filter guard never fires.
+
+    const result = runGsdTools('milestone complete v0.5 --name Test', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const fm = parseFrontmatter(state);
+    // Fails pre-migration: the unanchored parser mined "5" from
+    // "Phase: Milestone v0.5 complete" and clobbered current_phase.
+    assert.strictEqual(
+      fm.current_phase, '19',
+      `current_phase must be preserved across milestone complete, not mined from ` +
+      `the version string (#2111); got ${JSON.stringify(fm.current_phase)}`,
+    );
+  });
 
   test('archives roadmap, requirements, creates MILESTONES.md', () => {
     writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
