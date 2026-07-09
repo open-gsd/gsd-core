@@ -6774,9 +6774,13 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // Get the target directory based on runtime and install type. Cline local
   // installs write to the project root (.clinerules/ lives at the root, not in
   // a .cline/ subdir), mirroring the install() path resolution (#787).
+  // Descriptor-driven (ADR-1239 / #2090): cline local installs write to the
+  // project root (.clinerules/ lives at the root, not in a .cline/ subdir),
+  // mirroring the install() path resolution (#787). Folded from a hardcoded
+  // `runtime === 'cline'` branch into hostBehaviors.localTargetIsProjectRoot.
   const targetDir = isGlobal
     ? getGlobalConfigDir(runtime, explicitConfigDir)
-    : runtime === 'cline'
+    : _hostBehaviors(runtime).localTargetIsProjectRoot
       ? process.cwd()
       : path.join(process.cwd(), dirName);
 
@@ -6941,7 +6945,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // 1b-cline. Non-layout Cline side-effects (issue #787): remove the
   // directory-form rules + PreToolUse hook, and strip the GSD block from the
   // global cross-tool ~/.agents/AGENTS.md target.
-  if (runtime === 'cline') {
+  // Descriptor-driven (ADR-1239 / #2090): folded from `runtime === 'cline'`
+  // into hostBehaviors.clineRulesSurface.
+  if (_hostBehaviors(runtime).clineRulesSurface) {
     const clinerulesDir = path.join(targetDir, '.clinerules');
     for (const rel of ['gsd.md', path.join('hooks', 'PreToolUse')]) {
       const p = path.join(clinerulesDir, rel);
@@ -7892,7 +7898,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // Track Cline directory-form artifacts in the manifest (issue #787): the
   // rules file and the PreToolUse hook. (~/.agents/AGENTS.md is tracked via its
   // marker block, not the per-configDir manifest, since it lives outside it.)
-  if (isCline) {
+  // Descriptor-driven (ADR-1239 / #2090): folded from `isCline` into
+  // hostBehaviors.clineRulesSurface.
+  if (_hostBehaviors(runtime).clineRulesSurface) {
     for (const rel of ['.clinerules/gsd.md', '.clinerules/hooks/PreToolUse']) {
       const dest = path.join(configDir, rel);
       if (fs.existsSync(dest)) {
@@ -7903,7 +7911,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
 
   // Track hook files so saveLocalPatches() can detect user modifications
   // Hooks are only installed for runtimes that use settings.json (not Codex/Copilot/Cline)
-  if (!isCodex && !isCopilot && !isCline && !isKimi) {
+  // Descriptor-driven (ADR-1239 / #2089+#2090): cline's exclusion is via
+  // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCline).
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi) {
     const hooksDir = path.join(configDir, 'hooks');
     if (fs.existsSync(hooksDir)) {
       // Drive from INSTALLED_HOOK_FILES (the canonical HOOKS_TO_COPY set from
@@ -8348,15 +8358,17 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   };
 
   // Get the target directory based on runtime and install type.
-  // Cline local installs write to the project root (like Claude Code) — .clinerules
-  // lives at the root, not inside a .cline/ subdirectory.
+  // Descriptor-driven (ADR-1239 / #2090): cline local installs write to the
+  // project root (like Claude Code) — .clinerules lives at the root, not inside
+  // a .cline/ subdirectory. Folded from `isCline` into
+  // hostBehaviors.localTargetIsProjectRoot.
   // #791: antigravity local installs write to .agents/ (canonical). The legacy .agent/
   // directory is recognized by RUNTIME_DIRS (update-context) and _LEGACY_SCAN_SUBDIR_NAMES
   // but NOT auto-removed here; legacy .agent/ gsd artifacts are recognized but not
   // auto-removed on reinstall (dual-read fallback per issue #791 spec).
   const targetDir = isGlobal
     ? getGlobalConfigDir(runtime, explicitConfigDir)
-    : isCline
+    : _hostBehaviors(runtime).localTargetIsProjectRoot
       ? process.cwd()
       : path.join(process.cwd(), dirName);
 
@@ -8929,10 +8941,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         }
       }
     }
-  } else if (isCline) {
+  } else if (_hostBehaviors(runtime).localCommandsViaRules) {
     // Cline local install: rules-based only — commands are embedded in .clinerules (generated below).
     // No skills/commands directory needed for local installs.
     // Global installs are handled above by _isSkillsRuntime (#782).
+    // Descriptor-driven (ADR-1239 / #2090): folded from `isCline` into
+    // hostBehaviors.localCommandsViaRules.
     console.log(`  ${green}✓${reset} Cline: commands will be available via .clinerules`);
   } else {
     // Claude Code local: flat gsd-<cmd>.md layout — Claude Code registers
@@ -9212,7 +9226,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = convertClaudeAgentToTraeAgent(content);
         } else if (isCodebuddy) {
           content = convertClaudeAgentToCodebuddyAgent(content);
-        } else if (isCline) {
+        } else if (_hostBehaviors(runtime).frontmatterDialect === 'cline') {
+          // Descriptor-driven (ADR-1239 / #2090): folded from `isCline` into
+          // hostBehaviors.frontmatterDialect === 'cline'.
           content = convertClaudeAgentToClineAgent(content);
         } else if (isQwen) {
           content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
@@ -9286,7 +9302,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // them and the CommonJS package.json marker written below.
   // #2089: Cursor's exclusion is now descriptor-driven via
   // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCursor).
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode) {
+  // #2090: Cline's exclusion is likewise descriptor-driven (cline declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isCline` was removed.
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isKilo && !isZcode) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -9378,15 +9396,15 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Gate hooks/lib/ install on the same runtimes that receive hooks (see line ~8702).
   // Codex/Copilot/Cursor/Windsurf/Trae/Cline do not use the shared hooks/lib/ helpers
   // (Cursor uses standalone .js hook scripts registered via hooks.json — gated
-  // descriptor-driven via hostBehaviors.skipSharedHooksInstall, #2089; Codex uses
-  // hooks.json directly; the others skip hooks entirely); Kilo and ZCode also skip
-  // hooks entirely (hooksSurface:'none' with no plugin surface — #1821). OpenCode
-  // is NOT excluded: its #1914 plugin adapter spawns the staged hooks and requires
-  // hooks/lib/ helpers. None of the excluded runtimes must receive the hooks/lib/
-  // helpers — otherwise the Codex comment downstream ("we deliberately do *not*
-  // copy hooks/lib/ for Codex") is contradicted in practice.
+  // descriptor-driven via hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise
+  // #2090; Codex uses hooks.json directly; the others skip hooks entirely); Kilo and
+  // ZCode also skip hooks entirely (hooksSurface:'none' with no plugin surface — #1821).
+  // OpenCode is NOT excluded: its #1914 plugin adapter spawns the staged hooks and
+  // requires hooks/lib/ helpers. None of the excluded runtimes must receive the
+  // hooks/lib/ helpers — otherwise the Codex comment downstream ("we deliberately do
+  // *not* copy hooks/lib/ for Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isKilo && !isZcode && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);

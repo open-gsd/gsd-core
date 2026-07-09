@@ -618,6 +618,14 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "frontmatterDialect": "cline",
+        "skipSharedHooksInstall": true,
+        "localTargetIsProjectRoot": true,
+        "clineRulesSurface": true,
+        "localCommandsViaRules": true
       }
     }
   },
@@ -4029,6 +4037,14 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/gsd-update --reapply",
+        "frontmatterDialect": "cline",
+        "skipSharedHooksInstall": true,
+        "localTargetIsProjectRoot": true,
+        "clineRulesSurface": true,
+        "localCommandsViaRules": true
       }
     }
   },
