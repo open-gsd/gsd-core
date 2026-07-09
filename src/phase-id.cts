@@ -255,6 +255,97 @@ function phaseTokenMatches(dirName: string, normalized: string): boolean {
   return false;
 }
 
+// ─── #2121 canonical surface (ADR-2121) ──────────────────────────────────────
+
+/**
+ * Parse a phase identifier from a STATE.md `Phase:` prose field VALUE — the text
+ * after the `Phase:` label (e.g. `"3 of 4 (Delta)"`, `"3A — Delta (executing)"`,
+ * or `"Milestone v0.5 complete"`).
+ *
+ * The token is anchored to the START of the value (after an optional literal
+ * `Phase ` label and an optional project-code prefix) so a phase is only
+ * returned when the value actually begins with one. This is the #2111 fix: the
+ * prior unanchored `/\b(\d+[A-Z]?(?:\.\d+)*)\b/i` mined the first numeral
+ * anywhere, so `"Milestone v0.5 complete"` collapsed to `"5"` (the minor-version
+ * digit) and `"v1.0"` to `"0"` (a reserved sentinel). Here both yield
+ * `{ phase: null }` because they do not begin with a phase token. The name
+ * extraction (parenthetical or em-dash tail, minus status words) is unchanged.
+ */
+function parsePhaseFromProse(value: string | null): { phase: string | null; name: string | null } {
+  if (!value) return { phase: null, name: null };
+  // Coerce defensively so a non-string caller cannot throw on this canonical
+  // surface (mirrors the sibling #2121 functions' String(...) handling).
+  const str = String(value);
+  const phaseMatch = str.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
+  // The name-extraction quantifiers are length-bounded so a crafted long
+  // unterminated run (many `(` or `—`) in an untrusted STATE.md field value
+  // cannot drive O(n^2) regex backtracking (CPU-exhaustion DoS). A real phase
+  // name is far shorter than the cap.
+  const parenName = str.match(/\(([^)]{1,200})\)/);
+  const dashName = str.match(/—\s*([^(\n]{1,200}?)(?:\s*\(|$)/);
+  const rawName = parenName?.[1] ?? dashName?.[1] ?? null;
+  const name = rawName && !/^(?:complete|executing|not started)$/i.test(rawName.trim())
+    ? rawName.trim()
+    : null;
+  return {
+    phase: phaseMatch ? phaseMatch[1] : null,
+    name,
+  };
+}
+
+/**
+ * Config-AWARE project-code prefix strip. Unlike the config-blind
+ * `stripProjectCodePrefix` (which strips ANY `<CODE>-` shape), this strips the
+ * leading `<CODE>-` ONLY when `<CODE>` case-insensitively equals the configured
+ * `projectCode`. A foreign prefix (`MEM-01` when the configured code is `LKML`)
+ * or an absent/empty `projectCode` is preserved verbatim — this is the #2104
+ * fix: a foreign-prefixed id must not collapse to a bare numeric phase and
+ * collide with a real one.
+ */
+function stripConfiguredProjectCodePrefix(value: unknown, projectCode: string | null | undefined): string {
+  const input = String(value);
+  const configured = typeof projectCode === 'string' ? projectCode.trim() : '';
+  if (!configured) return input;
+  const m = input.match(PROJECT_CODE_PREFIX_CAPTURE_RE_I);
+  if (!m) return input;
+  if (m[1].toUpperCase() !== configured.toUpperCase()) return input;
+  return m[2];
+}
+
+/**
+ * True when `phase` carries a project-code prefix that is NOT the configured
+ * `projectCode` (or when no `projectCode` is configured). The canonical
+ * predicate the init-command foreign-prefix guard (#2056 / PR #2105) delegates
+ * to, so every call site shares one foreign-prefix rule.
+ */
+function isForeignPrefixedPhaseQuery(phase: unknown, projectCode: unknown): boolean {
+  const m = String(phase).match(PROJECT_CODE_PREFIX_CAPTURE_RE_I);
+  if (!m) return false;
+  const configured = typeof projectCode === 'string' ? projectCode.trim() : '';
+  return !configured || m[1].toUpperCase() !== configured.toUpperCase();
+}
+
+/**
+ * Canonical ROADMAP heading lookup-source list (moved here from
+ * roadmap-parser.cts so phase-id.cts is the single owner of the ordering).
+ * Sources are tried in a fixed, deduplicated order: exact (only when the query
+ * itself is project-code-prefixed) → bare numeric / padding-tolerant →
+ * prefix-tolerant fallback. The bare numeric source precedes the prefix-tolerant
+ * form so a canonical heading (`### Phase 117:`) is preferred over a drifted
+ * prefixed one (`### Phase MANIFOLD-117:`) when both exist in one ROADMAP.
+ */
+function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
+  const sources: string[] = [];
+  const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
+  if (exactSource) sources.push(exactSource);
+
+  const numericSource = phaseMarkdownRegexSource(phaseNum);
+  sources.push(numericSource);
+  sources.push(`${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${numericSource}`);
+
+  return [...new Set(sources)];
+}
+
 export = {
   escapeRegex,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
@@ -268,4 +359,8 @@ export = {
   comparePhaseNum,
   extractPhaseToken,
   phaseTokenMatches,
+  parsePhaseFromProse,
+  stripConfiguredProjectCodePrefix,
+  isForeignPrefixedPhaseQuery,
+  roadmapPhaseLookupSources,
 };

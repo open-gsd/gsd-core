@@ -22,10 +22,11 @@ import phaseIdModule = require('./phase-id.cjs');
 const {
   escapeRegex,
   phaseMarkdownRegexSource,
-  phaseMarkdownRegexSourceExact,
   stripProjectCodePrefix,
-  OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
+  // #2121: roadmapPhaseLookupSources now lives in phase-id.cjs (single owner of
+  // the lookup-source ordering); imported here rather than defined locally.
+  roadmapPhaseLookupSources,
 } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -240,23 +241,6 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSour
     goal,
     section,
   };
-}
-
-function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
-  const sources: string[] = [];
-  const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
-  if (exactSource) sources.push(exactSource);
-
-  const numericSource = phaseMarkdownRegexSource(phaseNum);
-  // Source order matters: the bare numeric source is tried before the
-  // prefix-tolerant form so that a canonical bare heading ("Phase 117:") is
-  // preferred over a drifted prefixed heading ("Phase MANIFOLD-117:") when
-  // both exist in the same ROADMAP.  The prefix-tolerant form is the fallback
-  // that handles the drifted-only case.
-  sources.push(numericSource);
-  sources.push(`${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${numericSource}`);
-
-  return [...new Set(sources)];
 }
 
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
