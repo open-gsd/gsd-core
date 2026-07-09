@@ -255,12 +255,30 @@ const GSD_COPILOT_SESSION_HOOK_PWSH =
 // Cursor reads hook configs from <project-root>/.cursor/hooks.json (local) or
 // ~/.cursor/hooks.json (global) with the shape { version: 1, hooks: { <event>: [...] } }.
 // Events use camelCase: sessionStart, postToolUse, preToolUse, etc.
-// A `command` hook entry runs an external script. GSD registers two managed hooks:
-//   sessionStart → gsd-cursor-session-start.js  (context injection)
-//   postToolUse  → gsd-cursor-post-tool.js       (STATE.md update monitor)
+// A `command` hook entry runs an external script. GSD registers six managed hooks
+// (AC4a upgrade, #2089 — ADR-1239):
+//   sessionStart   → gsd-cursor-session-start.js   (context injection)
+//   postToolUse    → gsd-cursor-post-tool.js        (STATE.md update monitor)
+//   preToolUse     → gsd-cursor-pre-tool.js         (write-path guard)
+//   stop           → gsd-cursor-stop.js             (verify-work reminder)
+//   subagentStart  → gsd-cursor-subagent-start.js   (subagent context injection)
+//   subagentStop   → gsd-cursor-subagent-stop.js    (subagent completion reminder)
 // Cursor docs: https://cursor.com/docs/hooks
 const GSD_CURSOR_SESSION_HOOK_SCRIPT = 'gsd-cursor-session-start.js';
 const GSD_CURSOR_POST_TOOL_HOOK_SCRIPT = 'gsd-cursor-post-tool.js';
+const GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT = 'gsd-cursor-pre-tool.js';
+const GSD_CURSOR_STOP_HOOK_SCRIPT = 'gsd-cursor-stop.js';
+const GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT = 'gsd-cursor-subagent-start.js';
+const GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT = 'gsd-cursor-subagent-stop.js';
+// All GSD-managed Cursor hook scripts (used by uninstall cleanup).
+const GSD_CURSOR_HOOK_SCRIPTS = [
+  GSD_CURSOR_SESSION_HOOK_SCRIPT,
+  GSD_CURSOR_POST_TOOL_HOOK_SCRIPT,
+  GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT,
+  GSD_CURSOR_STOP_HOOK_SCRIPT,
+  GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT,
+  GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT,
+];
 // Marker comment embedded in managed hook entries so GSD can find+remove them.
 const GSD_CURSOR_HOOK_MARKER = 'gsd-managed';
 
@@ -6969,17 +6987,20 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     }
   }
 
-  // 1b-cursor. Non-layout Cursor side-effects (issue #777): remove GSD-managed
-  // hook entries from hooks.json and clean up the managed hook scripts.
-  if (isCursor) {
+  // 1b-cursor. Descriptor-driven hook-bus cleanup (ADR-1239 / #2089): remove
+  // GSD-managed hook entries from hooks.json and clean up the managed hook
+  // scripts. Gated by the hostBehaviors.hooksJsonSurface descriptor axis, not a
+  // hardcoded `isCursor` branch.
+  if (_hostBehaviors(runtime).hooksJsonSurface) {
     const hooksJsonCleanup = removeCursorHooksJson(targetDir);
     if (hooksJsonCleanup.changed) {
       removedCount++;
       console.log(`  ${green}✓${reset} Removed GSD-managed Cursor hooks from hooks.json`);
     }
-    // Remove the managed hook scripts (session-start + post-tool).
+    // Remove all GSD-managed hook scripts (sessionStart, postToolUse, preToolUse,
+    // stop, subagentStart, subagentStop — AC4a, #2089).
     const hooksDir = path.join(targetDir, 'hooks');
-    for (const script of [GSD_CURSOR_SESSION_HOOK_SCRIPT, GSD_CURSOR_POST_TOOL_HOOK_SCRIPT]) {
+    for (const script of GSD_CURSOR_HOOK_SCRIPTS) {
       const p = path.join(hooksDir, script);
       try {
         if (fs.existsSync(p)) {
@@ -8245,11 +8266,9 @@ function reportLocalPatches(configDir, runtime = DEFAULT_RUNTIME) {
   if (meta.files && meta.files.length > 0) {
     const reapplyCommand = _hostBehaviors(runtime).reapplyCommand
       ? _hostBehaviors(runtime).reapplyCommand
-      : runtime === 'cursor'
-          ? 'gsd-update --reapply (mention the skill name)'
-        : runtime === 'kimi'
-          ? '/skill:gsd-update --reapply'
-          : '/gsd-update --reapply';
+      : runtime === 'kimi'
+        ? '/skill:gsd-update --reapply'
+        : '/gsd-update --reapply';
     console.log('');
     console.log('  ' + yellow + 'Local patches detected' + reset + ' (from v' + meta.from_version + '):');
     for (const f of meta.files) {
@@ -8877,8 +8896,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         }
       }
 
-      // Cursor only: also report the commands/ output (#785 — Cursor 1.6 slash commands)
-      if (isCursor) {
+      // Descriptor-driven commands/ output report (#785 — Cursor 1.6 slash commands).
+      // Gated by hostBehaviors.reportCommandsDir, not a hardcoded `isCursor` branch (#2089).
+      if (_hostBehaviors(runtime).reportCommandsDir) {
         const commandsDir = path.join(targetDir, 'commands');
         if (fs.existsSync(commandsDir)) {
           const cmdCount = fs.readdirSync(commandsDir)
@@ -9184,8 +9204,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = convertClaudeAgentToCopilotAgent(content, isGlobal);
         } else if (isAntigravity) {
           content = convertClaudeAgentToAntigravityAgent(content, isGlobal);
-        } else if (isCursor) {
-          content = convertClaudeAgentToCursorAgent(content);
         } else if (isWindsurf) {
           content = convertClaudeAgentToWindsurfAgent(content);
         } else if (isAugment) {
@@ -9266,7 +9284,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // its native plugin adapter (#1914, installed above under plugins/gsd-core.js)
   // spawns the staged hooks/*.js scripts via OpenCode's event bus and needs both
   // them and the CommonJS package.json marker written below.
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode) {
+  // #2089: Cursor's exclusion is now descriptor-driven via
+  // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCursor).
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -9357,7 +9377,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
 
   // Gate hooks/lib/ install on the same runtimes that receive hooks (see line ~8702).
   // Codex/Copilot/Cursor/Windsurf/Trae/Cline do not use the shared hooks/lib/ helpers
-  // (Cursor uses standalone .js hook scripts registered via hooks.json; Codex uses
+  // (Cursor uses standalone .js hook scripts registered via hooks.json — gated
+  // descriptor-driven via hostBehaviors.skipSharedHooksInstall, #2089; Codex uses
   // hooks.json directly; the others skip hooks entirely); Kilo and ZCode also skip
   // hooks entirely (hooksSurface:'none' with no plugin surface — #1821). OpenCode
   // is NOT excluded: its #1914 plugin adapter spawns the staged hooks and requires
@@ -9365,7 +9386,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // helpers — otherwise the Codex comment downstream ("we deliberately do *not*
   // copy hooks/lib/ for Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && !isCursor && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isCline && !isKimi && !isKilo && !isZcode && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
@@ -9979,11 +10000,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   if (plan.installSurface === 'cursor-hooks-json') {
-    // #777: Cursor v2.4+ supports hooks.json. Register sessionStart + postToolUse.
-    // Hook scripts are copied to <targetDir>/hooks/ and referenced by hooks.json.
+    // ADR-1239 / #2089: Cursor hooks.json driven by the descriptor-managed hook-bus
+    // adapter. Registers all 6 managed events (sessionStart, postToolUse, preToolUse,
+    // stop, subagentStart, subagentStop) via runtime-hooks-surface.cts, which reads
+    // the event list from the descriptor-driven adapter module.
     const cursorHookResult = writeCursorHooksJson(targetDir, src, {});
     if (cursorHookResult.changed) {
-      console.log(`  ${green}✓${reset} Configured Cursor lifecycle hooks (sessionStart, postToolUse)`);
+      console.log(`  ${green}✓${reset} Configured Cursor lifecycle hooks (sessionStart, postToolUse, preToolUse, stop, subagentStart, subagentStop)`);
     } else {
       console.log(`  ${green}✓${reset} Cursor lifecycle hooks already up to date`);
     }
@@ -11396,6 +11419,11 @@ module.exports = {
     mergeGsdAgentsMd,
     GSD_CURSOR_SESSION_HOOK_SCRIPT,
     GSD_CURSOR_POST_TOOL_HOOK_SCRIPT,
+    GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT,
+    GSD_CURSOR_STOP_HOOK_SCRIPT,
+    GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT,
+    GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT,
+    GSD_CURSOR_HOOK_SCRIPTS,
     GSD_CURSOR_HOOK_MARKER,
     buildCursorHookEntry,
     isManagedCursorHookEntry,

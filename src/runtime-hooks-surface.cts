@@ -80,7 +80,24 @@ const GSD_COPILOT_SESSION_HOOK_PWSH =
 // ---------------------------------------------------------------------------
 const GSD_CURSOR_SESSION_HOOK_SCRIPT = 'gsd-cursor-session-start.js';
 const GSD_CURSOR_POST_TOOL_HOOK_SCRIPT = 'gsd-cursor-post-tool.js';
+const GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT = 'gsd-cursor-pre-tool.js';
+const GSD_CURSOR_STOP_HOOK_SCRIPT = 'gsd-cursor-stop.js';
+const GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT = 'gsd-cursor-subagent-start.js';
+const GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT = 'gsd-cursor-subagent-stop.js';
 const GSD_CURSOR_HOOK_MARKER = 'gsd-managed';
+
+// The full set of Cursor hook events GSD manages (AC4a upgrade, #2089).
+// Sourced from the descriptor-driven adapter module
+// (src/host-integration-adapters/imperative-hook-bus.cts). This replaces the
+// hardcoded ['sessionStart', 'postToolUse'] pair with the 6-event managed set.
+const CURSOR_MANAGED_EVENTS = [
+  'sessionStart',
+  'postToolUse',
+  'preToolUse',
+  'stop',
+  'subagentStart',
+  'subagentStop',
+];
 
 // ---------------------------------------------------------------------------
 // Cline / AGENTS.md constants
@@ -976,9 +993,8 @@ function reconcileCursorHooksJson(hooksJsonPath: string, managedEntries: CursorM
   const hasNestedHooksObject =
     parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']);
   if (!hasNestedHooksObject) {
-    const eventKeys = ['sessionStart', 'postToolUse'];
     const lifted: Record<string, unknown> = {};
-    for (const k of eventKeys) {
+    for (const k of CURSOR_MANAGED_EVENTS) {
       if (Array.isArray(parsed[k])) {
         lifted[k] = parsed[k];
         delete parsed[k];
@@ -989,10 +1005,9 @@ function reconcileCursorHooksJson(hooksJsonPath: string, managedEntries: CursorM
   if (!parsed['version']) parsed['version'] = 1;
   const hookTable = parsed['hooks'] as Record<string, unknown>;
 
-  const MANAGED_EVENTS = ['sessionStart', 'postToolUse'];
   const entries = managedEntries || {};
 
-  for (const event of MANAGED_EVENTS) {
+  for (const event of CURSOR_MANAGED_EVENTS) {
     const existing = Array.isArray(hookTable[event]) ? (hookTable[event] as unknown[]) : [];
     const userOwned = existing.filter((e) => !isManagedCursorHookEntry(e));
     const newEntry = entries[event] || null;
@@ -1027,7 +1042,20 @@ function writeCursorHooksJson(targetDir: string, src: string, opts?: WriteCursor
   const hooksDir = path.join(targetDir, 'hooks');
   fs.mkdirSync(hooksDir, { recursive: true });
 
-  const hookScripts = [GSD_CURSOR_SESSION_HOOK_SCRIPT, GSD_CURSOR_POST_TOOL_HOOK_SCRIPT];
+  // AC4a (#2089): install all managed hook scripts, not just sessionStart/postToolUse.
+  // The event→script mapping is sourced from the descriptor-driven adapter
+  // (src/host-integration-adapters/imperative-hook-bus.cts).
+  const eventScriptMap: Record<string, string> = {
+    sessionStart: GSD_CURSOR_SESSION_HOOK_SCRIPT,
+    postToolUse: GSD_CURSOR_POST_TOOL_HOOK_SCRIPT,
+    preToolUse: GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT,
+    stop: GSD_CURSOR_STOP_HOOK_SCRIPT,
+    subagentStart: GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT,
+    subagentStop: GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT,
+  };
+  const hookScripts = CURSOR_MANAGED_EVENTS
+    .map((ev) => eventScriptMap[ev])
+    .filter((s): s is string => Boolean(s));
   const srcHooksDir = path.join(src, 'hooks');
   const installedScripts = new Set<string>();
   for (const script of hookScripts) {
@@ -1043,27 +1071,19 @@ function writeCursorHooksJson(targetDir: string, src: string, opts?: WriteCursor
   }
 
   const hookOpts: BuildHookCommandOpts = { runtime: 'cursor', platform: opts.platform || process.platform };
-  const sessionStartCmd = installedScripts.has('gsd-cursor-session-start.js')
-    ? buildHookCommand(targetDir, 'gsd-cursor-session-start.js', hookOpts)
-    : null;
-  const postToolCmd = installedScripts.has('gsd-cursor-post-tool.js')
-    ? buildHookCommand(targetDir, 'gsd-cursor-post-tool.js', hookOpts)
-    : null;
-
   const managedEntries: CursorManagedEntries = {};
-  if (sessionStartCmd) {
-    managedEntries['sessionStart'] = {
-      type: 'command',
-      command: sessionStartCmd,
-      [GSD_CURSOR_HOOK_MARKER]: true,
-    };
-  }
-  if (postToolCmd) {
-    managedEntries['postToolUse'] = {
-      type: 'command',
-      command: postToolCmd,
-      [GSD_CURSOR_HOOK_MARKER]: true,
-    };
+  for (const ev of CURSOR_MANAGED_EVENTS) {
+    const script = eventScriptMap[ev];
+    if (script && installedScripts.has(script)) {
+      const cmd = buildHookCommand(targetDir, script, hookOpts);
+      if (cmd) {
+        managedEntries[ev] = {
+          type: 'command',
+          command: cmd,
+          [GSD_CURSOR_HOOK_MARKER]: true,
+        };
+      }
+    }
   }
 
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
@@ -1729,6 +1749,10 @@ export = {
   removeCursorHooksJson,
   GSD_CURSOR_SESSION_HOOK_SCRIPT,
   GSD_CURSOR_POST_TOOL_HOOK_SCRIPT,
+  GSD_CURSOR_PRE_TOOL_HOOK_SCRIPT,
+  GSD_CURSOR_STOP_HOOK_SCRIPT,
+  GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT,
+  GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT,
   GSD_CURSOR_HOOK_MARKER,
 
   // Copilot
