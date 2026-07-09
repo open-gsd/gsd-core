@@ -494,6 +494,22 @@ describe('parsePhaseFromProse', () => {
     assert.deepEqual(phaseId.parsePhaseFromProse('3A — Delta (executing)'), { phase: '3A', name: null });
     assert.equal(phaseId.parsePhaseFromProse('3 (complete)').name, null);
   });
+
+  test('#2124 review: name quantifiers are length-bounded (ReDoS guard)', () => {
+    // A parenthetical within the bound extracts; one longer than the bound is
+    // NOT matched — the cap is what prevents O(n^2) backtracking on a crafted
+    // untrusted value. Removing the bound would extract the long name → fail.
+    assert.equal(phaseId.parsePhaseFromProse('3 (Delta)').name, 'Delta');
+    assert.equal(phaseId.parsePhaseFromProse(`3 (${'x'.repeat(201)})`).name, null);
+    // A long unterminated "(" run yields no name and still parses the phase.
+    assert.deepEqual(phaseId.parsePhaseFromProse(`3 ${'('.repeat(5000)}`), { phase: '3', name: null });
+  });
+
+  test('#2124 review: non-string input is coerced, never throws', () => {
+    assert.doesNotThrow(() => phaseId.parsePhaseFromProse(3));
+    assert.equal(phaseId.parsePhaseFromProse(3).phase, '3');
+    assert.deepEqual(phaseId.parsePhaseFromProse(true), { phase: null, name: null });
+  });
 });
 
 // ─── stripConfiguredProjectCodePrefix (#2121 / #2104, config-aware) ───────────

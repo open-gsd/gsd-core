@@ -273,9 +273,16 @@ function phaseTokenMatches(dirName: string, normalized: string): boolean {
  */
 function parsePhaseFromProse(value: string | null): { phase: string | null; name: string | null } {
   if (!value) return { phase: null, name: null };
-  const phaseMatch = value.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
-  const parenName = value.match(/\(([^)]+)\)/);
-  const dashName = value.match(/—\s*([^(\n]+?)(?:\s*\(|$)/);
+  // Coerce defensively so a non-string caller cannot throw on this canonical
+  // surface (mirrors the sibling #2121 functions' String(...) handling).
+  const str = String(value);
+  const phaseMatch = str.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
+  // The name-extraction quantifiers are length-bounded so a crafted long
+  // unterminated run (many `(` or `—`) in an untrusted STATE.md field value
+  // cannot drive O(n^2) regex backtracking (CPU-exhaustion DoS). A real phase
+  // name is far shorter than the cap.
+  const parenName = str.match(/\(([^)]{1,200})\)/);
+  const dashName = str.match(/—\s*([^(\n]{1,200}?)(?:\s*\(|$)/);
   const rawName = parenName?.[1] ?? dashName?.[1] ?? null;
   const name = rawName && !/^(?:complete|executing|not started)$/i.test(rawName.trim())
     ? rawName.trim()
