@@ -1,7 +1,7 @@
 {
   "id": "claude",
   "role": "runtime",
-  "version": "1.7.0-rc.4",
+  "version": "1.7.0-rc.5",
   "title": "Claude Code",
   "description": "Anthropic Claude Code — primary development runtime; tier-1 support with full hook surface and skills-based global install.",
   "tier": "core",
@@ -90,7 +90,9 @@
         "global": "settings.json"
       },
       "sourceMarkerFile": ".gsd-source",
-      "agentFrontmatterExtensions": ["effort"],
+      "agentFrontmatterExtensions": [
+        "effort"
+      ],
       "ownsClaudePaths": true,
       "nativeModelAliases": true,
       "skillsGlobalOnboarding": true
