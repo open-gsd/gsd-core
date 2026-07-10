@@ -348,6 +348,21 @@ describe('#1729 regression: parenthetical tag before the colon in a phase header
     assert.ok(re.test('### Phase 26: X'), 'seam stays optional when no tag is present');
   });
 
+  test('#2128: the pre-colon tag is length-bounded so the tag clause cannot ReDoS', () => {
+    // The tag body `[^)\n]*` was unbounded, making the optional-group + /g scan
+    // quadratic on adversarial ROADMAP.md/STATE.md (a long run of `(` after a
+    // header). Bounding it to {0,200} keeps the match linear; a 200-char tag body
+    // still matches (real tags are a handful of chars), 201 does not.
+    const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+    const re = new RegExp(`Phase\\s+0*26${phaseId.OPTIONAL_PHASE_TAG_SOURCE}\\s*:`);
+    assert.ok(re.test(`### Phase 26 (${'x'.repeat(200)}): T`), 'a 200-char tag body is within the bound');
+    assert.ok(!re.test(`### Phase 26 (${'x'.repeat(201)}): T`), 'a 201-char tag body exceeds the bound');
+    // Linearity guard: the adversarial input that was ~18.8s unbounded resolves
+    // near-instantly now. Assert bounded work, not wall-clock (no clock seam):
+    // the bounded source contains an explicit upper repetition limit.
+    assert.match(phaseId.OPTIONAL_PHASE_TAG_SOURCE, /\{0,\d+\}/, 'tag body must carry an explicit upper bound');
+  });
+
   test('enumeration (roadmap analyze) lists a pre-colon-tagged phase, not just the resolver', () => {
     // The resolver (get-phase) and the capture-all enumeration regexes are
     // separate code paths. Fixing only the resolver left `roadmap analyze`

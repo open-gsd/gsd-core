@@ -1442,8 +1442,8 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
           // truth for total_phases (#549).
           let roadmapPhaseCount = 0;
           if (roadmapScope !== null) {
-            // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-            const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:/gi;
+            // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+            const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
             let m: RegExpExecArray | null;
             while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
               // Only count tokens that contain at least one digit — excludes
@@ -2419,8 +2419,8 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   try {
     let roadmapPhaseCount = 0;
     if (syncRoadmapScope !== null) {
-      // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:/gi;
+      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
       let m: RegExpExecArray | null;
       while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
         // Only count tokens that contain at least one digit — excludes

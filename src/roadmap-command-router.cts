@@ -70,11 +70,11 @@ function checkW021(content: string): W021Warning[] {
   const MILESTONE_RE = /^#{1,3}\s+(?:\[[^\]]+\]\s+|Roadmap\s+|[✅🚧]\s*)?v(\d+)\.\d+(?:\s|:|\s*—)/iu;
 
   // Migrated phase heading: ### Phase M-NN: Name  (M-NN or unpadded M-N form)
-  // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-  const PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+)-(\d+)(?:-\d+)*(?:\s*\([^)\n]*\))?\s*:/i;
+  // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+  const PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+)-(\d+)(?:-\d+)*(?:\s*\([^)\n]{0,200}\))?\s*:/i;
   // Unprefixed legacy phase heading: ### Phase N: Name  (no hyphen sub-index)
   // phase-id-owner: UNPREFIXED_PHASE_RE token uses the [A-Za-z] case-variant (identical to the canonical [A-Z] token under /i); kept literal, not source-byte-equal to PHASE_NUMBER_TOKEN_SOURCE.
-  const UNPREFIXED_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Za-z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:/i;
+  const UNPREFIXED_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Za-z]?(?:\.\d+)*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
 
   let currentMilestoneMajor: number | null = null;
   const lines = content.split('\n');

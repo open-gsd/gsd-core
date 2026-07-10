@@ -37,9 +37,9 @@ const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
 // Enumeration/parse call sites that read phase headers from a regex *literal*
 // (rather than a `new RegExp` built from an interpolated phase number) cannot
 // reference this constant; they inline its literal-regex mirror instead —
-// `(?:\s*\([^)\n]*\))?` — kept character-for-character equivalent to this
+// `(?:\s*\([^)\n]{0,200}\))?` — kept character-for-character equivalent to this
 // source. Both forms must change together; see the #1729 regression test.
-const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]*\\))?';
+const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 
 // #2128: the canonical phase-NUMBER-TOKEN grammar — a phase number with an
 // optional single-letter variant suffix and optional dotted sub-phases
