@@ -46,18 +46,21 @@ const path = require('node:path');
 // adversary deliberately obfuscating a re-derivation.
 const TOKEN_DRIFT_RE = /(?:\\{1,2}d|\[0-9\])\+\[A-Z(?:a-z)?\]\??\(\?:(?:\\{1,2}\.|\[\.-\])(?:\\{1,2}d|\[0-9\])\+\)\*/;
 
-// A `phase-id-owner:` sanction only counts inside a `//` line comment — a bare
-// substring in a string literal or identifier must NOT suppress a real flag.
-const OWNER_RE = /\/\/[^\n]*phase-id-owner:/;
+// A `phase-id-owner:` sanction must be a DEDICATED `//` comment line (the marker
+// as the line's leading token). A `//` or the phrase embedded in a string
+// literal or trailing a code line is NOT a comment and must never suppress a real
+// flag — so sanctions live on their own line directly above the regex.
+const OWNER_RE = /^\s*\/\/.*phase-id-owner:/;
 const CANON_REF = 'PHASE_NUMBER_TOKEN_SOURCE';
 
 /**
  * Pure: find every literal re-derivation of the canonical phase-number token in
- * `text` that is NOT sanctioned. A site is sanctioned when its own line — or the
- * nearest preceding NON-BLANK line (so an auto-formatter's blank line between a
- * `// phase-id-owner:` comment and its regex does not reactivate the flag) —
- * carries a `// phase-id-owner:` comment, or when the line references
- * `PHASE_NUMBER_TOKEN_SOURCE` (built from the canonical source, not a literal).
+ * `text` that is NOT sanctioned. A site is sanctioned when the nearest preceding
+ * NON-BLANK line is a dedicated `// phase-id-owner:` comment (blank lines between
+ * the comment and the regex are tolerated, so an auto-formatter cannot reactivate
+ * the flag), or when the regex line references `PHASE_NUMBER_TOKEN_SOURCE` (built
+ * from the canonical source, not a literal). A `//`/phrase inside a string or
+ * trailing a code line does NOT count — put the sanction on its own line above.
  * Returns [{ line, found }].
  */
 function findPhaseIdRegexDrift(text) {
@@ -67,7 +70,6 @@ function findPhaseIdRegexDrift(text) {
     const line = lines[i];
     const m = TOKEN_DRIFT_RE.exec(line);
     if (!m) continue;
-    if (OWNER_RE.test(line)) continue;
     if (line.includes(CANON_REF)) continue;
     let j = i - 1;
     while (j >= 0 && lines[j].trim() === '') j--; // nearest preceding non-blank line
@@ -135,7 +137,8 @@ function main() {
   }
   process.stderr.write('phase-id-drift: literal re-derivation(s) of the canonical phase-number token found.\n');
   process.stderr.write('Build the regex from phase-id.cjs `PHASE_NUMBER_TOKEN_SOURCE` (or phaseMarkdownRegexSource for a\n');
-  process.stderr.write('known number), or sanction the site with a `// phase-id-owner: <reason>` comment:\n');
+  process.stderr.write('known number), or sanction the site with a dedicated `// phase-id-owner: <reason>`\n');
+  process.stderr.write('comment on the line directly above the regex:\n');
   for (const d of violations) {
     process.stderr.write(`  ${d.file}:${d.line}  ${d.found}\n`);
   }

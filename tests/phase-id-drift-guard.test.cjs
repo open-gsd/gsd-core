@@ -66,29 +66,38 @@ describe('#2128 phase-id drift scanner: findPhaseIdRegexDrift (pure)', () => {
     assert.equal(findPhaseIdRegexDrift('/([0-9]+[A-Z]?(?:\\.[0-9]+)*)/').length, 1, '[0-9] in place of \\d');
   });
 
-  test('a same-line // phase-id-owner: sanction suppresses the flag', () => {
+  test('a dedicated preceding // phase-id-owner: comment line suppresses the flag', () => {
     assert.deepEqual(
-      findPhaseIdRegexDrift('const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/; // phase-id-owner: sanctioned exception'),
-      [],
-    );
-  });
-
-  test('a preceding-line // phase-id-owner: sanction suppresses the flag', () => {
-    assert.deepEqual(
-      findPhaseIdRegexDrift('// phase-id-owner: sanctioned exception\nconst re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;'),
+      findPhaseIdRegexDrift('  // phase-id-owner: sanctioned exception\n  const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;'),
       [],
     );
   });
 
   test('a blank line between the // phase-id-owner: comment and the regex still suppresses', () => {
     assert.deepEqual(
-      findPhaseIdRegexDrift('// phase-id-owner: sanctioned exception\n\nconst re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;'),
+      findPhaseIdRegexDrift('  // phase-id-owner: sanctioned exception\n\n  const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;'),
       [],
     );
   });
 
-  test('a bare "phase-id-owner:" substring in a STRING (not a // comment) does NOT suppress', () => {
-    const v = findPhaseIdRegexDrift('const msg = "ping the phase-id-owner: for review"; const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;');
+  test('a trailing same-line // phase-id-owner: is NOT a sanction (must be a dedicated line above)', () => {
+    // The marker must lead its own comment line; a trailing comment on a code
+    // line is not honored, so the regex is still flagged.
+    const v = findPhaseIdRegexDrift('const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/; // phase-id-owner: not honored here');
+    assert.equal(v.length, 1);
+  });
+
+  test('a // phase-id-owner: embedded in a STRING literal does NOT suppress (decoy)', () => {
+    // A `//` inside a string is not a comment — help/doc text that quotes the
+    // sanction syntax must not silently suppress a real re-derivation.
+    const decoyLine = findPhaseIdRegexDrift('const help = "use // phase-id-owner: <reason>"; const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;');
+    assert.equal(decoyLine.length, 1);
+    const decoyPrev = findPhaseIdRegexDrift('const help = "use // phase-id-owner: <reason>";\nconst re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;');
+    assert.equal(decoyPrev.length, 1);
+  });
+
+  test('a bare "phase-id-owner:" substring with no // does NOT suppress', () => {
+    const v = findPhaseIdRegexDrift('const msg = "ping the phase-id-owner for review"; const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;');
     assert.equal(v.length, 1);
   });
 
