@@ -1181,8 +1181,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      // phase-id-owner: dir-name phase-token parse; extractPhaseToken dash-separated sub-phase semantics differ, so a token-source swap would risk remapping phase<->directory matches. Kept local.
-      const m = stripProjectCodePrefix(e.name).match(/^(\d+[A-Z]?(?:\.\d+)*)/);
+      const m = stripProjectCodePrefix(e.name).match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`));
       if (!m) continue;
       diskPhaseDirs.set(canonicalizePhase(m[1]), e.name);
     }
@@ -1715,17 +1714,14 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
       .map((e) => e.name)
       .filter(isDirInMilestone)
       .sort((a, b) => {
-        // phase-id-owner: dir-name phase-token parse; extractPhaseToken dash-separated sub-phase semantics differ, so a token-source swap would risk remapping phase<->directory matches. Kept local.
-        const pa = a.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
-        // phase-id-owner: dir-name phase-token parse; extractPhaseToken dash-separated sub-phase semantics differ, so a token-source swap would risk remapping phase<->directory matches. Kept local.
-        const pb = b.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
+        const pa = a.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
+        const pb = b.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
         if (!pa || !pb) return a.localeCompare(b);
         return parseInt(pa[1], 10) - parseInt(pb[1], 10);
       });
 
     for (const dir of dirs) {
-      // phase-id-owner: dir-name phase-token parse; extractPhaseToken dash-separated sub-phase semantics differ, so a token-source swap would risk remapping phase<->directory matches. Kept local.
-      const dirMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i);
+      const dirMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
       const phaseNumber = dirMatch ? dirMatch[1] : dir;
       const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
       seenPhaseNums.add(phaseNumber.replace(/^0+/, '') || '0');

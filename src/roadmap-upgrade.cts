@@ -175,8 +175,7 @@ function extractPhaseNumFromDir(dirName: string): string | null {
   const stripped = stripProjectCodePrefix(dirName);
   // Matches: digits + optional letter + optional decimal suffix, followed by '-' or end.
   // e.g. "02.1-hotfix" → "02.1", "01-setup" → "01"
-  // phase-id-owner: strips a leading phase number from a dir name; extractPhaseToken returns the project-code-prefixed token, so it is not a behavior-preserving drop-in.
-  const m = stripped.match(/^(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i);
+  const m = stripped.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})(?:-|$)`, 'i'));
   return m ? m[1] : null;
 }
 

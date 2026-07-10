@@ -459,7 +459,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
   // the milestone as a bogus "46-6" id.
   const numericRe = roadmapUsesHyphenedIds
     ? /^0*(\d+(?:-\d{2,})*[A-Za-z]?(?:\.\d+)*)/
-    // phase-id-owner: [A-Za-z] case-variant token (identical under /i); kept literal, not source-byte-equal to the canonical PHASE_NUMBER_TOKEN_SOURCE.
+    // phase-id-owner: the [A-Za-z] letter class does real case handling here — this regex carries NO /i flag; kept literal, not source-byte-equal to the canonical PHASE_NUMBER_TOKEN_SOURCE.
     : /^0*(\d+[A-Za-z]?(?:\.\d+)*)/;
 
   function isDirInMilestone(dirName: string): boolean {

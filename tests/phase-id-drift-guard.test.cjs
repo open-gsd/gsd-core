@@ -60,9 +60,10 @@ describe('#2128 phase-id drift scanner: findPhaseIdRegexDrift (pure)', () => {
     assert.equal(v.length, 1);
   });
 
-  test('the [A-Za-z] and [.-] near-variants ARE flagged', () => {
-    assert.equal(findPhaseIdRegexDrift('/(\\d+[A-Za-z]?(?:\\.\\d+)*)/').length, 1);
-    assert.equal(findPhaseIdRegexDrift('/(\\d+[A-Z]?(?:[.-]\\d+)*)/').length, 1);
+  test('the [A-Za-z], [.-] and [0-9] near-variants ARE flagged (no trivial evasion)', () => {
+    assert.equal(findPhaseIdRegexDrift('/(\\d+[A-Za-z]?(?:\\.\\d+)*)/').length, 1, '[A-Za-z] letter class');
+    assert.equal(findPhaseIdRegexDrift('/(\\d+[A-Z]?(?:[.-]\\d+)*)/').length, 1, '[.-] separator');
+    assert.equal(findPhaseIdRegexDrift('/([0-9]+[A-Z]?(?:\\.[0-9]+)*)/').length, 1, '[0-9] in place of \\d');
   });
 
   test('a same-line // phase-id-owner: sanction suppresses the flag', () => {
@@ -77,6 +78,18 @@ describe('#2128 phase-id drift scanner: findPhaseIdRegexDrift (pure)', () => {
       findPhaseIdRegexDrift('// phase-id-owner: sanctioned exception\nconst re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;'),
       [],
     );
+  });
+
+  test('a blank line between the // phase-id-owner: comment and the regex still suppresses', () => {
+    assert.deepEqual(
+      findPhaseIdRegexDrift('// phase-id-owner: sanctioned exception\n\nconst re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;'),
+      [],
+    );
+  });
+
+  test('a bare "phase-id-owner:" substring in a STRING (not a // comment) does NOT suppress', () => {
+    const v = findPhaseIdRegexDrift('const msg = "ping the phase-id-owner: for review"; const re = /(\\d+[A-Z]?(?:\\.\\d+)*)/;');
+    assert.equal(v.length, 1);
   });
 
   test('non-token phase regexes are NOT flagged (no false positives)', () => {
@@ -119,14 +132,18 @@ describe('#2128 phase-id single-owner identity guard', () => {
     const libDir = path.join(ROOT, 'gsd-core', 'bin', 'lib');
     const consumers = fs.readdirSync(libDir).filter((f) => f.endsWith('.cjs') && f !== 'phase-id.cjs');
     let checked = 0;
+    const requireFailures = [];
     for (const f of consumers) {
       let mod;
       try {
         mod = require(path.join(libDir, f));
-      } catch {
-        continue; // a module that cannot be required in isolation can't re-export anything
+      } catch (e) {
+        // Surfaced, not silently skipped — a module that cannot be required
+        // would otherwise erode the guard's coverage without any signal.
+        requireFailures.push(`${f}: ${e.message}`);
+        continue;
       }
-      if (!mod || typeof mod !== 'object') continue;
+      if (!mod || typeof mod !== 'object') continue; // bare-function exports carry no named canonical member
       checked++;
       for (const name of CANONICAL) {
         if (Object.prototype.hasOwnProperty.call(mod, name)) {
@@ -138,6 +155,9 @@ describe('#2128 phase-id single-owner identity guard', () => {
         }
       }
     }
-    assert.ok(checked > 0, 'expected to inspect at least one consumer module');
+    assert.deepEqual(requireFailures, [], `consumer module(s) failed to require (guard coverage would silently degrade):\n  ${requireFailures.join('\n  ')}`);
+    // Coverage floor: the vast majority of the ~150 built lib modules export an
+    // object and must actually be inspected — not a token "at least one".
+    assert.ok(checked > consumers.length * 0.75, `expected to inspect most of the ${consumers.length} consumer modules, only inspected ${checked}`);
   });
 });

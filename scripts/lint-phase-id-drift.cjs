@@ -34,19 +34,31 @@ const path = require('node:path');
 // The canonical phase-number token as it appears in SOURCE TEXT:
 //   \d+[A-Z]?(?:\.\d+)*   in a regex literal   -> one backslash before d/.
 //   \\d+[A-Z]?(?:\\.\\d+)* in a template string -> two backslashes
-// Also tolerate the [A-Za-z] letter-class and the [.-] (dot-or-dash) separator
-// near-variants that a few enumeration call sites use.
-const TOKEN_DRIFT_RE = /\\{1,2}d\+\[A-Z(?:a-z)?\]\??\(\?:(?:\\{1,2}\.|\[\.-\])\\{1,2}d\+\)\*/;
+// Tolerated near-variants so a trivial rewrite does not silently evade the guard:
+//   digit class     \d  \\d  or  [0-9]
+//   letter class    [A-Z]  or  [A-Za-z]
+//   sub-phase sep    \.  \\.  or  [.-]  (dot-or-dash)
+// KNOWN, ACCEPTED limits of a per-line textual scan (covered instead by the
+// identity guard + code review, not by this regex): a re-derivation split
+// across lines via string concatenation, a capturing `(\.\d+)*` in place of the
+// non-capturing group, or a semantically-equivalent restructuring. This guard
+// targets the common case — an accidental copy of the exact grammar — not an
+// adversary deliberately obfuscating a re-derivation.
+const TOKEN_DRIFT_RE = /(?:\\{1,2}d|\[0-9\])\+\[A-Z(?:a-z)?\]\??\(\?:(?:\\{1,2}\.|\[\.-\])(?:\\{1,2}d|\[0-9\])\+\)\*/;
 
-const OWNER_MARK = 'phase-id-owner:';
+// A `phase-id-owner:` sanction only counts inside a `//` line comment — a bare
+// substring in a string literal or identifier must NOT suppress a real flag.
+const OWNER_RE = /\/\/[^\n]*phase-id-owner:/;
 const CANON_REF = 'PHASE_NUMBER_TOKEN_SOURCE';
 
 /**
  * Pure: find every literal re-derivation of the canonical phase-number token in
- * `text` that is NOT sanctioned. A site is sanctioned when its line — or the
- * line directly above it — contains `// phase-id-owner:`, or when the line
- * references `PHASE_NUMBER_TOKEN_SOURCE` (i.e. it is built from the canonical
- * source, not a literal). Returns [{ line, found }].
+ * `text` that is NOT sanctioned. A site is sanctioned when its own line — or the
+ * nearest preceding NON-BLANK line (so an auto-formatter's blank line between a
+ * `// phase-id-owner:` comment and its regex does not reactivate the flag) —
+ * carries a `// phase-id-owner:` comment, or when the line references
+ * `PHASE_NUMBER_TOKEN_SOURCE` (built from the canonical source, not a literal).
+ * Returns [{ line, found }].
  */
 function findPhaseIdRegexDrift(text) {
   const out = [];
@@ -55,9 +67,11 @@ function findPhaseIdRegexDrift(text) {
     const line = lines[i];
     const m = TOKEN_DRIFT_RE.exec(line);
     if (!m) continue;
-    if (line.includes(OWNER_MARK)) continue;
-    if (i > 0 && lines[i - 1].includes(OWNER_MARK)) continue;
+    if (OWNER_RE.test(line)) continue;
     if (line.includes(CANON_REF)) continue;
+    let j = i - 1;
+    while (j >= 0 && lines[j].trim() === '') j--; // nearest preceding non-blank line
+    if (j >= 0 && OWNER_RE.test(lines[j])) continue;
     out.push({ line: i + 1, found: m[0] });
   }
   return out;
