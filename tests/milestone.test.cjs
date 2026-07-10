@@ -113,6 +113,85 @@ describe('milestone complete command', () => {
     assert.ok(milestones.includes('Set up project infrastructure'));
   });
 
+  test('#2118 — --dry-run does NOT mutate: no archive, no STATE.md rewrite, no phase move', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      `# Requirements\n\n- [x] User auth\n`,
+    );
+    writeState(tmpDir);
+    const phasePath = mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+
+    // Capture pre-state
+    const stateBefore = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    const result = runGsdTools('milestone complete v1.0 --name Test --dry-run', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true, 'dry_run must be true');
+    assert.strictEqual(output.version, 'v1.0');
+    assert.ok(output.stats.phases >= 1, 'should count at least 1 phase');
+    assert.ok(output.would_archive.roadmap, 'should list roadmap archive plan');
+    assert.ok(output.would_archive.requirements, 'should list requirements archive plan');
+    assert.ok(
+      output.would_archive.phases.includes('01-foundation'),
+      'should list phase dir for archive',
+    );
+
+    // CRITICAL: no mutations occurred
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'ROADMAP.md')),
+      'ROADMAP.md must NOT be archived (dry-run)',
+    );
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md')),
+      'REQUIREMENTS.md must NOT be archived (dry-run)',
+    );
+    assert.ok(
+      fs.existsSync(phasePath),
+      'phase directory must NOT be moved (dry-run)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
+      'MILESTONES.md must NOT be created (dry-run)',
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'),
+      stateBefore,
+      'STATE.md must be unchanged (dry-run)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'archive dir must NOT be created (dry-run) — platformEnsureDir must be gated',
+    );
+  });
+
+  test('#2118 — --dry-run --no-archive-phases omits phase list from preview', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation');
+
+    const result = runGsdTools('milestone complete v1.0 --dry-run --no-archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true);
+    assert.deepStrictEqual(output.would_archive.phases, [], 'phases list must be empty with --no-archive-phases');
+  });
+
+  test('#2118 — --dry-run --force bypasses the unstarted-phases guard', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir, 'milestone: v1.0\n');
+    // No phase directory for Phase 1 — guard would block without --force
+
+    const result = runGsdTools('milestone complete v1.0 --dry-run --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true, 'preview should run past the guard with --force');
+  });
+
   test('prepends to existing MILESTONES.md (reverse chronological)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'MILESTONES.md'),
