@@ -393,7 +393,7 @@ with no wired evidence routes to `insufficient_spec → human_needed` — never 
 That surfacing is the intended honest-verifier behavior, not over-flagging.
 
 **Write-back.** Populate a `## UI Considerations` section in the UI-SPEC from the resolved
-considerations, in the format the shipped plan-phase lift reads (plan-phase.md:921):
+considerations, in the format the shipped plan-phase `## UI Considerations` lift rule reads:
 `covered` → a truth string; `backstop` → a flat scalar `{ statement, verification: backstop }`;
 `unresolved` → an explicit `⚠ unresolved — planner must treat as assumption` row. Empty-state and
 error-state COPY stays in `## Copywriting Contract` — the considerations section covers shape-rooted

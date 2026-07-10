@@ -388,7 +388,7 @@ The prompt-level data/instruction isolation seam for untrusted web/document ingr
 `PROBE.prohib.verification=test|judgment`
 `PROBE.ui.verification=explicit|backstop`
 `PROBE.ui.axis=MIXED — closed compiled shape-rooted 8 (empty/loading/error/populated/partial/overflow/zero-one-many/long-text) via ui-consideration-probe adapter; open UX (real-time/a11y/i18n-RTL) prose-owned in references/domain-probes.md, NOT compiled (#1867)`
-`PROBE.ui.seam=ui-phase Step 9.5 post-verification: element-cue classify -> propose-then-confirm (partial-cue mitigation, Goodhart) -> autoResolve --auto floor (never dismiss; unclassified stays unresolved #1110) -> ## UI Considerations write-back -> plan-phase.md:921 lift (#1867)`
+`PROBE.ui.seam=ui-phase Step 9.5 post-verification: element-cue classify -> propose-then-confirm (partial-cue mitigation, Goodhart) -> autoResolve --auto floor (never dismiss; unclassified stays unresolved #1110) -> ## UI Considerations write-back -> plan-phase `## UI Considerations` lift rule (#1867)`
 `PROBE.ci.surface=the contract (parse/validate, projection round-trip, fail-closed guards), NEVER the LLM judgment (ADR-550 D5)`
 `PROHIB.recall=LLM-prose; no compiled prohibition-probe recall engine (only the schema/projection layer is code, ADR-550 D7b)`
 `PROHIB.canon-referral=OWASP/GDPR/fairness-canon are REFERRED to /gsd:secure-phase+eslint, never minted as prohibitions (ADR-550 D6)`

@@ -285,7 +285,7 @@ describe('ui-consideration-probe: partial-cue recall gap (confirm is load-bearin
 
 // ══ WIRE-02 (Phase 2, #1867) — the UI-SPEC section round-trips the shipped lift, backward-compat,
 // idempotency. Typed returns only (this file carries no allow-test-rule header). The `## UI
-// Considerations` section format is LOCKED by the shipped plan-phase lift (plan-phase.md:921) +
+// Considerations` section format is LOCKED by the shipped plan-phase `## UI Considerations` lift rule +
 // probe-core `projectTruths`; these guards pin that the template documents the SAME format. ═════
 describe('ui-consideration-probe WIRE-02: backward-compat + format-match + idempotency (SC4)', () => {
   test('projectTruths(undefined) and projectTruths([]) both === [] — an old UI-SPEC with no section lifts nothing, never throws (Hyrum SC4)', () => {

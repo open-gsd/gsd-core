@@ -81,8 +81,8 @@ Accent reserved for: {explicit list — never "all interactive elements"}
 
 ## UI Considerations
 
-> Populated by the ui-phase UI-consideration probe (Step 9.5) and lifted by plan-phase
-> (plan-phase.md:921) via the identical rule as SPEC `## Edge Coverage`. Shape-rooted UI *state*
+> Populated by the ui-phase UI-consideration probe (Step 9.5) and lifted by plan-phase's
+> `## UI Considerations` lift rule via the identical rule as SPEC `## Edge Coverage`. Shape-rooted UI *state*
 > coverage (empty / loading / error / populated / partial / overflow / zero-one-many / long-text).
 > Empty-state and error-state COPY live in `## Copywriting Contract` above — this section covers
 > state coverage and REFERENCES those rows rather than restating the copy (de-dup).
