@@ -41,6 +41,18 @@ const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
 // source. Both forms must change together; see the #1729 regression test.
 const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]*\\))?';
 
+// #2128: the canonical phase-NUMBER-TOKEN grammar — a phase number with an
+// optional single-letter variant suffix and optional dotted sub-phases
+// (1, 01, 12A, 12.1, 3.2.1). This is the ENUMERATION/scan counterpart to
+// phaseMarkdownRegexSource: use phaseMarkdownRegexSource(n) to build a source
+// for ONE KNOWN number; reference this constant when a call site must match ANY
+// phase and capture its token. Enumeration/parse sites inline this into a
+// `new RegExp(...)` instead of re-deriving the grammar as a literal, so every
+// phase-token producer shares one owner. The anti-divergence guard
+// (scripts/lint-phase-id-drift.cjs) fails CI if a literal re-derivation is
+// introduced outside this module without a `// phase-id-owner:` justification.
+const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -350,6 +362,7 @@ export = {
   escapeRegex,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
+  PHASE_NUMBER_TOKEN_SOURCE,
   stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,
