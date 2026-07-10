@@ -537,7 +537,7 @@ export function extractTaggedBlocks(content: string, tagName: string): string[] 
 
   // Escape the tag name for safe interpolation into a RegExp.
   const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`<${escapedTag}>([\\s\\S]*?)</${escapedTag}>`, 'g');
+  const pattern = new RegExp(`<${escapedTag}>((?:(?!<${escapedTag}>)[\\s\\S])*?)</${escapedTag}>`, 'g');
 
   const results: string[] = [];
   let match: RegExpExecArray | null;

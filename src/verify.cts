@@ -373,20 +373,20 @@ function scanFileWideNegativeGateConflict(content: string): { warnings: string[]
     const namem = tc.match(/<name>([\s\S]*?)<\/name>/);
     const name = namem ? namem[1].trim() : 'unnamed';
     // Extract <files> entries.
-    const filesm = tc.match(/<files>([\s\S]*?)<\/files>/);
+    const filesm = tc.match(/<files>((?:(?!<files>)[\s\S])*?)<\/files>/);
     const filesText = filesm ? filesm[1] : '';
     const files = filesText.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
     // Gate text: <verify>/<automated>/<acceptance_criteria>.
     const gateFragments: string[] = [];
     for (const tag of ['verify', 'automated', 'acceptance_criteria']) {
-      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
+      const re = new RegExp(`<${tag}>((?:(?!<${tag}>)[\\s\\S])*?)<\\/${tag}>`, 'g');
       let mm: RegExpExecArray | null;
       while ((mm = re.exec(tc)) !== null) gateFragments.push(mm[1]);
     }
     // Requirement text: <action>/<acceptance_criteria>.
     const reqFragments: string[] = [];
     for (const tag of ['action', 'acceptance_criteria']) {
-      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
+      const re = new RegExp(`<${tag}>((?:(?!<${tag}>)[\\s\\S])*?)<\\/${tag}>`, 'g');
       let mm: RegExpExecArray | null;
       while ((mm = re.exec(tc)) !== null) reqFragments.push(mm[1]);
     }
@@ -2094,7 +2094,7 @@ function cmdVerifySchemaDrift(
   const planFiles = fs.readdirSync(phaseDir).filter((f) => f.endsWith('-PLAN.md'));
   for (const pf of planFiles) {
     const content = fs.readFileSync(path.join(phaseDir, pf), 'utf-8');
-    const fmMatch = content.match(/files_modified:\s*\[([^\]]*)\]/);
+    const fmMatch = content.match(/files_modified:\s*\[([^\]]{0,8000})\]/);
     if (fmMatch) {
       const files = fmMatch[1].split(',').map((f) => f.trim()).filter(Boolean);
       allFiles.push(...files);

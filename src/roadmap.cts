@@ -545,7 +545,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //   `**Plans:** N plans`  — bold "Plans:" (colon inside bold)
     //   `Plans: N plans`      — plain text header
     const planCountPattern = new RegExp(
-      `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)[^\\n]+`,
+      `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)[^\\n]+`,
       'i'
     );
     const planCountText = isComplete
@@ -615,11 +615,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // Pattern A: anchor to bare `Plans:` header (preferred).
       // Pattern B: fallback to bold summary when no bare header exists.
       const insertRowsPatternA = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])[\\s\\S]*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
+        `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
         'i'
       );
       const insertRowsPatternB = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
+        `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
         'i'
       );
 

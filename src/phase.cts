@@ -1519,7 +1519,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         }
 
         const planCountPattern = new RegExp(
-          `(#{2,4}\\s*Phase\\s+${phaseEscaped}[\\s\\S]*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
+          `(#{2,4}\\s*Phase\\s+${phaseEscaped}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
           'i',
         );
         roadmapContent = roadmapContent.replace(

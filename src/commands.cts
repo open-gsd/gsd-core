@@ -1334,7 +1334,7 @@ function cmdTodoMatchPhase(cwd: string, phase: string | undefined, raw: boolean)
       for (const pf of planFiles) {
         const planContent = platformReadSync(path.join(phaseDir, pf));
         if (planContent === null) continue;
-        const fmFiles = planContent.match(/files_modified:\s*\[([^\]]*)\]/);
+        const fmFiles = planContent.match(/files_modified:\s*\[([^\]]{0,8000})\]/);
         if (fmFiles) {
           phasePlans.push(...fmFiles[1].split(',').map(s => s.trim().replace(/['"]/g, '')).filter(Boolean));
         }
