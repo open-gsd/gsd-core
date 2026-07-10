@@ -3967,12 +3967,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
       'opencode-subset is NOT a hookEvents value — it is the extensionEvents vocabulary (#1943)');
   });
 
-  test('VALID_EXTENSION_EVENTS has the extension-system dialects (opencode/pi/none — #1943)', () => {
+  test('VALID_EXTENSION_EVENTS has the extension-system dialects (opencode/pi/hermes/none — #1943/#2091)', () => {
     assert.ok(VALID_EXTENSION_EVENTS instanceof Set);
-    for (const v of ['opencode', 'pi', 'none']) {
+    for (const v of ['opencode', 'pi', 'hermes', 'none']) {
       assert.ok(VALID_EXTENSION_EVENTS.has(v), 'VALID_EXTENSION_EVENTS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_EXTENSION_EVENTS.size, 3);
+    assert.strictEqual(VALID_EXTENSION_EVENTS.size, 4);
   });
 
   test('VALID_SANDBOX_TIERS has exactly 2 values', () => {

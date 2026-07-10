@@ -709,7 +709,7 @@ const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
 // DISTINCT from hookEvents (managed-hook dialect): extensionEvents describes the
 // plugin-owned event subset imperative hosts expose (opencode / pi); 'none' = the
 // host exposes no extension surface (engine owns the bus, e.g. VS Code).
-const VALID_EXTENSION_EVENTS = new Set(['opencode', 'pi', 'none']);
+const VALID_EXTENSION_EVENTS = new Set(['opencode', 'pi', 'hermes', 'none']);
 const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);

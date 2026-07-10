@@ -74,9 +74,9 @@ describe('extensionEventSurfaceFor (extension-system event dialect — #1943)', 
     assert.equal(extensionEventSurfaceFor('nope'), null);
     assert.equal(extensionEventSurfaceFor(undefined), null);
   });
-  test('EXTENSION_EVENT_SURFACES is frozen + covers opencode/pi/none', () => {
+  test('EXTENSION_EVENT_SURFACES is frozen + covers opencode/pi/hermes/none', () => {
     assert.equal(Object.isFrozen(EXTENSION_EVENT_SURFACES), true);
-    assert.deepEqual(Object.keys(EXTENSION_EVENT_SURFACES).sort(), ['none', 'opencode', 'pi']);
+    assert.deepEqual(Object.keys(EXTENSION_EVENT_SURFACES).sort(), ['hermes', 'none', 'opencode', 'pi']);
   });
 });
 

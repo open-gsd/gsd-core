@@ -258,6 +258,8 @@ Sources consulted:
 - https://github.com/NousResearch/hermes-agent/releases/tag/v2026.6.19
 - /nousresearch/hermes-agent (Context7)
 
+**EoS migration status (#2091):** Migrated onto the imperative adapter. All `runtime === 'hermes'` branches in `bin/install.js` folded into descriptor-driven `runtime.hostBehaviors`. New `extensionEvents: "hermes"` dialect registered (13 real plugin hook events, replacing the borrowed `hookEvents: "claude"` 6-event surface). Cite: https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md
+
 Documentation gaps:
 - runtime — Hermes plugins and agent core run in Python, but this was confirmed by code inspection rather than explicit docs statement.
 - dispatch.namedDispatch — docs explicitly confirm no named-agent dispatch in delegate_task; Kanban has named profiles but that is a separate board system not a dispatch mechanism.

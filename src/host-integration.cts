@@ -559,6 +559,19 @@ const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Ob
     // permission decisions + session error surface.
     'permission.asked', 'permission.replied', 'session.error',
   ]),
+  // #2091 — Hermes Agent real plugin hook vocabulary (13 events).
+  // Cite: https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md
+  // Replaces the borrowed `hookEvents: "claude"` 6-event surface that silently
+  // never fired on Hermes.
+  hermes: Object.freeze([
+    'pre_tool_call', 'post_tool_call',
+    'pre_llm_call', 'post_llm_call',
+    'on_session_start', 'on_session_end',
+    'on_session_finalize', 'on_session_reset',
+    'subagent_start', 'subagent_stop',
+    'pre_gateway_dispatch', 'pre_approval_request',
+    'transform_tool_result',
+  ]),
   pi: Object.freeze(['tool_call']),
   none: Object.freeze([]),
 });

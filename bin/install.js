@@ -1851,7 +1851,7 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
   // Hermes' SKILL.md spec lists `version` as a required frontmatter field.
   // Track GSD's package version so Hermes' skill_view() reports a stable
   // identifier per install.
-  if (runtime === 'hermes') fm += `version: ${yamlQuote(pkg.version)}\n`;
+  if (_hostBehaviors(runtime).skillFrontmatterVersion) fm += `version: ${yamlQuote(pkg.version)}\n`;
   // #778 (b) — Qwen-only numeric priority for /skills ordering. Scoped to qwen
   // so Claude/Hermes skill frontmatter is unchanged (they ignore the field, but
   // we keep their output byte-stable). skillName is the `gsd-<stem>` dir name.
@@ -7067,7 +7067,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   //     removes the directory; we must preserve/restore user artifacts before that path.
   //     This block runs AFTER uninstallRuntimeArtifacts, so we check if the directory
   //     was already removed and skip if so (idempotent).
-  if (isQwen || isHermes) {
+  if (isQwen || _hostBehaviors(runtime).legacyCommandsGsdCleanup === true) {
     // dev-preferences may have survived in skills/ as SKILL.md — nothing to do for
     // that case. If a stale commands/gsd/ still exists (e.g. legacy was not removed),
     // attempt migration. In practice _runLegacyUninstallCleanup removes it first,
@@ -7821,7 +7821,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // resolves destSubpath (which includes hermes's 'skills/gsd' nesting) — do not
   // re-append 'gsd' or the hermes dir gets double-nested to skills/gsd/gsd.
   const codexSkillsDir = _resolveSkillsRootDir(runtime, configDir, options.scope === 'local' ? 'local' : 'global');
-  const codexSkillsManifestPrefix = isHermes ? 'skills/gsd/' : 'skills/';
+  const codexSkillsManifestPrefix = _hostBehaviors(runtime).skillsManifestPrefix || 'skills/';
   const agentsDir = path.join(configDir, 'agents');
   const manifest = {
     version: pkg.version,
@@ -7871,8 +7871,8 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
         manifest.files[`${codexSkillsManifestPrefix}${skillName}/${rel}`] = hash;
       }
     }
-    // For Hermes, also hash the category DESCRIPTION.md so reinstall detects drift.
-    if (isHermes) {
+    // Descriptor-driven (#2090): hash the category DESCRIPTION.md so reinstall detects drift.
+    if (_hostBehaviors(runtime).trackCategoryDescription) {
       const descPath = path.join(codexSkillsDir, 'DESCRIPTION.md');
       if (fs.existsSync(descPath)) {
         manifest.files['skills/gsd/DESCRIPTION.md'] = fileHash(descPath);
@@ -8822,13 +8822,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       }
     }
 
-    // Hermes only: write DESCRIPTION.md for the gsd/ category after layout install
-    if (isHermes) {
+    // Descriptor-driven (#2090): write DESCRIPTION.md for the gsd/ category after layout install
+    if (_hostBehaviors(runtime).writeCategoryDescription) {
       writeHermesCategoryDescription(path.join(targetDir, 'skills', 'gsd'));
     }
 
     // Verify installed artifacts and report
-    if (isHermes) {
+    if (_hostBehaviors(runtime).reportSkillsCount) {
       const hermesSkillsDir = path.join(targetDir, 'skills', 'gsd');
       if (fs.existsSync(hermesSkillsDir)) {
         // Hermes layout uses prefix: 'gsd-' (#947) — skill dirs have gsd-<stem> names
@@ -9234,7 +9234,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
           content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
           content = content.replace(/\.claude\//g, '.qwen/');
-        } else if (isHermes) {
+        } else if (_hostBehaviors(runtime).brandingRewrites) {
           content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
           content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
           content = content.replace(/\.claude\//g, '.hermes/');
@@ -9333,7 +9333,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
               content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
               content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
             }
-            if (isHermes) {
+            if (_hostBehaviors(runtime).brandingRewrites) {
               content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
               content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
             }
