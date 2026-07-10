@@ -73,7 +73,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { escapeRegex, normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE } = phaseId;
+const { escapeRegex, normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE, isForeignPrefixedPhaseQuery } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -96,25 +96,10 @@ void stripShippedMilestones;
 // Accept all bold/colon variants of the Requirements header (#2769)
 const REQUIREMENTS_HEADER_RE = /^\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([^\n]*)$/m;
 
-// #2056: normalizePhaseName() strips ANY [A-Z][A-Z0-9_]*- prefix as a project
-// code (e.g. 'MEM-01' → '01'), so a foreign-prefixed workstream/task id would
-// collapse to its numeric suffix and resolve to an unrelated numeric phase via
-// the dir/roadmap fallback. init plan-phase must require EXACT prefixed
-// evidence — a phase dir whose token literally IS the prefixed query, or a
-// roadmap entry literally headed with it — before accepting such a match. The
-// configured project_code's own prefix (e.g. LKML-01 under project_code: LKML)
-// is never foreign and always passes through.
-function parsePhasePrefix(phase: unknown): string | null {
-  const match = String(phase).match(/^([A-Z][A-Z0-9_]*)-(?=\d)/i);
-  return match ? match[1] : null;
-}
-
-function isForeignPrefixedPhaseQuery(phase: unknown, projectCode: unknown): boolean {
-  const prefix = parsePhasePrefix(phase);
-  if (!prefix) return false;
-  const configured = typeof projectCode === 'string' ? projectCode.trim() : '';
-  return !configured || prefix.toUpperCase() !== configured.toUpperCase();
-}
+// #2056/#2104: isForeignPrefixedPhaseQuery is imported from phase-id.cts
+// (the canonical predicate). parsePhasePrefix is no longer needed locally.
+// phaseInfoMatchesExactPrefix and roadmapPhaseMatchesExactPrefix are local
+// helpers that post-filter the lookup results for foreign-prefix queries.
 
 function phaseInfoMatchesExactPrefix(
   phaseInfo: Record<string, unknown> | null,
@@ -132,6 +117,33 @@ function roadmapPhaseMatchesExactPrefix(
   const sectionRaw = roadmapPhase?.['section'];
   const section = typeof sectionRaw === 'string' ? sectionRaw : '';
   return new RegExp(`^#{2,4}\\s*Phase\\s+${escapeRegex(phase)}(?:\\b|\\s|:)`, 'i').test(section);
+}
+
+// #2104: shared helpers that wrap findPhaseInternal / getRoadmapPhaseInternal
+// with the #2056 foreign-prefix guard, so every init command gets the same
+// protection without duplicating the guard logic at each call site.
+function guardedFindPhase(
+  cwd: string,
+  phase: string,
+  projectCode: unknown,
+): Record<string, unknown> | null {
+  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
+    phaseInfo = null;
+  }
+  return phaseInfo;
+}
+
+function guardedGetRoadmapPhase(
+  cwd: string,
+  phase: string,
+  projectCode: unknown,
+): Record<string, unknown> | null {
+  let roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  if (isForeignPrefixedPhaseQuery(phase, projectCode) && !roadmapPhaseMatchesExactPrefix(roadmapPhase, phase)) {
+    roadmapPhase = null;
+  }
+  return roadmapPhase;
 }
 
 function listPhaseSummaryFiles(phaseDir: string): string[] {
@@ -334,10 +346,10 @@ function cmdInitExecutePhase(
   }
 
   const config = loadConfig(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
   const milestone = getMilestoneInfo(cwd) as unknown as Record<string, unknown>;
 
-  const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived'] && roadmapPhase?.['found']) {
     phaseInfo = null;
@@ -468,19 +480,9 @@ function cmdInitPlanPhase(
   }
 
   const config = loadConfig(cwd);
-  const foreignPrefixedPhase = isForeignPrefixedPhaseQuery(phase, config.project_code);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
-  // #2056: a foreign-prefixed query must only match a phase whose token literally
-  // IS the prefixed query (e.g. a real 'MEM-01-*' dir); otherwise the numeric
-  // fallback ('MEM-01' → '01') would resolve to the unrelated numeric phase.
-  if (foreignPrefixedPhase && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
-    phaseInfo = null;
-  }
-
-  let roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
-  if (foreignPrefixedPhase && !roadmapPhaseMatchesExactPrefix(roadmapPhase, phase)) {
-    roadmapPhase = null;
-  }
+  // #2056/#2104: foreign-prefixed queries must not collapse to numeric phases.
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived'] && roadmapPhase?.['found']) {
     phaseInfo = null;
@@ -901,17 +903,17 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
   const config = loadConfig(cwd);
   const _slashRuntime = resolveRuntime(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived']) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       phaseInfo = null;
     }
   }
 
   if (!phaseInfo) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -974,10 +976,10 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
 function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived']) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -999,7 +1001,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   }
 
   if (!phaseInfo) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
