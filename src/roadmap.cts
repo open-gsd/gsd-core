@@ -14,7 +14,7 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, phaseTokenMatches, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseTokenMatches, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -215,22 +215,17 @@ function getRoadmapPhaseWithFallback(cwd: string, phaseNum: string): string | nu
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
 
-  const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
-  if (exactSource) {
-    const exactMilestone = searchPhaseInContent(milestoneContent, exactSource, phaseNum);
-    if (exactMilestone && !exactMilestone.error) return exactMilestone.section ?? null;
-    const exactFull = searchPhaseInContent(fullContent, exactSource, phaseNum);
-    if (exactFull && !exactFull.error) return exactFull.section ?? null;
+  // #2121/#2114: iterate the shared lookup-source list (exact → numeric →
+  // prefix-tolerant) so this resolver matches getRoadmapPhaseInternal and a
+  // bare-number query resolves a drifted project-code-prefixed heading.
+  for (const source of roadmapPhaseLookupSources(phaseNum)) {
+    const milestoneResult = searchPhaseInContent(milestoneContent, source, phaseNum);
+    if (milestoneResult && !milestoneResult.error) return milestoneResult.section ?? null;
+    const fullResult = searchPhaseInContent(fullContent, source, phaseNum);
+    if (fullResult && !fullResult.error) return fullResult.section ?? null;
   }
 
-  const escapedPhase = phaseMarkdownRegexSource(phaseNum);
-  const milestoneResult = searchPhaseInContent(milestoneContent, escapedPhase, phaseNum);
-  const result = (milestoneResult && !milestoneResult.error)
-    ? milestoneResult
-    : searchPhaseInContent(fullContent, escapedPhase, phaseNum) || milestoneResult;
-
-  if (!result || result.error) return null;
-  return result.section ?? null;
+  return null;
 }
 
 // ─── cmdRoadmapGetPhase ───────────────────────────────────────────────────────
@@ -251,52 +246,37 @@ function cmdRoadmapGetPhase(cwd: string, phaseNum: string, raw: boolean): void {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const milestoneContent = extractCurrentMilestone(rawContent, cwd);
 
-    // #3599 two-pass: when the caller passes a project-code-prefixed ID like
-    // `PROJ-42`, try the exact-prefixed heading first (`### Phase PROJ-42:`).
-    // If no match, fall back to the #3537 padding-tolerant numeric form so
-    // a `CK-01` query still resolves to `### Phase 1:`. Doing this at the
-    // call site (instead of inside phaseMarkdownRegexSource) avoids the
-    // alternation-order ambiguity where a bare `### Phase 42:` heading in
-    // the same document would intercept the match for a `PROJ-42` query.
     const fullContent = stripShippedMilestones(rawContent);
 
-    const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
-    if (exactSource) {
-      const exactMilestone = searchPhaseInContent(milestoneContent, exactSource, phaseNum);
-      if (exactMilestone && !exactMilestone.error) {
-        output(exactMilestone, raw, exactMilestone.section);
+    // #2121/#2114: iterate the shared lookup-source list (exact → numeric →
+    // prefix-tolerant) so all three roadmap resolvers share one contract and a
+    // bare-number query resolves a drifted `### Phase AB-29:` heading. This
+    // preserves the #3599 exact-prefix-first and #3537 padding-tolerant behavior
+    // (both now encoded in roadmapPhaseLookupSources' ordering). A clean match
+    // (milestone or full, any source) wins immediately; a malformed_roadmap
+    // (checklist-only) candidate is surfaced only if no source finds a real
+    // heading — so a milestone checklist never blocks a full-roadmap header.
+    let malformed: PhaseSearchResult | null = null;
+    for (const source of roadmapPhaseLookupSources(phaseNum)) {
+      const milestoneResult = searchPhaseInContent(milestoneContent, source, phaseNum);
+      if (milestoneResult && !milestoneResult.error) {
+        output(milestoneResult, raw, milestoneResult.section);
         return;
       }
-      const exactFull = searchPhaseInContent(fullContent, exactSource, phaseNum);
-      if (exactFull && !exactFull.error) {
-        output(exactFull, raw, exactFull.section);
+      const fullResult = searchPhaseInContent(fullContent, source, phaseNum);
+      if (fullResult && !fullResult.error) {
+        output(fullResult, raw, fullResult.section);
         return;
       }
+      if (!malformed) malformed = (milestoneResult?.error ? milestoneResult : (fullResult?.error ? fullResult : null));
     }
 
-    // #3537: padding-tolerant fragment so callers passing `02.7` still match
-    // un-padded ROADMAP prose (`### Phase 2.7:`).
-    const escapedPhase = phaseMarkdownRegexSource(phaseNum);
-
-    // Search the current milestone slice first, then fall back to full roadmap.
-    // A malformed_roadmap result (checklist-only) from the milestone should not
-    // block finding a full header match in the wider roadmap content.
-    const milestoneResult = searchPhaseInContent(milestoneContent, escapedPhase, phaseNum);
-    const result = (milestoneResult && !milestoneResult.error)
-      ? milestoneResult
-      : searchPhaseInContent(fullContent, escapedPhase, phaseNum) || milestoneResult;
-
-    if (!result) {
-      output({ found: false, phase_number: phaseNum }, raw, '');
+    if (malformed) {
+      output(malformed, raw, '');
       return;
     }
 
-    if (result.error) {
-      output(result, raw, '');
-      return;
-    }
-
-    output(result, raw, result.section);
+    output({ found: false, phase_number: phaseNum }, raw, '');
   } catch (e) {
     error('Failed to read ROADMAP.md: ' + (e as Error).message);
   }

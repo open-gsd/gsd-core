@@ -1918,11 +1918,13 @@ describe('bug #3599: roadmap get-phase preserves project-code prefix in lookup',
     assert.strictEqual(payload.goal, 'Verify project-code-prefixed lookup');
   });
 
-  test('does NOT cross-match: querying 42 must not match ### Phase PROJ-42:', () => {
-    // Counter-test: if the regex erroneously matches both forms in both
-    // directions, this catches it. `42` must only match `Phase 42:` — not
-    // `Phase PROJ-42:` — otherwise integer phase lookups silently steal
-    // matches from prefixed siblings.
+  test('bare numeric prefers a bare sibling over a prefixed one (#3599 anti-steal, updated for #2114)', () => {
+    // #3599's real guard is anti-STEALING: when BOTH a bare `Phase 42:` and a
+    // distinct prefixed `Phase PROJ-42:` exist, a bare `42` query must resolve
+    // the BARE one — the numeric source is tried before the prefix-tolerant
+    // fallback, so a bare query never steals a distinct prefixed sibling.
+    // (Since #2114/#2121, a bare query DOES resolve a *drifted-only* prefixed
+    // heading when no bare sibling exists — see the bug #2114 block below.)
     writeState(tmpDir, 'v1.0.0');
     writeRoadmap(
       tmpDir,
@@ -1931,8 +1933,11 @@ describe('bug #3599: roadmap get-phase preserves project-code prefix in lookup',
         '',
         '## Current Milestone: v1.0.0 - Test',
         '',
-        '### Phase PROJ-42: Should not be returned for `42`',
-        '**Goal:** Counter-test',
+        '### Phase 42: Bare',
+        '**Goal:** Canonical bare heading',
+        '',
+        '### Phase PROJ-42: Prefixed',
+        '**Goal:** Distinct prefixed sibling',
         '',
       ].join('\n'),
     );
@@ -1940,10 +1945,11 @@ describe('bug #3599: roadmap get-phase preserves project-code prefix in lookup',
     const result = runGsdTools('roadmap get-phase 42 --json', tmpDir);
     assert.ok(result.success);
     const payload = JSON.parse(result.output);
+    assert.strictEqual(payload.found, true, `expected found=true, got: ${result.output}`);
     assert.strictEqual(
-      payload.found,
-      false,
-      `bare numeric '42' must not match 'Phase PROJ-42:'; got ${result.output}`,
+      payload.phase_name,
+      'Bare',
+      `bare '42' must resolve the bare 'Phase 42:', not steal 'Phase PROJ-42:'; got ${result.output}`,
     );
   });
 
@@ -2070,6 +2076,85 @@ function makePlanProject(files = {}) {
   }
   return dir;
 }
+
+describe('bug #2114: roadmap get-phase resolves drifted prefixed headings by bare number', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject('bug-2114-'); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('bare-number query resolves a drifted project-code-prefixed heading', () => {
+    // Before the fix, bare `29` did NOT match `### Phase AB-29:` from the CLI
+    // (2-source lookup), even though getRoadmapPhaseInternal (init.phase-op) did
+    // — the #2114 divergence. Now all three resolvers share the 3-source list.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '---\nmilestone: v1.0.0\n---\n# State\n\n**Status:** In progress\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Current Milestone: v1.0.0 - Test',
+        '',
+        '### Phase 30: Plain',
+        '**Goal:** Canonical bare heading',
+        '',
+        '### Phase AB-29: Prefixed',
+        '**Goal:** Drifted prefixed heading',
+        '',
+      ].join('\n'),
+    );
+
+    const resultAB29 = runGsdTools('roadmap get-phase 29 --json', tmpDir);
+    assert.ok(resultAB29.success, `command failed: ${resultAB29.error || resultAB29.output}`);
+    const payloadAB29 = JSON.parse(resultAB29.output);
+    assert.strictEqual(payloadAB29.found, true, `expected found=true for drifted AB-29, got: ${resultAB29.output}`);
+    assert.strictEqual(payloadAB29.phase_name, 'Prefixed');
+    assert.strictEqual(payloadAB29.goal, 'Drifted prefixed heading');
+
+    // The canonical bare heading still resolves.
+    const result30 = runGsdTools('roadmap get-phase 30 --json', tmpDir);
+    assert.ok(result30.success);
+    const payload30 = JSON.parse(result30.output);
+    assert.strictEqual(payload30.found, true);
+    assert.strictEqual(payload30.phase_name, 'Plain');
+  });
+
+  test('project-code-prefixed checklist-only entry surfaces malformed_roadmap for both query forms', () => {
+    // #2121/#2114 route all three resolvers through the shared 3-source lookup. A
+    // `**Phase PROJ-42:**` summary line with no matching `### Phase PROJ-42:` detail heading
+    // is a malformed ROADMAP. Before the consolidation this project-code-prefixed checklist
+    // was reported as a silent `{found:false}` for BOTH query forms — the prefixed pass
+    // discarded its malformed candidate, and the bare pass could not match the `PROJ-` prefix
+    // at all. The unified lookup newly surfaces the malformed_roadmap diagnostic for both, so
+    // this test fails on the prior silent-empty behavior for the prefixed AND the bare form.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      [
+        '# Roadmap v1.0',
+        '',
+        '## Phases',
+        '',
+        '- [ ] **Phase PROJ-42: Checklist only, no header**',
+        '',
+      ].join('\n'),
+    );
+
+    const prefixed = runGsdTools('roadmap get-phase PROJ-42 --json', tmpDir);
+    assert.ok(prefixed.success, `command failed: ${prefixed.error || prefixed.output}`);
+    const pPayload = JSON.parse(prefixed.output);
+    assert.strictEqual(pPayload.found, false, 'malformed roadmap: phase must not be found');
+    assert.strictEqual(pPayload.error, 'malformed_roadmap', 'prefixed query must surface malformed_roadmap');
+    assert.ok(pPayload.message.includes('missing'), 'message must explain the missing detail section');
+
+    // Parity: the bare numeric form yields the same diagnostic against the same fixture.
+    const bare = runGsdTools('roadmap get-phase 42 --json', tmpDir);
+    assert.ok(bare.success, `command failed: ${bare.error || bare.output}`);
+    assert.strictEqual(JSON.parse(bare.output).error, 'malformed_roadmap', 'bare query surfaces the same diagnostic');
+  });
+});
 
 describe('roadmap annotate-dependencies', () => {
   let tmpDir;

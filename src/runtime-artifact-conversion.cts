@@ -2522,10 +2522,12 @@ function rewriteStagedSkillBodies(stagedDir, opts) {
  * attribution from opts, then delegates to applyRuntimeContentRewritesForCommandsInPlace
  * (single copy+rewrite owner).
  *
- * @internal — symmetric companion to rewriteStagedSkillBodies; retained as the deep-seam
- * API for command bodies. No production caller today (install rewrites commands via
- * copyWithPathReplacement → applyRuntimeContentRewritesForCommandsInPlace). Kept for
- * API symmetry + test coverage.
+ * @internal — symmetric companion to rewriteStagedSkillBodies; the deep-seam API for
+ * command bodies. Production callers: applySurface (surface.cts) and the install path
+ * in createRuntimeArtifactInstallPlan (runtime-artifact-install-plan.cts) — both keep
+ * the returned temp dir alive until they have copied its contents out, then clean it up
+ * in their own finally. (A test that treats this as a throwaway shared-tmp path will
+ * race those live temp dirs under --test-concurrency; see #1575/#2090.)
  *
  * @returns {string} path to the temp dir (caller is responsible for cleanup)
  */

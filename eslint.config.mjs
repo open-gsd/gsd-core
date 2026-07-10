@@ -399,4 +399,17 @@ export default tseslint.config(
     languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
     rules: { 'local/no-source-grep': 'error' },
   },
+  // ── #2126 lint-rule CLEAN fixture ───────────────────────────────────────────
+  // `tests/_ff_lint_clean.cjs` is the KNOWN-CLEAN companion to the violation fixture: the
+  // prohibition-enforcement real-runner tests lint it as their non-vacuous "clean target" instead of
+  // a type-aware `src/**/*.cts` file, so each eslint spawn is ~0.8s (non-type-aware) not ~2s
+  // (whole-tsconfig-program load) — removing the CPU starvation that blew the 60s bound under
+  // --test-concurrency. Rule enabled (as error) so the pass is non-vacuous; the file is clean so it
+  // greens. PLAIN `.cjs`, kept OFF the `*.test.cjs` runner glob. (#2126)
+  {
+    files: ['tests/_ff_lint_clean.cjs'],
+    plugins: { local: localPlugin },
+    languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
+    rules: { 'local/no-source-grep': 'error' },
+  },
 );
