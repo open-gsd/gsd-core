@@ -26,13 +26,37 @@ host.
 }
 ```
 
-- **Claude Code / Codex / OpenCode / Cursor / Cline / Hermes** — under the
-  host's `mcpServers` object (project or user config).
+- **Claude Code / Codex / Cursor / Cline / Hermes** — under the host's
+  `mcpServers` object (project or user config).
 - **VS Code** — in the workspace MCP servers list.
 - **Antigravity CLI** — under its `mcpServers` block.
+- **OpenCode** — under the `mcp` key (**not** `mcpServers`), in
+  `~/.config/opencode/opencode.jsonc` (global) or `./opencode.json`
+  (project). The entry shape also differs — see below.
+- **Kilo Code** — an OpenCode fork; also under the `mcp` key (**not**
+  `mcpServers`), in `~/.config/kilo/opencode.jsonc` (global) or
+  `./opencode.json` (project). Same entry shape as OpenCode.
 
 Set `cwd` to the project whose `.planning/` you want GSD to manage — the server
 resolves state paths against it.
+
+### OpenCode / Kilo entry shape
+
+OpenCode (and Kilo, which shares OpenCode's config schema) use a
+`type`/`command`/`timeout` entry under the `mcp` key instead of the generic
+`command`/`args`/`cwd` form above:
+
+```jsonc
+{
+  "mcp": {
+    "gsd": {
+      "type": "local",
+      "command": ["npx", "-y", "@opengsd/gsd-core", "gsd-mcp-server"],
+      "timeout": 10000
+    }
+  }
+}
+```
 
 ## 2. Restart the host
 

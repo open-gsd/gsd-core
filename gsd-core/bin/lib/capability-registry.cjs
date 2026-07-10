@@ -1548,6 +1548,7 @@ const capabilities = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "kilo",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "settings-json",
@@ -1577,7 +1578,13 @@ const capabilities = {
         "flatCommandDir": "command",
         "combinedFamilyInstall": true,
         "frontmatterDialect": "kilo",
-        "skipUpdateBannerCommand": true
+        "nativePlugin": {
+          "dir": "plugins",
+          "file": "gsd-core.js",
+          "source": ".kilo/plugins/gsd-core.js"
+        },
+        "skipUpdateBannerCommand": true,
+        "skipSharedHooksInstall": true
       }
     }
   },
@@ -4669,6 +4676,7 @@ const runtimes = {
       },
       "commandStyle": "slash-hyphen",
       "hooksSurface": "none",
+      "extensionEvents": "kilo",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "settings-json",
@@ -4698,7 +4706,13 @@ const runtimes = {
         "flatCommandDir": "command",
         "combinedFamilyInstall": true,
         "frontmatterDialect": "kilo",
-        "skipUpdateBannerCommand": true
+        "nativePlugin": {
+          "dir": "plugins",
+          "file": "gsd-core.js",
+          "source": ".kilo/plugins/gsd-core.js"
+        },
+        "skipUpdateBannerCommand": true,
+        "skipSharedHooksInstall": true
       }
     }
   },

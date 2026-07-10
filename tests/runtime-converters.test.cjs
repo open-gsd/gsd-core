@@ -230,6 +230,44 @@ Fallback skills live in .agents/skills/.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DEFECT.GENERATIVE-FIX output-parity guard: convertClaudeToKiloFrontmatter is
+// defined TWICE — once in bin/install.js (the function bound at the top of this
+// file, used by bin/install.js's own legacy install path) and once in
+// src/runtime-artifact-conversion.cts, compiled to
+// gsd-core/bin/lib/runtime-artifact-conversion.cjs (used by
+// src/install-engine.cts's newer TS install path, see install-engine.cts ~L871).
+// Both copies are LIVE — neither re-exports the other — so #2093's modelOverride
+// edit had to be applied twice by hand. Source-text identity can't be asserted
+// (they live in different module systems: plain CJS vs a tsc-compiled .cts
+// output with different surrounding comments), so this instead proves the two
+// implementations still produce IDENTICAL output for representative agent and
+// command input. If a future edit changes one copy's behavior without mirroring
+// it into the other, this test is the guard that catches the divergence.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('convertClaudeToKiloFrontmatter output parity: bin/install.js vs runtime-artifact-conversion.cjs (#2093)', () => {
+  const { convertClaudeToKiloFrontmatter: convertViaConversionModule } =
+    require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+
+  test('identical output for an agent with a model override', () => {
+    const viaInstall = convertClaudeToKiloFrontmatter(SAMPLE_AGENT, { isAgent: true, modelOverride: 'anthropic/claude-sonnet-5' });
+    const viaModule = convertViaConversionModule(SAMPLE_AGENT, { isAgent: true, modelOverride: 'anthropic/claude-sonnet-5' });
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical agent output');
+  });
+
+  test('identical output for an agent with no model override', () => {
+    const viaInstall = convertClaudeToKiloFrontmatter(SAMPLE_AGENT, { isAgent: true, modelOverride: null });
+    const viaModule = convertViaConversionModule(SAMPLE_AGENT, { isAgent: true, modelOverride: null });
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical agent output with no override');
+  });
+
+  test('identical output for a command (model override never applies)', () => {
+    const viaInstall = convertClaudeToKiloFrontmatter(SAMPLE_COMMAND, { isAgent: false, modelOverride: 'x' });
+    const viaModule = convertViaConversionModule(SAMPLE_COMMAND, { isAgent: false, modelOverride: 'x' });
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical command output');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Antigravity agent conversion — shared Gemini-backend tool mapping (#1394 / #1928)
 // ─────────────────────────────────────────────────────────────────────────────
 //

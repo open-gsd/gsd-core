@@ -551,14 +551,26 @@ function hookEventSurfaceFor(hookEvents: unknown): readonly string[] | null {
 // events (session/tool/file/permission); pi ~30 fine-grained extension events;
 // 'none' = the host exposes no extension surface and the engine owns the bus
 // (VS Code). Declarative hosts (no plugin API) do not set `extensionEvents`.
+// OpenCode's plugin event surface (ADR-1239 §research; ~25 documented events,
+// GSD binds this subset). Hoisted to a named const — rather than duplicated
+// object literals — so the `kilo` dialect below (#2093) can reuse the IDENTICAL
+// array instead of a copy-pasted one that could silently drift out of sync.
+const OPENCODE_EXTENSION_EVENTS = Object.freeze([
+  'session.created', 'session.idle', 'experimental.session.compacting',
+  'tool.execute.before', 'tool.execute.after', 'file.edited',
+  // #2087 — additional documented plugin events GSD binds (opencode.ai/docs/plugins):
+  // permission decisions + session error surface.
+  'permission.asked', 'permission.replied', 'session.error',
+]);
+
 const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  opencode: Object.freeze([
-    'session.created', 'session.idle', 'experimental.session.compacting',
-    'tool.execute.before', 'tool.execute.after', 'file.edited',
-    // #2087 — additional documented plugin events GSD binds (opencode.ai/docs/plugins):
-    // permission decisions + session error surface.
-    'permission.asked', 'permission.replied', 'session.error',
-  ]),
+  opencode: OPENCODE_EXTENSION_EVENTS,
+  // #2093 — Kilo Code is an OpenCode fork sharing the same plugin/extension
+  // event bus (host hook bus, UPGRADE 1): reuses OPENCODE_EXTENSION_EVENTS
+  // verbatim (not a re-derivation), so the two dialects stay pinned together
+  // by construction. See .kilo/plugins/gsd-core.js (copied verbatim from
+  // .opencode/plugins/gsd-core.js).
+  kilo: OPENCODE_EXTENSION_EVENTS,
   // #2091 — Hermes Agent real plugin hook vocabulary (13 events).
   // Cite: https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md
   // Replaces the borrowed `hookEvents: "claude"` 6-event surface that silently

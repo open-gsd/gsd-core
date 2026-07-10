@@ -122,6 +122,18 @@ function convertClaudeCommandToKiloSkill(content: string, skillName: string): st
   return (runtimeArtifactConversion as any).convertClaudeCommandToKiloSkill(content, skillName);
 }
 
+/**
+ * Converter-name registry for the OpenCode-family combined skills installer
+ * (ADR-1239 / #2093). Maps the `converter` string declared on each runtime's
+ * artifactLayout skills-kind descriptor (capabilities/<runtime>/capability.json)
+ * to the actual conversion function, so `installOpencodeFamilySkills` dispatches
+ * off the descriptor instead of a `frontmatterDialect === 'kilo'` runtime check.
+ */
+const SKILLS_CONVERTER_REGISTRY: Record<string, (content: string, skillName: string) => string> = {
+  convertClaudeCommandToOpencodeSkill,
+  convertClaudeCommandToKiloSkill,
+};
+
 // ---------------------------------------------------------------------------
 // User-artifact preservation helpers
 // ---------------------------------------------------------------------------
@@ -734,9 +746,18 @@ function installOpencodeFamilySkills(
   const rawDir = rawCommandsDir;
   if (!rawDir || !fs.existsSync(rawDir)) return 0;
 
-  const converter = _hostBehaviors(runtime).frontmatterDialect === 'kilo'
-    ? convertClaudeCommandToKiloSkill
-    : convertClaudeCommandToOpencodeSkill;
+  // #2093: descriptor-driven — dispatch off the skills-kind entry's `converter`
+  // string (capabilities/<runtime>/capability.json artifactLayout) via the
+  // SKILLS_CONVERTER_REGISTRY, instead of a `frontmatterDialect === 'kilo'`
+  // runtime check. Fail loud if the descriptor names an unregistered converter
+  // (mirrors the converter=null throw in runtime-artifact-layout.cts).
+  const converterName: string | undefined = skillsKindEntry.converter;
+  const converter = converterName ? SKILLS_CONVERTER_REGISTRY[converterName] : undefined;
+  if (!converter) {
+    throw new TypeError(
+      `installOpencodeFamilySkills: unknown skills converter '${String(converterName)}' for runtime '${runtime}'`,
+    );
+  }
 
   const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(targetDir, skillsKindEntry.destSubpath);
   // Symlink-escape guard: reject if any path component between targetDir and
@@ -836,6 +857,16 @@ function installOpencodeFamilyCommands(
       let content = fs.readFileSync(srcPath, 'utf8');
       content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
       content = processAttribution(content, resolveAttribution(runtime));
+      // #2093: this commands-kind entry's descriptor `converter` field is
+      // intentionally `null` (see capabilities/{kilo,opencode}/capability.json —
+      // the flattened-command writer above applies its own path/attribution
+      // rewrites and has no per-file converter slot to key on), so there is no
+      // descriptor string to dispatch through here. `frontmatterDialect` is the
+      // documented, intentional dispatch key for frontmatter-shape selection —
+      // it is itself descriptor-driven (not a `runtime === 'kilo'` check), so it
+      // already satisfies the fold-to-descriptor requirement. Only the SKILLS
+      // converter site above (installOpencodeFamilySkills) has a real
+      // `converter` string to key on via SKILLS_CONVERTER_REGISTRY.
       content = _hostBehaviors(runtime).frontmatterDialect === 'kilo'
         ? (runtimeArtifactConversion as any).convertClaudeToKiloFrontmatter(content)
         : (runtimeArtifactConversion as any).convertClaudeToOpencodeFrontmatter(content);
@@ -849,9 +880,10 @@ function installOpencodeFamilyCommands(
 // ---------------------------------------------------------------------------
 
 /**
- * Combined-family install orchestrator for OpenCode/Kilo (ADR-1239 / #2087).
- * Stages the flattened commands surface + skills surface + (OpenCode only)
- * native plugin adapter, mirroring the bespoke `else if (isOpencode ||
+ * Combined-family install orchestrator for OpenCode/Kilo (ADR-1239 / #2087,
+ * #2093). Stages the flattened commands surface + skills surface + (any
+ * runtime whose hostBehaviors declares `nativePlugin` — OpenCode and, since
+ * #2093, Kilo) native plugin adapter, mirroring the bespoke `else if (isOpencode ||
  * isKilo)` block previously inlined in bin/install.js.
  *
  * @param runtime - 'opencode' or 'kilo'

@@ -360,7 +360,8 @@ Built-in tier defaults by runtime:
 | `opencode` | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
 | `copilot`  | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
 | `hermes`   | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
-| Group B (`kilo`, `cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | |
+| `kilo`     | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
+| Group B (`cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | |
 
 Display a table to the user showing the effective configuration:
 
@@ -387,8 +388,8 @@ AskUserQuestion([
     options: [
       { label: "Keep current (<runtime>)", description: "Configure overrides for the current runtime." },
       { label: "Common runtimes", description: "claude, codex, gemini, qwen" },
-      { label: "Additional runtimes", description: "opencode, copilot, hermes" },
-      { label: "Other (Group B or custom)", description: "kilo, cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string." }
+      { label: "Additional runtimes", description: "opencode, copilot, hermes, kilo" },
+      { label: "Other (Group B or custom)", description: "cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string." }
     ]
   }
 ])
@@ -423,7 +424,8 @@ AskUserQuestion([
     options: [
       { label: "opencode", description: "OpenCode (uses anthropic/ prefix)." },
       { label: "copilot", description: "GitHub Copilot." },
-      { label: "hermes", description: "Hermes (uses anthropic/ prefix)." }
+      { label: "hermes", description: "Hermes (uses anthropic/ prefix)." },
+      { label: "kilo", description: "Kilo Code (uses anthropic/ prefix)." }
     ]
   }
 ])

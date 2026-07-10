@@ -1676,7 +1676,12 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
 }
 
 // Kilo CLI — same conversion logic as OpenCode, different config paths.
-function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// convertClaudeToKiloFrontmatter (used by bin/install.js's own legacy install
+// path). Neither copy re-exports the other — mirror any behavior change into
+// both. Guarded by the output-parity test in tests/runtime-converters.test.cjs
+// (#2093).
+function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverride = null } = {}) {
   // Replace tool name references in content (applies to all files)
   let convertedContent = content;
   convertedContent = convertedContent.replace(/\bAskUserQuestion\b/g, 'question');
@@ -1835,6 +1840,14 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
   // For agents: add required Kilo agent fields
   if (isAgent) {
     newLines.push('mode: subagent');
+    // Embed model override from ~/.gsd/defaults.json so model_overrides is
+    // respected on Kilo (which uses static agent frontmatter, not inline
+    // Task() model parameters) — mirrors convertClaudeToOpencodeFrontmatter's
+    // model emission exactly (#2093 UPGRADE 2 / ADR-1239; Kilo is an OpenCode
+    // fork with the same static-frontmatter model constraint). See #2256.
+    if (modelOverride) {
+      newLines.push(['model:', modelOverride].join(' '));
+    }
     newLines.push(...buildKiloAgentPermissionBlock(agentTools));
   }
 

@@ -6077,7 +6077,12 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
 }
 
 // Kilo CLI — same conversion logic as OpenCode, different config paths.
-function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
+// DEFECT.GENERATIVE-FIX: this body is mirrored in
+// src/runtime-artifact-conversion.cts's convertClaudeToKiloFrontmatter (used by
+// src/install-engine.cts's install path). Neither copy re-exports the other —
+// mirror any behavior change into both. Guarded by the output-parity test in
+// tests/runtime-converters.test.cjs (#2093).
+function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverride = null } = {}) {
   // Replace tool name references in content (applies to all files)
   let convertedContent = content;
   convertedContent = convertedContent.replace(/\bAskUserQuestion\b/g, 'question');
@@ -6236,6 +6241,13 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
   // For agents: add required Kilo agent fields
   if (isAgent) {
     newLines.push('mode: subagent');
+    // Embed model override from ~/.gsd/defaults.json so model_overrides is
+    // respected on Kilo (which uses static agent frontmatter, not inline
+    // Task() model parameters) — mirrors convertClaudeToOpencodeFrontmatter's
+    // model emission exactly (#2093 UPGRADE 2 / ADR-1239). See #2256.
+    if (modelOverride) {
+      newLines.push(['model:', modelOverride].join(' '));
+    }
     newLines.push(...buildKiloAgentPermissionBlock(agentTools));
   }
 
@@ -6788,7 +6800,10 @@ const GSD_UNINSTALL_HOOKS = [
  * @param {string} runtime - Target runtime ('claude', 'opencode', 'codex', 'copilot')
  */
 function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
-  const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2093: isKilo dropped — the Kilo permission-cleanup branch below is
+  // descriptor-driven (resolveInstallPlan(runtime).finishPermissionWriter),
+  // not gated on this flag.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -7197,9 +7212,11 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
     }
   }
 
-  // 4z. Remove the OpenCode native plugin adapter (#1914). Only GSD's own
-  // plugin file is removed; the plugins/ dir is pruned only if it becomes
-  // empty, preserving any user-authored OpenCode plugins.
+  // 4z. Remove the native plugin adapter (#1914, extended to Kilo by #2093).
+  // Descriptor-driven via hostBehaviors.nativePlugin — covers every runtime
+  // that declares the block (OpenCode, Kilo, ...), not just OpenCode. Only
+  // GSD's own plugin file is removed; the plugins/ dir is pruned only if it
+  // becomes empty, preserving any user-authored plugins for that host.
   const _np = _hostBehaviors(runtime).nativePlugin;
   if (_np) {
     const pluginsDir = path.join(targetDir, _np.dir);
@@ -7208,7 +7225,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       try {
         fs.unlinkSync(pluginPath);
         removedCount++;
-        console.log(`  ${green}✓${reset} Removed OpenCode plugin`);
+        console.log(`  ${green}✓${reset} Removed native plugin adapter (${runtime})`);
       } catch (_) { /* best-effort */ }
       try { fs.rmdirSync(pluginsDir); } catch (_) { /* not empty — user plugins present */ }
     }
@@ -7423,7 +7440,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 7. For Kilo, clean up permissions from kilo.json or kilo.jsonc
-  if (isKilo) {
+  // #2093: descriptor-driven via resolveInstallPlan(runtime).finishPermissionWriter,
+  // mirroring the OpenCode branch above (was hardcoded `isKilo`).
+  if (resolveInstallPlan(runtime).finishPermissionWriter === 'kilo') {
     const configPath = resolveKiloConfigPath(targetDir);
     if (fs.existsSync(configPath)) {
       try {
@@ -7825,7 +7844,8 @@ function resolveInstallRelativePath(baseDir, relPath) {
  * Write file manifest after installation for future modification detection
  */
 function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
-  const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2093: isKilo dropped — unused in this function.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // Claude local uses flatCommandsDir instead for manifest recording.
@@ -8325,7 +8345,9 @@ function reportInstallerMigrationResult(result) {
 }
 
 function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
-  const { isOpencode, isKilo, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2093: isKilo dropped — Kilo's agent/model-override handling below reads
+  // _hostBehaviors(runtime).frontmatterDialect === 'kilo' instead of this flag.
+  const { isOpencode, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -9237,7 +9259,25 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           }
           content = convertClaudeToOpencodeFrontmatter(content, { isAgent: true, modelOverride: _ocModelOverride });
         } else if (_hostBehaviors(runtime).frontmatterDialect === 'kilo') {
-          content = convertClaudeToKiloFrontmatter(content, { isAgent: true });
+          // Resolve per-agent model for Kilo agents (#2093 UPGRADE 2; Kilo is an
+          // OpenCode fork with the same static-frontmatter model constraint).
+          // Precedence: model_overrides[agent] > model_profile_overrides.kilo.<tier> > omit.
+          // model_overrides (#2256): explicit per-agent override, highest precedence.
+          // model_profile_overrides (#2794): tier-based runtime resolver, same parity as OpenCode.
+          const _kiloAgentName = entry.name.replace(/\.md$/, '');
+          const _kiloModelOverrides = readGsdEffectiveModelOverrides(targetDir);
+          let _kiloModelOverride = _kiloModelOverrides?.[_kiloAgentName] || null;
+          if (!_kiloModelOverride) {
+            // Fall back to tier-based resolution via model_profile_overrides.kilo.<tier>.
+            const _kiloRuntimeResolver = readGsdRuntimeProfileResolver(targetDir);
+            if (_kiloRuntimeResolver) {
+              const _kiloEntry = _kiloRuntimeResolver.resolve(_kiloAgentName);
+              if (_kiloEntry?.model) {
+                _kiloModelOverride = _kiloEntry.model;
+              }
+            }
+          }
+          content = convertClaudeToKiloFrontmatter(content, { isAgent: true, modelOverride: _kiloModelOverride });
         } else if (_hostBehaviors(runtime).frontmatterDialect === 'codex') {
           content = convertClaudeAgentToCodexAgent(content);
         } else if (isCopilot) {
@@ -9331,7 +9371,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCursor).
   // #2090: Cline's exclusion is likewise descriptor-driven (cline declares
   // skipSharedHooksInstall:true) — the redundant `&& !isCline` was removed.
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isKilo && !isZcode) {
+  // #2093: Kilo's exclusion is likewise descriptor-driven (kilo declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isKilo` was removed.
+  // ZCode still has an empty hostBehaviors, so `&& !isZcode` stays.
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isZcode) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -9423,17 +9466,18 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   // Gate hooks/lib/ install on the same runtimes that receive hooks (see line ~8702).
-  // Codex/Copilot/Cursor/Windsurf/Trae/Cline do not use the shared hooks/lib/ helpers
-  // (Cursor uses standalone .js hook scripts registered via hooks.json — gated
+  // Codex/Copilot/Cursor/Windsurf/Trae/Cline/Kilo do not use the shared hooks/lib/
+  // helpers (Cursor uses standalone .js hook scripts registered via hooks.json — gated
   // descriptor-driven via hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise
-  // #2090; Codex uses hooks.json directly; the others skip hooks entirely); Kilo and
-  // ZCode also skip hooks entirely (hooksSurface:'none' with no plugin surface — #1821).
-  // OpenCode is NOT excluded: its #1914 plugin adapter spawns the staged hooks and
-  // requires hooks/lib/ helpers. None of the excluded runtimes must receive the
-  // hooks/lib/ helpers — otherwise the Codex comment downstream ("we deliberately do
-  // *not* copy hooks/lib/ for Codex") is contradicted in practice.
+  // #2090; Kilo likewise #2093; Codex uses hooks.json directly; the others skip hooks
+  // entirely); Kilo and ZCode also skip hooks entirely (hooksSurface:'none' with no
+  // plugin surface — #1821). ZCode's hostBehaviors is still empty, so `&& !isZcode`
+  // stays hardcoded. OpenCode is NOT excluded: its #1914 plugin adapter spawns the
+  // staged hooks and requires hooks/lib/ helpers. None of the excluded runtimes must
+  // receive the hooks/lib/ helpers — otherwise the Codex comment downstream ("we
+  // deliberately do *not* copy hooks/lib/ for Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isKilo && !isZcode && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isZcode && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
@@ -10367,7 +10411,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
  * Apply statusline config, then print completion message
  */
 function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = DEFAULT_RUNTIME, isGlobal = true, configDir = null, bannerOpts = {}) {
-  const { isOpencode, isKilo, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2093: isKilo dropped — the Kilo permissions-writer call below is gated
+  // on plan.finishPermissionWriter === 'kilo' (descriptor-driven), not this flag.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {
