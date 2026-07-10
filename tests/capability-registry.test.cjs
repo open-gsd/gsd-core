@@ -4001,9 +4001,9 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
 // ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
 
 describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
-  test('VALID_CONVERTER_NAMES has exactly 25 entries (16 command/skill/workflow + 9 agent converters)', () => {
+  test('VALID_CONVERTER_NAMES has exactly 26 entries (16 command/skill/workflow + 10 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 25, 'VALID_CONVERTER_NAMES must have exactly 25 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 26, 'VALID_CONVERTER_NAMES must have exactly 26 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -4035,6 +4035,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToCodebuddyAgent',
       'convertClaudeAgentToClineAgent',
       'convertClaudeAgentToCodexAgent',
+      // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
+      'convertClaudeAgentToQwenAgent',
     ];
     for (const name of expected) {
       assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');
@@ -4424,10 +4426,11 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     }
   });
 
-  test('VALID_EXTENDED_HOOK_EVENTS covers all 7 known extended events', () => {
+  test('VALID_EXTENDED_HOOK_EVENTS covers all 8 known extended events', () => {
     assert.ok(VALID_EXTENDED_HOOK_EVENTS instanceof Set, 'Must be a Set');
-    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 7, 'Must cover 7 extended hook events');
-    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 8, 'Must cover 8 extended hook events');
+    // SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today).
+    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']) {
       assert.ok(VALID_EXTENDED_HOOK_EVENTS.has(ev), 'Must include event "' + ev + '"');
     }
   });

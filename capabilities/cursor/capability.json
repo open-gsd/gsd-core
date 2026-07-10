@@ -114,7 +114,8 @@
         "stop",
         "subagentStart",
         "subagentStop"
-      ]
+      ],
+      "reviewerCli": true
     }
   }
 }

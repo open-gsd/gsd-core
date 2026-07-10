@@ -351,6 +351,8 @@ Skills land in `~/.qwen/skills/gsd-*/SKILL.md`.
 
 GSD's main-loop skills are emitted with Qwen's optional numeric `priority` frontmatter field so the most-used workflows surface first in the `/skills` TUI list. Higher values sort earlier (per Qwen's skills spec), so core commands such as `/skills` for `new-project` (100), `plan-phase` (90), and `execute-phase` (85) appear above utility skills, which are left unset (default 0). This affects only the `/skills` list order — slash-command completion and `/help` remain alphabetical.
 
+Subagents land in `~/.qwen/agents/gsd-*.md` as native Qwen subagents, converted to Qwen's own `name:`/`description:`/`tools:` (YAML block list) frontmatter schema rather than Claude Code's.
+
 **Override the install directory:**
 
 ```bash
@@ -367,6 +369,7 @@ Qwen Code supports 15 hook events. GSD registers the following events automatica
 | `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
 | `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
 | `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
+| `SubagentStart` | `gsd-context-monitor.js` | Context headroom tracking at subagent start |
 | `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
 | `PreCompact` | `gsd-context-monitor.js` | Context awareness before conversation compaction |
 

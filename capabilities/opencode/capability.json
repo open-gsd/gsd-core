@@ -99,7 +99,8 @@
       "skipHomePrefixSubstitution": true,
       "skipSettingsUi": true,
       "skipUpdateBannerCommand": true,
-      "skipCodexSkillsManifest": true
+      "skipCodexSkillsManifest": true,
+      "reviewerCli": true
     }
   }
 }

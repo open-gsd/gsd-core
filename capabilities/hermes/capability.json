@@ -63,7 +63,10 @@
         "Claude Code": "Hermes Agent",
         ".claude/": ".hermes/"
       },
-      "reapplyCommand": "gsd-update --reapply (mention the skill name)"
+      "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+      "legacyCommandsGsdInstallMigration": true,
+      "legacyCommandsGsdUninstall": true,
+      "hyphenNameAgentBody": true
     },
     "hostIntegration": {
       "embeddingMode": "imperative",

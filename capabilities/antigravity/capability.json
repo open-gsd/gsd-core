@@ -89,6 +89,9 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "go"
+    },
+    "hostBehaviors": {
+      "reviewerCli": true
     }
   }
 }

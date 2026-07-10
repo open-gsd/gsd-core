@@ -78,7 +78,8 @@
       "tomlConfigInstall": true,
       "cleanupSkillSidecars": true,
       "agentTomlFiles": true,
-      "frontmatterDialect": "codex"
+      "frontmatterDialect": "codex",
+      "reviewerCli": true
     }
   }
 }

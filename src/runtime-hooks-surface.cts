@@ -108,6 +108,31 @@ const GSD_AGENTS_MD_MARKER = '<!-- GSD Configuration — managed by gsd-core ins
 const GSD_AGENTS_MD_CLOSE_MARKER = '<!-- End GSD Configuration -->';
 
 // ---------------------------------------------------------------------------
+// Descriptor-driven runtime title lookup (ADR-1239 / #2092)
+// ---------------------------------------------------------------------------
+
+/**
+ * Console-log label for a runtime, sourced from the capability registry's
+ * `title` field (capabilities/<runtime>/capability.json). Folded from a
+ * hardcoded `runtime === 'qwen' ? 'Qwen Code' : runtime === 'claude' ?
+ * 'Claude Code' : runtime` ternary — cosmetic (log text) only, but resolves
+ * to the same 'Qwen Code' / 'Claude Code' values for those two runtimes.
+ * Falls back to the raw runtime id if the registry can't be loaded or the
+ * runtime has no title.
+ */
+function _capabilityTitle(runtime: string): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const reg = require('./capability-registry.cjs') as {
+      runtimes?: Record<string, { title?: string } | undefined>;
+    };
+    return reg?.runtimes?.[runtime]?.title || runtime;
+  } catch {
+    return runtime;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // atomicWriteFileSync — shared canonical implementation.
 //
 // __atomicWrittenTmps is exported so bin/install.js can merge it into its
@@ -1548,12 +1573,18 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
       console.warn(`  ${yellow}⚠${reset}  Skipped phase boundary hook — Bash executable path unavailable (#3393)`);
     }
 
-    // ── Extended hook events: SubagentStop / Stop / PreCompact (#788 + #770) ──
-    // Claude Code (since #770) and Qwen Code (since #788) both support these
-    // three lifecycle events.  Wire gsd-context-monitor so agents get context-
-    // headroom warnings at subagent completion, model stop, and pre-compaction
-    // (the most critical moment to surface headroom info).
+    // ── Extended hook events: SubagentStop / Stop / PreCompact / SubagentStart
+    //    (#788 + #770 + #2092) ────────────────────────────────────────────────
+    // Claude Code (since #770) and Qwen Code (since #788) both support the
+    // SubagentStop / Stop / PreCompact lifecycle events. Qwen Code additionally
+    // supports SubagentStart (#2092 Phase B, Upgrade 2). Wire gsd-context-
+    // monitor so agents get context-headroom warnings at subagent start,
+    // subagent completion, model stop, and pre-compaction (the most critical
+    // moment to surface headroom info).
     //
+    //   SubagentStart — subagent lifecycle start (context headroom tracking;
+    //                   qwen-only today — no other runtime declares it in
+    //                   extendedHookEvents)
     //   SubagentStop  — subagent lifecycle completion (context headroom tracking)
     //   Stop          — model stop / final-response moment (context headroom)
     //   PreCompact    — fires before conversation compaction (most critical
@@ -1563,11 +1594,15 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // user prompt text, not a tool invocation, so gsd-prompt-guard (which
     // exits unless tool_name is Write/Edit) would be a silent no-op.  A
     // dedicated handler for UserPromptSubmit is deferred to a follow-on issue.
-    // SubagentStop, Stop, PreCompact — route through the context monitor.
-    // Guard is now descriptor-driven: only events present in extendedEvents are wired.
+    // SubagentStart, SubagentStop, Stop, PreCompact — route through the context monitor.
+    // Guard is descriptor-driven: only events present in extendedEvents are wired,
+    // so this loop is a no-op for every runtime that doesn't list SubagentStart.
     {
-      const runtimeLabel = runtime === 'qwen' ? 'Qwen Code' : runtime === 'claude' ? 'Claude Code' : runtime;
-      for (const event of ['SubagentStop', 'Stop', 'PreCompact']) {
+      // Descriptor-driven (ADR-1239 / #2092): folded from a hardcoded
+      // `runtime === 'qwen' ? ... : ...` ternary into a capability-title
+      // lookup (see _capabilityTitle above).
+      const runtimeLabel = _capabilityTitle(runtime);
+      for (const event of ['SubagentStop', 'Stop', 'PreCompact', 'SubagentStart']) {
         if (!extendedEvents.includes(event)) continue;
         if (!settings.hooks[event]) {
           settings.hooks[event] = [];
@@ -1591,7 +1626,7 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
         }
       }
     }
-    // ── end SubagentStop / Stop / PreCompact events ────────────────────────────
+    // ── end SubagentStop / Stop / PreCompact / SubagentStart events ────────────
 
     // ── Extended hook events (#776; Gemini runtime removed #1928) ──────────────
     // The Gemini-3-backend dialect exposes several hook events beyond

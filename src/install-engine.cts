@@ -470,7 +470,7 @@ function _runLegacyInstallMigrations(runtime: string, configDir: string, scope: 
   // that for Hermes the flat skills/gsd-*/ removal (below) does not delete the freshly
   // created skills/gsd-dev-preferences/ skill dir.
   let savedLegacyArtifacts: Map<string, string> | null = null;
-  if (runtime === 'claude' || runtime === 'qwen' || runtime === 'hermes') {
+  if (_hostBehaviors(runtime).legacyCommandsGsdInstallMigration) {
     if (fs.existsSync(legacyCommandsGsd)) {
       savedLegacyArtifacts = preserveUserArtifacts(legacyCommandsGsd, ['dev-preferences.md']);
       fs.rmSync(legacyCommandsGsd, { recursive: true });
@@ -531,7 +531,8 @@ function _runLegacyUninstallCleanup(runtime: string, configDir: string, scope: s
   // commands/gsd/ for claude local, preserving dev-preferences.md by restoring it
   // to the same location (#1423). Using migrateLegacyDevPreferencesToSkill here
   // (which would redirect to skills/) conflicts with the test contract for local installs.
-  const isLegacyCommandsGsd = runtime === 'qwen' || runtime === 'hermes' || (runtime === 'claude' && scope === 'global');
+  const _lu = _hostBehaviors(runtime).legacyCommandsGsdUninstall;
+  const isLegacyCommandsGsd = _lu === true || (_lu === 'global' && scope === 'global');
   if (isLegacyCommandsGsd) {
     const legacyCommandsGsd = path.join(configDir, 'commands', 'gsd');
     if (fs.existsSync(legacyCommandsGsd)) {

@@ -95,7 +95,11 @@
       ],
       "ownsClaudePaths": true,
       "nativeModelAliases": true,
-      "skillsGlobalOnboarding": true
+      "skillsGlobalOnboarding": true,
+      "legacyCommandsGsdInstallMigration": true,
+      "legacyCommandsGsdUninstall": "global",
+      "hyphenNameAgentBody": true,
+      "reviewerCli": true
     }
   }
 }

@@ -14,20 +14,43 @@
  * per-instance CLI flags). An instance is available iff its base `cli` is
  * detected. The instance→cli mapping lives HERE (single source; see the parity
  * test in tests/review-reviewer-instances.test.cjs — DEFECT.GENERATIVE-FIX).
+ *
+ * KNOWN_REVIEWER_SLUGS (post-review #2092): registry-derived, not a flat
+ * hand-maintained array. Each capability-runtime descriptor that is a valid
+ * reviewer CLI declares `runtime.hostBehaviors.reviewerCli: true`
+ * (capabilities/<id>/capability.json); this module reads that flag off the
+ * generated capability-registry.cjs at require-time. A handful of reviewer
+ * CLIs are NOT install-time runtimes at all (no capabilities/<id>/ descriptor
+ * exists) — those stay a small hardcoded tail:
+ *   - `gemini` — hook-event dialect name only (see runtime-hooks-surface.cts);
+ *     the Gemini CLI reviewer is not an installable runtime (#1928 folded
+ *     gemini into antigravity's descriptor).
+ *   - `coderabbit` / `ollama` / `lm_studio` / `llama_cpp` — third-party
+ *     review/model CLIs with no GSD install surface at all.
  */
 
-export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = [
+const NON_RUNTIME_REVIEWER_SLUGS: ReadonlyArray<string> = [
   'gemini',
-  'claude',
-  'codex',
   'coderabbit',
-  'opencode',
-  'qwen',
-  'cursor',
-  'antigravity',
   'ollama',
   'lm_studio',
   'llama_cpp',
+];
+
+function deriveRuntimeReviewerSlugs(): string[] {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const registry = require('./capability-registry.cjs') as {
+    runtimes?: Record<string, { runtime?: { hostBehaviors?: { reviewerCli?: boolean } } }>;
+  };
+  const runtimes = registry.runtimes || {};
+  return Object.keys(runtimes).filter(
+    (id) => runtimes[id]?.runtime?.hostBehaviors?.reviewerCli === true,
+  );
+}
+
+export const KNOWN_REVIEWER_SLUGS: ReadonlyArray<string> = [
+  ...deriveRuntimeReviewerSlugs(),
+  ...NON_RUNTIME_REVIEWER_SLUGS,
 ];
 
 /** Instance names are lowercase slugs that must not shadow a built-in slug. */

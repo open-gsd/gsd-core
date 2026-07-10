@@ -697,6 +697,8 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeAgentToCodebuddyAgent',
   'convertClaudeAgentToClineAgent',
   'convertClaudeAgentToCodexAgent',
+  // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
+  'convertClaudeAgentToQwenAgent',
 ]);
 
 // C3: Validate role:runtime body
@@ -716,7 +718,9 @@ const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
 const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
 const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
-const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
+// SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today — see
+// capabilities/qwen/capability.json's extendedHookEvents).
+const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']);
 
 // ADR-1239 Phase A: hostIntegration axes (MUST stay parity-identical to HOST_INTEGRATION_AXES in src/host-integration.cts)
 const VALID_EMBEDDING_MODES   = new Set(['imperative', 'declarative']);
@@ -742,7 +746,9 @@ const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
 // GATE B: extended hook event families → required hookEvents value
 // Gemini agent-events require hookEvents='gemini'; Claude-family events require hookEvents='claude'.
 const GEMINI_AGENT_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeModel']);
-const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged']);
+// SubagentStart added #2092 Phase B Upgrade 2 — Claude hook-event dialect
+// counterpart of SubagentStop (qwen-only today).
+const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'SubagentStart']);
 
 /**
  * Validate a runtime.configHome object per ADR-1016 Decision 1.

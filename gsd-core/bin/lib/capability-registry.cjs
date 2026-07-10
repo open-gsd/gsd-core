@@ -183,6 +183,9 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "go"
+      },
+      "hostBehaviors": {
+        "reviewerCli": true
       }
     }
   },
@@ -469,7 +472,11 @@ const capabilities = {
         ],
         "ownsClaudePaths": true,
         "nativeModelAliases": true,
-        "skillsGlobalOnboarding": true
+        "skillsGlobalOnboarding": true,
+        "legacyCommandsGsdInstallMigration": true,
+        "legacyCommandsGsdUninstall": "global",
+        "hyphenNameAgentBody": true,
+        "reviewerCli": true
       }
     }
   },
@@ -873,7 +880,8 @@ const capabilities = {
         "tomlConfigInstall": true,
         "cleanupSkillSidecars": true,
         "agentTomlFiles": true,
-        "frontmatterDialect": "codex"
+        "frontmatterDialect": "codex",
+        "reviewerCli": true
       }
     }
   },
@@ -1083,7 +1091,8 @@ const capabilities = {
           "stop",
           "subagentStart",
           "subagentStop"
-        ]
+        ],
+        "reviewerCli": true
       }
     }
   },
@@ -1395,7 +1404,10 @@ const capabilities = {
           "Claude Code": "Hermes Agent",
           ".claude/": ".hermes/"
         },
-        "reapplyCommand": "gsd-update --reapply (mention the skill name)"
+        "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+        "legacyCommandsGsdInstallMigration": true,
+        "legacyCommandsGsdUninstall": true,
+        "hyphenNameAgentBody": true
       },
       "hostIntegration": {
         "embeddingMode": "imperative",
@@ -1968,7 +1980,8 @@ const capabilities = {
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
-        "skipCodexSkillsManifest": true
+        "skipCodexSkillsManifest": true,
+        "reviewerCli": true
       }
     }
   },
@@ -2133,6 +2146,14 @@ const capabilities = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQwenAgent"
           }
         ],
         "local": [
@@ -2143,6 +2164,14 @@ const capabilities = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQwenAgent"
           }
         ]
       },
@@ -2157,7 +2186,8 @@ const capabilities = {
       "extendedHookEvents": [
         "SubagentStop",
         "Stop",
-        "PreCompact"
+        "PreCompact",
+        "SubagentStart"
       ],
       "hostIntegration": {
         "embeddingMode": "imperative",
@@ -2175,6 +2205,19 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "skillPriorityFrontmatter": true,
+        "brandingRewrites": {
+          "CLAUDE.md": "QWEN.md",
+          "Claude Code": "Qwen Code",
+          ".claude/": ".qwen/"
+        },
+        "legacyCommandsGsdCleanup": true,
+        "legacyCommandsGsdInstallMigration": true,
+        "legacyCommandsGsdUninstall": true,
+        "hyphenNameAgentBody": true,
+        "reviewerCli": true
       }
     }
   },
@@ -3787,6 +3830,9 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "go"
+      },
+      "hostBehaviors": {
+        "reviewerCli": true
       }
     }
   },
@@ -3990,7 +4036,11 @@ const runtimes = {
         ],
         "ownsClaudePaths": true,
         "nativeModelAliases": true,
-        "skillsGlobalOnboarding": true
+        "skillsGlobalOnboarding": true,
+        "legacyCommandsGsdInstallMigration": true,
+        "legacyCommandsGsdUninstall": "global",
+        "hyphenNameAgentBody": true,
+        "reviewerCli": true
       }
     }
   },
@@ -4246,7 +4296,8 @@ const runtimes = {
         "tomlConfigInstall": true,
         "cleanupSkillSidecars": true,
         "agentTomlFiles": true,
-        "frontmatterDialect": "codex"
+        "frontmatterDialect": "codex",
+        "reviewerCli": true
       }
     }
   },
@@ -4456,7 +4507,8 @@ const runtimes = {
           "stop",
           "subagentStart",
           "subagentStop"
-        ]
+        ],
+        "reviewerCli": true
       }
     }
   },
@@ -4525,7 +4577,10 @@ const runtimes = {
           "Claude Code": "Hermes Agent",
           ".claude/": ".hermes/"
         },
-        "reapplyCommand": "gsd-update --reapply (mention the skill name)"
+        "reapplyCommand": "gsd-update --reapply (mention the skill name)",
+        "legacyCommandsGsdInstallMigration": true,
+        "legacyCommandsGsdUninstall": true,
+        "hyphenNameAgentBody": true
       },
       "hostIntegration": {
         "embeddingMode": "imperative",
@@ -4822,7 +4877,8 @@ const runtimes = {
         "skipHomePrefixSubstitution": true,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
-        "skipCodexSkillsManifest": true
+        "skipCodexSkillsManifest": true,
+        "reviewerCli": true
       }
     }
   },
@@ -4856,6 +4912,14 @@ const runtimes = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQwenAgent"
           }
         ],
         "local": [
@@ -4866,6 +4930,14 @@ const runtimes = {
             "nesting": "nested",
             "recursive": false,
             "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQwenAgent"
           }
         ]
       },
@@ -4880,7 +4952,8 @@ const runtimes = {
       "extendedHookEvents": [
         "SubagentStop",
         "Stop",
-        "PreCompact"
+        "PreCompact",
+        "SubagentStart"
       ],
       "hostIntegration": {
         "embeddingMode": "imperative",
@@ -4898,6 +4971,19 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "skillPriorityFrontmatter": true,
+        "brandingRewrites": {
+          "CLAUDE.md": "QWEN.md",
+          "Claude Code": "Qwen Code",
+          ".claude/": ".qwen/"
+        },
+        "legacyCommandsGsdCleanup": true,
+        "legacyCommandsGsdInstallMigration": true,
+        "legacyCommandsGsdUninstall": true,
+        "hyphenNameAgentBody": true,
+        "reviewerCli": true
       }
     }
   },

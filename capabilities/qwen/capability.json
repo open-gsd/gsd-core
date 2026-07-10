@@ -28,6 +28,14 @@
           "nesting": "nested",
           "recursive": false,
           "converter": "convertClaudeCommandToClaudeSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToQwenAgent"
         }
       ],
       "local": [
@@ -38,6 +46,14 @@
           "nesting": "nested",
           "recursive": false,
           "converter": "convertClaudeCommandToClaudeSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToQwenAgent"
         }
       ]
     },
@@ -52,7 +68,8 @@
     "extendedHookEvents": [
       "SubagentStop",
       "Stop",
-      "PreCompact"
+      "PreCompact",
+      "SubagentStart"
     ],
     "hostIntegration": {
       "embeddingMode": "imperative",
@@ -70,6 +87,15 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "node"
+    },
+    "hostBehaviors": {
+      "skillPriorityFrontmatter": true,
+      "brandingRewrites": { "CLAUDE.md": "QWEN.md", "Claude Code": "Qwen Code", ".claude/": ".qwen/" },
+      "legacyCommandsGsdCleanup": true,
+      "legacyCommandsGsdInstallMigration": true,
+      "legacyCommandsGsdUninstall": true,
+      "hyphenNameAgentBody": true,
+      "reviewerCli": true
     }
   }
 }

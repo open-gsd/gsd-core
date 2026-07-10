@@ -62,6 +62,27 @@ function gsdVersion(): string {
   return cachedVersion;
 }
 
+/**
+ * Host-specific install behaviors declared on the runtime descriptor
+ * (capabilities/<runtime>/capability.json -> runtime.hostBehaviors). Mirrors
+ * bin/install.js's / install-engine.cts's `_hostBehaviors` (ADR-1239 / #2086
+ * / #2092). Returns {} for runtimes that declare none, so every behavior
+ * branch degrades to the generic path by default. Unlike the bin/install.js
+ * and install-engine.cts variants, this module already imports
+ * `capabilityRegistry` statically (see NON_CLAUDE_RUNTIMES below), so this
+ * reads it directly rather than re-require()-ing inside a try/catch.
+ */
+function _hostBehaviors(runtime: string): Record<string, unknown> {
+  return (
+    (capabilityRegistry &&
+      capabilityRegistry.runtimes &&
+      capabilityRegistry.runtimes[runtime] &&
+      capabilityRegistry.runtimes[runtime].runtime &&
+      capabilityRegistry.runtimes[runtime].runtime.hostBehaviors) ||
+    {}
+  );
+}
+
 
 const colorNameToHex = {
   cyan: '#00FFFF',
@@ -434,10 +455,12 @@ function convertClaudeCommandToClaudeSkill(content, skillName, runtime = null, c
     const version = gsdVersion();
     if (version) fm += `version: ${yamlQuote(version)}\n`;
   }
-  // #778 (b) — Qwen-only numeric priority for /skills ordering. Scoped to qwen
-  // so Claude/Hermes skill frontmatter is unchanged (they ignore the field, but
-  // we keep their output byte-stable). skillName is the `gsd-<stem>` dir name.
-  if (runtime === 'qwen') {
+  // #778 (b) — numeric priority for /skills ordering, declared on the runtime
+  // descriptor (runtime.hostBehaviors.skillPriorityFrontmatter). Scoped to
+  // runtimes that declare the flag so Claude/Hermes skill frontmatter is
+  // unchanged (they ignore the field, but we keep their output byte-stable).
+  // skillName is the `gsd-<stem>` dir name. (ADR-1239 / #2092)
+  if (_hostBehaviors(runtime).skillPriorityFrontmatter) {
     const stem = typeof skillName === 'string' && skillName.startsWith('gsd-')
       ? skillName.slice(4)
       : skillName;
@@ -2053,6 +2076,77 @@ function convertClaudeAgentToTraeAgent(content) {
   return `${cleanFrontmatter}\n${body}`;
 }
 
+/**
+ * Convert a Claude agent (.md) to a native Qwen Code subagent file
+ * (`.qwen/agents/gsd-*.md` / `<qwenhome>/agents/gsd-*.md`, ADR-1239 / #2092
+ * Phase B Upgrade 1). Qwen Code is a Claude-dialect host: its docs' "Claude
+ * Code Compatibility Fields" section confirms CC agent files parse under
+ * `.qwen/agents/` (https://qwenlm.github.io/qwen-code-docs/en/users/features/sub-agents),
+ * so — unlike Cursor/Trae/Copilot/Antigravity — tool names pass through
+ * UNCHANGED (no remapping table).
+ *
+ * Emits DETERMINISTIC frontmatter: `name:` + `description:` (mirrors
+ * convertClaudeAgentToCursorAgent), plus `tools:` as a YAML block list when the
+ * source declares one. Qwen's documented `tools:` schema is a YAML array
+ * (`tools:\n- tool1\n- tool2`), not Claude's single-line comma-separated string
+ * — passing the raw single-line string through unchanged would parse as one
+ * malformed tool name and be silently dropped ("Optional fields with invalid
+ * values are silently dropped at parse time" — same docs page). Reuses
+ * `parseFrontmatterTools` (already relied on by the Kimi agent path), which
+ * tolerates BOTH source formats Claude's own agents/*.md files use — the
+ * single-line comma list (most agents) and the YAML block list (e.g.
+ * agents/gsd-nyquist-auditor.md, agents/gsd-security-auditor.md) — so no tools
+ * are lost regardless of which the source agent uses.
+ *
+ * `color` IS preserved: Qwen's docs list `color` under "Claude Code
+ * Compatibility Fields" as a supported optional field, so it is passed
+ * through as a plain scalar (unlike the cursor/trae/augment/windsurf
+ * reduced-frontmatter converters, which drop it — those hosts have no such
+ * compatibility field). `model:` and `approvalMode:` are intentionally NOT
+ * emitted: both are optional per the docs and out of scope for #2092 (model:
+ * would couple to the model catalog and introduce nondeterminism;
+ * approvalMode is a deliberate follow-on).
+ *
+ * Body: preserved verbatim after the qwen branding rewrite (CLAUDE.md /
+ * Claude Code / .claude/ literal-substring values — descriptor-driven via
+ * runtime.hostBehaviors.brandingRewrites, mirrors the qwen case in
+ * _applyRuntimeRewrites). The anchored `~/.claude/` / `$HOME/.claude/` forms
+ * are already rewritten upstream by applyAgentPathRewrites (agentCtx Step 1 in
+ * stageAgentsForRuntimeWithConverter) before this converter runs, so only the
+ * bare/non-anchored forms are handled here — mirrors how
+ * convertClaudeToTraeMarkdown orders its bare-form rewrites after the slash
+ * forms to avoid double-rewriting the same substring.
+ */
+function convertClaudeAgentToQwenAgent(content) {
+  const _b = _hostBehaviors('qwen').brandingRewrites || {};
+  let converted = content;
+  if (_b['CLAUDE.md']) converted = converted.replace(/CLAUDE\.md/g, _b['CLAUDE.md']);
+  if (_b['Claude Code']) converted = converted.replace(/\bClaude Code\b/g, _b['Claude Code']);
+  if (_b['.claude/']) converted = converted.replace(/\.claude\//g, _b['.claude/']);
+
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const tools = parseFrontmatterTools(frontmatter);
+  const color = extractFrontmatterField(frontmatter, 'color');
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (tools.length > 0) {
+    fm += 'tools:\n';
+    for (const tool of tools) {
+      fm += `  - ${yamlIdentifier(tool)}\n`;
+    }
+  }
+  if (color) {
+    fm += `color: ${yamlIdentifier(color)}\n`;
+  }
+  fm += '---';
+
+  return `${fm}\n${body}`;
+}
+
 function convertClaudeAgentToCodebuddyAgent(content) {
   const converted = convertClaudeToCodebuddyMarkdown(content);
 
@@ -2357,9 +2451,20 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = processAttribution(content, attribution);
       break;
 
-    case 'qwen':
-      content = content.replace(/CLAUDE\.md/g, 'QWEN.md');
-      content = content.replace(/\bClaude Code\b/g, 'Qwen Code');
+    // Descriptor-driven brand literals (ADR-1239 / #2092): the qwen/hermes
+    // brand VALUES (CLAUDE.md/Claude Code/.claude/ replacements) now read from
+    // runtime.hostBehaviors.brandingRewrites instead of hardcoded literals.
+    // EXACT regexes/order preserved — only the replacement values changed.
+    case 'qwen': {
+      // Guarded (post-review #2092): brandingRewrites is undefined if the
+      // capability registry fails to load — degrade closed (skip the
+      // brand-literal replacements, still apply the non-branding path
+      // rewrites below) instead of throwing on `_b['CLAUDE.md']`.
+      const _b = _hostBehaviors(runtime).brandingRewrites;
+      if (_b) {
+        content = content.replace(/CLAUDE\.md/g, _b['CLAUDE.md']);
+        content = content.replace(/\bClaude Code\b/g, _b['Claude Code']);
+      }
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.qwen\//g, pathPrefix);
@@ -2368,15 +2473,23 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/~\/\.qwen(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.qwen(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.claude\//g, '.qwen/');
+      if (_b) {
+        content = content.replace(/\.claude\//g, _b['.claude/']);
+      }
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/\.\/\.qwen\//g, `./${dirName}/`);
       content = processAttribution(content, attribution);
       break;
+    }
 
-    case 'hermes':
-      content = content.replace(/CLAUDE\.md/g, 'HERMES.md');
-      content = content.replace(/\bClaude Code\b/g, 'Hermes Agent');
+    case 'hermes': {
+      // Guarded (post-review #2092): see qwen case above — same degrade-closed
+      // rationale.
+      const _b = _hostBehaviors(runtime).brandingRewrites;
+      if (_b) {
+        content = content.replace(/CLAUDE\.md/g, _b['CLAUDE.md']);
+        content = content.replace(/\bClaude Code\b/g, _b['Claude Code']);
+      }
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/~\/\.hermes\//g, pathPrefix);
@@ -2385,11 +2498,14 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/~\/\.hermes(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.hermes(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\.claude\//g, '.hermes/');
+      if (_b) {
+        content = content.replace(/\.claude\//g, _b['.claude/']);
+      }
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/\.\/\.hermes\//g, `./${dirName}/`);
       content = processAttribution(content, attribution);
       break;
+    }
 
     case 'kimi':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
@@ -2554,25 +2670,20 @@ function rewriteStagedCommandBodies(stagedDir, opts) {
 }
 
 /**
- * Runtimes that use the hyphen-namespace form `/gsd-<cmd>` in agent bodies.
- * claude/qwen/hermes use hyphen-name:`...` frontmatter; cursor/windsurf/etc
- * self-convert. Mirrors the `HYPHEN_NAME_AGENT_RUNTIMES` set in bin/install.js.
- *
- * @private — export normalizeAgentBodyForRuntime for callers.
- */
-const HYPHEN_NAME_AGENT_RUNTIMES: ReadonlySet<string> = new Set(['claude', 'qwen', 'hermes']);
-
-/**
  * Normalize `/gsd:<cmd>` colon refs in the agent body to `/gsd-<cmd>` for
- * hyphen-`name:` runtimes (claude / qwen / hermes). No-op for all other
- * runtimes. Mirrors the per-file call in bin/install.js line 9400.
+ * runtimes that declare `runtime.hostBehaviors.hyphenNameAgentBody` on their
+ * descriptor (claude / qwen / hermes use hyphen-`name:` frontmatter;
+ * cursor/windsurf/etc self-convert and don't declare the flag). Descriptor-
+ * driven (ADR-1239 / #2092) — folded from the hardcoded
+ * `HYPHEN_NAME_AGENT_RUNTIMES` allow-list set. Mirrors the per-file call in
+ * bin/install.js line 9370 / `shouldNormalizeHyphenNamespaceInAgentBody`.
  *
  * @param content   raw agent file content (post-converter)
  * @param runtime   canonical runtime ID
  * @param cmdNames  gsd command names from readGsdCommandNames()
  */
 function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames: string[]): string {
-  if (!HYPHEN_NAME_AGENT_RUNTIMES.has(runtime)) return content;
+  if (_hostBehaviors(runtime).hyphenNameAgentBody !== true) return content;
   return transformContentToHyphen(content, cmdNames);
 }
 
@@ -2698,6 +2809,11 @@ export = {
   convertClaudeAgentToCodebuddyAgent,
   convertClaudeAgentToClineAgent,
   convertClaudeAgentToCodexAgent,
+  // ADR-1239 / #2092 Phase B Upgrade 1: native .qwen/agents/*.md subagent
+  // projection — registered by name so convertedAgentsKind's
+  // conversionExports[converterName] dispatch (runtime-artifact-layout.cts)
+  // can resolve it from capabilities/qwen/capability.json's agents kind.
+  convertClaudeAgentToQwenAgent,
   // #1511 ADR-1508 Phase 2: rewrite engine deep seam
   // Low-level walkers (pathPrefix + attribution pre-resolved by caller):
   applyRuntimeContentRewritesInPlace,
