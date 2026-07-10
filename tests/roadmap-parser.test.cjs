@@ -77,6 +77,19 @@ describe('roadmap-parser: stripShippedMilestones', () => {
     assert.ok(!result.includes('closed content'), 'content removed');
     assert.ok(result.includes('after'), 'after content preserved');
   });
+
+  test('#557: preserves an active <details open> block while stripping shipped bare <details>', () => {
+    // <details open> marks the ACTIVE milestone (roadmap.analyze must still see its
+    // phases); only closed/shipped bare <details> blocks are stripped. Regression for
+    // #557, which the #2128 shared-seam migration briefly reintroduced via the seam's
+    // attribute-tolerance — the details strip is now attr-INTOLERANT to keep #557 fixed.
+    const input = '<details>\nshipped phase\n</details>\n<details open>\n- [ ] **Phase 9: Active**\n</details>\nafter';
+    const result = stripShippedMilestones(input);
+    assert.ok(!result.includes('shipped phase'), 'shipped bare <details> stripped');
+    assert.ok(result.includes('<details open>'), 'active <details open> tag preserved');
+    assert.ok(result.includes('Phase 9: Active'), 'active-milestone phases preserved');
+    assert.ok(result.includes('after'), 'trailing content preserved');
+  });
 });
 
 // ─── extractCurrentMilestone ──────────────────────────────────────────────────

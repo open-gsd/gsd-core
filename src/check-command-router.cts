@@ -143,7 +143,10 @@ const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action)(?:\s[^>]{0,1000})?>((
 
 function stripCommentsAndFences(text: string): string {
   // HTML-comment stripping stays caller-side (the seam does not strip HTML comments).
-  const htmlStripped = text.replace(/<!--[\s\S]*?(?:-->|$)/g, ' ');
+  // Stop-at-next-open body (ReDoS-safe, #2128); an UNCLOSED `<!--` does not match,
+  // so downstream tags are preserved (unlike a `(?:-->|$)` fallback, which would
+  // wipe to EOF and fail-close the decision-coverage gate).
+  const htmlStripped = text.replace(/<!--(?:(?!<!--)[\s\S])*?-->/g, ' ');
   // Fenced-code stripping: delegate to the canonical CommonMark-correct seam.
   // replaces the prior independent regex copy (```` ``` ``` ````  + `~~~ ~~~`).
   return stripFencedCode(htmlStripped).text;

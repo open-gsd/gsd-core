@@ -206,7 +206,15 @@ function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warni
   //    while a prose echo on the same line is still caught.
   const cmdSpanRe =
     /grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n]*?(?:==|-eq|=)\s*0\b/g;
-  const actionZones = extractTaggedBlocks(text, 'action');
+  // Security scan: must see the FULL text up to the first </action> — including a
+  // malformed inner <action> — so a grep-echo-0 trick cannot hide behind a
+  // deliberately-unclosed tag. Use a bounded to-first-close scan (ReDoS-safe via
+  // the {0,20000} cap, #2128), NOT the stop-at-next-open extractTaggedBlocks seam
+  // (which would drop the span before an unterminated inner <action>).
+  const actionZones: string[] = [];
+  const actionRe = /<action>([\s\S]{0,20000}?)<\/action>/g;
+  let acm: RegExpExecArray | null;
+  while ((acm = actionRe.exec(text)) !== null) actionZones.push(acm[1]);
   const scannableActionText = actionZones.map((zone) => zone.replace(cmdSpanRe, ' ')).join('\n');
 
   // 3. Per shell SEGMENT (split lines on && / ||) extract count-grep literals and
@@ -363,7 +371,7 @@ function scanFileWideNegativeGateConflict(content: string): { warnings: string[]
     reqText: string;   // <action>+<acceptance_criteria> text (requirement side)
   }
   const tasks: TaskInfo[] = [];
-  for (const tc of extractTaggedBlocks(text, 'task')) {
+  for (const tc of extractTaggedBlocks(text, 'task', true)) {
     // Extract task name.
     const namem = extractTaggedBlocks(tc, 'name');
     const name = namem.length ? namem[0].trim() : 'unnamed';
@@ -565,7 +573,7 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   }
 
   const tasks: Record<string, unknown>[] = [];
-  for (const taskContent of extractTaggedBlocks(content, 'task')) {
+  for (const taskContent of extractTaggedBlocks(content, 'task', true)) {
     const nameArr = extractTaggedBlocks(taskContent, 'name');
     const taskName = nameArr.length ? nameArr[0].trim() : 'unnamed';
     const hasFiles = /<files>/.test(taskContent);
