@@ -383,6 +383,15 @@ AskUserQuestion — **Specify** (→ `covered`, write a concrete truth) / **Dism
 **Backstop** (a held-out/visual UI-state test) / **Defer** (→ `unresolved`). An `unclassified` row is
 a manual-review nudge, not a hard block. Text mode (`workflow.text_mode` / `--text`) → numbered lists.
 
+**Kind-confirmation under `--auto`.** The propose-then-confirm step above is an AskUserQuestion, so
+under `--auto` it follows the spec-phase 5.5 convention (replace AskUserQuestion with Claude's
+recommended choice): Claude re-reads each element's prose and authors the `elements` override (the
+union of the detected kinds + any kind it identifies as missed) instead of prompting — so `--auto`
+recall rests on Claude's kind-identification, not the heuristic cue-match alone. This matters because
+`autoResolve` (below) is a RESOLUTION floor only: it resolves the *detected* categories and cannot
+recover a kind that was never surfaced, so recall is fixed HERE, at kind-confirmation, before
+resolution runs.
+
 **`--auto` mode (two layers).** The adapter's `autoResolve` is the CODE floor: every applicable
 consideration auto-`backstop`s (carrying the taxonomy question as its resolution) and an
 `unclassified` candidate stays `unresolved` — it NEVER auto-`dismiss`es and never auto-backstops an
