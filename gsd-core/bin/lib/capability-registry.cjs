@@ -1593,7 +1593,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.7.0-rc.5",
     "title": "Kimi CLI",
-    "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
+    "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; native config.toml [[hooks]] bus at ~/.kimi/config.toml; background dispatch; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -1636,13 +1636,19 @@ const capabilities = {
         "local": []
       },
       "commandStyle": "slash-hyphen",
-      "hooksSurface": "none",
+      "hooksSurface": "kimi-hooks-toml",
+      "hookEvents": "claude",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": [],
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
       "hostIntegration": {
         "embeddingMode": "imperative",
         "commandSurface": "slash-file",
@@ -1652,13 +1658,21 @@ const capabilities = {
           "maxDepth": 1,
           "background": true,
           "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
+          "backgroundDispatch": true
         },
         "modelMode": "passive",
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "python"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/skill:gsd-update --reapply",
+        "localInstallDeferred": true,
+        "verificationStyle": "kimi",
+        "agentManifestStyle": "kimi-nested",
+        "doneBannerStyle": "kimi-agent-file",
+        "skipSharedHooksInstall": true
       }
     }
   },
@@ -4725,7 +4739,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.7.0-rc.5",
     "title": "Kimi CLI",
-    "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; no hook surface; no hook events; tier-2 support.",
+    "description": "Kimi CLI (Moonshot AI) — generic agents root at ~/.config/agents; skills + kimi-agents artifact layout; native config.toml [[hooks]] bus at ~/.kimi/config.toml; background dispatch; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -4768,13 +4782,19 @@ const runtimes = {
         "local": []
       },
       "commandStyle": "slash-hyphen",
-      "hooksSurface": "none",
+      "hooksSurface": "kimi-hooks-toml",
+      "hookEvents": "claude",
       "sandboxTier": "none",
       "supportTier": 2,
       "installSurface": "profile-marker-only",
       "writesSharedSettings": false,
       "permissionWriter": null,
-      "extendedHookEvents": [],
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
       "hostIntegration": {
         "embeddingMode": "imperative",
         "commandSurface": "slash-file",
@@ -4784,13 +4804,21 @@ const runtimes = {
           "maxDepth": 1,
           "background": true,
           "subagentToolkit": "undocumented",
-          "backgroundDispatch": false
+          "backgroundDispatch": true
         },
         "modelMode": "passive",
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "python"
+      },
+      "hostBehaviors": {
+        "reapplyCommand": "/skill:gsd-update --reapply",
+        "localInstallDeferred": true,
+        "verificationStyle": "kimi",
+        "agentManifestStyle": "kimi-nested",
+        "doneBannerStyle": "kimi-agent-file",
+        "skipSharedHooksInstall": true
       }
     }
   },

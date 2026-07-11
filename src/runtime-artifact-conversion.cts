@@ -505,6 +505,14 @@ function convertGsdCommandReferencesToKimiSkillInvocations(content, cmdNames) {
     .replace(hyphenPattern, (_, cmd) => `/skill:gsd-${cmd}`);
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// convertClaudeCommandToKimiSkill (kept for bin/install.js's own
+// module-level export/test surface; dead for the live skills-install path,
+// which routes here via install-engine.cts's SKILLS_CONVERTER_REGISTRY
+// through the kimi capability descriptor's artifactLayout
+// `converter: "convertClaudeCommandToKimiSkill"`). Neither copy re-exports
+// the other — mirror any behavior change into both. Guarded by the
+// output-parity test in tests/runtime-converters.test.cjs (#2095).
 function convertClaudeCommandToKimiSkill(content, skillName, _runtime = null, cmdNames = null) {
   const { frontmatter, body } = extractFrontmatterAndBody(content);
   const kimiSkillName = normalizeKimiSkillName(skillName);
@@ -649,6 +657,15 @@ function buildKimiSubagentYaml({ name, description, tools }) {
   return `${lines.join('\n')}\n`;
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// buildKimiAgentArtifacts (kept for bin/install.js's own module-level
+// export/test surface; dead for the live install path, which routes here via
+// runtime-artifact-layout.cts's kimiAgentsKind through a dynamic
+// `conversionExports['buildKimiAgentArtifacts']` lookup against this
+// compiled module). Neither copy re-exports the other — mirror any behavior
+// change into both, including the kimi_cli.tools.agent:Agent grant that
+// enables background dispatch (#2095 Upgrade 2). Guarded by the
+// output-parity test in tests/runtime-converters.test.cjs (#2095).
 function buildKimiAgentArtifacts({
   rootAgent = '',
   subagents = [],

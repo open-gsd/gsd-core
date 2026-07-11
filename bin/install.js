@@ -32,6 +32,7 @@ const {
   resolveAntigravityGlobalDir,
   getGlobalConfigDir,
   getGlobalSkillsBase,
+  resolveKimiHooksTomlDir,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 // getDirName (runtime -> local config dir name) is relocated out of this
 // installer to the runtime-name-policy leaf (ADR-1508 / #1510 Phase 1) so the
@@ -754,6 +755,10 @@ const referencesHook = hooksSurface.referencesHook;
 // applySettingsJsonHooks: mutates settings.hooks.* in place with all GSD-managed
 // hook registrations for settings.json-surface runtimes (ADR-857 phase 5f-1b).
 const applySettingsJsonHooks = hooksSurface.applySettingsJsonHooks;
+// writeKimiHooksToml / removeKimiHooksToml: kimi's native config.toml [[hooks]]
+// surface (#2095 EoS/kimi Upgrade 1) — separate from settings.json entirely.
+const writeKimiHooksToml = hooksSurface.writeKimiHooksToml;
+const removeKimiHooksToml = hooksSurface.removeKimiHooksToml;
 // processAttribution: pure Co-Authored-By content transform, relocated to the
 // conversion module (ADR-1508 / #1510 Phase 1). Bound here so install.js
 // callers continue to work and there is a single implementation. (All call
@@ -1900,6 +1905,14 @@ function convertGsdCommandReferencesToKimiSkillInvocations(content, cmdNames) {
     .replace(hyphenPattern, (_, cmd) => `/skill:gsd-${cmd}`);
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in
+// src/runtime-artifact-conversion.cts's convertClaudeCommandToKimiSkill (dead
+// for the live skills-install path, which routes here via
+// install-engine.cts's SKILLS_CONVERTER_REGISTRY through the kimi capability
+// descriptor's artifactLayout `converter: "convertClaudeCommandToKimiSkill"`;
+// kept for bin/install.js's own module-level export/test surface). Neither
+// copy re-exports the other — mirror any behavior change into both. Guarded
+// by the output-parity test in tests/runtime-converters.test.cjs (#2095).
 function convertClaudeCommandToKimiSkill(content, skillName, _runtime = null, cmdNames = null) {
   const { frontmatter, body } = extractFrontmatterAndBody(content);
   const kimiSkillName = normalizeKimiSkillName(skillName);
@@ -2044,6 +2057,16 @@ function buildKimiSubagentYaml({ name, description, tools }) {
   return `${lines.join('\n')}\n`;
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in
+// src/runtime-artifact-conversion.cts's buildKimiAgentArtifacts (dead for the
+// live install path, which routes here via runtime-artifact-layout.cts's
+// kimiAgentsKind — see its `conversionExports['buildKimiAgentArtifacts']`
+// dynamic lookup against the compiled runtime-artifact-conversion.cjs; kept
+// for bin/install.js's own module-level export/test surface). Neither copy
+// re-exports the other — mirror any behavior change into both, including the
+// kimi_cli.tools.agent:Agent grant that enables background dispatch
+// (#2095 Upgrade 2). Guarded by the output-parity test in
+// tests/runtime-converters.test.cjs (#2095).
 function buildKimiAgentArtifacts({
   rootAgent = '',
   subagents = [],
@@ -6790,25 +6813,21 @@ function validateHookFields(settings) {
  * GSD hook filenames removed during uninstall.
  * Module-level so tests can assert structurally instead of regex-parsing source
  * (retires pending-migration-to-typed-ir on hooks-opt-in.test.cjs, per #455).
+ *
+ * Derived from _HOOKS_TO_COPY (scripts/build-hooks.js — the SAME single source
+ * of truth INSTALLED_HOOK_FILES uses for manifest-tracking above) instead of a
+ * separately hand-maintained literal array. The hand-maintained array had
+ * silently drifted out of sync with the install-time set — missing
+ * gsd-check-update-worker.js, gsd-ensure-canonical-path.js,
+ * managed-hooks-registry.cjs, gsd-cursor-pre-tool.js, gsd-cursor-stop.js,
+ * gsd-cursor-subagent-start.js, gsd-cursor-subagent-stop.js, and
+ * gsd-worktree-path-guard.js — so every one of those files (and the hooks/ dir
+ * itself, via the non-empty-dir rmdir guard) was left behind on uninstall for
+ * every settings-json-hook runtime. `gsd-check-update.cmd` is added on top: a
+ * Windows-only SessionStart shim generated at install time (not copied from
+ * hooks/dist/, so it is not in _HOOKS_TO_COPY).
  */
-const GSD_UNINSTALL_HOOKS = [
-  'gsd-statusline.js',
-  'gsd-check-update.js',
-  'gsd-check-update.cmd',
-  'gsd-config-reload.js',
-  'gsd-context-monitor.js',
-  'gsd-cursor-session-start.js',
-  'gsd-cursor-post-tool.js',
-  'gsd-prompt-guard.js',
-  'gsd-read-guard.js',
-  'gsd-read-injection-scanner.js',
-  'gsd-update-banner.js',
-  'gsd-workflow-guard.js',
-  'gsd-session-state.sh',
-  'gsd-validate-commit.sh',
-  'gsd-phase-boundary.sh',
-  'gsd-graphify-update.sh',
-];
+const GSD_UNINSTALL_HOOKS = [..._HOOKS_TO_COPY, 'gsd-check-update.cmd'];
 
 /**
  * Uninstall GSD from the specified directory for a specific runtime
@@ -6822,8 +6841,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // not gated on this flag.
   // #2094: isTrae dropped — unused in this function after the
   // skipSharedHooksInstall fold (was never referenced here besides the
-  // destructure).
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // destructure). #2095: isKimi likewise dropped — kimi is now a hooks/
+  // consumer, so its former `&& !isKimi` uninstall guards were removed.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -6958,6 +6978,79 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       if (eventCleanup.changed) {
         removedCount++;
         console.log(`  ${green}✓${reset} Removed managed Codex ${eventName} hook from hooks.json`);
+      }
+    }
+  }
+
+  // 1a-kimi. Non-layout Kimi side-effect (#2095 EoS/kimi Upgrade 1): kimi's
+  // native config.toml lives outside targetDir entirely (resolveKimiHooksTomlDir
+  // resolves ~/.kimi, a sibling of targetDir's ~/.config/agents), so its
+  // cleanup can't be driven by anything under targetDir the way every other
+  // hook surface above is.
+  if (resolveInstallPlan(runtime).hooksSurface === 'kimi-hooks-toml') {
+    const kimiHooksRoot = resolveKimiHooksTomlDir();
+    const kimiHooksTomlPath = path.join(kimiHooksRoot, 'config.toml');
+    const kimiHooksCleanup = removeKimiHooksToml(kimiHooksTomlPath);
+    if (kimiHooksCleanup.changed) {
+      removedCount++;
+      console.log(`  ${green}✓${reset} Removed GSD hooks from ${kimiHooksTomlPath}`);
+    }
+
+    // Kimi's shared hook scripts + CommonJS package.json marker are installed
+    // into this SAME ~/.kimi root (installSharedHooksBundle, install()'s
+    // kimi-hooks-toml branch) rather than under targetDir — mirror steps "4.
+    // Remove GSD hooks" / "5. Remove GSD package.json" below, but scoped to
+    // kimiHooksRoot. ~/.kimi is Kimi's own native config home (shared space —
+    // may hold the user's real config.toml/providers), so only the exact
+    // GSD-owned filenames are removed, and directories are pruned only if left
+    // empty by that removal.
+    const kimiHooksDir = path.join(kimiHooksRoot, 'hooks');
+    if (fs.existsSync(kimiHooksDir)) {
+      let kimiHookCount = 0;
+      for (const hook of GSD_UNINSTALL_HOOKS) {
+        const hookPath = path.join(kimiHooksDir, hook);
+        if (fs.existsSync(hookPath)) {
+          fs.unlinkSync(hookPath);
+          kimiHookCount++;
+        }
+      }
+      if (kimiHookCount > 0) {
+        removedCount++;
+        console.log(`  ${green}✓${reset} Removed ${kimiHookCount} GSD hooks from ${kimiHooksDir}`);
+      }
+
+      const kimiHooksLibDir = path.join(kimiHooksDir, 'lib');
+      if (fs.existsSync(kimiHooksLibDir)) {
+        let removedKimiLibFiles = 0;
+        for (const file of GSD_HOOK_LIB_FILES) {
+          try {
+            fs.unlinkSync(path.join(kimiHooksLibDir, file));
+            removedKimiLibFiles++;
+          } catch (_) { /* best-effort */ }
+        }
+        try { fs.rmdirSync(kimiHooksLibDir); } catch (_) { /* not empty or other error — leave it */ }
+        if (removedKimiLibFiles > 0) {
+          removedCount++;
+          console.log(`  ${green}✓${reset} Removed ${removedKimiLibFiles} hooks/lib/ helper(s) from ${kimiHooksLibDir}`);
+        }
+      }
+
+      try {
+        if (fs.readdirSync(kimiHooksDir).length === 0) fs.rmdirSync(kimiHooksDir);
+      } catch (_) { /* not empty — leave it */ }
+    }
+
+    const kimiPkgJsonPath = path.join(kimiHooksRoot, 'package.json');
+    if (fs.existsSync(kimiPkgJsonPath)) {
+      try {
+        const content = fs.readFileSync(kimiPkgJsonPath, 'utf8').trim();
+        if (content === '{"type":"commonjs"}') {
+          fs.unlinkSync(kimiPkgJsonPath);
+          removedCount++;
+          console.log(`  ${green}✓${reset} Removed GSD package.json from ${kimiHooksRoot}`);
+        }
+      } catch (e) {
+        // Ignore read errors
       }
     }
   }
@@ -7867,7 +7960,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // #2093: isKilo dropped — unused in this function.
   // #2094: isTrae dropped — was only used in the hooks-tracking conditional
   // above, now covered by hostBehaviors.skipSharedHooksInstall.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2095: isKimi dropped — kimi is now a hooks/ consumer like every other
+  // settings-json-adjacent runtime, so the `&& !isKimi` term below was removed.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // Claude local uses flatCommandsDir instead for manifest recording.
@@ -7941,7 +8036,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
       }
     }
   }
-  if (isKimi && fs.existsSync(agentsDir)) {
+  if (_hostBehaviors(runtime).agentManifestStyle === 'kimi-nested' && fs.existsSync(agentsDir)) {
     const agentHashes = generateManifest(agentsDir);
     for (const [rel, hash] of Object.entries(agentHashes)) {
       const isRootAgent = rel === 'gsd.yaml' || rel === 'gsd.md';
@@ -7977,7 +8072,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCline).
   // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
   // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isKimi) {
+  // #2095: kimi is now a hooks/ consumer (native config.toml [[hooks]] bus) —
+  // the redundant `&& !isKimi` was removed so its hook files are tracked too.
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf) {
     const hooksDir = path.join(configDir, 'hooks');
     if (fs.existsSync(hooksDir)) {
       // Drive from INSTALLED_HOOK_FILES (the canonical HOOKS_TO_COPY set from
@@ -8338,11 +8435,7 @@ function reportLocalPatches(configDir, runtime = DEFAULT_RUNTIME) {
   try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch { return []; }
 
   if (meta.files && meta.files.length > 0) {
-    const reapplyCommand = _hostBehaviors(runtime).reapplyCommand
-      ? _hostBehaviors(runtime).reapplyCommand
-      : runtime === 'kimi'
-        ? '/skill:gsd-update --reapply'
-        : '/gsd-update --reapply';
+    const reapplyCommand = _hostBehaviors(runtime).reapplyCommand || '/gsd-update --reapply';
     console.log('');
     console.log('  ' + yellow + 'Local patches detected' + reset + ' (from v' + meta.from_version + '):');
     for (const f of meta.files) {
@@ -8371,12 +8464,17 @@ function reportInstallerMigrationResult(result) {
 function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // #2093: isKilo dropped — Kilo's agent/model-override handling below reads
   // _hostBehaviors(runtime).frontmatterDialect === 'kilo' instead of this flag.
-  const { isOpencode, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2095: isKimi dropped — kimi is now a hooks/ consumer like every other
+  // settings-json-adjacent runtime; the two `&& !isKimi` hooks-copy guards
+  // below were removed, leaving isKimi unused in this function (the kimi
+  // local-install-deferred branch above already reads
+  // _hostBehaviors(runtime).localInstallDeferred instead of this flag).
+  const { isOpencode, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
 
-  if (isKimi && !isGlobal) {
+  if (_hostBehaviors(runtime).localInstallDeferred && !isGlobal) {
     console.log(`  ${yellow}⚠${reset} Kimi local install is deferred for Phase 2.`);
     console.log(`      No .kimi-code/skills or .agents/skills project artifacts were written.`);
     console.log(`      Project-level Kimi install semantics remain deferred.`);
@@ -8908,7 +9006,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       } else {
         failures.push('skills/gsd/*');
       }
-    } else if (isKimi) {
+    } else if (_hostBehaviors(runtime).verificationStyle === 'kimi') {
       const skillsDir = path.join(targetDir, 'skills');
       const rootAgentPath = path.join(targetDir, 'agents', 'gsd.yaml');
       if (fs.existsSync(skillsDir)) {
@@ -9199,7 +9297,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // brandingRewrites-only branch).
   // cline remains excluded: rules-only local branch + local/global complication
   // that the descriptor-driven path does not handle correctly.
-  const _DESCRIPTOR_AGENTS_RUNTIMES = new Set(['cursor', 'windsurf', 'augment', 'trae', 'codebuddy', 'copilot', 'antigravity', 'qwen']);
+  const _DESCRIPTOR_AGENTS_RUNTIMES = new Set(['cursor', 'windsurf', 'augment', 'trae', 'codebuddy', 'copilot', 'antigravity', 'qwen', 'kimi']);
 
   // Always remove stale gsd-* agents first so re-installing with
   // `--minimal` actually shrinks a previously-full install.
@@ -9217,9 +9315,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
   }
 
-  if (isKimi) {
-    console.log(`  ${dim}↳${reset} Kimi custom agent YAML/prompt artifacts were installed via runtime artifact layout`);
-  } else if (_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime)) {
+  if (_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime)) {
     // installRuntimeArtifacts already wrote agents + handles stale-file cleanup
     // via its own prune pass. No further action needed.
     console.log(`  ${dim}↳${reset} Agents installed via descriptor-driven layout (${runtime})`);
@@ -9385,34 +9481,41 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     failures.push('VERSION');
   }
 
-  // #1821: Kilo and ZCode declare hooksSurface:'none' AND have no plugin surface,
-  // so the staged hook scripts are dead weight for them — exclude both here.
-  // OpenCode also declares hooksSurface:'none' but is deliberately NOT excluded:
-  // its native plugin adapter (#1914, installed above under plugins/gsd-core.js)
-  // spawns the staged hooks/*.js scripts via OpenCode's event bus and needs both
-  // them and the CommonJS package.json marker written below.
-  // #2089: Cursor's exclusion is now descriptor-driven via
-  // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCursor).
-  // #2090: Cline's exclusion is likewise descriptor-driven (cline declares
-  // skipSharedHooksInstall:true) — the redundant `&& !isCline` was removed.
-  // #2093: Kilo's exclusion is likewise descriptor-driven (kilo declares
-  // skipSharedHooksInstall:true) — the redundant `&& !isKilo` was removed.
-  // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
-  // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
-  // ZCode still has an empty hostBehaviors, so `&& !isZcode` stays.
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isKimi && !isZcode) {
+  // Reusable: copy hooks/dist/ + hooks/lib/ into destRootDir, writing the
+  // CommonJS package.json marker alongside them. Used below for the generic
+  // configDir install path (guarded by hostBehaviors.skipSharedHooksInstall),
+  // and — since #2095 — for Kimi's OWN native hook-install root (~/.kimi,
+  // resolved by resolveKimiHooksTomlDir), a directory entirely separate from
+  // Kimi's configDir/agents-root. Kimi's contract forbids hooks/ or
+  // package.json under its generic Agent-Skills root (see
+  // capabilities/kimi/capability.json hostBehaviors.skipSharedHooksInstall
+  // and the kimi-hooks-toml branch further below), so its shared-hooks bundle
+  // is installed into its own root via this same helper instead.
+  // Returns false when hooks/dist/ exists but failed to verify post-copy (a
+  // genuine failure the caller should surface); true otherwise (including
+  // when hooks/dist/ is absent from the package — nothing to verify).
+  function installSharedHooksBundle(destRootDir) {
+    // destRootDir already exists for the generic call site (targetDir — created
+    // earlier in install() by the skills/agents writes above). It does NOT yet
+    // exist for kimi's call site (~/.kimi, resolved by resolveKimiHooksTomlDir):
+    // a fresh install has never created that dir before. mkdirSync recursive is
+    // a safe no-op when the dir is already present.
+    fs.mkdirSync(destRootDir, { recursive: true });
+
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
-    const pkgJsonDest = path.join(targetDir, 'package.json');
+    const pkgJsonDest = path.join(destRootDir, 'package.json');
     fs.writeFileSync(pkgJsonDest, '{"type":"commonjs"}\n');
     console.log(`  ${green}✓${reset} Wrote package.json (CommonJS mode)`);
+
+    let hooksOk = true;
 
     // Copy hooks from dist/ (bundled with dependencies)
     // Template paths for the target runtime (replaces '.claude' with correct config dir)
     const hooksSrc = path.join(src, 'hooks', 'dist');
     if (fs.existsSync(hooksSrc)) {
-      const hooksDest = path.join(targetDir, 'hooks');
+      const hooksDest = path.join(destRootDir, 'hooks');
       fs.mkdirSync(hooksDest, { recursive: true });
       const hookEntries = fs.readdirSync(hooksSrc);
       const configDirReplacement = getConfigDirFromHome(runtime, isGlobal);
@@ -9486,29 +9589,58 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           }
         }
       } else {
-        failures.push('hooks');
+        hooksOk = false;
       }
     }
+
+    // Gate hooks/lib/ install on the same set of runtimes that receive hooks/.
+    // Codex/Copilot/Cursor/Windsurf/Trae/Cline/Kilo do not use the shared
+    // hooks/lib/ helpers (Cursor uses standalone .js hook scripts registered
+    // via hooks.json — gated descriptor-driven via
+    // hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise #2090; Kilo
+    // likewise #2093; Trae likewise #2094; Codex uses hooks.json directly;
+    // the others skip hooks entirely); Kilo and ZCode also skip hooks entirely
+    // (hooksSurface:'none' with no plugin surface — #1821). None of the
+    // excluded runtimes must receive the hooks/lib/ helpers — otherwise the
+    // Codex comment downstream ("we deliberately do *not* copy hooks/lib/ for
+    // Codex") is contradicted in practice. (Gating lives at the call sites
+    // below; this helper itself only checks source presence.)
+    const hooksLibSrc = path.join(src, 'hooks', 'lib');
+    if (fs.existsSync(hooksLibSrc)) {
+      const hooksLibDest = path.join(destRootDir, 'hooks', 'lib');
+      fs.mkdirSync(hooksLibDest, { recursive: true });
+      copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
+      console.log(`  ${green}✓${reset} Installed hooks/lib/ helpers (git-cmd, graphify-rebuild, ...)`);
+    }
+
+    return hooksOk;
   }
 
-  // Gate hooks/lib/ install on the same runtimes that receive hooks (see line ~8702).
-  // Codex/Copilot/Cursor/Windsurf/Trae/Cline/Kilo do not use the shared hooks/lib/
-  // helpers (Cursor uses standalone .js hook scripts registered via hooks.json — gated
-  // descriptor-driven via hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise
-  // #2090; Kilo likewise #2093; Trae likewise #2094; Codex uses hooks.json directly;
-  // the others skip hooks entirely); Kilo and ZCode also skip hooks entirely
-  // (hooksSurface:'none' with no plugin surface — #1821). ZCode's hostBehaviors is
-  // still empty, so `&& !isZcode` stays hardcoded. OpenCode is NOT excluded: its
-  // #1914 plugin adapter spawns the staged hooks and requires hooks/lib/ helpers.
-  // None of the excluded runtimes must receive the hooks/lib/ helpers — otherwise
-  // the Codex comment downstream ("we deliberately do *not* copy hooks/lib/ for
-  // Codex") is contradicted in practice.
-  const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isKimi && !isZcode && fs.existsSync(hooksLibSrc)) {
-    const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
-    fs.mkdirSync(hooksLibDest, { recursive: true });
-    copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
-    console.log(`  ${green}✓${reset} Installed hooks/lib/ helpers (git-cmd, graphify-rebuild, ...)`);
+  // #1821: Kilo and ZCode declare hooksSurface:'none' AND have no plugin surface,
+  // so the staged hook scripts are dead weight for them — exclude both here.
+  // OpenCode also declares hooksSurface:'none' but is deliberately NOT excluded:
+  // its native plugin adapter (#1914, installed above under plugins/gsd-core.js)
+  // spawns the staged hooks/*.js scripts via OpenCode's event bus and needs both
+  // them and the CommonJS package.json marker written below.
+  // #2089: Cursor's exclusion is now descriptor-driven via
+  // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCursor).
+  // #2090: Cline's exclusion is likewise descriptor-driven (cline declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isCline` was removed.
+  // #2093: Kilo's exclusion is likewise descriptor-driven (kilo declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isKilo` was removed.
+  // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
+  // ZCode still has an empty hostBehaviors, so `&& !isZcode` stays.
+  // #2095: Kimi's exclusion is likewise descriptor-driven (kimi declares
+  // skipSharedHooksInstall:true) — kimi's shared hooks/ + package.json marker
+  // are instead installed into its OWN native hook root (~/.kimi, resolved by
+  // resolveKimiHooksTomlDir) via installSharedHooksBundle, at the
+  // kimi-hooks-toml branch further below — never under the generic
+  // Agent-Skills configDir GSD installs skills/agents into for kimi.
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isZcode) {
+    if (!installSharedHooksBundle(targetDir)) {
+      failures.push('hooks');
+    }
   }
 
   // Install scripts/changeset/ and scripts/lib/ into <configDir>/scripts/
@@ -10137,7 +10269,47 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   if (plan.installSurface === 'profile-marker-only') {
-    // Windsurf/Trae/Kimi use artifact-only surfaces — no config.toml or settings.json hooks needed.
+    // Windsurf/Trae use artifact-only surfaces — no config.toml or settings.json
+    // hooks needed. Kimi is also artifact-only for its INSTALL surface (skills +
+    // kimi-agents, no settings.json) but #2095 Upgrade 1 gives it its own
+    // independent hooksSurface: kimi's native config.toml [[hooks]] array, which
+    // lives outside targetDir entirely (resolveKimiHooksTomlDir resolves ~/.kimi,
+    // a sibling of targetDir's ~/.config/agents) — hence writing it here, inside
+    // this early-return, rather than requiring installSurface to change.
+    //
+    // GATED TO GLOBAL ONLY (belt-and-suspenders): kimi local installs already
+    // return early at the top of install() via hostBehaviors.localInstallDeferred,
+    // long before this point is ever reached — so `isGlobal` is always true here
+    // in practice. The explicit check documents that invariant and fails closed
+    // if that early-return is ever refactored away.
+    //
+    // Kimi's contract forbids hooks/ or package.json under its generic
+    // Agent-Skills configDir (targetDir) — capabilities/kimi/capability.json
+    // declares hostBehaviors.skipSharedHooksInstall:true, which excludes it from
+    // the shared installSharedHooksBundle(targetDir) call above. Kimi still needs
+    // those SAME hook scripts + the CommonJS package.json marker, but SELF-
+    // CONTAINED under its own native hook root instead — so install them there,
+    // and point buildHookCommand (via writeKimiHooksToml's second arg) at that
+    // same root so the generated [[hooks]] command paths reference
+    // ~/.kimi/hooks/<script> rather than a script that doesn't exist under
+    // targetDir/hooks (which kimi no longer receives).
+    if (plan.hooksSurface === 'kimi-hooks-toml' && isGlobal) {
+      const kimiHooksRoot = resolveKimiHooksTomlDir();
+      // Note: the `failures` array's hard-fail gate (`if (failures.length > 0)
+      // process.exit(1)`) runs earlier in this function, before this
+      // profile-marker-only branch is ever reached — pushing to it here would
+      // be silently ineffective. Warn instead; a failed hooks copy still
+      // leaves kimi's skills/agents artifacts installed correctly.
+      if (!installSharedHooksBundle(kimiHooksRoot)) {
+        console.warn(`  ${yellow}⚠${reset}  Kimi hook bundle did not verify at ${path.join(kimiHooksRoot, 'hooks')} — GSD lifecycle hooks may be incomplete`);
+      }
+      const kimiHookOpts = { portableHooks: hasPortableHooks, runtime };
+      const kimiHooksTomlPath = path.join(kimiHooksRoot, 'config.toml');
+      const kimiHooksResult = writeKimiHooksToml(kimiHooksTomlPath, kimiHooksRoot, { hookOpts: kimiHookOpts });
+      if (kimiHooksResult.changed) {
+        console.log(`  ${green}✓${reset} Configured ${kimiHooksResult.entryCount} GSD hook(s) in ${kimiHooksTomlPath}`);
+      }
+    }
     persistActiveProfileMarker();
     return { settingsPath: null, settings: null, statuslineCommand: null, updateBannerCommand: null, runtime, configDir: targetDir };
   }
@@ -10441,7 +10613,9 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // #2093: isKilo dropped — the Kilo permissions-writer call below is gated
   // on plan.finishPermissionWriter === 'kilo' (descriptor-driven), not this flag.
   // #2094: isTrae dropped — unused in this function.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2095: isKimi dropped — the Kimi "Done!" banner below reads
+  // _hostBehaviors(runtime).doneBannerStyle === 'kimi-agent-file' (descriptor-driven), not this flag.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {
@@ -10583,7 +10757,7 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     return;
   }
 
-  if (runtime === 'kimi') {
+  if (_hostBehaviors(runtime).doneBannerStyle === 'kimi-agent-file') {
     const agentPath = configDir ? path.join(configDir, 'agents', 'gsd.yaml') : 'agents/gsd.yaml';
     console.log(`
   ${green}Done!${reset} Start ${program} with ${cyan}kimi --agent-file ${agentPath}${reset}, then run ${cyan}${command}${reset}.

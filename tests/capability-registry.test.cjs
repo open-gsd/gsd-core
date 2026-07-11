@@ -3412,11 +3412,13 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     );
   });
 
-  test('copilot/trae/kimi/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
+  test('copilot/trae/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
     // opencode and kilo register ZERO lifecycle hooks → hooksSurface none, no hookEvents
-    const noEventsRuntimes = ['trae', 'kimi', 'windsurf', 'opencode', 'kilo'];
+    // #2095: kimi moved OUT of this group — it now has hooksSurface:'kimi-hooks-toml'
+    // and hookEvents:'claude' (see the dedicated kimi hooksSurface test below).
+    const noEventsRuntimes = ['trae', 'windsurf', 'opencode', 'kilo'];
     for (const id of noEventsRuntimes) {
       const rt = registry.runtimes[id].runtime;
       assert.ok(
@@ -3438,6 +3440,22 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
       !Object.prototype.hasOwnProperty.call(copilotRt, 'hookEvents'),
       'copilot.runtime must NOT have hookEvents',
     );
+  });
+
+  test('kimi: hooksSurface === kimi-hooks-toml, hookEvents === claude, extendedHookEvents wired (#2095)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const kimiRt = registry.runtimes['kimi'].runtime;
+    assert.strictEqual(kimiRt.hooksSurface, 'kimi-hooks-toml', 'kimi.hooksSurface must be "kimi-hooks-toml"');
+    assert.strictEqual(kimiRt.hookEvents, 'claude', 'kimi.hookEvents must be "claude" (Kimi\'s 13 lifecycle events include exact-name equivalents for the Claude dialect)');
+    assert.deepStrictEqual(
+      [...kimiRt.extendedHookEvents].sort(),
+      ['PreCompact', 'Stop', 'SubagentStart', 'SubagentStop'].sort(),
+      'kimi.extendedHookEvents must wire SubagentStop/Stop/PreCompact/SubagentStart',
+    );
+    // installSurface stays profile-marker-only — the native config.toml
+    // [[hooks]] write is independent of the artifact-install surface (#2095).
+    assert.strictEqual(kimiRt.installSurface, 'profile-marker-only', 'kimi.installSurface must remain "profile-marker-only"');
   });
 
   test('codex: hooksSurface === codex-hooks-json, cursor: hooksSurface === cursor-hooks-json', () => {
@@ -3949,12 +3967,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_COMMAND_STYLES.size, 2);
   });
 
-  test('VALID_HOOKS_SURFACES has exactly 6 values', () => {
+  test('VALID_HOOKS_SURFACES has exactly 7 values', () => {
     assert.ok(VALID_HOOKS_SURFACES instanceof Set);
-    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']) {
+    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'none']) {
       assert.ok(VALID_HOOKS_SURFACES.has(v), 'VALID_HOOKS_SURFACES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_HOOKS_SURFACES.size, 6);
+    assert.strictEqual(VALID_HOOKS_SURFACES.size, 7);
   });
 
   test('VALID_HOOK_EVENTS has exactly 2 managed-hook dialects (claude/gemini)', () => {

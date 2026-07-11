@@ -262,7 +262,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── shouldFlattenDispatch per-host (#853 discriminator) ─────────────────────
 
-  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 15.
+  // Expected: false (may background) for codex, cursor, kimi, and opencode;
+  // true (must inline) for the other 13.
   const EXPECTED_FLATTEN = {
     antigravity: true,
     augment:     true,
@@ -274,7 +275,11 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     cursor:      false,
     hermes:      true,
     kilo:        true,
-    kimi:        true,
+    // #2095: Kimi Upgrade 2 — Kimi's Agent tool takes a run_in_background
+    // call-time param (Context7 agents.html) → backgroundDispatch flipped to
+    // true → dispatch.background/backgroundDispatch both true → NOT
+    // force-flattened (mirrors the #2087 OpenCode precedent below).
+    kimi:        false,
     // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
     // dispatch.background/backgroundDispatch true → NOT force-flattened.
     opencode:    false,

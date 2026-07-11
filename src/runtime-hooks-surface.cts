@@ -44,6 +44,7 @@ const {
   projectPortableHookBaseDir,
   projectCodexHookTomlCommand,
   shellHookOmitsBashRunner,
+  escapeTomlDoubleQuotedString,
 } = shellCmdProjection as {
   isManagedHookBasename: (scriptPath: string, opts?: { surface?: string }) => boolean;
   isManagedHookCommand: (cmd: string | null | undefined, opts?: { surface?: string; includeLegacyAliases?: boolean; configDir?: string }) => boolean;
@@ -52,6 +53,7 @@ const {
   projectPortableHookBaseDir: (opts: { configDir: string; homeDir: string }) => string;
   projectCodexHookTomlCommand: (opts: { absoluteRunner: string; scriptPath: string; platform: string }) => string;
   shellHookOmitsBashRunner: (opts: { platform: string; runtime: string; isShellHook: boolean }) => boolean;
+  escapeTomlDoubleQuotedString: (value: unknown) => string;
 };
 
 // ---------------------------------------------------------------------------
@@ -1245,7 +1247,13 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
   // register settings.json hooks; runtimes with hooksSurface === 'none'
   // (opencode, kilo) are skipped. Equivalence: hooksSurface !== 'none' iff
   // the old !isOpencode && !isKilo check.
-  if (hooksSurface !== 'none') {
+  // #2095: kimi's hooksSurface is 'kimi-hooks-toml' — it registers hooks into
+  // its own native config.toml via writeKimiHooksToml, not settings.json (kimi
+  // never writes settings.json at all: writesSharedSettings stays false). This
+  // guard must also skip kimi's surface so applySettingsJsonHooks doesn't log
+  // misleading "Configured ..." console messages for a settings object that
+  // finishInstall() will never persist for kimi.
+  if (hooksSurface !== 'none' && hooksSurface !== 'kimi-hooks-toml') {
     if (!settings.hooks) {
       settings.hooks = {};
     }
@@ -1726,6 +1734,215 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
 }
 
 // ---------------------------------------------------------------------------
+// Kimi hooks.toml (#2095 EoS/kimi Upgrade 1 — native hook bus)
+//
+// Kimi CLI reads lifecycle hooks from a flat `[[hooks]]` array in its own
+// config.toml (moonshotai.github.io/kimi-cli/en/customization/hooks.html),
+// not from settings.json. Unlike every other hooksSurface writer above, this
+// file lives OUTSIDE the runtime's GSD configDir: kimi's configDir is the
+// generic Agent-Skills root (~/.config/agents by default), while config.toml
+// is a sibling at ~/.kimi (KIMI_SHARE_DIR override), resolved by
+// resolveKimiHooksTomlDir in runtime-homes.cts. Callers resolve that path and
+// pass it in explicitly — this module never reaches into runtime-homes.cjs
+// itself, keeping the same configDir/targetDir-passed-in shape every other
+// writer in this file uses.
+//
+// GSD-owned [[hooks]] entries are wrapped in marker comments so a reinstall
+// can find-and-replace only GSD's own block, leaving any user-authored
+// [[hooks]] entries elsewhere in the file untouched — mirrors the marker
+// approach stripStaleGsdHookBlocks uses for Codex's config.toml, simplified
+// to plain string slicing since this block is a flat, self-contained span
+// (no nested per-key structural TOML parsing is needed).
+// ---------------------------------------------------------------------------
+
+const KIMI_HOOKS_TOML_MARKER_BEGIN = '# GSD Hooks BEGIN — managed by GSD, do not edit between these markers';
+const KIMI_HOOKS_TOML_MARKER_END = '# GSD Hooks END';
+
+interface KimiHookEntrySpec {
+  event: string;
+  command: string | null;
+  matcher?: string;
+  timeout?: number;
+}
+
+function buildKimiHookEntryToml(spec: KimiHookEntrySpec): string | null {
+  if (!spec.command) return null;
+  const lines = ['[[hooks]]', `event = "${spec.event}"`];
+  if (spec.matcher) {
+    lines.push(`matcher = "${escapeTomlDoubleQuotedString(spec.matcher)}"`);
+  }
+  lines.push(`command = "${escapeTomlDoubleQuotedString(spec.command)}"`);
+  if (typeof spec.timeout === 'number') {
+    lines.push(`timeout = ${spec.timeout}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Build the full marker-delimited GSD [[hooks]] block for kimi's config.toml,
+ * or null when no GSD hook resolved to a usable command (hooks/ missing, or
+ * the node/bash runner could not be resolved — mirrors the #1754/#3002
+ * defensive guards applySettingsJsonHooks applies per-hook above).
+ *
+ * Event -> hook mapping mirrors applySettingsJsonHooks' settings.json wiring
+ * 1:1 by GSD hook script (update check, session-state, phase-boundary,
+ * graphify, context monitor, prompt/read/workflow/worktree guards, commit
+ * validation). Kimi's 13 lifecycle events include exact-name equivalents for
+ * every Claude-dialect event GSD currently wires (SessionStart, PreToolUse,
+ * PostToolUse, Stop, PreCompact, SubagentStart, SubagentStop) — see
+ * moonshotai.github.io/kimi-cli/en/customization/hooks.html.
+ *
+ * Matcher translation (best-effort — Kimi's tool-name vocabulary is
+ * confirmed distinct from Claude's by the upstream hooks doc's own examples):
+ *   Bash -> Shell, Write -> WriteFile, Edit/MultiEdit -> StrReplaceFile.
+ * Read -> ReadFile follows the same WriteFile/StrReplaceFile naming
+ * convention but is not independently doc-confirmed. Claude's Agent|Task
+ * (subagent-dispatch) matcher segment has no confirmed Kimi tool name and is
+ * dropped rather than guessed — gsd-context-monitor's PostToolUse entry runs
+ * unmatched (all tools) instead, which only widens when it fires, it never
+ * narrows incorrectly.
+ */
+function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookCommandOpts }): string | null {
+  const { hookOpts } = opts;
+  const cmd = (hookName: string): string | null => {
+    if (!fs.existsSync(path.join(targetDir, 'hooks', hookName))) return null;
+    return buildHookCommand(targetDir, hookName, hookOpts);
+  };
+
+  const specs: KimiHookEntrySpec[] = [
+    // SessionStart — unmatched (session-level; no tool_name to filter on).
+    { event: 'SessionStart', command: cmd('gsd-check-update.js') },
+    { event: 'SessionStart', command: cmd('gsd-session-state.sh') },
+
+    // PreToolUse
+    { event: 'PreToolUse', command: cmd('gsd-prompt-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-read-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-worktree-path-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-workflow-guard.js'), matcher: 'Shell|WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-validate-commit.sh'), matcher: 'Shell', timeout: 5 },
+
+    // PostToolUse
+    { event: 'PostToolUse', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'PostToolUse', command: cmd('gsd-phase-boundary.sh'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PostToolUse', command: cmd('gsd-read-injection-scanner.js'), matcher: 'ReadFile', timeout: 5 },
+    { event: 'PostToolUse', command: cmd('gsd-graphify-update.sh'), matcher: 'Shell', timeout: 5 },
+
+    // Extended lifecycle events — context-headroom tracking (unmatched).
+    { event: 'Stop', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'PreCompact', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'SubagentStart', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+    { event: 'SubagentStop', command: cmd('gsd-context-monitor.js'), timeout: 10 },
+  ];
+
+  const entries = specs
+    .map(buildKimiHookEntryToml)
+    .filter((entry): entry is string => entry !== null);
+  if (entries.length === 0) return null;
+  return [KIMI_HOOKS_TOML_MARKER_BEGIN, '', entries.join('\n\n'), '', KIMI_HOOKS_TOML_MARKER_END].join('\n');
+}
+
+/**
+ * Strip a previously-written GSD [[hooks]] block from kimi's config.toml
+ * content. Pure string function (no fs access) so install, uninstall, and
+ * tests share one strip implementation. Returns null when stripping leaves
+ * nothing but whitespace (the file was GSD-only), so the caller can unlink
+ * it instead of writing an empty file.
+ */
+function stripKimiHooksTomlBlock(content: string): string | null {
+  const beginIdx = content.indexOf(KIMI_HOOKS_TOML_MARKER_BEGIN);
+  if (beginIdx === -1) {
+    return content.trim() === '' ? null : content;
+  }
+  const endMarkerIdx = content.indexOf(KIMI_HOOKS_TOML_MARKER_END, beginIdx);
+  if (endMarkerIdx === -1) {
+    // Malformed marker pair — BEGIN present but no END after it (missing END,
+    // or an END that only appears earlier in the file, before BEGIN). Never
+    // fall back to content.length here: that would slice to EOF and destroy
+    // every user section that follows. Leave the content untouched instead;
+    // a subsequent writeKimiHooksToml call will append a fresh, well-formed
+    // block rather than silently deleting user data.
+    return content;
+  }
+  const endIdx = endMarkerIdx + KIMI_HOOKS_TOML_MARKER_END.length;
+
+  // Swallow blank lines immediately surrounding the block so repeated
+  // strip+rewrite cycles never accumulate blank lines.
+  let sliceStart = beginIdx;
+  while (sliceStart > 0 && (content[sliceStart - 1] === '\n' || content[sliceStart - 1] === '\r')) sliceStart -= 1;
+  let sliceEnd = endIdx;
+  while (sliceEnd < content.length && (content[sliceEnd] === '\n' || content[sliceEnd] === '\r')) sliceEnd += 1;
+
+  const before = content.slice(0, sliceStart);
+  const after = content.slice(sliceEnd);
+  // Blank-line swallowing above consumes every newline flanking the block,
+  // including the one required to keep the surrounding user sections on
+  // separate lines. If the block sat BETWEEN two user sections (content
+  // survives on both sides), concatenating `before` + `after` directly would
+  // glue the last line of the earlier section onto the first line of the
+  // later one. Reinsert a blank-line separator in that case; when only one
+  // side has content (block at file start or EOF), no separator is needed —
+  // that matches the pre-existing idempotent behavior for those shapes.
+  const result = before.trim() !== '' && after.trim() !== ''
+    ? `${before}\n\n${after}`
+    : before + after;
+  return result.trim() === '' ? null : result;
+}
+
+/**
+ * Idempotently (re)write kimi's GSD-owned [[hooks]] block into its native
+ * config.toml at `configPath` (resolved by the caller via
+ * resolveKimiHooksTomlDir). No-ops (`{changed:false}`) when the computed
+ * block is byte-identical to what's already on disk, so reinstalls don't
+ * touch the file's mtime for no reason.
+ */
+function writeKimiHooksToml(
+  configPath: string,
+  targetDir: string,
+  opts: { hookOpts: BuildHookCommandOpts },
+): { changed: boolean; path: string; entryCount: number } {
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const stripped = stripKimiHooksTomlBlock(existing) ?? '';
+  const block = buildKimiHooksTomlBlock(targetDir, opts);
+  const entryCount = block ? (block.match(/\[\[hooks\]\]/g) || []).length : 0;
+
+  if (!block) {
+    if (stripped === existing) return { changed: false, path: configPath, entryCount: 0 };
+    if (stripped.trim() === '') {
+      if (fs.existsSync(configPath)) fs.unlinkSync(configPath);
+    } else {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      atomicWriteFileSync(configPath, stripped, 'utf8');
+    }
+    return { changed: true, path: configPath, entryCount: 0 };
+  }
+
+  const separator = stripped.trim() === '' ? '' : (stripped.endsWith('\n') ? '\n' : '\n\n');
+  const next = stripped.trim() === '' ? `${block}\n` : `${stripped}${separator}${block}\n`;
+  if (next === existing) return { changed: false, path: configPath, entryCount };
+
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  atomicWriteFileSync(configPath, next, 'utf8');
+  return { changed: true, path: configPath, entryCount };
+}
+
+/**
+ * Uninstall-time counterpart to writeKimiHooksToml: strips the GSD block and
+ * deletes the file if nothing but GSD's own block was ever in it.
+ */
+function removeKimiHooksToml(configPath: string): { changed: boolean } {
+  if (!fs.existsSync(configPath)) return { changed: false };
+  const existing = fs.readFileSync(configPath, 'utf8');
+  const stripped = stripKimiHooksTomlBlock(existing);
+  if (stripped === existing) return { changed: false };
+  if (stripped === null || stripped.trim() === '') {
+    fs.unlinkSync(configPath);
+  } else {
+    atomicWriteFileSync(configPath, stripped, 'utf8');
+  }
+  return { changed: true };
+}
+
+// ---------------------------------------------------------------------------
 // referencesHook
 //
 // Pure predicate — checks whether a hook entry object references a managed
@@ -1797,6 +2014,14 @@ export = {
   // Codex TOML
   buildCodexHookBlock,
   rewriteLegacyCodexHookBlock,
+
+  // Kimi hooks.toml
+  buildKimiHooksTomlBlock,
+  stripKimiHooksTomlBlock,
+  writeKimiHooksToml,
+  removeKimiHooksToml,
+  KIMI_HOOKS_TOML_MARKER_BEGIN,
+  KIMI_HOOKS_TOML_MARKER_END,
 
   // Shared
   buildHookCommand,

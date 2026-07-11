@@ -53,6 +53,7 @@ type HooksSurface =
   | 'cursor-hooks-json'
   | 'cline-rules'
   | 'copilot-inline'
+  | 'kimi-hooks-toml'
   | 'none';
 
 interface RuntimeConfigIntent {

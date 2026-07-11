@@ -229,6 +229,22 @@ Avoid arbitrary `KIMI_CONFIG_DIR` roots unless your Kimi configuration also adds
 
 `--kimi --local` is intentionally deferred and guarded in v1; use the global install path above for Kimi CLI.
 
+**Hook coverage**
+
+GSD wires its lifecycle hooks into Kimi's native `[[hooks]]` array in `config.toml` — by default `~/.kimi/config.toml` (overridable via Kimi's own `KIMI_SHARE_DIR` environment variable, a directory deliberately separate from the `~/.config/agents` skills root above). Kimi CLI's hooks system is documented as **Beta**. GSD's entries are wrapped in `# GSD Hooks BEGIN`/`# GSD Hooks END` marker comments, so reinstalling only ever rewrites GSD's own block and never touches hand-written `[[hooks]]` entries around it.
+
+| Event | Hook | Purpose |
+|---|---|---|
+| `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check and session-state bootstrap at session open |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-worktree-path-guard.js`, `gsd-workflow-guard.js`, `gsd-validate-commit.sh` | Prompt-injection guard, read-before-edit guidance, worktree path safety, workflow guard, and commit validation before tool calls |
+| `PostToolUse` | `gsd-context-monitor.js`, `gsd-phase-boundary.sh`, `gsd-read-injection-scanner.js`, `gsd-graphify-update.sh` | Context window tracking, phase-boundary detection, read-time injection scanning, and graph updates after tool calls |
+| `Stop` | `gsd-context-monitor.js` | Context headroom tracking before the model stops |
+| `PreCompact` | `gsd-context-monitor.js` | Context headroom tracking before compaction |
+| `SubagentStart` | `gsd-context-monitor.js` | Inject context / GSD_AGENT_NAME awareness at subagent open |
+| `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking at subagent stop |
+
+All registered hooks are managed by GSD and are removed cleanly on `--uninstall`.
+
 ---
 
 ### GitHub Copilot

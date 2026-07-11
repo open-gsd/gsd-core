@@ -20,6 +20,8 @@ const {
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,
   convertClaudeCommandToTraeSkill,
+  convertClaudeCommandToKimiSkill,
+  buildKimiAgentArtifacts,
   neutralizeAgentReferences,
 } = require('../bin/install.js');
 
@@ -307,6 +309,58 @@ Do nothing.`;
     const viaInstall = convertClaudeCommandToTraeSkill(noDescriptionCommand, 'gsd-noop');
     const viaModule = convertViaConversionModule(noDescriptionCommand, 'gsd-noop');
     assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical output when description is absent');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEFECT.GENERATIVE-FIX output-parity guard: convertClaudeCommandToKimiSkill
+// and buildKimiAgentArtifacts are each defined TWICE — once in bin/install.js
+// (dead for the live install path; kept for this file's own module-level
+// export/test surface) and once in src/runtime-artifact-conversion.cts,
+// compiled to gsd-core/bin/lib/runtime-artifact-conversion.cjs (used by
+// src/install-engine.cts's skills-install path via SKILLS_CONVERTER_REGISTRY
+// for skills, and by src/runtime-artifact-layout.cts's kimiAgentsKind for
+// agent YAML — see runtime-artifact-layout.cts ~L268/L289). Both copies are
+// LIVE call surfaces — neither re-exports the other, so any future
+// kimi-specific fix (e.g. the #2095 code-review fixes) must be applied to
+// both by hand. Source-text identity can't be asserted (different module
+// systems: plain CJS vs a tsc-compiled .cts output with different
+// surrounding comments), so this instead proves the two implementations
+// still produce IDENTICAL output for representative command and agent
+// input. If a future edit changes one copy's behavior without mirroring it
+// into the other, this test is the guard that catches the divergence.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('convertClaudeCommandToKimiSkill / buildKimiAgentArtifacts output parity: bin/install.js vs runtime-artifact-conversion.cjs (#2095)', () => {
+  const {
+    convertClaudeCommandToKimiSkill: convertViaConversionModule,
+    buildKimiAgentArtifacts: buildViaConversionModule,
+  } = require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+
+  test('identical skill output for a representative command', () => {
+    const viaInstall = convertClaudeCommandToKimiSkill(SAMPLE_COMMAND, 'gsd-execute-phase');
+    const viaModule = convertViaConversionModule(SAMPLE_COMMAND, 'gsd-execute-phase');
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical Kimi skill output');
+  });
+
+  test('identical skill output when the source has no description (falls back to generic description)', () => {
+    const noDescriptionCommand = `---
+name: gsd-noop
+allowed-tools:
+  - Read
+---
+
+Do nothing.`;
+    const viaInstall = convertClaudeCommandToKimiSkill(noDescriptionCommand, 'gsd-noop');
+    const viaModule = convertViaConversionModule(noDescriptionCommand, 'gsd-noop');
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical output when description is absent');
+  });
+
+  test('identical agent-artifact output for a representative agent with a subagent, including the Agent tool grant', () => {
+    const viaInstall = buildKimiAgentArtifacts({ rootAgent: SAMPLE_AGENT, subagents: [SAMPLE_AGENT] });
+    const viaModule = buildViaConversionModule({ rootAgent: SAMPLE_AGENT, subagents: [SAMPLE_AGENT] });
+    assert.deepEqual(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit an identical artifact bundle');
+    assert.match(viaInstall.root.yaml, /kimi_cli\.tools\.agent:Agent/,
+      'both copies must grant the Agent tool when a subagent is present (#2095 Upgrade 2)');
   });
 });
 
