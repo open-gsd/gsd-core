@@ -292,7 +292,11 @@ function formatGsdState(s) {
  * Format a token count compactly: 156342 → '156k', 1234567 → '1.2M'.
  */
 function formatTokens(tokens) {
-  if (tokens >= 1000000) return (tokens / 1000000).toFixed(1) + 'M';
+  // Promote to the M branch when k-rounding would reach 1000 (999,500-999,999
+  // must render "1.0M", never "1000k").
+  if (tokens >= 1000000 || Math.round(tokens / 1000) >= 1000) {
+    return (tokens / 1000000).toFixed(1) + 'M';
+  }
   if (tokens >= 1000) return Math.round(tokens / 1000) + 'k';
   return String(tokens);
 }
@@ -305,10 +309,10 @@ function formatTokens(tokens) {
  */
 function contextTokenSuffix(currentUsage) {
   if (!currentUsage || typeof currentUsage !== 'object') return '';
-  const total = (currentUsage.input_tokens || 0) +
-    (currentUsage.cache_creation_input_tokens || 0) +
-    (currentUsage.cache_read_input_tokens || 0) +
-    (currentUsage.output_tokens || 0);
+  const total = (Number(currentUsage.input_tokens) || 0) +
+    (Number(currentUsage.cache_creation_input_tokens) || 0) +
+    (Number(currentUsage.cache_read_input_tokens) || 0) +
+    (Number(currentUsage.output_tokens) || 0);
   return total > 0 ? ` (${formatTokens(total)})` : '';
 }
 

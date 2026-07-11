@@ -1233,6 +1233,15 @@ test('config-set rejects invalid statusline.context_position', () => {
       assert.equal(formatTokens(1000000), '1.0M');
       assert.equal(formatTokens(1234567), '1.2M');
     });
+    test('k-to-M threshold boundary: limit-1 / limit / limit+1', () => {
+      // 999,999 k-rounds to 1000 — must promote to the M branch, never "1000k"
+      assert.equal(formatTokens(999999), '1.0M');
+      assert.equal(formatTokens(1000000), '1.0M');
+      assert.equal(formatTokens(1000001), '1.0M');
+      // 999,499 is the last value that still k-rounds below 1000
+      assert.equal(formatTokens(999499), '999k');
+      assert.equal(formatTokens(999500), '1.0M');
+    });
   });
 
   describe('contextTokenSuffix', () => {
