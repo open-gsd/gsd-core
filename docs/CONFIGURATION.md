@@ -55,6 +55,7 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "cross_ai_execution": false,
     "cross_ai_command": null,
     "cross_ai_timeout": 300,
+    "test_gate_timeout": 600,
     "security_enforcement": true,
     "security_asvs_level": 1,
     "security_block_on": "high",
@@ -322,7 +323,9 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `workflow.cross_ai_execution` | boolean | `false` | Delegate phase execution to an external AI CLI instead of spawning local executor agents. Useful for leveraging a different model's strengths for specific phases. Added in v1.36 |
 | `workflow.cross_ai_command` | string | (none) | Shell command template for cross-AI execution. Receives the phase prompt via stdin. Must produce SUMMARY.md-compatible output. Required when `cross_ai_execution` is `true`. Added in v1.36 |
 | `workflow.cross_ai_timeout` | number | `300` | Timeout in seconds for cross-AI execution commands. Prevents runaway external processes. Added in v1.36 |
+| `workflow.test_gate_timeout` | number | `600` | Wall-clock timeout (seconds) for a verification test gate; a watch-mode runner (vitest/jest) that never exits is aborted after this budget instead of hanging the orchestrator (#1857) |
 | `workflow.ai_integration_phase` | boolean | `true` | Enable the `/gsd-ai-integration-phase` command. When `false`, the command exits with a configuration gate message |
+| `workflow.api_coverage_gate` | boolean | `true` | Require an explicit API-coverage decision before a phase that integrates an external API/SDK/service can seal. At `plan:pre` the planner is prompted to produce a `COVERAGE.md` matrix (full coverage by default, every opt-out reasoned); at `verify:pre` a blocking gate fails the seal unless the matrix is complete. Independent of `ai_integration_phase` (#1562) |
 | `workflow.auto_prune_state` | boolean | `false` | When `true`, automatically prune stale entries from STATE.md at phase boundaries instead of prompting |
 | `workflow.pattern_mapper` | boolean | `true` | Run the `gsd-pattern-mapper` agent between research and planning to map new files to existing codebase analogs |
 | `workflow.subagent_timeout` | number | `300000` | Timeout in milliseconds for parallel subagent tasks (e.g. codebase mapping). Increase for large codebases or slower models. Default: 300000 (5 minutes) |
@@ -767,9 +770,9 @@ Installed overlay capabilities are merged via the same `buildRegistry` pipeline 
 
 Each overlay manifest may declare an `engines.gsd` semver range. At load time GSD evaluates this range against the running GSD version. An overlay that does not satisfy the range is **skipped with a warning** — it is never loaded and never crashes the loop. Manifests without an `engines.gsd` field are accepted unconditionally.
 
-### Gate-kind fail-closed policy
+### Gate-kind fail-open policy (#2009)
 
-If a skipped overlay capability declared a `gate`-kind loop hook, the loop resolver **injects a blocking gate** at that hook point (fail CLOSED). Skipped capabilities whose hooks are `step` or `contribution` kind skip open — the loop proceeds without them.
+If a skipped or load-failed overlay capability (for example, one whose `engines.gsd` range is incompatible) declared a `gate`-kind loop hook, the loop resolver does **not** inject a gate at that hook point (fail OPEN): the loop proceeds. Instead it emits a loud warning — to stderr and in the `loop render-hooks` envelope's `warnings` array — naming the load-failure reason and the exact remediation, `gsd capability remove <id>`, so the operator is loudly told how to clear it. Skipped capabilities whose hooks are `step` or `contribution` kind skip open too, as before — the loop proceeds without them.
 
 ### Overlay config federation
 
@@ -1112,10 +1115,10 @@ for the change to take effect. See issue #2256.
 | Phase type | Agents |
 |---|---|
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
-| `discuss` | (reserved — no subagent today) |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
 | `completion` | (reserved — no subagent today) |
 
 `discuss` and `completion` are accepted by the schema for forward compatibility; setting them today is a no-op until a subagent maps to them.
@@ -1416,12 +1419,13 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 | Runtime | `opus` | `sonnet` | `haiku` | reasoning_effort |
 |---------|--------|----------|---------|------------------|
 | `claude` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (not used) |
-| `codex` | `gpt-5.5` | `gpt-5.4` | `gpt-5.4-mini` | `xhigh` / `medium` / `medium` |
+| `codex` | `gpt-5.6-sol` | `gpt-5.6-terra` | `gpt-5.6-luna` | `xhigh` / `medium` / `medium` |
 | `qwen` | `qwen3-max-2026-01-23` | `qwen3-coder-plus` | `qwen3-coder-next` | (not used) |
 | `opencode` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (not used) |
 | `copilot` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (not used) |
 | `hermes` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (not used) |
-| Group B (`kilo`, `cline`, `cursor`, `windsurf` (alias: `devin-desktop`), `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | | |
+| `kilo` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (not used) |
+| Group B (`cline`, `cursor`, `windsurf` (alias: `devin-desktop`), `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | | |
 
 > **How these model IDs are sourced.** The catalog (`bin/shared/model-catalog.json`) pins each runtime's tier defaults to that provider's current frontier IDs, and may intentionally carry forward-dated IDs ahead of a provider's public docs. To verify an ID is live before changing it, check the provider's own source/API — e.g. Codex: `codex debug models` or the OpenAI Codex models page; Qwen: Alibaba Model Studio model list. Only change an ID that the provider actually rejects — absence from documentation alone is not proof of invalidity.
 
@@ -1434,7 +1438,7 @@ When `runtime` is set, profile tiers (`opus`/`sonnet`/`haiku`) resolve to runtim
 }
 ```
 
-This resolves `gsd-planner` → `gpt-5.5` (xhigh), `gsd-executor` → `gpt-5.4` (medium), `gsd-codebase-mapper` → `gpt-5.4-mini` (medium). The Codex installer embeds `model = "..."` and `model_reasoning_effort = "..."` in each generated agent TOML.
+This resolves `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5.6-terra` (medium), `gsd-codebase-mapper` → `gpt-5.6-luna` (medium). The Codex installer embeds `model = "..."` and `model_reasoning_effort = "..."` in each generated agent TOML.
 
 **Claude example** — explicit opt-in resolves to full Claude IDs (no `resolve_model_ids: true` needed):
 
@@ -1499,9 +1503,9 @@ Choose a provider and budget level via the settings workflow; GSD writes the can
   "model_policy": {
     "provider": "openai",
     "budget": "medium",
-    "high":   "gpt-5.5",
-    "medium": "gpt-5.4",
-    "low":    "gpt-5.4-mini"
+    "high":   "gpt-5.6-sol",
+    "medium": "gpt-5.6-terra",
+    "low":    "gpt-5.6-luna"
   }
 }
 ```
@@ -1517,9 +1521,9 @@ For advanced per-runtime control, `runtime_tiers` accepts explicit entries using
     "provider": "openai",
     "runtime_tiers": {
       "codex": {
-        "opus":   { "model": "gpt-5.5",        "reasoning_effort": "high" },
-        "sonnet": { "model": "gpt-5.4",         "reasoning_effort": "medium" },
-        "haiku":  { "model": "gpt-5.4-mini",   "reasoning_effort": "low" }
+        "opus":   { "model": "gpt-5.6-sol",        "reasoning_effort": "high" },
+        "sonnet": { "model": "gpt-5.6-terra",     "reasoning_effort": "medium" },
+        "haiku":  { "model": "gpt-5.6-luna",      "reasoning_effort": "low" }
       }
     }
   }

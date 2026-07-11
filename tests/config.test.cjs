@@ -747,6 +747,131 @@ describe('config-set — no silent coercion (#1581)', () => {
   });
 });
 
+// ─── config-set <key> null — unset/clear (#2046) ─────────────────────────────
+
+describe('config-set <key> null — unset/clear (#2046)', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('non-secret routing key: config-set <key> null removes the key (not the string "null")', () => {
+    const setResult = runGsdTools('config-set review.models.gemini foo', tmpDir);
+    assert.ok(setResult.success, `Command failed: ${setResult.error}`);
+    assert.strictEqual(readConfig(tmpDir).review.models.gemini, 'foo');
+
+    const unsetResult = runGsdTools('config-set review.models.gemini null', tmpDir);
+    assert.ok(unsetResult.success, `Command failed: ${unsetResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.ok(
+      !config.review || !config.review.models || !Object.prototype.hasOwnProperty.call(config.review.models, 'gemini'),
+      'review.models.gemini must be absent on disk after unset, not the string "null"'
+    );
+
+    const getResult = runGsdTools('config-get review.models.gemini', tmpDir);
+    assert.ok(
+      !getResult.output || !getResult.output.trim() || getResult.output.trim() === 'undefined',
+      `config-get should return empty/undefined after unset, got: ${getResult.output}`
+    );
+    assert.notStrictEqual(getResult.output && getResult.output.trim(), 'null');
+  });
+
+  test('secret key: config-set brave_search null removes the key (never persists "null")', () => {
+    const setResult = runGsdTools('config-set brave_search sk-test-1234', tmpDir);
+    assert.ok(setResult.success, `Command failed: ${setResult.error}`);
+    assert.strictEqual(readConfig(tmpDir).brave_search, 'sk-test-1234');
+
+    const unsetResult = runGsdTools('config-set brave_search null', tmpDir);
+    assert.ok(unsetResult.success, `Command failed: ${unsetResult.error}`);
+
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    const rawText = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(rawText);
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(config, 'brave_search'),
+      'brave_search must be absent on disk after unset'
+    );
+    assert.doesNotMatch(rawText, /"brave_search":\s*"null"/,
+      'raw config.json must never contain brave_search mapped to the literal string "null"');
+  });
+
+  test('typed-key bypass: config-set context null clears an enum-typed key without validator rejection', () => {
+    const setResult = runGsdTools('config-set context dev', tmpDir);
+    assert.ok(setResult.success, `Command failed: ${setResult.error}`);
+    assert.strictEqual(readConfig(tmpDir).context, 'dev');
+
+    const unsetResult = runGsdTools('config-set context null', tmpDir);
+    assert.ok(unsetResult.success, `config-set context null must succeed (bypass enum validator), got error: ${unsetResult.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.ok(!Object.prototype.hasOwnProperty.call(config, 'context'),
+      'context key must be removed after unset');
+  });
+
+  test('idempotent: config-set <never-set key> null succeeds with no crash and no key written', () => {
+    const result = runGsdTools('config-set git.base_branch null', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.ok(
+      !config.git || !Object.prototype.hasOwnProperty.call(config.git, 'base_branch'),
+      'git.base_branch must not be present after unsetting a key that was never set'
+    );
+  });
+
+  test('literal-"null" guard: no config-set <key> null ever persists the literal string "null" on disk', () => {
+    runGsdTools('config-set review.models.gemini foo', tmpDir);
+    runGsdTools('config-set review.models.gemini null', tmpDir);
+    runGsdTools('config-set brave_search sk-test-1234', tmpDir);
+    runGsdTools('config-set brave_search null', tmpDir);
+    runGsdTools('config-set context dev', tmpDir);
+    runGsdTools('config-set context null', tmpDir);
+
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    const rawText = fs.readFileSync(configPath, 'utf-8');
+    assert.doesNotMatch(rawText, /:\s*"null"/,
+      `config.json must never contain a key mapped to the literal string "null": ${rawText}`);
+  });
+
+  test('prototype-pollution guard: unsetting a __proto__ leaf is rejected, no pollution (alert #26 parity)', () => {
+    // Create the intermediate so the unset walk reaches the leaf guard (a bare
+    // dynamic-prefix key passes the schema gate, so this exercises the
+    // _unsetNestedValue guard, not the schema gate — mirrors the set-path test).
+    const seed = runGsdTools('config-set agent_skills.sonnet-coder true', tmpDir);
+    assert.ok(seed.success, `seed failed: ${seed.error}`);
+
+    const result = runGsdTools('config-set agent_skills.__proto__ null', tmpDir);
+    assert.strictEqual(result.success, false, `Expected rejection, got: ${result.output}`);
+    assert.ok(
+      result.error.includes('prototype pollution guard'),
+      `Expected pollution-guard error, got: ${result.error}`,
+    );
+    // No prototype pollution occurred via the unset path.
+    assert.strictEqual(({}).polluted, undefined);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(Object.prototype, 'polluted'), false);
+  });
+
+  test('deep (4-segment) nested key: config-set <deep> null removes only the leaf', () => {
+    const set = runGsdTools('config-set review.reviewer_instances.myinst.model some-model', tmpDir);
+    assert.ok(set.success, `deep set failed: ${set.error}`);
+    assert.strictEqual(readConfig(tmpDir).review.reviewer_instances.myinst.model, 'some-model');
+
+    const unset = runGsdTools('config-set review.reviewer_instances.myinst.model null', tmpDir);
+    assert.ok(unset.success, `deep unset failed: ${unset.error}`);
+
+    const config = readConfig(tmpDir);
+    assert.ok(
+      !config.review.reviewer_instances.myinst ||
+        !Object.prototype.hasOwnProperty.call(config.review.reviewer_instances.myinst, 'model'),
+      'the leaf model key must be removed',
+    );
+    // Parent objects along the path are preserved (unset removes only the leaf).
+    assert.ok(config.review && config.review.reviewer_instances,
+      'parent objects on the path must remain after leaf unset');
+  });
+});
+
 // ─── config-set (research_before_questions and discuss_mode) ──────────────────
 
 describe('config-set research_before_questions and discuss_mode', () => {

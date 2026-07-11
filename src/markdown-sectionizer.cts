@@ -520,31 +520,68 @@ export function iterateBullets(sectionText: string): BulletItem[] {
  * fenced code blocks itself. If a `<tagName>` block appears inside a fenced code
  * block and should be excluded, the caller should apply `stripFencedCode` first.
  *
- * **Nested tags are NOT supported.** The underlying regex uses a non-greedy
- * `[\s\S]*?` match, which means it closes at the FIRST `</tagName>` encountered.
- * Given `<x><x>inner</x></x>`, `extractTaggedBlocks(content, 'x')` returns
- * `['<x>inner']` — the inner `<x>` is captured as literal text, and the second
- * `</x>` is left unmatched (or matched as a second block with empty inner text
- * if another `<x>` follows). Callers that need to handle nested tags must
- * pre-process the input or use a proper XML/HTML parser.
+ * **Nested tags are NOT supported.** The body scan terminates at the NEXT
+ * opening of the same tag (the ReDoS-safe boundary, #2128). Given
+ * `<x><x>inner</x></x>`, `extractTaggedBlocks(content, 'x')` returns `['inner']`
+ * — the well-formed inner block; the unterminated outer `<x>` is skipped.
+ * Callers that need true nesting must use a proper XML/HTML parser.
+ *
+ * `allowAttributes` (default `false`): when `true`, the opening tag may carry
+ * bounded attributes (`<tag foo="x">`) — needed for `<task type="…">` blocks.
+ * Leave `false` for tags that must match exactly (e.g. `<decisions>`), and never
+ * enable it for a tag where an attributed form is semantically distinct.
  *
  * Generalises `decisions.cts`'s bespoke `matchAll(/<decisions>([\s\S]*?)<\/decisions>/g)`
  * so tier T1 can drop its own copy (tracked duplication until T1 lands).
  */
-export function extractTaggedBlocks(content: string, tagName: string): string[] {
+export function extractTaggedBlocks(content: string, tagName: string, allowAttributes = false): string[] {
   if (typeof content !== 'string' || content.length === 0) return [];
   if (typeof tagName !== 'string' || tagName.length === 0) return [];
 
-  // Escape the tag name for safe interpolation into a RegExp.
-  const escapedTag = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(`<${escapedTag}>([\\s\\S]*?)</${escapedTag}>`, 'g');
-
+  const pattern = taggedBlockPattern(tagName, 'g', allowAttributes);
   const results: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(content)) !== null) {
     results.push(match[1]);
   }
   return results;
+}
+
+/**
+ * Build the single, ReDoS-safe `<tag>…</tag>` block regex shared by
+ * `extractTaggedBlocks` (extract bodies) and `stripTaggedBlocks` (remove blocks).
+ *
+ * Safety: the body terminates at the NEXT opening of this tag (stop-at-next-open)
+ * instead of lazily rescanning the whole remaining document for a `</tag>` that
+ * may never appear — so a document full of unclosed `<tag>` openings scans
+ * LINEARLY, not quadratically (#2128). Group 1 is the block body.
+ *
+ * `allowAttributes`: when `true`, the opener accepts bounded attributes
+ * (`<tag foo="x">`) and the body boundary is `<tag` followed by a space or `>`.
+ * When `false`, the opener is the EXACT `<tag>` and the boundary is exact `<tag>`,
+ * so an attributed `<tag foo>` is neither an opener nor a boundary — it is body
+ * content. That exact form is load-bearing for `<details>` stripping: `<details
+ * open>` marks the ACTIVE milestone and must be preserved, not stripped (#557).
+ */
+function taggedBlockPattern(tagName: string, flags: string, allowAttributes: boolean): RegExp {
+  const esc = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const open = allowAttributes ? `<${esc}(?:\\s[^>]{0,1000})?>` : `<${esc}>`;
+  const boundary = allowAttributes ? `<${esc}[\\s>]` : `<${esc}>`;
+  return new RegExp(`${open}((?:(?!${boundary})[\\s\\S])*?)</${esc}>`, flags);
+}
+
+/**
+ * Remove every `<tagName>…</tagName>` block (opening tag, body, and closing tag)
+ * from `content`. The ReDoS-safe counterpart to `extractTaggedBlocks` — same
+ * hardened pattern, `.replace(…, '')` instead of body extraction. `allowAttributes`
+ * defaults to `false` so `<details open>` (active milestone) is preserved (#557);
+ * case-insensitive by default (matching the `<details>` strip call sites), pass
+ * `caseSensitive` to force exact-case matching.
+ */
+export function stripTaggedBlocks(content: string, tagName: string, allowAttributes = false, caseSensitive = false): string {
+  if (typeof content !== 'string' || content.length === 0) return '';
+  if (typeof tagName !== 'string' || tagName.length === 0) return content;
+  return content.replace(taggedBlockPattern(tagName, caseSensitive ? 'g' : 'gi', allowAttributes), '');
 }
 
 // ─── replaceSection ───────────────────────────────────────────────────────────

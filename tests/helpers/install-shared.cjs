@@ -12,6 +12,10 @@ const os = require('node:os');
 const { spawnSync } = require('node:child_process');
 const assert = require('node:assert/strict');
 
+const {
+  resolveRuntimeArtifactLayout,
+} = require('../../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+
 const INSTALL_SCRIPT = path.join(__dirname, '..', '..', 'bin', 'install.js');
 const MANIFEST_NAME = 'gsd-file-manifest.json';
 
@@ -177,9 +181,27 @@ function manifestAgentCount(manifest) {
   return Object.keys(manifest.files).filter((k) => k.startsWith('agents/')).length;
 }
 
-function collectSkillBasenamesOnDisk(configDir) {
+/**
+ * Collect gsd-* skill/command basenames actually present on disk under configDir.
+ *
+ * @param {string} configDir
+ * @param {string} [runtime] - when provided, the skills-kind destination is
+ *   resolved via resolveRuntimeArtifactLayout so a skills-kind `home` override
+ *   (Codex only, ADR-1239 upgrade 3 / #2088: skills -> $HOME/.agents/skills
+ *   instead of configDir/skills) is honored. Omitted callers keep the prior
+ *   configDir/skills default.
+ * @param {string} [scope='global']
+ */
+function collectSkillBasenamesOnDisk(configDir, runtime, scope = 'global') {
   const out = new Set();
-  const skillsDir = path.join(configDir, 'skills');
+  let skillsDir = path.join(configDir, 'skills');
+  if (runtime) {
+    try {
+      const layout = resolveRuntimeArtifactLayout(runtime, configDir, scope);
+      const skillsKind = layout.kinds.find((k) => k.kind === 'skills');
+      if (skillsKind) skillsDir = path.join(skillsKind.home || configDir, skillsKind.destSubpath);
+    } catch { /* fall back to configDir/skills */ }
+  }
   if (fs.existsSync(skillsDir)) {
     for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
       if (entry.isDirectory() && entry.name.startsWith('gsd-')) {

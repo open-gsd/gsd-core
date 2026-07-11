@@ -27,6 +27,11 @@ const VOLATILE_FILES = new Set([
   'gsd-core/CHANGELOG.md',
 ]);
 const HOOK_CONFIG_FILES = new Set(['settings.json', 'hooks.json']);
+// Kimi's native config.toml (#2095) — see tests/golden-install-parity.test.cjs'
+// HOOK_CONFIG_RELATIVE_PATHS comment for why this is an exact relative-path
+// exclusion rather than a HOOK_CONFIG_FILES basename entry (a basename entry
+// would also blind Codex's stable, platform-independent config.toml fixture).
+const HOOK_CONFIG_RELATIVE_PATHS = new Set(['.kimi/config.toml']);
 const EXCLUDED_PREFIXES = ['gsd-core/bin/lib/'];
 
 function buildParityManifest(configDir, root) {
@@ -36,6 +41,7 @@ function buildParityManifest(configDir, root) {
     const rel = path.relative(configDir, full).split(path.sep).join('/');
     if (VOLATILE_FILES.has(rel)) continue;
     if (HOOK_CONFIG_FILES.has(path.basename(rel))) continue;
+    if (HOOK_CONFIG_RELATIVE_PATHS.has(rel)) continue;
     if (EXCLUDED_PREFIXES.some((p) => rel.startsWith(p))) continue;
     const content = fs.readFileSync(full);
     const normalized = content.toString('utf8').split(root).join('<HOME>').split(PKG_VERSION).join('<VERSION>');

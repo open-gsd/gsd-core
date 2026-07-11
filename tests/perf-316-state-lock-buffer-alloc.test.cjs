@@ -57,9 +57,13 @@ const fs = require('fs');
 // Write pid to lock file so acquireStateLock sees a live pid and retries.
 fs.writeFileSync(workerData.lockPath, String(process.pid));
 parentPort.postMessage({ pid: process.pid });
-// Synchronous sleep — blocks this worker thread for holdMs ms.
-const buf = new Int32Array(new SharedArrayBuffer(4));
-Atomics.wait(buf, 0, 0, workerData.holdMs);
+// Hold the lock until the writer signals it has made its first FAILED lock
+// attempt (deterministic contention), or until holdMs elapses as a safety cap.
+// Atomics.wait blocks this thread while releaseFlag[0] === 0. A fixed timer here
+// was racy: on a slow/loaded runner the writer's spawn+init could exceed the
+// timer, so the lock released before the writer ever contended (lockAttempts:1).
+const releaseFlag = new Int32Array(workerData.releaseSab);
+Atomics.wait(releaseFlag, 0, 0, workerData.holdMs);
 // Release the lock.
 try { fs.unlinkSync(workerData.lockPath); } catch { /* already gone */ }
 parentPort.postMessage({ done: true });
@@ -88,17 +92,29 @@ global.SharedArrayBuffer = StubSAB;
 // path — without this witness, a no-retry success would yield sabCount === 1
 // from BOTH pre-fix and post-fix code (the SAB is allocated unconditionally
 // post-fix, and exactly once for the single successful open pre-fix), giving
-// a false-pass against the bug. The 1000ms holdMs + 200ms SUT retry delay
-// guarantees >=4 attempts even on the slowest CI runners.
+// a false-pass against the bug. Contention is deterministic here: this worker
+// signals the holder to release only after its first failed attempt, so a
+// retry always occurs (lockAttempts >= 2) regardless of runner speed.
 const realOpenSync = fs.openSync.bind(fs);
+const releaseFlag = new Int32Array(workerData.releaseSab);
 let lockAttempts = 0;
 fs.openSync = function(filePath, flags, mode) {
-  if (typeof filePath === 'string' && filePath.endsWith('.lock') &&
+  const isLockCreate = typeof filePath === 'string' && filePath.endsWith('.lock') &&
       typeof flags === 'number' &&
-      (flags & fs.constants.O_CREAT) && (flags & fs.constants.O_EXCL)) {
-    lockAttempts++;
+      (flags & fs.constants.O_CREAT) && (flags & fs.constants.O_EXCL);
+  if (isLockCreate) lockAttempts++;
+  try {
+    return realOpenSync(filePath, flags, mode);
+  } catch (e) {
+    // On the FIRST failed atomic-create (lock is held → contention proven),
+    // signal the holder worker to release so the next retry succeeds. Makes the
+    // retry path deterministic regardless of worker-spawn latency.
+    if (isLockCreate && lockAttempts === 1) {
+      Atomics.store(releaseFlag, 0, 1);
+      Atomics.notify(releaseFlag, 0);
+    }
+    throw e;
   }
-  return realOpenSync(filePath, flags, mode);
 };
 
 // Delete cache entry to ensure a fresh require picks up the stubbed constructor.
@@ -157,20 +173,28 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
 
   test(
     'sabCount === 1 after a call that undergoes >= 1 retry (post-fix assertion)',
-    { timeout: 8000 },
+    { timeout: 15000 },
     async () => {
-      // ── Worker A: hold the lock for 1000ms ─────────────────────────────────
-      // state.cjs retry delay = 200ms + 0-50ms jitter; 1000ms hold guarantees
-      // >=4 retries even on the slowest CI worker (~200ms spawn + 4 retry
-      // intervals ~1000ms ≈ hold duration). The lockAttempts assertion below
-      // proves the retry path was exercised end-to-end.
-      const holdMs = 1000;
+      // ── Worker A: hold the lock until the writer signals contention ─────────
+      // The holder releases the lock only when the writer signals its first
+      // failed lock attempt (see WRITER_WORKER_CODE), so the writer is guaranteed
+      // to contend at least once. holdMs is ONLY a safety cap for a dead/hung
+      // writer — it MUST be large enough that it never elapses while Worker B is
+      // still spawning + requiring state.cjs + installing its stubs. Under load
+      // (full suite in a container) that spawn+init can exceed 1s; a 1s cap let A
+      // time out and remove the lock before B contended, so B's first openSync
+      // succeeded (lockAttempts:1) and the retry-path witness failed. 30s is
+      // comfortably beyond B's worst-case init yet still bounded; the test's own
+      // timeout caps wall-clock, and afterEach terminate()s A the moment B posts
+      // its result, so the normal path adds no delay.
+      const holdMs = 30000;
+      const releaseSab = new SharedArrayBuffer(4);
       let resolveLockWritten;
       const lockWritten = new Promise((resolve) => { resolveLockWritten = resolve; });
       const holderDone = new Promise((resolve, reject) => {
         holderWorker = new Worker(HOLDER_WORKER_CODE, {
           eval: true,
-          workerData: { lockPath, holdMs },
+          workerData: { lockPath, holdMs, releaseSab },
         });
         holderWorker.on('message', (msg) => {
           if (msg.pid !== undefined) resolveLockWritten();
@@ -223,6 +247,7 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
               statePath,
               content: MINIMAL_STATE_MD,
               tmpDir,
+              releaseSab,
             },
           });
           writerWorker.on('message', resolve);
@@ -259,8 +284,8 @@ describe('perf #316: acquireStateLock hoists sleep buffer — exactly one SAB pe
       assert.ok(
         writeResult.lockAttempts >= 2,
         'SUT must have entered the retry path (>=1 failed lock attempt before success). ' +
-          'Got lockAttempts: ' + writeResult.lockAttempts + '. The 1000ms holdMs + 200ms ' +
-          'SUT retry delay guarantees >=2 attempts on any CI runner.'
+          'Got lockAttempts: ' + writeResult.lockAttempts + '. The holder releases only ' +
+          'after the writer signals its first failed attempt, so contention is deterministic.'
       );
 
       // THE KEY INVARIANT:

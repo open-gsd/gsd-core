@@ -2692,10 +2692,10 @@ capture_thought({
 | 槽位 | 分配的智能体 |
 |------|-----------------|
 | `planning` | `gsd-planner`、`gsd-roadmapper`、`gsd-pattern-mapper` |
-| `discuss` | （为未来子智能体保留） |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | `gsd-phase-researcher`、`gsd-project-researcher`、`gsd-research-synthesizer`、`gsd-codebase-mapper`、`gsd-ui-researcher` |
 | `execution` | `gsd-executor`、`gsd-debugger`、`gsd-doc-writer` |
-| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier` |
+| `verification` | `gsd-verifier`、`gsd-plan-checker`、`gsd-integration-checker`、`gsd-nyquist-auditor`、`gsd-ui-checker`、`gsd-ui-auditor`、`gsd-doc-verifier`、`gsd-code-reviewer` |
 | `completion` | （为未来子智能体保留） |
 
 **接受的值：** `"opus"` / `"sonnet"` / `"haiku"` / `"inherit"`

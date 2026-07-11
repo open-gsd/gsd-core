@@ -79,6 +79,31 @@ Accent reserved for: {explicit list — never "all interactive elements"}
 
 ---
 
+## UI Considerations
+
+> Populated by the ui-phase UI-consideration probe (Step 9.5) and lifted by plan-phase's
+> `## UI Considerations` lift rule via the identical rule as SPEC `## Edge Coverage`. Shape-rooted UI *state*
+> coverage (empty / loading / error / populated / partial / overflow / zero-one-many / long-text).
+> Empty-state and error-state COPY live in `## Copywriting Contract` above — this section covers
+> state coverage and REFERENCES those rows rather than restating the copy (de-dup).
+
+Applicable state considerations resolved: {N covered, M backstop, K unresolved — or "none applicable"}
+
+| Category | Element(s) | Status | Resolution / Reason |
+|----------|------------|--------|---------------------|
+| {empty} | {list-collection} | ✅ covered | {concrete truth string — e.g. "Empty results render the documented 'No results' copy"} |
+| {long-text} | {static-content} | 🧪 backstop | {held-out/visual UI-state test — lifts as `{ statement, verification: backstop }`} |
+| {overflow} | {list-collection} | ⚠ unresolved | {planner treats as assumption} |
+
+<!-- Status vocabulary (locked by probe-core projectTruths):
+     ✅ covered   → a plain truth string lifted into must_haves.truths
+     🧪 backstop  → a flat scalar { statement, verification: backstop }; at verify time, no explicit
+                    evidence → insufficient_spec → human_needed (never a silent pass, #1154)
+     ⚠ unresolved → an explicit planner assumption (surfaced, never silently dropped)
+     Rows are REPLACED (not appended) on a probe re-run — idempotent. -->
+
+---
+
 ## Registry Safety
 
 | Registry | Blocks Used | Safety Gate |

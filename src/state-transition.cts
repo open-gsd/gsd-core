@@ -1818,7 +1818,7 @@ function reconcileByPhaseTable(
  * source to substitute. This is honest — better than silently leaving `[X]`
  * which looks like a value.
  */
-const TEMPLATE_PLACEHOLDER_VALUE = /^\s*\[[^\]]+\]\s*$|^\s*-\s*$/;
+const TEMPLATE_PLACEHOLDER_VALUE = /^\s*\[[^\]]{1,200}\]\s*$|^\s*-\s*$/;
 
 function stripTemplatePlaceholders(
   content: string,

@@ -716,13 +716,13 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     const enforce = require(ENFORCEMENT_LIB);
     // Migrated to the SHIPPING prover (#1279): the default real prover lints the committed
     // `_ff_lint_violation.cjs` violationFixture (the rule fires -> fail-first proven) while the
-    // clean runCheck lints src/clock.cts (no violation -> non-vacuous pass). Both via real eslint.
+    // clean runCheck lints tests/_ff_lint_clean.cjs (no violation -> non-vacuous pass). Both via real eslint.
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       {
         kind: 'lint-rule',
         rule: 'local/no-source-grep',
-        target: 'src/clock.cts',
+        target: 'tests/_ff_lint_clean.cjs',
         failFirst: true,
         violationFixture: path.join('tests', '_ff_lint_violation.cjs'),
       },
@@ -759,13 +759,13 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     const enforce = require(ENFORCEMENT_LIB);
     // No injected runCheck/proveFailFirst: the default prover lints the committed
     // `_ff_lint_violation.cjs` (the rule fires -> fail-first proven) AND the default runner lints
-    // the clean `src/clock.cts` (no violation -> non-vacuous pass). BOTH directions via real eslint.
+    // the clean `tests/_ff_lint_clean.cjs` (no violation -> non-vacuous pass). BOTH directions via real eslint.
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       {
         kind: 'lint-rule',
         rule: 'local/no-source-grep',
-        target: 'src/clock.cts',
+        target: 'tests/_ff_lint_clean.cjs',
         violationFixture: path.join('tests', '_ff_lint_violation.cjs'),
       },
       { cwd: process.cwd() },
@@ -780,7 +780,7 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
 
   test('FULL producer (real): lint-rule hard-gates on a TOOTHLESS violationFixture (rule does not flag it) (FF-02 wrong-direction)', () => {
     const enforce = require(ENFORCEMENT_LIB);
-    // The "violation fixture" is a CLEAN in-tree file (src/clock.cts) the rule does NOT flag, so the
+    // The "violation fixture" is a CLEAN in-tree file (tests/_ff_lint_clean.cjs) the rule does NOT flag, so the
     // default prover cannot prove fail-first -> the producer must hard-gate (never green), even though
     // the clean target itself would pass the runner. A toothless guard is not a guard.
     const result = enforce.runProhibitionEnforcement(
@@ -788,8 +788,8 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
       {
         kind: 'lint-rule',
         rule: 'local/no-source-grep',
-        target: 'src/clock.cts',
-        violationFixture: 'src/clock.cts',
+        target: 'tests/_ff_lint_clean.cjs',
+        violationFixture: 'tests/_ff_lint_clean.cjs',
       },
       { cwd: process.cwd() },
     );
@@ -807,8 +807,8 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
         {
           kind: 'lint-rule',
           rule: 'local/no-source-grep',
-          target: 'src/clock.cts',
-          violationFixture: 'src/clock.cts',
+          target: 'tests/_ff_lint_clean.cjs',
+          violationFixture: 'tests/_ff_lint_clean.cjs',
         },
         { cwd: process.cwd(), mode },
       );
@@ -1009,11 +1009,11 @@ describe('prohibition-enforcement defaultProveFailFirst REAL prover (#1279)', ()
 
   test('lint-rule: a CLEAN violationFixture (rule does not flag) is NOT proven (FF-02 toothless direction)', () => {
     const enforce = require(ENFORCEMENT_LIB);
-    // src/clock.cts is a clean in-tree source with no no-source-grep violation. If a "violation
+    // tests/_ff_lint_clean.cjs is a clean in-tree source with no no-source-grep violation. If a "violation
     // fixture" does not actually trigger the rule, the rule is toothless on it → not a guard → not
     // proven → must hard-gate.
     const proof = enforce.defaultProveFailFirst(
-      { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'src/clock.cts', violationFixture: 'src/clock.cts' },
+      { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'tests/_ff_lint_clean.cjs', violationFixture: 'tests/_ff_lint_clean.cjs' },
       process.cwd(),
     );
     assert.equal(proof.provenFailFirst, false,
@@ -1023,7 +1023,7 @@ describe('prohibition-enforcement defaultProveFailFirst REAL prover (#1279)', ()
   test('lint-rule: no violationFixture -> not proven (FF-05 fail-closed)', () => {
     const enforce = require(ENFORCEMENT_LIB);
     const proof = enforce.defaultProveFailFirst(
-      { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'src/clock.cts' }, // no violationFixture
+      { kind: 'lint-rule', rule: 'local/no-source-grep', target: 'tests/_ff_lint_clean.cjs' }, // no violationFixture
       process.cwd(),
     );
     assert.equal(proof.provenFailFirst, false, 'no violationFixture -> cannot prove -> hard-gate');

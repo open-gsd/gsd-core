@@ -49,11 +49,19 @@ const PATH_RETURNING_FNS = [
   'resolveAgentDir',
   'getGlobalConfigDir',
   'getGlobalSkillsBase',
+  // #2088 (ADR-1239 upgrade 3): resolves the on-disk skills-install dir honoring
+  // a skills-kind `home` override (e.g. Codex → $HOME/.agents/skills).
+  '_resolveSkillsRootDir',
   'getGlobalSkillDir',
   'getGlobalSkillDisplayPath',
   'resolveSkillsBaseFromDescriptor',
   'resolveConfigHomeFromDescriptor',
   'resolveKimiGlobalDir',
+  // #2095 (EoS/kimi): resolves the directory holding Kimi CLI's OWN native
+  // config.toml (~/.kimi by default, KIMI_SHARE_DIR override) — a sibling of,
+  // and deliberately separate from, resolveKimiGlobalDir's generic
+  // Agent-Skills root above.
+  'resolveKimiHooksTomlDir',
   'resolveAntigravityGlobalDir',
   'getGlobalDir',
   'getConfigDirFromHome',

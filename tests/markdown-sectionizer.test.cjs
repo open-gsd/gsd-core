@@ -33,6 +33,7 @@ const {
   collectSection,
   iterateBullets,
   extractTaggedBlocks,
+  stripTaggedBlocks,
   replaceSection,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -1015,15 +1016,14 @@ describe('stripFencedCode and tokenizeHeadings: backtick info string with backti
 
 // ─── FIX 6: extractTaggedBlocks — nested tag behavior ─────────────────────────
 
-describe('extractTaggedBlocks: nested same-name tag behavior (non-greedy limitation)', () => {
-  test('nested <x><x>…</x></x> closes at first </x> (non-greedy; nested tags not supported)', () => {
-    // Non-greedy match: <x>([\s\S]*?)</x> closes at the FIRST </x>.
-    // So <x><x>inner</x></x> → first block captures "<x>inner", second </x> is unmatched.
+describe('extractTaggedBlocks: nested same-name tag behavior (#2128 stop-at-next-open)', () => {
+  test('nested <x><x>inner</x></x> extracts the well-formed inner block', () => {
+    // #2128: the ReDoS-safe body scan terminates at the NEXT opening <x>, so the
+    // unterminated outer <x> is skipped and the inner block is extracted.
     const content = '<x><x>inner</x></x>';
     const result = extractTaggedBlocks(content, 'x');
-    // The first match closes at the first </x>, capturing "<x>inner"
-    assert.equal(result.length, 1, 'non-greedy match produces exactly one result from nested input');
-    assert.equal(result[0], '<x>inner', 'inner capture is the content up to the first closing tag');
+    assert.equal(result.length, 1, 'exactly one result from nested input');
+    assert.equal(result[0], 'inner', 'the well-formed inner block is extracted; the unterminated outer is skipped');
   });
 
   test('back-to-back blocks (not nested) are both extracted', () => {
@@ -1032,6 +1032,24 @@ describe('extractTaggedBlocks: nested same-name tag behavior (non-greedy limitat
     assert.equal(result.length, 2);
     assert.equal(result[0], 'first');
     assert.equal(result[1], 'second');
+  });
+
+  test('#2128: a document full of unclosed <x> openings stays linear and yields no match', () => {
+    const content = '<x>a\n'.repeat(50) + 'no closing tag';
+    assert.deepEqual(extractTaggedBlocks(content, 'x'), [], 'no </x> anywhere -> no blocks');
+  });
+
+  test('#557 / #2128: attr-intolerant by default preserves <details open>; opt-in matches <task type=…>', () => {
+    // stripTaggedBlocks(details) must PRESERVE <details open> (the active-milestone
+    // marker) and strip only bare <details>; extractTaggedBlocks(task, true) must
+    // match attributed tasks, and must NOT when allowAttributes is left false.
+    assert.equal(
+      stripTaggedBlocks('X<details>shipped</details>Y<details open>active</details>Z', 'details'),
+      'XY<details open>active</details>Z',
+      '#557: <details open> preserved; bare <details> stripped',
+    );
+    assert.deepEqual(extractTaggedBlocks('<task type="auto">body</task>', 'task', true), ['body'], 'attributed task matched with allowAttributes=true');
+    assert.deepEqual(extractTaggedBlocks('<task type="auto">body</task>', 'task'), [], 'attributed task NOT matched with allowAttributes=false');
   });
 });
 

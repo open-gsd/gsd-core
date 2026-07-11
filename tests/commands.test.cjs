@@ -1204,7 +1204,7 @@ describe('resolve-model command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.model, 'gpt-5.5');
+    assert.strictEqual(output.model, 'gpt-5.6-sol');
     assert.strictEqual(output.profile, 'balanced');
     // #443: effort is now the unified field (xhigh for gsd-planner heavy tier default)
     assert.strictEqual(output.effort, 'xhigh');

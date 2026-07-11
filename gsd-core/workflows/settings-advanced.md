@@ -354,13 +354,14 @@ Built-in tier defaults by runtime:
 | Runtime    | `opus`                        | `sonnet`                        | `haiku`                       |
 |------------|-------------------------------|---------------------------------|-------------------------------|
 | `claude`   | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
-| `codex`    | `gpt-5.5`                     | `gpt-5.4`                       | `gpt-5.4-mini`                |
+| `codex`    | `gpt-5.6-sol`                 | `gpt-5.6-terra`                 | `gpt-5.6-luna`                |
 | `gemini`   | `gemini-3.1-pro-preview`      | `gemini-3-flash`                | `gemini-2.5-flash-lite`       |
 | `qwen`     | `qwen3-max-2026-01-23`        | `qwen3-coder-plus`              | `qwen3-coder-next`            |
 | `opencode` | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
 | `copilot`  | `claude-opus-4-8`             | `claude-sonnet-5`             | `claude-haiku-4-5`            |
 | `hermes`   | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
-| Group B (`kilo`, `cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | |
+| `kilo`     | `anthropic/claude-opus-4-8`   | `anthropic/claude-sonnet-5`   | `anthropic/claude-haiku-4-5`  |
+| Group B (`cline`, `cursor`, `windsurf`, `augment`, `trae`, `codebuddy`, `antigravity`) | (no built-in default — your runtime handles model selection) | | |
 
 Display a table to the user showing the effective configuration:
 
@@ -387,8 +388,8 @@ AskUserQuestion([
     options: [
       { label: "Keep current (<runtime>)", description: "Configure overrides for the current runtime." },
       { label: "Common runtimes", description: "claude, codex, gemini, qwen" },
-      { label: "Additional runtimes", description: "opencode, copilot, hermes" },
-      { label: "Other (Group B or custom)", description: "kilo, cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string." }
+      { label: "Additional runtimes", description: "opencode, copilot, hermes, kilo" },
+      { label: "Other (Group B or custom)", description: "cline, cursor, windsurf, augment, trae, codebuddy, antigravity, or a custom runtime string." }
     ]
   }
 ])
@@ -423,7 +424,8 @@ AskUserQuestion([
     options: [
       { label: "opencode", description: "OpenCode (uses anthropic/ prefix)." },
       { label: "copilot", description: "GitHub Copilot." },
-      { label: "hermes", description: "Hermes (uses anthropic/ prefix)." }
+      { label: "hermes", description: "Hermes (uses anthropic/ prefix)." },
+      { label: "kilo", description: "Kilo Code (uses anthropic/ prefix)." }
     ]
   }
 ])
@@ -627,7 +629,7 @@ AskUserQuestion([
     options: [
       { label: "anthropic", description: "claude-opus-4-8 / claude-sonnet-5 / claude-haiku-4-5 (Anthropic / Claude)" },
       { label: "anthropic-fable", description: "claude-fable-5 / claude-sonnet-5 / claude-haiku-4-5 (Anthropic / Claude Fable opt-in)" },
-      { label: "openai", description: "gpt-5.5 / gpt-5.4 / gpt-5.4-mini (OpenAI / Codex)" },
+      { label: "openai", description: "gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna (OpenAI / Codex)" },
       { label: "Other known provider", description: "Type google or qwen; both still use the canonical tier mapping." }
     ]
   }
@@ -662,9 +664,9 @@ Canonical tier mappings by provider and budget:
 | anthropic-fable | high   | claude-fable-5             | claude-fable-5             | claude-sonnet-5          |
 | anthropic-fable | medium | claude-opus-4-8            | claude-sonnet-5          | claude-haiku-4-5           |
 | anthropic-fable | low    | claude-haiku-4-5           | claude-haiku-4-5           | claude-haiku-4-5           |
-| openai    | high   | gpt-5.5                    | gpt-5.5                    | gpt-5.5                    |
-| openai    | medium | gpt-5.5                    | gpt-5.4                    | gpt-5.4-mini               |
-| openai    | low    | gpt-5.4-mini               | gpt-5.4-mini               | gpt-5.4-mini               |
+| openai    | high   | gpt-5.6-sol                | gpt-5.6-sol                | gpt-5.6-sol                |
+| openai    | medium | gpt-5.6-sol                | gpt-5.6-terra              | gpt-5.6-luna               |
+| openai    | low    | gpt-5.6-luna               | gpt-5.6-luna               | gpt-5.6-luna               |
 | google    | high   | gemini-3.1-pro-preview     | gemini-3.1-pro-preview     | gemini-3.1-pro-preview     |
 | google    | medium | gemini-3.1-pro-preview     | gemini-3-flash             | gemini-2.5-flash-lite      |
 | google    | low    | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      | gemini-2.5-flash-lite      |

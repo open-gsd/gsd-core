@@ -343,9 +343,14 @@ describe('bug #1906: local hook commands use $CLAUDE_PROJECT_DIR', () => {
  * dir as cwd. Claude Code and others still use "$CLAUDE_PROJECT_DIR"/ (#1906).
  *
  * #1928: Google sunset Gemini CLI (2026-06-18) and the `gemini` runtime was
- * removed from GSD entirely. `projectLocalHookPrefix` now special-cases only
- * `antigravity` — an unrecognized runtime string like the former `'gemini'`
- * falls through to the default $CLAUDE_PROJECT_DIR-anchored prefix.
+ * removed from GSD entirely.
+ *
+ * #2096: `projectLocalHookPrefix` no longer special-cases `antigravity` by
+ * name — it branches on the caller-supplied `hookPathStyle` (sourced from
+ * the runtime's `hostBehaviors.hookPathStyle` descriptor field). An
+ * unrecognized runtime string like the former `'gemini'`, or any runtime
+ * that doesn't declare `hookPathStyle: 'raw'`, falls through to the default
+ * $CLAUDE_PROJECT_DIR-anchored prefix.
  */
 
 const { describe, test } = require('node:test');
@@ -357,7 +362,13 @@ const { projectLocalHookPrefix, projectShellCommandText } = projection;
 
 describe('bug #2557: Antigravity local hooks use relative paths (not $CLAUDE_PROJECT_DIR); gemini runtime removed (#1928)', () => {
   test('Antigravity local prefix is bare dirName', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
+    // #2096: hookPathStyle is now the caller-supplied descriptor value
+    // (bin/install.js resolves it from hostBehaviors.hookPathStyle); the
+    // function itself no longer knows the runtime name 'antigravity'.
+    assert.equal(
+      projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents', hookPathStyle: 'raw' }),
+      '.agents',
+    );
   });
 
   test('non-Antigravity local prefix remains $CLAUDE_PROJECT_DIR anchored', () => {
@@ -512,7 +523,13 @@ describe('bug #3439: shell projection module owns managed-hook policy and legacy
   });
 
   test('projectLocalHookPrefix centralizes runtime-specific project-dir interpolation policy', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
+    // #2096: 'raw' hookPathStyle (descriptor-driven) is what produces the
+    // bare-dirName behavior now — the function no longer branches on the
+    // 'antigravity' runtime name itself.
+    assert.equal(
+      projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents', hookPathStyle: 'raw' }),
+      '.agents',
+    );
     assert.equal(
       projectLocalHookPrefix({ runtime: 'claude', dirName: '.claude' }),
       '"$CLAUDE_PROJECT_DIR"/.claude',

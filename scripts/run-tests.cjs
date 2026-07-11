@@ -577,6 +577,23 @@ function main() {
   const MAX_FILES_PER_CHUNK = process.env.RUN_TESTS_MAX_FILES_PER_CHUNK
     ? Number(process.env.RUN_TESTS_MAX_FILES_PER_CHUNK)
     : 60;
+  // #2088: file COUNT is a poor proxy for a chunk's wall-clock — install-heavy
+  // files (real installs; install-minimal-hooks.test.cjs alone runs ~250 cases
+  // doing dozens of installs) are ~10× a unit file. When several land in the SAME
+  // chunk — e.g. a PR touching the whole install surface, whose *targeted* lane is
+  // unsharded (13 install-heavy files → one chunk) — that chunk blows the 600s
+  // backstop while unit-only chunks finish in seconds. WEIGHT install-heavy files
+  // so they fill a chunk's budget faster and therefore SPREAD across chunks
+  // instead of clustering. Light files keep weight 1, so pure-unit chunking (and
+  // its harness tests) is byte-for-byte unchanged. `MAX_FILES_PER_CHUNK` is now a
+  // per-chunk WEIGHT budget (backwards-compatible: it equals the file count when
+  // every file is light). Tune via RUN_TESTS_HEAVY_FILE_WEIGHT; classify via the
+  // basename prefix (install*/installer*/codex-* are the real install-heavy suites).
+  const HEAVY_TEST_RE = /^(?:install|codex-)/;
+  const HEAVY_FILE_WEIGHT = process.env.RUN_TESTS_HEAVY_FILE_WEIGHT
+    ? Number(process.env.RUN_TESTS_HEAVY_FILE_WEIGHT)
+    : 12;
+  const fileWeight = (f) => (HEAVY_TEST_RE.test(basename(f)) ? HEAVY_FILE_WEIGHT : 1);
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
@@ -595,18 +612,21 @@ function main() {
   const chunks = [];
   let current = [];
   let currentLen = FIXED_OVERHEAD;
+  let currentWeight = 0;
   for (const file of selected) {
     const add = file.length + 1; // +1 for the inter-arg separator
     if (
       current.length > 0 &&
-      (currentLen + add > MAX_CMDLINE_CHARS || current.length >= MAX_FILES_PER_CHUNK)
+      (currentLen + add > MAX_CMDLINE_CHARS || currentWeight >= MAX_FILES_PER_CHUNK)
     ) {
       chunks.push(current);
       current = [];
       currentLen = FIXED_OVERHEAD;
+      currentWeight = 0;
     }
     current.push(file);
     currentLen += add;
+    currentWeight += fileWeight(file); // heavy install files count for more
   }
   if (current.length > 0) chunks.push(current);
 

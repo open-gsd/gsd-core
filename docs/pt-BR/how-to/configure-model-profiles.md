@@ -88,8 +88,9 @@ Tipos de fase e seus agentes:
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
-| `discuss`, `completion` | Reservado — nenhum subagente hoje; aceito pelo esquema para compatibilidade futura |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
+| `discuss` | `gsd-assumptions-analyzer` |
+| `completion` | Reservado — nenhum subagente hoje; aceito pelo esquema para compatibilidade futura |
 
 O bloco `models` aceita apenas aliases de nível (`opus`, `sonnet`, `haiku`, `inherit`). Para um ID de modelo totalmente qualificado, use `model_overrides` por agente.
 

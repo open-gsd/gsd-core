@@ -97,6 +97,9 @@ const path = require('path');
 const EXECUTE_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
 const VERIFY_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-phase.md');
 const AUDIT_FIX_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'audit-fix.md');
+// #1857: execute-phase's regression-gate test-command resolution was extracted
+// to this step file (execute-phase.md is size-frozen — phase-6 capstone).
+const REGRESSION_GATE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase', 'steps', 'regression-gate.md');
 
 function assertMakefileCheckBeforeNpmTest(filePath, label) {
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -166,8 +169,8 @@ describe('bug-2396: Makefile test target must take priority over hardcoded comma
     assert.ok(fs.existsSync(AUDIT_FIX_PATH), 'audit-fix.md should exist');
   });
 
-  test('execute-phase.md: Makefile check precedes npm test (post-merge gate)', () => {
-    assertMakefileCheckBeforeNpmTest(EXECUTE_PHASE_PATH, 'execute-phase.md');
+  test('regression-gate step: Makefile check precedes npm test (#1857 — extracted from execute-phase.md)', () => {
+    assertMakefileCheckBeforeNpmTest(REGRESSION_GATE_PATH, 'regression-gate.md');
   });
 
   test('verify-phase.md: Makefile check precedes npm test', () => {
@@ -178,8 +181,8 @@ describe('bug-2396: Makefile test target must take priority over hardcoded comma
     assertMakefileCheckBeforeNpmTest(AUDIT_FIX_PATH, 'audit-fix.md');
   });
 
-  test('execute-phase.md: workflow.test_command config checked first (within bash block)', () => {
-    assertConfigGetBeforeMakefile(EXECUTE_PHASE_PATH, 'execute-phase.md');
+  test('regression-gate step: workflow.test_command config checked first (within bash block) (#1857)', () => {
+    assertConfigGetBeforeMakefile(REGRESSION_GATE_PATH, 'regression-gate.md');
   });
 
   test('verify-phase.md: workflow.test_command config checked first (within bash block)', () => {

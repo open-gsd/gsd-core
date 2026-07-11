@@ -222,15 +222,23 @@ describe('resolveRuntimeArtifactLayout — trae', () => {
 });
 
 describe('resolveRuntimeArtifactLayout — qwen', () => {
-  test('returns correct layout for qwen', () => {
+  test('returns correct layout for qwen (skills + agents — #2092 Phase B Upgrade 1)', () => {
     const layout = resolveRuntimeArtifactLayout('qwen', FAKE_DIR);
     assert.strictEqual(layout.runtime, 'qwen');
     assert.strictEqual(layout.configDir, FAKE_DIR);
-    assert.strictEqual(layout.kinds.length, 1);
-    assert.strictEqual(layout.kinds[0].kind, 'skills');
-    assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
-    assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
-    assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+    assert.strictEqual(layout.kinds.length, 2);
+
+    const skillsKind = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skillsKind, 'must have a skills kind');
+    assert.strictEqual(skillsKind.destSubpath, 'skills');
+    assert.strictEqual(skillsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof skillsKind.stage, 'function');
+
+    const agentsKind = layout.kinds.find(k => k.kind === 'agents');
+    assert.ok(agentsKind, 'must have an agents kind (#2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection)');
+    assert.strictEqual(agentsKind.destSubpath, 'agents');
+    assert.strictEqual(agentsKind.prefix, 'gsd-');
+    assert.strictEqual(typeof agentsKind.stage, 'function');
   });
 });
 

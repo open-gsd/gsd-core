@@ -3055,6 +3055,39 @@ describe('state complete-phase: decorated Phase fallback (#2761 nitpick)', () =>
     assert.ok(!after.includes('Status: Phase Phase complete'));
   });
 
+  test('rejects a milestone-closure Phase line, never mines the version token (#2111 / #2125)', () => {
+    // After `milestone complete v0.5`, the only phase signal is the narrative
+    // `Phase: Milestone v0.5 complete`. The old unanchored resolver mined "0.5"
+    // and rewrote Status as "Phase 0.5 complete"; the anchored parser yields no
+    // token, so complete-phase must reject rather than corrupt STATE.md.
+    const stateMd = [
+      '---',
+      'milestone: v0.5',
+      '---',
+      '',
+      '# State',
+      '',
+      '**Status:** Awaiting next milestone',
+      '**Last Activity:** 2024-01-15',
+      '',
+      '## Current Position',
+      '',
+      'Phase: Milestone v0.5 complete',
+      '',
+    ].join('\n');
+    const statePath = path.join(tmpDir, '.planning', 'STATE.md');
+    fs.writeFileSync(statePath, stateMd);
+
+    const result = runGsdTools('state complete-phase', tmpDir);
+    assert.ok(result.success, 'command should return JSON error payload, not crash');
+    const output = JSON.parse(result.output);
+    assert.ok(output.error, 'expected a resolution error, not a phase mined from the version string');
+
+    const after = fs.readFileSync(statePath, 'utf-8');
+    assert.ok(!after.includes('Phase 0.5 complete'), `must not mine "0.5" from the version: ${after}`);
+    assert.ok(!after.includes('Phase: 0.5'), `must not rewrite Current Position to Phase 0.5: ${after}`);
+  });
+
   test('supports explicit phase override for complete-phase disambiguation (#3063)', () => {
     const stateMd = [
       '---',

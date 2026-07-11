@@ -73,8 +73,8 @@ Parse current values (default to `true` if not present):
 ```
 Note: Quality, Balanced, Budget, and Adaptive profiles assign semantic tiers
 (Opus/Sonnet/Haiku) to each agent. When `runtime` is set in .planning/config.json,
-tiers resolve to runtime-native model IDs — on Codex that's gpt-5.5 / gpt-5.4 /
-gpt-5.4-mini with appropriate reasoning effort. See "Runtime-Aware Profiles" in
+tiers resolve to runtime-native model IDs — on Codex that's gpt-5.6-sol / gpt-5.6-terra /
+gpt-5.6-luna with appropriate reasoning effort. See "Runtime-Aware Profiles" in
 docs/CONFIGURATION.md.
 
 If `runtime` is unset on a non-Claude runtime, the profile tiers have no effect on

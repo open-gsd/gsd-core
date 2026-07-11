@@ -37,9 +37,21 @@ const OPTIONAL_PROJECT_CODE_PREFIX_SOURCE = '(?:[A-Z][A-Z0-9_]*-)?';
 // Enumeration/parse call sites that read phase headers from a regex *literal*
 // (rather than a `new RegExp` built from an interpolated phase number) cannot
 // reference this constant; they inline its literal-regex mirror instead —
-// `(?:\s*\([^)\n]*\))?` — kept character-for-character equivalent to this
+// `(?:\s*\([^)\n]{0,200}\))?` — kept character-for-character equivalent to this
 // source. Both forms must change together; see the #1729 regression test.
-const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]*\\))?';
+const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
+
+// #2128: the canonical phase-NUMBER-TOKEN grammar — a phase number with an
+// optional single-letter variant suffix and optional dotted sub-phases
+// (1, 01, 12A, 12.1, 3.2.1). This is the ENUMERATION/scan counterpart to
+// phaseMarkdownRegexSource: use phaseMarkdownRegexSource(n) to build a source
+// for ONE KNOWN number; reference this constant when a call site must match ANY
+// phase and capture its token. Enumeration/parse sites inline this into a
+// `new RegExp(...)` instead of re-deriving the grammar as a literal, so every
+// phase-token producer shares one owner. The anti-divergence guard
+// (scripts/lint-phase-id-drift.cjs) fails CI if a literal re-derivation is
+// introduced outside this module without a `// phase-id-owner:` justification.
+const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
@@ -205,9 +217,29 @@ function extractPhaseToken(dirName: string): string {
 
   const segments = rest.split('-');
   const tokenSegments: string[] = [];
+  // #2043: distinguish a real (zero-padded, ≥2-digit) phase/sub-phase segment
+  // from a single-digit slug word. A pure-numeric leading segment ("46") only
+  // continues with ≥2-digit segments, so "46-6-rs-…" yields "46" (the "6" is the
+  // slug's first word), not "46-6". Milestone-prefixed ids like "M1-2" reach here
+  // with "M1-" already stripped as a project-code prefix (see
+  // PROJECT_CODE_PREFIX_CAPTURE_RE_I), so "2" is the leading segment and the same
+  // pure-numeric rule applies (M1-46-6-rs → "M1-46"). The firstLetterPrefixed
+  // carve-out covers letter+digit leading segments that survive prefix stripping
+  // because of punctuation (e.g. "P0.3-2"), whose single-digit continuation is
+  // intentionally preserved (unchanged from prior behaviour).
+  let firstLetterPrefixed = false;
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
-    if (/^\d/.test(seg) || (i === 0 && /^[A-Za-z]{1,3}\d/.test(seg))) {
+    if (i === 0) {
+      if (/^\d/.test(seg)) {
+        tokenSegments.push(seg);
+      } else if (/^[A-Za-z]{1,3}\d/.test(seg)) {
+        tokenSegments.push(seg);
+        firstLetterPrefixed = true;
+      } else {
+        break;
+      }
+    } else if (/^\d{2,}/.test(seg) || (firstLetterPrefixed && /^\d/.test(seg))) {
       tokenSegments.push(seg);
     } else {
       break;
@@ -235,10 +267,102 @@ function phaseTokenMatches(dirName: string, normalized: string): boolean {
   return false;
 }
 
+// ─── #2121 canonical surface (ADR-2121) ──────────────────────────────────────
+
+/**
+ * Parse a phase identifier from a STATE.md `Phase:` prose field VALUE — the text
+ * after the `Phase:` label (e.g. `"3 of 4 (Delta)"`, `"3A — Delta (executing)"`,
+ * or `"Milestone v0.5 complete"`).
+ *
+ * The token is anchored to the START of the value (after an optional literal
+ * `Phase ` label and an optional project-code prefix) so a phase is only
+ * returned when the value actually begins with one. This is the #2111 fix: the
+ * prior unanchored `/\b(\d+[A-Z]?(?:\.\d+)*)\b/i` mined the first numeral
+ * anywhere, so `"Milestone v0.5 complete"` collapsed to `"5"` (the minor-version
+ * digit) and `"v1.0"` to `"0"` (a reserved sentinel). Here both yield
+ * `{ phase: null }` because they do not begin with a phase token. The name
+ * extraction (parenthetical or em-dash tail, minus status words) is unchanged.
+ */
+function parsePhaseFromProse(value: string | null): { phase: string | null; name: string | null } {
+  if (!value) return { phase: null, name: null };
+  // Coerce defensively so a non-string caller cannot throw on this canonical
+  // surface (mirrors the sibling #2121 functions' String(...) handling).
+  const str = String(value);
+  const phaseMatch = str.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
+  // The name-extraction quantifiers are length-bounded so a crafted long
+  // unterminated run (many `(` or `—`) in an untrusted STATE.md field value
+  // cannot drive O(n^2) regex backtracking (CPU-exhaustion DoS). A real phase
+  // name is far shorter than the cap.
+  const parenName = str.match(/\(([^)]{1,200})\)/);
+  const dashName = str.match(/—\s*([^(\n]{1,200}?)(?:\s*\(|$)/);
+  const rawName = parenName?.[1] ?? dashName?.[1] ?? null;
+  const name = rawName && !/^(?:complete|executing|not started)$/i.test(rawName.trim())
+    ? rawName.trim()
+    : null;
+  return {
+    phase: phaseMatch ? phaseMatch[1] : null,
+    name,
+  };
+}
+
+/**
+ * Config-AWARE project-code prefix strip. Unlike the config-blind
+ * `stripProjectCodePrefix` (which strips ANY `<CODE>-` shape), this strips the
+ * leading `<CODE>-` ONLY when `<CODE>` case-insensitively equals the configured
+ * `projectCode`. A foreign prefix (`MEM-01` when the configured code is `LKML`)
+ * or an absent/empty `projectCode` is preserved verbatim — this is the #2104
+ * fix: a foreign-prefixed id must not collapse to a bare numeric phase and
+ * collide with a real one.
+ */
+function stripConfiguredProjectCodePrefix(value: unknown, projectCode: string | null | undefined): string {
+  const input = String(value);
+  const configured = typeof projectCode === 'string' ? projectCode.trim() : '';
+  if (!configured) return input;
+  const m = input.match(PROJECT_CODE_PREFIX_CAPTURE_RE_I);
+  if (!m) return input;
+  if (m[1].toUpperCase() !== configured.toUpperCase()) return input;
+  return m[2];
+}
+
+/**
+ * True when `phase` carries a project-code prefix that is NOT the configured
+ * `projectCode` (or when no `projectCode` is configured). The canonical
+ * predicate the init-command foreign-prefix guard (#2056 / PR #2105) delegates
+ * to, so every call site shares one foreign-prefix rule.
+ */
+function isForeignPrefixedPhaseQuery(phase: unknown, projectCode: unknown): boolean {
+  const m = String(phase).match(PROJECT_CODE_PREFIX_CAPTURE_RE_I);
+  if (!m) return false;
+  const configured = typeof projectCode === 'string' ? projectCode.trim() : '';
+  return !configured || m[1].toUpperCase() !== configured.toUpperCase();
+}
+
+/**
+ * Canonical ROADMAP heading lookup-source list (moved here from
+ * roadmap-parser.cts so phase-id.cts is the single owner of the ordering).
+ * Sources are tried in a fixed, deduplicated order: exact (only when the query
+ * itself is project-code-prefixed) → bare numeric / padding-tolerant →
+ * prefix-tolerant fallback. The bare numeric source precedes the prefix-tolerant
+ * form so a canonical heading (`### Phase 117:`) is preferred over a drifted
+ * prefixed one (`### Phase MANIFOLD-117:`) when both exist in one ROADMAP.
+ */
+function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
+  const sources: string[] = [];
+  const exactSource = phaseMarkdownRegexSourceExact(phaseNum);
+  if (exactSource) sources.push(exactSource);
+
+  const numericSource = phaseMarkdownRegexSource(phaseNum);
+  sources.push(numericSource);
+  sources.push(`${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${numericSource}`);
+
+  return [...new Set(sources)];
+}
+
 export = {
   escapeRegex,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
+  PHASE_NUMBER_TOKEN_SOURCE,
   stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,
@@ -248,4 +372,8 @@ export = {
   comparePhaseNum,
   extractPhaseToken,
   phaseTokenMatches,
+  parsePhaseFromProse,
+  stripConfiguredProjectCodePrefix,
+  isForeignPrefixedPhaseQuery,
+  roadmapPhaseLookupSources,
 };

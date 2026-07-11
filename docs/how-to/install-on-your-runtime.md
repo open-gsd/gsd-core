@@ -229,6 +229,22 @@ Avoid arbitrary `KIMI_CONFIG_DIR` roots unless your Kimi configuration also adds
 
 `--kimi --local` is intentionally deferred and guarded in v1; use the global install path above for Kimi CLI.
 
+**Hook coverage**
+
+GSD wires its lifecycle hooks into Kimi's native `[[hooks]]` array in `config.toml` — by default `~/.kimi/config.toml` (overridable via Kimi's own `KIMI_SHARE_DIR` environment variable, a directory deliberately separate from the `~/.config/agents` skills root above). Kimi CLI's hooks system is documented as **Beta**. GSD's entries are wrapped in `# GSD Hooks BEGIN`/`# GSD Hooks END` marker comments, so reinstalling only ever rewrites GSD's own block and never touches hand-written `[[hooks]]` entries around it.
+
+| Event | Hook | Purpose |
+|---|---|---|
+| `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check and session-state bootstrap at session open |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-worktree-path-guard.js`, `gsd-workflow-guard.js`, `gsd-validate-commit.sh` | Prompt-injection guard, read-before-edit guidance, worktree path safety, workflow guard, and commit validation before tool calls |
+| `PostToolUse` | `gsd-context-monitor.js`, `gsd-phase-boundary.sh`, `gsd-read-injection-scanner.js`, `gsd-graphify-update.sh` | Context window tracking, phase-boundary detection, read-time injection scanning, and graph updates after tool calls |
+| `Stop` | `gsd-context-monitor.js` | Context headroom tracking before the model stops |
+| `PreCompact` | `gsd-context-monitor.js` | Context headroom tracking before compaction |
+| `SubagentStart` | `gsd-context-monitor.js` | Inject context / GSD_AGENT_NAME awareness at subagent open |
+| `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking at subagent stop |
+
+All registered hooks are managed by GSD and are removed cleanly on `--uninstall`.
+
 ---
 
 ### GitHub Copilot
@@ -337,6 +353,22 @@ npx @opengsd/gsd-core@latest --codebuddy --global
 
 GSD installs four surfaces. Slash command definitions land in `~/.codebuddy/commands/gsd-*.md` and appear as `/gsd-help`, `/gsd-phase`, `/gsd-ship`, etc. in the `/` menu. Subagents land in `~/.codebuddy/agents/gsd-*.md`. Skills land in `~/.codebuddy/skills/gsd-*/SKILL.md` — emitted with `user-invocable: false` so they stay out of the `/` menu (the commands surface is the sole `/` entry point) and remain available for model invocation. CodeBuddy hooks are written to `settings.json`. No `mcp.json` is written: GSD ships no MCP server.
 
+**Hook coverage**
+
+GSD registers the following events automatically on install (Claude hook event dialect):
+
+| Event | Hook | Purpose |
+|---|---|---|
+| `SessionStart` | `gsd-check-update.js`, `gsd-session-state.sh` | Update check, session orientation |
+| `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
+| `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
+| `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
+| `SubagentStart` | `gsd-context-monitor.js` | Context headroom tracking at subagent start |
+| `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
+| `PreCompact` | `gsd-context-monitor.js` | Context awareness before conversation compaction |
+
+CodeBuddy's own [background sub-agent dispatch](https://www.codebuddy.ai/docs/cli/sub-agents) (`run_in_background: true`) is a caller-side invocation parameter, not something GSD's installed agent files control — there is no frontmatter field to set on GSD's agent artifacts to request it.
+
 ---
 
 ### Qwen Code
@@ -350,6 +382,8 @@ npx @opengsd/gsd-core@latest --qwen --global
 Skills land in `~/.qwen/skills/gsd-*/SKILL.md`.
 
 GSD's main-loop skills are emitted with Qwen's optional numeric `priority` frontmatter field so the most-used workflows surface first in the `/skills` TUI list. Higher values sort earlier (per Qwen's skills spec), so core commands such as `/skills` for `new-project` (100), `plan-phase` (90), and `execute-phase` (85) appear above utility skills, which are left unset (default 0). This affects only the `/skills` list order — slash-command completion and `/help` remain alphabetical.
+
+Subagents land in `~/.qwen/agents/gsd-*.md` as native Qwen subagents, converted to Qwen's own `name:`/`description:`/`tools:` (YAML block list) frontmatter schema rather than Claude Code's.
 
 **Override the install directory:**
 
@@ -367,6 +401,7 @@ Qwen Code supports 15 hook events. GSD registers the following events automatica
 | `PostToolUse` | `gsd-context-monitor.js`, `gsd-read-injection-scanner.js`, `gsd-phase-boundary.sh`, `gsd-graphify-update.sh` | Context monitoring, read-time scan, phase boundary detection |
 | `PreToolUse` | `gsd-prompt-guard.js`, `gsd-read-guard.js`, `gsd-workflow-guard.js`, `gsd-worktree-path-guard.js`, `gsd-validate-commit.sh` | Prompt guard, read-before-edit, workflow + worktree safety, commit validation |
 | `SubagentStop` | `gsd-context-monitor.js` | Context headroom tracking after subagent completion |
+| `SubagentStart` | `gsd-context-monitor.js` | Context headroom tracking at subagent start |
 | `Stop` | `gsd-context-monitor.js` | Context headroom tracking before model stop |
 | `PreCompact` | `gsd-context-monitor.js` | Context awareness before conversation compaction |
 
@@ -378,7 +413,7 @@ Qwen Code supports 15 hook events. GSD registers the following events automatica
 npx @opengsd/gsd-core@latest --augment --global
 ```
 
-Skills land in `~/.augment/skills/` and slash command definitions land in `~/.augment/commands/`. GSD installs skills, agents, and commands (`/gsd-phase`, `/gsd-ship`, etc.). No hook or statusline ownership.
+Skills land in `~/.augment/skills/` and slash command definitions land in `~/.augment/commands/`. GSD installs skills, agents, and commands (`/gsd-phase`, `/gsd-ship`, etc.). GSD's managed lifecycle hooks are registered into Augment's own `settings.json` `hooks` block (Claude hook event dialect, covering session-start, tool-use, and phase-boundary events) — no statusline ownership. #2097 also registers the GSD companion MCP server under `settings.json`'s `mcpServers.gsd` (see [Connect a host to the GSD MCP server](connect-gsd-mcp-server.md)).
 
 ---
 

@@ -62,6 +62,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/host-integration.cjs',
       'gsd-core/bin/lib/handshake-serialized.cjs',
       'gsd-core/bin/lib/host-integration-sdk.cjs',
+      'gsd-core/bin/lib/install-effort-resolver.cjs',
       'gsd-core/bin/lib/install-engine.cjs',
       'gsd-core/bin/lib/capability-loader.cjs',
       'gsd-core/bin/lib/capability-source.cjs',
@@ -76,9 +77,12 @@ export default tseslint.config(
       'gsd-core/bin/lib/external-job.cjs',
       'gsd-core/bin/lib/edge-probe.cjs',
       'gsd-core/bin/lib/probe-core.cjs',
+      'gsd-core/bin/lib/spec-section.cjs',
       'gsd-core/bin/lib/prohibition-enforcement.cjs',
+      'gsd-core/bin/lib/ui-consideration-probe.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
+      'gsd-core/bin/lib/api-coverage.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
       'gsd-core/bin/lib/assumption-delta.cjs',
       'gsd-core/bin/lib/state-transition.cjs',
@@ -148,6 +152,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/core-utils.cjs',
       'gsd-core/bin/lib/io.cjs',
       'gsd-core/bin/lib/phase-id.cjs',
+      'gsd-core/bin/lib/normalize-test-command.cjs',
       'gsd-core/bin/lib/config-loader.cjs',
       'gsd-core/bin/lib/phase-locator.cjs',
       'gsd-core/bin/lib/roadmap-parser.cjs',
@@ -391,6 +396,19 @@ export default tseslint.config(
   // project's own `eslint .` green. (#1279)
   {
     files: ['tests/_ff_lint_violation.cjs'],
+    plugins: { local: localPlugin },
+    languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
+    rules: { 'local/no-source-grep': 'error' },
+  },
+  // ── #2126 lint-rule CLEAN fixture ───────────────────────────────────────────
+  // `tests/_ff_lint_clean.cjs` is the KNOWN-CLEAN companion to the violation fixture: the
+  // prohibition-enforcement real-runner tests lint it as their non-vacuous "clean target" instead of
+  // a type-aware `src/**/*.cts` file, so each eslint spawn is ~0.8s (non-type-aware) not ~2s
+  // (whole-tsconfig-program load) — removing the CPU starvation that blew the 60s bound under
+  // --test-concurrency. Rule enabled (as error) so the pass is non-vacuous; the file is clean so it
+  // greens. PLAIN `.cjs`, kept OFF the `*.test.cjs` runner glob. (#2126)
+  {
+    files: ['tests/_ff_lint_clean.cjs'],
     plugins: { local: localPlugin },
     languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
     rules: { 'local/no-source-grep': 'error' },

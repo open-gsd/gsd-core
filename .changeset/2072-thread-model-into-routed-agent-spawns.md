@@ -1,0 +1,5 @@
+---
+type: Fixed
+pr: 2074
+---
+**`model_overrides` and per-phase-type models now actually apply to the assumptions-analyzer, code-reviewer, and code-fixer agents on Claude Code.** Previously `model_overrides["gsd-code-reviewer"]` / `["gsd-assumptions-analyzer"]` / `["gsd-code-fixer"]` (and `models.verification` / `models.discuss` / `models.execution`) were accepted and resolved but silently dropped — the workflows spawned these agents with no model, so they inherited the session model and the configured routing never took effect (no warning). Every spawn now threads its resolved model: `discuss-phase-assumptions`, `code-review`, and `code-review-fix` (both the re-review and the two fixer spawns) resolve it inline, and `quick`'s review step uses the code-reviewer's own resolved model instead of the executor's. The stale "`discuss` — reserved, no subagent" model-profile docs are corrected to list `gsd-assumptions-analyzer`, and the `verification` row now includes `gsd-code-reviewer`. (#2074)

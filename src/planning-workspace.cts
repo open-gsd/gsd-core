@@ -142,6 +142,22 @@ function planningRoot(cwd: string): string {
   return path.join(cwd, '.planning');
 }
 
+// Sorted list of workstream directory names under `<root>/.planning/workstreams`,
+// or `[]` when the project is flat (no workstreams dir). Single source of truth
+// for the "workstream mode" detection shared by the #1912/#2028 fail-safe guards
+// (init.progress, phase.complete) so the two paths cannot drift.
+function listAvailableWorkstreams(cwd: string): string[] {
+  try {
+    return fs
+      .readdirSync(path.join(planningRoot(cwd), 'workstreams'), { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 interface PlanningPaths {
   planning: string;
   state: string;
@@ -389,6 +405,7 @@ export = {
   createMemoryPointerAdapter,
   planningDir,
   planningRoot,
+  listAvailableWorkstreams,
   planningPaths,
   withPlanningLock,
   getActiveWorkstream,

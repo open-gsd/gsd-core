@@ -88,8 +88,9 @@ npx @opengsd/gsd-core@latest --codex --global   # 또는 --opencode, --kilo 등
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
-| `discuss`, `completion` | 예약됨 — 현재 서브에이전트 없음; 향후 호환성을 위해 스키마에서 허용 |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
+| `discuss` | `gsd-assumptions-analyzer` |
+| `completion` | 예약됨 — 현재 서브에이전트 없음; 향후 호환성을 위해 스키마에서 허용 |
 
 `models` 블록은 티어 별칭만 허용합니다(`opus`, `sonnet`, `haiku`, `inherit`). 완전히 정규화된 모델 ID는 에이전트별 `model_overrides`를 사용하세요.
 

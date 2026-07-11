@@ -77,6 +77,19 @@ describe('roadmap-parser: stripShippedMilestones', () => {
     assert.ok(!result.includes('closed content'), 'content removed');
     assert.ok(result.includes('after'), 'after content preserved');
   });
+
+  test('#557: preserves an active <details open> block while stripping shipped bare <details>', () => {
+    // <details open> marks the ACTIVE milestone (roadmap.analyze must still see its
+    // phases); only closed/shipped bare <details> blocks are stripped. Regression for
+    // #557, which the #2128 shared-seam migration briefly reintroduced via the seam's
+    // attribute-tolerance — the details strip is now attr-INTOLERANT to keep #557 fixed.
+    const input = '<details>\nshipped phase\n</details>\n<details open>\n- [ ] **Phase 9: Active**\n</details>\nafter';
+    const result = stripShippedMilestones(input);
+    assert.ok(!result.includes('shipped phase'), 'shipped bare <details> stripped');
+    assert.ok(result.includes('<details open>'), 'active <details open> tag preserved');
+    assert.ok(result.includes('Phase 9: Active'), 'active-milestone phases preserved');
+    assert.ok(result.includes('after'), 'trailing content preserved');
+  });
 });
 
 // ─── extractCurrentMilestone ──────────────────────────────────────────────────
@@ -426,6 +439,34 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.strictEqual(filter('02-01-alpha'), true, '02-01 matches Phase 2-01');
     assert.strictEqual(filter('02-02-beta'), true, '02-02 matches Phase 2-02');
     assert.strictEqual(filter('02-03-other'), false, '02-03 not in milestone');
+  });
+
+  test('single-digit slug word after a phase number is not wrongly excluded (#2043)', () => {
+    // The roadmap uses milestone-prefixed hyphenated phase IDs (e.g. "2-01"),
+    // which switches getMilestonePhaseFilter's dir-matching regex into
+    // hyphenated mode. Phase 46's roadmap name "6 Rs Pipeline Orchestrator"
+    // slugifies to a dir starting with a single-digit word ("46-6-rs-…").
+    // Before #2043, the hyphenated-mode regex over-collected that single
+    // digit into the phase token ("46-6"), which never matched the roadmap's
+    // "46" phase number, so the dir was wrongly excluded from the milestone.
+    writeState(tmpDir, { milestone: 'v1.0' });
+    writeRoadmap(tmpDir, [
+      '## v1.0: Current',
+      '### Phase 2-01: Alpha',
+      '**Goal:** first alpha phase',
+      '',
+      '### Phase 46: 6 Rs Pipeline Orchestrator',
+      '**Goal:** orchestrate the rs',
+    ].join('\n'));
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(
+      filter('46-6-rs-pipeline-orchestrator'),
+      true,
+      '46-6-rs-pipeline-orchestrator (phase 46, single-digit slug word "6") must match Phase 46',
+    );
+    // Legit milestone-prefixed dir still matches as before.
+    assert.strictEqual(filter('02-01-alpha'), true, '02-01-alpha matches Phase 2-01');
   });
 
   test('versionOverride uses specified version slice', () => {

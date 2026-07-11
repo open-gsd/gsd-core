@@ -564,9 +564,11 @@ function cmdEffortSync(cwd: string, raw: boolean, opts?: { dryRun?: boolean; con
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
   const { getGlobalConfigDir } = require('./runtime-homes.cjs') as { getGlobalConfigDir(runtime: string, explicitDir?: string | null): string };
   // Use install-time resolvers: they merge ~/.gsd/defaults.json with project config,
-  // matching the exact logic used when agents were originally installed.
+  // matching the exact logic used when agents were originally installed. #2071: these
+  // live in the shipped sibling install-effort-resolver.cjs (extracted from the
+  // package-root bin/install.js, which the installer never copies into a runtime home).
   // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('../../../bin/install.js') as {
+  const { readGsdEffectiveEffortConfig, resolveInstallTimeEffort } = require('./install-effort-resolver.cjs') as {
     readGsdEffectiveEffortConfig(cwd: string): Record<string, unknown>;
     resolveInstallTimeEffort(cfg: Record<string, unknown>, agentName: string): string;
   };
@@ -1332,7 +1334,7 @@ function cmdTodoMatchPhase(cwd: string, phase: string | undefined, raw: boolean)
       for (const pf of planFiles) {
         const planContent = platformReadSync(path.join(phaseDir, pf));
         if (planContent === null) continue;
-        const fmFiles = planContent.match(/files_modified:\s*\[([^\]]*)\]/);
+        const fmFiles = planContent.match(/files_modified:\s*\[([^\]]{0,8000})\]/);
         if (fmFiles) {
           phasePlans.push(...fmFiles[1].split(',').map(s => s.trim().replace(/['"]/g, '')).filter(Boolean));
         }
@@ -1514,8 +1516,8 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
     const roadmapContent = extractCurrentMilestone(roadmapRaw, cwd);
     // Matches both plain numeric (Phase 1:) and milestone-prefixed (Phase 2-01:) headings.
     // Also tolerates optional [bracket-token] scope prefix on phase headings.
-    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
+    // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const headingPattern = /#{2,4}\s*(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:\s*([^\n]+)/gi;
     let match: RegExpExecArray | null;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
       const key = normalizePhaseName(match[1]);

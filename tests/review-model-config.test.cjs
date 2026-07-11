@@ -4,11 +4,14 @@
  * Verifies the review.models.<cli> dynamic config key pattern:
  *   - isValidConfigKey accepts review.models.<cli-name>
  *   - validateKnownConfigKeyPath suggests review.models.<cli-name> for review.model
- *   - End-to-end round-trip via config-set / config-get for both model IDs and null
+ *   - End-to-end round-trip via config-set / config-get for model IDs and the
+ *     null "Clear" action (#2046 — config-set <key> null unsets the key)
  */
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 describe('review.models.<cli> config key', () => {
@@ -110,28 +113,49 @@ describe('review.models.<cli> config key', () => {
     );
   });
 
-  test('round-trip: config-set null then config-get returns "null"', () => {
-    // The issue spec documents null as the "fall back to CLI default" sentinel.
-    // cmdConfigSet does not parse 'null' as JSON null — it stores the literal
-    // string 'null'. config-get --raw returns the string 'null', and the
-    // workflow's `[ "$VAR" != "null" ]` guard handles this.
+  test('round-trip: config-set null UNSETS the model key (#2046 — the "Clear" action)', () => {
+    // #2046: `config-set <key> null` now DELETES the key (the documented "Clear"
+    // action) instead of persisting the literal string "null". A previously-set
+    // model override is removed cleanly; config-get then reports key-not-found.
+    // The review workflow's guard (`[ -n "$VAR" ] && [ "$VAR" != "null" ]`,
+    // review.md:259) treats the resulting empty read as "no override → use the
+    // reviewer's default", exactly as it treated the old "null" sentinel.
     const setResult = runGsdTools(
+      ['config-set', 'review.models.gemini', 'gemini-3.1-pro-preview'],
+      tmpDir,
+      { HOME: tmpDir, USERPROFILE: tmpDir }
+    );
+    assert.ok(setResult.success, `config-set failed: ${setResult.error}`);
+
+    const clearResult = runGsdTools(
       ['config-set', 'review.models.gemini', 'null'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );
-    assert.ok(setResult.success, `config-set null failed: ${setResult.error}`);
+    assert.ok(clearResult.success, `config-set null failed: ${clearResult.error}`);
 
+    // The key is gone from disk — not persisted as the string "null".
+    const configPath = path.join(tmpDir, '.planning', 'config.json');
+    const rawText = fs.readFileSync(configPath, 'utf-8');
+    const config = JSON.parse(rawText);
+    assert.ok(
+      !config.review || !config.review.models ||
+        !Object.prototype.hasOwnProperty.call(config.review.models, 'gemini'),
+      `review.models.gemini must be absent after clear, got: ${rawText}`
+    );
+    assert.doesNotMatch(rawText, /"gemini":\s*"null"/,
+      'must never persist review.models.gemini as the literal string "null"');
+
+    // config-get on the removed key reports not-found (the review workflow reads
+    // it as `... 2>/dev/null || echo ""` → empty → the `[ -n "$VAR" ]` guard falls
+    // back to the reviewer default).
     const getResult = runGsdTools(
       ['config-get', 'review.models.gemini', '--raw'],
       tmpDir,
       { HOME: tmpDir, USERPROFILE: tmpDir }
     );
-    assert.ok(getResult.success, `config-get failed: ${getResult.error}`);
-    assert.strictEqual(
-      getResult.output,
-      'null',
-      'config-get should return the literal string "null" so the workflow guard can match it'
-    );
+    assert.ok(!getResult.success, 'config-get on a cleared key should report not-found');
+    assert.notStrictEqual(getResult.output && getResult.output.trim(), 'null',
+      'config-get must not emit the literal string "null" for a cleared key');
   });
 });

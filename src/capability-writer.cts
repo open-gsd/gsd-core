@@ -151,8 +151,17 @@ function setCapabilityState(
   const resolvedConfigDir = before.runtimeConfigDir;
 
   // ── Load registry ─────────────────────────────────────────────────────────
+  // Issue #2045 (DEFECT 2): validate against the COMPOSED overlay-aware registry
+  // (first-party ∪ accepted overlays), mirroring capability-state.cts:547-551.
+  // The frozen capability-registry.cjs only knows first-party ids, so a third-
+  // party cap failed the membership check below → "unknown capability" even
+  // though resolveCapabilityRuntimeState (the `before` snapshot, line 150) already
+  // knew about it. loadRegistry is non-throwing and first-party-wins, so a
+  // malformed overlay is skipped (never crashes the writer); a truly-unknown id
+  // is STILL rejected because it is absent from the composed capabilities map.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const registry = require('./capability-registry.cjs') as Record<string, unknown>;
+  const { loadRegistry } = require('./capability-loader.cjs') as { loadRegistry: (opts?: Record<string, unknown>) => Record<string, unknown> };
+  const registry = loadRegistry({ includeInstalled: true, cwd, gsdHome: process.env['GSD_HOME'] });
   const capabilitiesMap = (
     registry['capabilities'] && typeof registry['capabilities'] === 'object' && !Array.isArray(registry['capabilities'])
       ? registry['capabilities']

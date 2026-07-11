@@ -1,7 +1,7 @@
 {
   "id": "cline",
   "role": "runtime",
-  "version": "1.7.0-rc.3",
+  "version": "1.7.0-rc.5",
   "title": "Cline",
   "description": "Cline (VS Code extension) — global-only nested-skill layout; cline-rules hook surface (.clinerules); no hook events emitted; tier-2 support.",
   "tier": "core",
@@ -56,6 +56,14 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "node"
+    },
+    "hostBehaviors": {
+      "reapplyCommand": "/gsd-update --reapply",
+      "frontmatterDialect": "cline",
+      "skipSharedHooksInstall": true,
+      "localTargetIsProjectRoot": true,
+      "clineRulesSurface": true,
+      "localCommandsViaRules": true
     }
   }
 }

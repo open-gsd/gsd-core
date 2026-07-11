@@ -120,6 +120,36 @@ describe('resolveModelInternal', () => {
     assert.ok(typeof model === 'string' && model.length > 0);
   });
 
+  // #2072 acceptance: these two catalog agents' config MUST resolve — the bug was
+  // that the workflows never threaded the resolved value, not that the resolver
+  // ignored it. These assert the value the (now-threaded) spawns receive.
+  test('#2072: model_overrides applies to gsd-code-reviewer', () => {
+    writeConfig(tmpDir, { model_overrides: { 'gsd-code-reviewer': 'my-custom-model' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-code-reviewer'), 'my-custom-model');
+  });
+
+  test('#2072: model_overrides applies to gsd-assumptions-analyzer', () => {
+    writeConfig(tmpDir, { model_overrides: { 'gsd-assumptions-analyzer': 'my-custom-model' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-assumptions-analyzer'), 'my-custom-model');
+  });
+
+  test('#2072: models.verification tier applies to gsd-code-reviewer', () => {
+    writeConfig(tmpDir, { models: { verification: 'opus' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-code-reviewer'), 'opus');
+  });
+
+  test('#2072: models.discuss tier applies to gsd-assumptions-analyzer', () => {
+    writeConfig(tmpDir, { models: { discuss: 'opus' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-assumptions-analyzer'), 'opus');
+  });
+
+  test('#2072: model_overrides + models.execution apply to gsd-code-fixer', () => {
+    writeConfig(tmpDir, { model_overrides: { 'gsd-code-fixer': 'my-custom-model' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-code-fixer'), 'my-custom-model');
+    writeConfig(tmpDir, { models: { execution: 'opus' } });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-code-fixer'), 'opus');
+  });
+
   test('runtime non-claude + model_profile_overrides for runtime tier', () => {
     writeConfig(tmpDir, {
       runtime: 'codex',

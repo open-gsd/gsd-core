@@ -20,6 +20,9 @@ const { planningDir } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatter;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdMod = require('./phase-id.cjs');
+const { PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
 import { requireSafePath, sanitizeForDisplay } from './security.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -482,7 +485,7 @@ function scanUatGaps(planDir: string): UatGapItem[] {
 
   for (const dir of dirs) {
     const phaseDir = path.join(phasesDir, dir);
-    const phaseMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
+    const phaseMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
     const phaseNum = phaseMatch ? phaseMatch[1] : dir;
 
     let files: string[];
@@ -552,7 +555,7 @@ function scanVerificationGaps(planDir: string): VerificationGapItem[] {
 
   for (const dir of dirs) {
     const phaseDir = path.join(phasesDir, dir);
-    const phaseMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
+    const phaseMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
     const phaseNum = phaseMatch ? phaseMatch[1] : dir;
 
     let files: string[];
@@ -614,7 +617,7 @@ function scanContextQuestions(planDir: string): ContextQuestionItem[] {
 
   for (const dir of dirs) {
     const phaseDir = path.join(phasesDir, dir);
-    const phaseMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
+    const phaseMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
     const phaseNum = phaseMatch ? phaseMatch[1] : dir;
 
     let files: string[];

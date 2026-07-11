@@ -69,7 +69,10 @@ build/
 /tsconfig.build.tsbuildinfo
 /gsd-core/bin/lib/host-integration.cjs
 /gsd-core/bin/lib/host-integration-sdk.cjs
+/gsd-core/bin/lib/host-integration-adapters/imperative-hook-bus.cjs
+/gsd-core/bin/lib/host-integration-adapters/cline-sdk-binding.cjs
 /gsd-core/bin/lib/handshake-serialized.cjs
+/gsd-core/bin/lib/install-effort-resolver.cjs
 /gsd-core/bin/lib/install-engine.cjs
 /gsd-core/bin/lib/embedding-adapter.cjs
 /gsd-core/bin/lib/adapter-declarative.cjs
@@ -96,7 +99,9 @@ build/
 /gsd-core/bin/lib/plan-drift-guard.cjs
 /gsd-core/bin/lib/edge-probe.cjs
 /gsd-core/bin/lib/probe-core.cjs
+/gsd-core/bin/lib/spec-section.cjs
 /gsd-core/bin/lib/prohibition-enforcement.cjs
+/gsd-core/bin/lib/ui-consideration-probe.cjs
 /gsd-core/bin/lib/config-types.cjs
 /gsd-core/bin/lib/cli-exit.cjs
 /gsd-core/bin/lib/code-review-flags.cjs
@@ -165,6 +170,7 @@ build/
 /gsd-core/bin/lib/core-utils.cjs
 /gsd-core/bin/lib/io.cjs
 /gsd-core/bin/lib/phase-id.cjs
+/gsd-core/bin/lib/normalize-test-command.cjs
 /gsd-core/bin/lib/config-loader.cjs
 /gsd-core/bin/lib/model-resolver.cjs
 /gsd-core/bin/lib/loop-resolver.cjs
@@ -247,3 +253,7 @@ reports/mutation/
 # Local Crabbox machine configuration
 .crabbox.yaml
 .crabbox.local.yaml
+
+# Memtrace local daemon/runtime state (per-machine; never committed)
+.memdb/
+.memtrace/

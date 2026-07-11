@@ -223,7 +223,7 @@ Agent(
 ## 8. Handle Checker Return
 
 **If `## UI-SPEC VERIFIED`:**
-Display dimension results. Proceed to step 10.
+Display dimension results. Proceed to step 9.5.
 
 **If `## ISSUES FOUND`:**
 Display blocking issues. Proceed to step 9.
@@ -263,6 +263,151 @@ Options:
 ```
 
 Use AskUserQuestion for the choice.
+
+**On "Force approve":** proceed to step 9.5 (the UI-consideration probe still runs on the accepted UI-SPEC, so state coverage is recorded even when quality FLAGs were accepted), then step 10. **On "Edit manually" / "Abandon":** exit without running the probe.
+
+## 9.5. UI-Consideration Probe (post-verification)
+
+Run AFTER the checker approves the UI-SPEC (VERIFIED, or force-approved at step 9) — never inline
+during authoring, so a revision-loop researcher rewrite (step 9) cannot clobber the section and the
+`## UI Considerations` block is committed with the FINAL UI-SPEC. This is the visual analog of
+spec-phase Step 5.5's edge probe, retargeted to the UI element/state axis. Reference:
+@~/.claude/gsd-core/references/ui-consideration-probe.md.
+
+**Skip conditions:** if `--auto` and the UI-SPEC already carries a resolved `## UI Considerations`
+section (re-run), the write-back is idempotent (it REPLACES that section, never appends). If the
+runtime is non-Claude and the probe engine cannot be resolved, the shim FAILS LOUD (below) — it
+never silently no-ops (a silent skip would drop the whole state-coverage axis).
+
+**Runtime coverage compute — resolve and invoke ui-consideration-probe.cjs:**
+
+```bash
+# Resolve the compiled ui-consideration-probe.cjs against the GSD install dir via RUNTIME_DIR
+# (#448) — NOT the consuming project's git root — falling back to git toplevel / $HOME/.claude.
+# Mirrors spec-phase.md Step 5.5's edge-probe resolution idiom verbatim (same candidate paths).
+_GSD_RT="${RUNTIME_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+UI_PROBE_JS=$(for _c in \
+  "$_GSD_RT/gsd-core/bin/lib/ui-consideration-probe.cjs" \
+  "$_GSD_RT/bin/lib/ui-consideration-probe.cjs" \
+  "$_GSD_RT/.claude/bin/lib/ui-consideration-probe.cjs" \
+  "$HOME/.claude/gsd-core/bin/lib/ui-consideration-probe.cjs" \
+  "$HOME/.claude/bin/lib/ui-consideration-probe.cjs"; do
+  [ -f "$_c" ] && { echo "$_c"; break; }
+done)
+
+# Graceful degradation — never a silent skip. Build ONLY when $_GSD_RT is a verified GSD source
+# checkout (has tsconfig.build.json + src/ui-consideration-probe.cts), pinned with --prefix so we
+# never trigger the CONSUMING project's own build during a ui-phase. Real installs ship the
+# compiled .cjs via prepublishOnly, so this path only matters in a GSD dev checkout.
+if [ -z "$UI_PROBE_JS" ]; then
+  if [ -f "$_GSD_RT/tsconfig.build.json" ] && [ -f "$_GSD_RT/src/ui-consideration-probe.cts" ]; then
+    npm --prefix "$_GSD_RT" run build:lib 2>/dev/null || true
+    UI_PROBE_JS=$(for _c in \
+      "$_GSD_RT/gsd-core/bin/lib/ui-consideration-probe.cjs" \
+      "$_GSD_RT/bin/lib/ui-consideration-probe.cjs" \
+      "$_GSD_RT/.claude/bin/lib/ui-consideration-probe.cjs" \
+      "$HOME/.claude/gsd-core/bin/lib/ui-consideration-probe.cjs" \
+      "$HOME/.claude/bin/lib/ui-consideration-probe.cjs"; do
+      [ -f "$_c" ] && { echo "$_c"; break; }
+    done)
+  fi
+  if [ -z "$UI_PROBE_JS" ]; then
+    echo "ERROR: ui-consideration-probe.cjs not found — reinstall GSD or run \`npm run build:lib\` in your GSD checkout." >&2
+    exit 1
+  fi
+fi
+
+# Element extraction (MANUAL BY DESIGN — not an oversight): the agent reads the researcher-authored
+# UI-SPEC prose (the described surfaces — the Design System / Copywriting rows and any element the
+# researcher named) and writes ONE object per UI element/surface: {"id","text"} where text is the
+# prose describing it. This mirrors spec-phase Step 5.5's edge-probe REQS_JSON step VERBATIM — a
+# hand-populated heredoc guarded by the fail-loud <replace:> check below — the established, shipped
+# pattern for feeding a probe from a prose spec. It is NOT mechanized on purpose: a UI-SPEC has no
+# single machine-parseable "elements" column — surfaces are distributed across design-token tables
+# (Design System / Typography / Color), the Copywriting section, and prose the researcher names, so a
+# regex/table parse would fail-OPEN (miss a prose-named surface, or feed a design-token row as a bogus
+# element). The agent-authored heredoc + fail-loud guard is the conservative choice, identical to the
+# requirement-side edge-probe path (RR-04). If a future UI-SPEC gains a canonical element table,
+# revisit to parse it. Populate the heredoc from the UI-SPEC; the guard below fails loud on a
+# forgotten substitution (never a no-op).
+ELEMENTS_JSON=$(mktemp "${TMPDIR:-/tmp}/ui-probe-elements-XXXXXX") && mv "$ELEMENTS_JSON" "${ELEMENTS_JSON}.json" && ELEMENTS_JSON="${ELEMENTS_JSON}.json" || exit 1
+cat > "$ELEMENTS_JSON" <<'JSON'
+[
+  { "id": "E1", "text": "<replace: element/surface description from the UI-SPEC prose>" }
+]
+JSON
+if ! node -e 'const a=require(process.argv[1]);if(!Array.isArray(a)||a.length===0)process.exit(1);if(a.some(e=>typeof e.text!=="string"||!e.text.trim()||e.text.includes("<replace:")))process.exit(1)' "$ELEMENTS_JSON" 2>/dev/null; then
+  rm -f "$ELEMENTS_JSON"
+  echo "ERROR: ui-probe elements JSON is empty/invalid or still holds the <replace: …> placeholder — populate \$ELEMENTS_JSON from the UI-SPEC's described surfaces before this step runs." >&2
+  exit 1
+fi
+# Invoke the compiled engine and CAPTURE its report. FATAL-INVOKE GUARD: use `if ! COVERAGE=$(…)`,
+# NEVER a bare `COVERAGE=$(node …)` — a bare capture swallows the engine's exit 2 (invalid shape /
+# bad input) and falls through to prose re-derivation: fail-OPEN at the exact boundary the engine
+# validation protects.
+if ! COVERAGE=$(node "$UI_PROBE_JS" "$ELEMENTS_JSON"); then
+  rm -f "$ELEMENTS_JSON"
+  echo "ERROR: ui-consideration-probe engine failed (invalid shapes or bad input) — fix the element(s) and re-run; never proceed with empty coverage." >&2
+  exit 1
+fi
+rm -f "$ELEMENTS_JSON"
+# Malformed-report guard: exit 0 but garbage. The report must parse as { items[], coverage{} }.
+if ! printf '%s' "$COVERAGE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let r;try{r=JSON.parse(s)}catch{process.exit(1)}if(!r||!Array.isArray(r.items)||typeof r.coverage!=="object"||r.coverage===null)process.exit(1)})'; then
+  echo "ERROR: ui-consideration-probe produced an unparseable or malformed coverage report — refusing to proceed with the resolution loop." >&2
+  exit 1
+fi
+# Zero-applicable guard: a report where NO category applied across ANY element is far more likely a
+# classification miss (or malformed elements) than a genuinely state-free UI. Surface it loudly.
+APPLICABLE=$(printf '%s' "$COVERAGE" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let n=0;try{n=JSON.parse(s).coverage.applicable}catch{n=0}process.stdout.write(String(n))})')
+if [ "$APPLICABLE" = "0" ]; then
+  echo "WARNING: ui-consideration-probe proposed ZERO applicable categories across all elements — likely a classification miss or malformed elements, not a genuinely state-free UI. Do NOT silently write an empty UI Considerations section." >&2
+fi
+```
+
+If `$APPLICABLE` is `0`, do NOT proceed silently: ask via AskUserQuestion ("The UI probe found no
+applicable state considerations — is this genuinely a state-free surface, or should we revisit the
+element descriptions?"). Only write an empty section after explicit confirmation.
+
+**Propose-then-confirm (the partial-cue mitigation — load-bearing).** For each element, the engine
+reports the DETECTED element kinds (`classifyElement` over the built `.cjs`). The prose classifier
+is heuristic and LOSSY: a surface that is genuinely both a form and a list, but whose prose trips
+only the form cue, under-covers — and because SOMETHING classified, no `unclassified` signal fires.
+So SURFACE the detected kinds to the user (AskUserQuestion) and ask whether any real element kind
+was missed. If the user ADDs a kind, re-run that element with an authored `elements` override
+(the union of detected + added) so the missed categories are raised. A single tripped cue is a
+SIGNAL, not proof the element is only that kind — the confirm step, not the heuristic, is what makes
+coverage sound.
+
+**Resolution loop** (mirror spec-phase 5.5): resolve each applicable consideration via
+AskUserQuestion — **Specify** (→ `covered`, write a concrete truth) / **Dismiss (reason required)** /
+**Backstop** (a held-out/visual UI-state test) / **Defer** (→ `unresolved`). An `unclassified` row is
+a manual-review nudge, not a hard block. Text mode (`workflow.text_mode` / `--text`) → numbered lists.
+
+**Kind-confirmation under `--auto`.** The propose-then-confirm step above is an AskUserQuestion, so
+under `--auto` it follows the spec-phase 5.5 convention (replace AskUserQuestion with Claude's
+recommended choice): Claude re-reads each element's prose and authors the `elements` override (the
+union of the detected kinds + any kind it identifies as missed) instead of prompting — so `--auto`
+recall rests on Claude's kind-identification, not the heuristic cue-match alone. This matters because
+`autoResolve` (below) is a RESOLUTION floor only: it resolves the *detected* categories and cannot
+recover a kind that was never surfaced, so recall is fixed HERE, at kind-confirmation, before
+resolution runs.
+
+**`--auto` mode (two layers).** The adapter's `autoResolve` is the CODE floor: every applicable
+consideration auto-`backstop`s (carrying the taxonomy question as its resolution) and an
+`unclassified` candidate stays `unresolved` — it NEVER auto-`dismiss`es and never auto-backstops an
+unclassified item (#1110). On top of that floor the workflow MAY upgrade an item to `covered` when a
+defensible acceptance criterion can be written (the same judgment spec-phase 5.5 applies in prose).
+An auto `--auto` run therefore leaves un-upgraded backstops as `backstop`: at verify time each one
+with no wired evidence routes to `insufficient_spec → human_needed` — never a silent pass (#1154).
+That surfacing is the intended honest-verifier behavior, not over-flagging.
+
+**Write-back.** Populate a `## UI Considerations` section in the UI-SPEC from the resolved
+considerations, in the format the shipped plan-phase `## UI Considerations` lift rule reads:
+`covered` → a truth string; `backstop` → a flat scalar `{ statement, verification: backstop }`;
+`unresolved` → an explicit `⚠ unresolved — planner must treat as assumption` row. Empty-state and
+error-state COPY stays in `## Copywriting Contract` — the considerations section covers shape-rooted
+STATE coverage and REFERENCES those rows rather than restating the copy (de-dup). IDEMPOTENT: if a
+`## UI Considerations` section already exists, REPLACE it — never append a duplicate.
 
 ## 10. Present Final Status
 

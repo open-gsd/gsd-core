@@ -26,6 +26,7 @@ import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
 import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
 import runtimeArtifactInstallPlan = require('./runtime-artifact-install-plan.cjs');
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
+import installProfiles = require('./install-profiles.cjs');
 
 const { processAttribution } = runtimeArtifactConversion;
 // resolveRuntimeArtifactLayout: accessed via module ref (not destructured) so
@@ -66,6 +67,26 @@ type ResolveAttribution = (runtime: string) => any;
 const USER_OWNED_ARTIFACTS: string[] = ['USER-PROFILE.md'];
 
 // ---------------------------------------------------------------------------
+// Host-behavior helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Host-specific install behaviors declared on the runtime descriptor
+ * (capabilities/<runtime>/capability.json -> runtime.hostBehaviors).
+ * Mirrors bin/install.js's `_hostBehaviors` (ADR-1239 / #2086/#2087). Returns
+ * {} for runtimes that declare none or if the registry fails to load, so
+ * every behavior branch degrades to the generic path by default.
+ */
+function _hostBehaviors(runtime: string): any {
+  try {
+    const reg = require('./capability-registry.cjs');
+    return (reg && reg.runtimes && reg.runtimes[runtime] && reg.runtimes[runtime].runtime && reg.runtimes[runtime].runtime.hostBehaviors) || {};
+  } catch {
+    return {};
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Conversion helpers
 // ---------------------------------------------------------------------------
 
@@ -100,6 +121,18 @@ function convertClaudeCommandToOpencodeSkill(content: string, skillName: string)
 function convertClaudeCommandToKiloSkill(content: string, skillName: string): string {
   return (runtimeArtifactConversion as any).convertClaudeCommandToKiloSkill(content, skillName);
 }
+
+/**
+ * Converter-name registry for the OpenCode-family combined skills installer
+ * (ADR-1239 / #2093). Maps the `converter` string declared on each runtime's
+ * artifactLayout skills-kind descriptor (capabilities/<runtime>/capability.json)
+ * to the actual conversion function, so `installOpencodeFamilySkills` dispatches
+ * off the descriptor instead of a `frontmatterDialect === 'kilo'` runtime check.
+ */
+const SKILLS_CONVERTER_REGISTRY: Record<string, (content: string, skillName: string) => string> = {
+  convertClaudeCommandToOpencodeSkill,
+  convertClaudeCommandToKiloSkill,
+};
 
 // ---------------------------------------------------------------------------
 // User-artifact preservation helpers
@@ -255,15 +288,21 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
       '_copyStaged: configDir (install root) is required to confine writes — refusing to write',
     );
   }
+  // The install root is normally configDir, but a kind may declare an alternate
+  // `home` (ADR-1239 upgrade 3 / #2088, e.g. Codex skills -> $HOME/.agents) — in
+  // that case this defense-in-depth check must confine against the resolved
+  // alternate root instead, matching the upstream gate's own root selection in
+  // createRuntimeArtifactInstallPlan.
+  const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
   // Strict-subpath + NUL containment via the canonical gate (shared with the
   // layout-driven install plan); throws if destDir escapes the install root.
-  // destDir here is an absolute path; path.resolve(configDir, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to configDir.
-  const resolvedDest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, destDir);
-  // Symlink-escape guard: reject if any path component between configDir and
-  // destDir is a symlink that would redirect writes outside configDir.
-  if (hasExistingSymlinkBetween(path.resolve(configDir), resolvedDest)) {
+  // destDir here is an absolute path; path.resolve(installRoot, absoluteDest) returns it unchanged, so the gate's strict-subpath check still correctly confines it to installRoot.
+  const resolvedDest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, destDir);
+  // Symlink-escape guard: reject if any path component between the install root and
+  // destDir is a symlink that would redirect writes outside the install root.
+  if (hasExistingSymlinkBetween(path.resolve(installRoot), resolvedDest)) {
     throw new Error(
-      `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${configDir}" — refusing to write`,
+      `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${installRoot}" — refusing to write`,
     );
   }
   // Use the validated absolute path for the actual writes below.
@@ -303,9 +342,13 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
     let destName: string;
     if (kind.kind === 'agents') {
       // Agent files already carry the gsd- prefix in the source dir.
-      // #1575: copilot agents get .agent.md suffix (mirrors inline loop line ~9118).
-      destName = runtime === 'copilot'
-        ? entry.name.replace(/\.md$/, '.agent.md')
+      // #2099: descriptor-driven via hostBehaviors.agentFileExtension (was
+      // hardcoded `runtime === 'copilot'`). copilot declares '.agent.md';
+      // every other runtime's descriptor leaves this unset, so destName falls
+      // back to entry.name unchanged (byte-parity, #1575 origin comment).
+      const _agentExt = runtime ? _hostBehaviors(runtime).agentFileExtension : undefined;
+      destName = _agentExt
+        ? entry.name.replace(/\.md$/, _agentExt)
         : entry.name;
     } else if (namespacedByDir) {
       // Directory is the namespace; don't double-prefix the filename
@@ -443,7 +486,7 @@ function _runLegacyInstallMigrations(runtime: string, configDir: string, scope: 
   // that for Hermes the flat skills/gsd-*/ removal (below) does not delete the freshly
   // created skills/gsd-dev-preferences/ skill dir.
   let savedLegacyArtifacts: Map<string, string> | null = null;
-  if (runtime === 'claude' || runtime === 'qwen' || runtime === 'hermes') {
+  if (_hostBehaviors(runtime).legacyCommandsGsdInstallMigration) {
     if (fs.existsSync(legacyCommandsGsd)) {
       savedLegacyArtifacts = preserveUserArtifacts(legacyCommandsGsd, ['dev-preferences.md']);
       fs.rmSync(legacyCommandsGsd, { recursive: true });
@@ -504,7 +547,8 @@ function _runLegacyUninstallCleanup(runtime: string, configDir: string, scope: s
   // commands/gsd/ for claude local, preserving dev-preferences.md by restoring it
   // to the same location (#1423). Using migrateLegacyDevPreferencesToSkill here
   // (which would redirect to skills/) conflicts with the test contract for local installs.
-  const isLegacyCommandsGsd = runtime === 'qwen' || runtime === 'hermes' || (runtime === 'claude' && scope === 'global');
+  const _lu = _hostBehaviors(runtime).legacyCommandsGsdUninstall;
+  const isLegacyCommandsGsd = _lu === true || (_lu === 'global' && scope === 'global');
   if (isLegacyCommandsGsd) {
     const legacyCommandsGsd = path.join(configDir, 'commands', 'gsd');
     if (fs.existsSync(legacyCommandsGsd)) {
@@ -563,6 +607,16 @@ function installRuntimeArtifacts(
   resolvedProfile: any,
   resolveAttribution: ResolveAttribution = () => undefined,
 ): void {
+  // Combined-family runtimes (OpenCode/Kilo, ADR-1239 / #2087): route through
+  // the dedicated combined commands+skills+plugin orchestrator instead of the
+  // generic layout-driven loop below, mirroring the bespoke install path that
+  // previously lived inline in bin/install.js.
+  const behaviors = _hostBehaviors(runtime);
+  if (behaviors.combinedFamilyInstall) {
+    installOpencodeFamilyArtifacts(runtime, configDir, scope, resolvedProfile, resolveAttribution, behaviors);
+    return;
+  }
+
   // Legacy cleanup before layout-driven writes
   _runLegacyInstallMigrations(runtime, configDir, scope);
 
@@ -589,11 +643,17 @@ function installRuntimeArtifacts(
       if (!kind) throw new Error(`Install plan returned unknown artifact kind: ${item.kind}`);
       const dest = item.destDir;
       // Symlink-escape guard: reject before mkdir if dest (or any component
-      // between configDir and dest) is a symlink pointing outside configDir.
-      // mkdirSync follows symlinks, so this must run BEFORE the mkdir call.
-      if (hasExistingSymlinkBetween(path.resolve(configDir), dest)) {
+      // between the install root and dest) is a symlink pointing outside that
+      // root. mkdirSync follows symlinks, so this must run BEFORE the mkdir
+      // call. The install root is normally configDir, but a kind may declare
+      // an alternate `home` (ADR-1239 upgrade 3 / #2088, e.g. Codex skills ->
+      // $HOME/.agents) — in that case the guard must check against the
+      // resolved alternate root instead, matching assertDestWithinConfigHome's
+      // own root selection in createRuntimeArtifactInstallPlan.
+      const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
+      if (hasExistingSymlinkBetween(path.resolve(installRoot), dest)) {
         throw new Error(
-          `installRuntimeArtifacts: destDir "${dest}" contains a symlink escaping the install root "${configDir}" — refusing to create`,
+          `installRuntimeArtifacts: destDir "${dest}" contains a symlink escaping the install root "${installRoot}" — refusing to create`,
         );
       }
       fs.mkdirSync(dest, { recursive: true });
@@ -690,9 +750,18 @@ function installOpencodeFamilySkills(
   const rawDir = rawCommandsDir;
   if (!rawDir || !fs.existsSync(rawDir)) return 0;
 
-  const converter = runtime === 'kilo'
-    ? convertClaudeCommandToKiloSkill
-    : convertClaudeCommandToOpencodeSkill;
+  // #2093: descriptor-driven — dispatch off the skills-kind entry's `converter`
+  // string (capabilities/<runtime>/capability.json artifactLayout) via the
+  // SKILLS_CONVERTER_REGISTRY, instead of a `frontmatterDialect === 'kilo'`
+  // runtime check. Fail loud if the descriptor names an unregistered converter
+  // (mirrors the converter=null throw in runtime-artifact-layout.cts).
+  const converterName: string | undefined = skillsKindEntry.converter;
+  const converter = converterName ? SKILLS_CONVERTER_REGISTRY[converterName] : undefined;
+  if (!converter) {
+    throw new TypeError(
+      `installOpencodeFamilySkills: unknown skills converter '${String(converterName)}' for runtime '${runtime}'`,
+    );
+  }
 
   const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(targetDir, skillsKindEntry.destSubpath);
   // Symlink-escape guard: reject if any path component between targetDir and
@@ -741,6 +810,132 @@ function installOpencodeFamilySkills(
   }
 
   return count;
+}
+
+// ---------------------------------------------------------------------------
+// installOpencodeFamilyCommands
+// ---------------------------------------------------------------------------
+
+/**
+ * Install the flattened commands surface for an OpenCode-family runtime
+ * (OpenCode/Kilo): commands/gsd/**\/*.md -> command/gsd-<...>.md, with
+ * per-runtime frontmatter conversion and path-prefix/attribution rewrites.
+ *
+ * Mirrors bin/install.js's copyFlattenedCommands VERBATIM (ADR-1239 /
+ * #2087), except attribution is resolved via the injected
+ * `resolveAttribution` callback instead of a module-level getCommitAttribution.
+ *
+ * @param runtime - 'opencode' or 'kilo'
+ * @param destDir - destination directory for flattened commands (recurses with the same destDir)
+ * @param srcDir - source directory to walk (commands/gsd/, recursing into subdirectories)
+ * @param pathPrefix - computed config-path prefix for body rewrites
+ * @param resolveAttribution - injection: (runtime) => attribution string | undefined
+ * @param prefix - filename prefix accumulator (defaults to 'gsd'; grows on recursion)
+ */
+function installOpencodeFamilyCommands(
+  runtime: string,
+  destDir: string,
+  srcDir: string,
+  pathPrefix: string,
+  resolveAttribution: ResolveAttribution = () => undefined,
+  prefix: string = 'gsd',
+): void {
+  if (!fs.existsSync(srcDir)) return;
+
+  // Remove old gsd-*.md files before copying new ones
+  if (fs.existsSync(destDir)) {
+    for (const file of fs.readdirSync(destDir)) {
+      if (file.startsWith(`${prefix}-`) && file.endsWith('.md')) fs.unlinkSync(path.join(destDir, file));
+    }
+  } else {
+    fs.mkdirSync(destDir, { recursive: true });
+  }
+
+  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const srcPath = path.join(srcDir, entry.name);
+    if (entry.isDirectory()) {
+      installOpencodeFamilyCommands(runtime, destDir, srcPath, pathPrefix, resolveAttribution, `${prefix}-${entry.name}`);
+    } else if (entry.name.endsWith('.md')) {
+      const baseName = entry.name.replace('.md', '');
+      const destName = `${prefix}-${baseName}.md`;
+      let content = fs.readFileSync(srcPath, 'utf8');
+      content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
+      content = processAttribution(content, resolveAttribution(runtime));
+      // #2093: this commands-kind entry's descriptor `converter` field is
+      // intentionally `null` (see capabilities/{kilo,opencode}/capability.json —
+      // the flattened-command writer above applies its own path/attribution
+      // rewrites and has no per-file converter slot to key on), so there is no
+      // descriptor string to dispatch through here. `frontmatterDialect` is the
+      // documented, intentional dispatch key for frontmatter-shape selection —
+      // it is itself descriptor-driven (not a `runtime === 'kilo'` check), so it
+      // already satisfies the fold-to-descriptor requirement. Only the SKILLS
+      // converter site above (installOpencodeFamilySkills) has a real
+      // `converter` string to key on via SKILLS_CONVERTER_REGISTRY.
+      content = _hostBehaviors(runtime).frontmatterDialect === 'kilo'
+        ? (runtimeArtifactConversion as any).convertClaudeToKiloFrontmatter(content)
+        : (runtimeArtifactConversion as any).convertClaudeToOpencodeFrontmatter(content);
+      fs.writeFileSync(path.join(destDir, destName), content);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// installOpencodeFamilyArtifacts
+// ---------------------------------------------------------------------------
+
+/**
+ * Combined-family install orchestrator for OpenCode/Kilo (ADR-1239 / #2087,
+ * #2093). Stages the flattened commands surface + skills surface + (any
+ * runtime whose hostBehaviors declares `nativePlugin` — OpenCode and, since
+ * #2093, Kilo) native plugin adapter, mirroring the bespoke `else if (isOpencode ||
+ * isKilo)` block previously inlined in bin/install.js.
+ *
+ * @param runtime - 'opencode' or 'kilo'
+ * @param configDir - resolved runtime config directory
+ * @param scope - install scope ('global' | 'local')
+ * @param resolvedProfile - from resolveProfile() / resolveEffectiveProfile()
+ * @param resolveAttribution - injection: (runtime) => attribution string | undefined
+ * @param behaviors - the runtime's hostBehaviors descriptor (already resolved by the caller)
+ */
+function installOpencodeFamilyArtifacts(
+  runtime: string,
+  configDir: string,
+  scope: string,
+  resolvedProfile: any,
+  resolveAttribution: ResolveAttribution = () => undefined,
+  behaviors: any = {},
+): void {
+  const isGlobal = scope === 'global';
+  // findInstallSourceRoot resolves DIRECTLY to the commands/gsd source dir
+  // (via the .gsd-source marker or a walk-up from __dirname) — every other
+  // call site in runtime-artifact-layout.cts feeds its return value straight
+  // into stageSkillsForProfile/stageSkillsForRuntimeAsSkills. The repo/package
+  // root (needed below for the native plugin source) is two levels up.
+  const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(configDir);
+  const src = path.dirname(path.dirname(commandsGsdDir));
+  const rawCommandsDir = installProfiles.stageSkillsForProfile(commandsGsdDir, resolvedProfile);
+
+  const pathPrefix = (runtimeArtifactConversion as any)._computePathPrefix({
+    isGlobal,
+    isOpencode: behaviors.skipHomePrefixSubstitution === true,
+    isWindowsHost: process.platform === 'win32',
+    resolvedTarget: path.resolve(configDir).replace(/\\/g, '/'),
+    homeDir: os.homedir().replace(/\\/g, '/'),
+  });
+
+  const commandDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, 'command');
+  installOpencodeFamilyCommands(runtime, commandDir, rawCommandsDir, pathPrefix, resolveAttribution);
+  installOpencodeFamilySkills(runtime, configDir, rawCommandsDir, pathPrefix, resolveAttribution);
+
+  const np = behaviors.nativePlugin;
+  if (np && np.source) {
+    const pluginSrc = path.join(src, np.source);
+    if (fs.existsSync(pluginSrc)) {
+      const destDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, np.dir);
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(pluginSrc, path.join(destDir, np.file));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -807,6 +1002,9 @@ export = {
   installRuntimeArtifacts,
   uninstallRuntimeArtifacts,
   installOpencodeFamilySkills,
+  installOpencodeFamilyCommands,
+  installOpencodeFamilyArtifacts,
+  _hostBehaviors,
   _copyStaged,
   hasExistingSymlinkBetween,
   preserveUserArtifacts,

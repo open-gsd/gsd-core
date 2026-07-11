@@ -261,6 +261,33 @@ function resolveSurface(runtimeConfigDir: string, manifest: Map<string, string[]
     for (const [key] of skillManifest) {
       if (!key.startsWith('_calls_agents_')) skills.add(key);
     }
+    // Issue #2045 (DEFECT 1): third-party capability skills live at
+    // ~/.gsd/capabilities/<id>/skills/<stem>/SKILL.md — NOT in the runtime skills
+    // dir → never in skillManifest → never in the Set → surfaced:false. The
+    // overlay-aware registry's `capabilityClusters` already covers accepted
+    // overlay caps (composed by loadRegistry({includeInstalled})), so union its
+    // values into the surfaced Set. This is IDEMPOTENT for first-party skills
+    // (their stems are already on disk → already in the Set) and ADDITIVE for
+    // third-party skills (the fix). The 'full' profile means everything, and
+    // every cap's profileMembership profiles-array includes 'full' (it is the
+    // suffix top), so no per-tier gate is needed here — this invariant is owned
+    // by gen-capability-registry.cjs deriveProfileMembership (PROFILE_RANK suffix)
+    // + deriveCapabilityClusters (same non-empty-skills scoping); revisit both if
+    // either derivation changes. Prototype-pollution guard mirrors the cluster-
+    // merge block above (lines 217-240). NOTE: third-party cap agents are NOT
+    // unioned here (skillManifest has no `_calls_agents_` companion for them) —
+    // v1 scopes to skills-only caps per issue #2045; agents are a follow-up.
+    if (registry && registry.capabilityClusters && typeof registry.capabilityClusters === 'object') {
+      const BANNED = ['__proto__', 'constructor', 'prototype'];
+      for (const capId of Object.keys(registry.capabilityClusters)) {
+        if (BANNED.includes(capId)) continue;
+        const stems = (registry.capabilityClusters as Record<string, unknown>)[capId];
+        if (!Array.isArray(stems)) continue;
+        for (const s of stems) {
+          if (typeof s === 'string' && s.length > 0) skills.add(s);
+        }
+      }
+    }
   } else {
     skills = new Set(baseResolved.skills);
   }
@@ -494,10 +521,14 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
   const kindName = (typeof kind === 'string') ? kind : kind.kind;
   const kindPrefix = (typeof kind === 'object' && kind !== null) ? kind.prefix : 'gsd-';
 
-  // #1575: copilot agents are renamed .md -> .agent.md at copy time, mirroring
-  // the inline agent loop in bin/install.js (line ~9118). Other runtimes keep
-  // the staged filename verbatim.
-  const isCopilotAgents = runtime === 'copilot' && kindName === 'agents';
+  // #1575 / #2103: agent files are renamed .md -> <agentFileExtension> at copy
+  // time when the runtime's descriptor declares hostBehaviors.agentFileExtension
+  // (e.g. copilot's '.agent.md'), mirroring install-engine.cts's staged-copy
+  // loop (`_copyStaged`) — ONE descriptor read shared by both surfaces instead
+  // of a duplicated hardcoded `runtime === 'copilot'` literal. Other runtimes
+  // (no agentFileExtension declared) keep the staged filename verbatim.
+  const _agentExt = runtime ? runtimeArtifactConversion.agentFileExtensionFor(runtime) : undefined;
+  const isRenamedAgents = !!_agentExt && kindName === 'agents';
 
   if (kindName === 'skills') {
     // Skills kind: work with directories, not files.
@@ -537,8 +568,8 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     const stagedFiles = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
     const stagedDestNames = new Set<string>();
     for (const file of stagedFiles) {
-      const destName = isCopilotAgents
-        ? file.replace(/\.md$/, '.agent.md')
+      const destName = isRenamedAgents
+        ? file.replace(/\.md$/, _agentExt)
         : (kindName === 'agents' || namespacedByDir)
           ? file
           : `${kindPrefix}${file.slice(0, -3)}.md`;

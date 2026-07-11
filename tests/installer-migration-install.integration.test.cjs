@@ -35,12 +35,16 @@ const RUNTIME_INSTALL_CONTRACTS = {
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
   kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
-  kilo: { surface: 'flat-command', settings: false, packageJson: true },
+  // #1821: Kilo (hooksSurface:none, no plugin surface) no longer receives the
+  // dead hook scripts or the CommonJS package.json marker.
+  kilo: { surface: 'flat-command', settings: false, packageJson: false },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
   windsurf: { surface: 'global-artifacts-noop', settings: false, packageJson: false },
-  zcode: { surface: 'flat-skills', settings: false, packageJson: true },
+  // #1821: ZCode (hooksSurface:none, no plugin surface) no longer receives the
+  // dead hook scripts or the CommonJS package.json marker.
+  zcode: { surface: 'flat-skills', settings: false, packageJson: false },
 };
 
 function sha256(content) {
@@ -75,6 +79,19 @@ function withEnv(key, value, fn) {
     if (previous == null) delete process.env[key];
     else process.env[key] = previous;
   }
+}
+
+// #2088: Codex CLI skills install to `$HOME/.agents/skills` (resolved via
+// os.homedir()), not `$CODEX_HOME/skills`. In-process codex installs must
+// sandbox HOME (and USERPROFILE, for Windows os.homedir() resolution) to the
+// test's codexHome dir, or skills get materialized into the real developer
+// home directory. withEnv saves/restores a single key, so nesting is safe.
+function withCodexEnv(codexHome, fn) {
+  return withEnv('CODEX_HOME', codexHome, () =>
+    withEnv('HOME', codexHome, () =>
+      withEnv('USERPROFILE', codexHome, fn)
+    )
+  );
 }
 
 function captureConsole(fn) {
@@ -212,11 +229,20 @@ function assertFreshInstallContract(runtime, targetDir) {
   }
 
   if (contract.surface === 'flat-skills') {
-    // Pre-#3562: codex was special-cased to expect zero gsd-* skill dirs
-    // (assumption: Codex auto-discovers from workflows). That assumption
-    // does not hold for Codex CLI 0.130.0 — fresh installs now materialize
-    // the same flat-skills surface as the other runtimes.
-    assertHasGsdDirectory(targetDir, 'skills');
+    if (runtime === 'codex') {
+      // #2088: Codex CLI skills install to the canonical `$HOME/.agents/skills`
+      // root (resolved via os.homedir()), NOT `<config-dir>/skills`. Here
+      // runInstallerCli sandboxes HOME to <dirname(targetDir)>/home, so assert
+      // the skill dir under that sandboxed home instead of under targetDir.
+      const codexSandboxHome = path.join(path.dirname(targetDir), 'home');
+      assertHasGsdDirectory(path.join(codexSandboxHome, '.agents'), 'skills');
+    } else {
+      // Pre-#3562: codex was special-cased to expect zero gsd-* skill dirs
+      // (assumption: Codex auto-discovers from workflows). That assumption
+      // does not hold for Codex CLI 0.130.0 — fresh installs now materialize
+      // the same flat-skills surface as the other runtimes.
+      assertHasGsdDirectory(targetDir, 'skills');
+    }
   } else if (contract.surface === 'hermes-skills') {
     // Hermes layout uses prefix: '' — skill dirs have bare stem names (no gsd- prefix).
     // Assert that the category dir contains at least one skill dir with SKILL.md.
@@ -331,7 +357,7 @@ describe('installer migration install integration', { concurrency: false }, () =
     });
 
     const { output } = captureConsole(() =>
-      withEnv('CODEX_HOME', codexHome, () => install(true, 'codex'))
+      withCodexEnv(codexHome, () => install(true, 'codex'))
     );
 
     const plainOutput = stripAnsi(output);
@@ -349,13 +375,17 @@ describe('installer migration install integration', { concurrency: false }, () =
 
     assert.throws(
       () => captureConsole(() =>
-        withEnv('CODEX_HOME', codexHome, () => install(true, 'codex'))
+        withCodexEnv(codexHome, () => install(true, 'codex'))
       ),
       /installer migration blocked/
     );
 
     assert.equal(fs.readFileSync(path.join(codexHome, 'hooks/gsd-retired-hook.txt'), 'utf8'), 'old gsd hook\n');
     assert.equal(fs.existsSync(path.join(codexHome, 'skills')), false);
+    // #2088: with HOME sandboxed to codexHome via withCodexEnv, Codex's
+    // canonical skill root ($HOME/.agents/skills) resolves under codexHome
+    // too — assert nothing was materialized there when the install is blocked.
+    assert.equal(fs.existsSync(path.join(codexHome, '.agents', 'skills')), false);
     assert.equal(fs.existsSync(path.join(codexHome, 'gsd-core', 'VERSION')), false);
   });
 
@@ -427,7 +457,7 @@ describe('installer migration install integration', { concurrency: false }, () =
     assert.throws(
       () => captureConsole(() =>
         withEnv('CLAUDE_CONFIG_DIR', claudeHome, () =>
-          withEnv('CODEX_HOME', codexHome, () =>
+          withCodexEnv(codexHome, () =>
             withWriteFailure(path.join(codexHome, 'gsd-core', 'VERSION'), () =>
               installModule.installAllRuntimes(['claude', 'codex'], true, false)
             )

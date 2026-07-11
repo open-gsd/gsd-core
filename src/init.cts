@@ -37,7 +37,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
 import commandsMod = require('./commands.cjs');
 import { validatePath, loadTrustedGlobalRoots } from './security.cjs';
-import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase } from './runtime-homes.cjs';
+import { getGlobalSkillDir, getGlobalSkillDisplayPath, getGlobalSkillsBase, getGlobalConfigDir } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- verification.cjs is an export= CommonJS module
@@ -73,13 +73,14 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix } = phaseId;
+const { escapeRegex, normalizePhaseName, phaseTokenMatches, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE, isForeignPrefixedPhaseQuery } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
   planningPaths,
   planningDir,
   planningRoot,
+  listAvailableWorkstreams,
   getActiveWorkstream,
   findContextMdIn,
 } = planningWorkspace;
@@ -94,6 +95,56 @@ void stripShippedMilestones;
 
 // Accept all bold/colon variants of the Requirements header (#2769)
 const REQUIREMENTS_HEADER_RE = /^\*\*Requirements:?\*\*[^\S\n]*:?[^\S\n]*([^\n]*)$/m;
+
+// #2056/#2104: isForeignPrefixedPhaseQuery is imported from phase-id.cts
+// (the canonical predicate). parsePhasePrefix is no longer needed locally.
+// phaseInfoMatchesExactPrefix and roadmapPhaseMatchesExactPrefix are local
+// helpers that post-filter the lookup results for foreign-prefix queries.
+
+function phaseInfoMatchesExactPrefix(
+  phaseInfo: Record<string, unknown> | null,
+  phase: string,
+): boolean {
+  const num = phaseInfo?.['phase_number'];
+  const numStr = typeof num === 'string' ? num : (typeof num === 'number' ? String(num) : '');
+  return numStr.toUpperCase() === phase.toUpperCase();
+}
+
+function roadmapPhaseMatchesExactPrefix(
+  roadmapPhase: Record<string, unknown> | null,
+  phase: string,
+): boolean {
+  const sectionRaw = roadmapPhase?.['section'];
+  const section = typeof sectionRaw === 'string' ? sectionRaw : '';
+  return new RegExp(`^#{2,4}\\s*Phase\\s+${escapeRegex(phase)}(?:\\b|\\s|:)`, 'i').test(section);
+}
+
+// #2104: shared helpers that wrap findPhaseInternal / getRoadmapPhaseInternal
+// with the #2056 foreign-prefix guard, so every init command gets the same
+// protection without duplicating the guard logic at each call site.
+function guardedFindPhase(
+  cwd: string,
+  phase: string,
+  projectCode: unknown,
+): Record<string, unknown> | null {
+  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
+    phaseInfo = null;
+  }
+  return phaseInfo;
+}
+
+function guardedGetRoadmapPhase(
+  cwd: string,
+  phase: string,
+  projectCode: unknown,
+): Record<string, unknown> | null {
+  let roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  if (isForeignPrefixedPhaseQuery(phase, projectCode) && !roadmapPhaseMatchesExactPrefix(roadmapPhase, phase)) {
+    roadmapPhase = null;
+  }
+  return roadmapPhase;
+}
 
 function listPhaseSummaryFiles(phaseDir: string): string[] {
   return (scanPhasePlans(phaseDir) as unknown as Record<string, string[]>)['summaryFiles'];
@@ -295,10 +346,10 @@ function cmdInitExecutePhase(
   }
 
   const config = loadConfig(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
   const milestone = getMilestoneInfo(cwd) as unknown as Record<string, unknown>;
 
-  const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived'] && roadmapPhase?.['found']) {
     phaseInfo = null;
@@ -429,9 +480,9 @@ function cmdInitPlanPhase(
   }
 
   const config = loadConfig(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
-
-  const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  // #2056/#2104: foreign-prefixed queries must not collapse to numeric phases.
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived'] && roadmapPhase?.['found']) {
     phaseInfo = null;
@@ -758,6 +809,9 @@ function cmdInitQuick(cwd: string, description: string | undefined, raw: boolean
     executor_model: resolveModelInternal(cwd, 'gsd-executor'),
     checker_model: resolveModelInternal(cwd, 'gsd-plan-checker'),
     verifier_model: resolveModelInternal(cwd, 'gsd-verifier'),
+    // #2072: the quick review step spawns gsd-code-reviewer; resolve its own model
+    // so model_overrides / models.verification apply (was reusing executor_model).
+    reviewer_model: resolveModelInternal(cwd, 'gsd-code-reviewer'),
 
     commit_docs: config.commit_docs,
     branch_name: quickBranchName,
@@ -849,17 +903,17 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
   const config = loadConfig(cwd);
   const _slashRuntime = resolveRuntime(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived']) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       phaseInfo = null;
     }
   }
 
   if (!phaseInfo) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -922,10 +976,10 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
 function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
 
   if (phaseInfo?.['archived']) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -947,7 +1001,7 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   }
 
   if (!phaseInfo) {
-    const roadmapPhase = getRoadmapPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+    const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {
       const phaseName = roadmapPhase['phase_name'] as string | null;
       phaseInfo = {
@@ -1157,8 +1211,8 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
     const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
     const currentSection = extractCurrentMilestone(roadmapRaw, cwd);
-    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-    const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:/gi;
+    // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
     let m: RegExpExecArray | null;
     while ((m = phasePattern.exec(currentSection)) !== null) {
       if (/^999(?:\.|$)/.test(m[1])) continue;
@@ -1177,7 +1231,7 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
     for (const e of entries) {
       if (!e.isDirectory()) continue;
-      const m = stripProjectCodePrefix(e.name).match(/^(\d+[A-Z]?(?:\.\d+)*)/);
+      const m = stripProjectCodePrefix(e.name).match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`));
       if (!m) continue;
       diskPhaseDirs.set(canonicalizePhase(m[1]), e.name);
     }
@@ -1315,14 +1369,14 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   })();
 
   const _checkboxStates = new Map<string, boolean>();
-  const _cbPattern = /-\s*\[(x| )\]\s*.*Phase\s+(\d+[A-Z]?(?:\.\d+)*)[:\s]/gi;
+  const _cbPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gi');
   let _cbMatch: RegExpExecArray | null;
   while ((_cbMatch = _cbPattern.exec(content)) !== null) {
     _checkboxStates.set(_cbMatch[2], _cbMatch[1].toLowerCase() === 'x');
   }
 
-  // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-  const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
+  // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+  const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
   const phases: Record<string, unknown>[] = [];
   let match: RegExpExecArray | null;
 
@@ -1461,7 +1515,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   );
   const phaseMap = new Map(phases.map((p) => [normalizePhaseNumber(p['number'] as string), p]));
 
-  const _allCompletedPattern = /-\s*\[x\]\s*.*Phase\s+(\d+[A-Z]?(?:\.\d+)*)[:\s]/gi;
+  const _allCompletedPattern = new RegExp(`-\\s*\\[x\\]\\s*.*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gi');
   let _allMatch: RegExpExecArray | null;
   while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
     const phaseNum = normalizePhaseNumber(_allMatch[1]);
@@ -1495,7 +1549,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     ) {
       phase['deps_satisfied'] = true;
     } else {
-      const depNums = (phase['depends_on'] as string).match(/\d+[A-Z]?(?:\.\d+)*/gi) || [];
+      const depNums = (phase['depends_on'] as string).match(new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi')) || [];
       phase['deps_satisfied'] = depNums.every((n) => completedNums.has(normalizePhaseNumber(n)));
       phase['dep_phases'] = depNums;
     }
@@ -1661,17 +1715,7 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
   // reporting a stale root milestone. Require an explicit workstream instead.
   // Mirror planningDir's resolution (GSD_WORKSTREAM env > stored active pointer) so
   // an explicit --ws (which sets GSD_WORKSTREAM) satisfies the check.
-  const _wsRoot = path.join(planningRoot(cwd), 'workstreams');
-  let _availableWorkstreams: string[] = [];
-  try {
-    _availableWorkstreams = fs
-      .readdirSync(_wsRoot, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
-      .map((e) => e.name)
-      .sort();
-  } catch {
-    /* no workstreams dir → flat mode */
-  }
+  const _availableWorkstreams = listAvailableWorkstreams(cwd);
   const _resolvedWorkstream = process.env['GSD_WORKSTREAM'] || getActiveWorkstream(cwd);
   if (_availableWorkstreams.length > 0 && !_resolvedWorkstream) {
     error(
@@ -1694,14 +1738,14 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
       fs.readFileSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'utf-8'),
       cwd,
     );
-    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-    const headingPattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
+    // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const headingPattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
     let hm: RegExpExecArray | null;
     while ((hm = headingPattern.exec(roadmapContent)) !== null) {
       roadmapPhaseNums.add(hm[1]);
       roadmapPhaseNames.set(hm[1], hm[2].replace(/\(INSERTED\)/i, '').trim());
     }
-    const cbPattern = /-\s*\[(x| )\]\s*.*Phase\s+(\d+[A-Z]?(?:\.\d+)*)[:\s]/gi;
+    const cbPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gi');
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       roadmapCheckboxStates.set(cbm[2], cbm[1].toLowerCase() === 'x');
@@ -1720,14 +1764,14 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
       .map((e) => e.name)
       .filter(isDirInMilestone)
       .sort((a, b) => {
-        const pa = a.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
-        const pb = b.match(/^(\d+[A-Z]?(?:\.\d+)*)/i);
+        const pa = a.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
+        const pb = b.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})`, 'i'));
         if (!pa || !pb) return a.localeCompare(b);
         return parseInt(pa[1], 10) - parseInt(pb[1], 10);
       });
 
     for (const dir of dirs) {
-      const dirMatch = dir.match(/^(\d+[A-Z]?(?:\.\d+)*)-?(.*)/i);
+      const dirMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
       const phaseNumber = dirMatch ? dirMatch[1] : dir;
       const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
       seenPhaseNums.add(phaseNumber.replace(/^0+/, '') || '0');
@@ -2378,10 +2422,23 @@ function buildSkillManifest(cwd: string, skillsDir: string | null = null): Skill
           kind: 'skills',
         },
         {
-          root: '~/.codex/skills',
+          // ADR-1239 upgrade 3 (#2088): Codex's canonical skill root is
+          // $HOME/.agents/skills (per codex core-skills loader.rs), resolved via
+          // the skills-kind `home` override in getGlobalSkillsBase.
+          root: '~/.agents/skills',
           path: getGlobalSkillsBase('codex') as string,
           scope: 'global',
           kind: 'skills',
+        },
+        {
+          // Codex's deprecated fallback skill root ($CODEX_HOME/skills). Kept as a
+          // discovery-only legacy root so pre-move installs remain inventoried;
+          // GSD no longer installs here (#2088).
+          root: '~/.codex/skills',
+          path: path.join(getGlobalConfigDir('codex'), 'skills'),
+          scope: 'global',
+          kind: 'skills',
+          deprecated: true,
         },
         {
           root: '.claude/gsd-core/skills',

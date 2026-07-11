@@ -98,6 +98,8 @@ describe('#1575 — golden-parity: surface path matches install path for descrip
           installContent,
           `${runtime}/${fileName}: surface content must be byte-identical to install content`,
         );
+      }
+    });
   }
 
   test('cursor with non-undefined attribution: surface agents byte-identical to install agents (M2 coverage)', (t) => {
@@ -124,8 +126,6 @@ describe('#1575 — golden-parity: surface path matches install path for descrip
         `cursor/${fileName}: content must be byte-identical with non-undefined attribution`);
     }
   });
-    });
-  }
 
   test('copilot: agents installed as .agent.md (filename rename parity)', (t) => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-1575-copilot-rename-'));

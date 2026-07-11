@@ -134,7 +134,7 @@ AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
 AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier)
 ```
 
-Parse JSON for: `planner_model`, `executor_model`, `checker_model`, `verifier_model`, `commit_docs`, `branch_name`, `quick_id`, `slug`, `date`, `timestamp`, `quick_dir`, `task_dir`, `roadmap_exists`, `planning_exists`.
+Parse JSON for: `planner_model`, `executor_model`, `checker_model`, `verifier_model`, `reviewer_model`, `commit_docs`, `branch_name`, `quick_id`, `slug`, `date`, `timestamp`, `quick_dir`, `task_dir`, `roadmap_exists`, `planning_exists`.
 
 ```bash
 USE_WORKTREES=$(gsd_run query config-get workflow.use_worktrees --raw 2>/dev/null || echo "true")
@@ -868,7 +868,7 @@ Agent(
   Output: ${QUICK_DIR}/${quick_id}-REVIEW.md
   Depth: quick",
   subagent_type="gsd-code-reviewer",
-  model="{executor_model}"
+  model="{reviewer_model}"
 )
 ```
 

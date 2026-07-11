@@ -68,6 +68,9 @@ _GSD_SHIM_NAME="gsd-tools.cjs"; _GSD_RUNTIME_ROOT="${RUNTIME_DIR:-$(git rev-pars
 INIT=$(gsd_run query init.phase-op "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 AGENT_SKILLS_ANALYZER=$(gsd_run query agent-skills gsd-assumptions-analyzer)
+# #2072: resolve the routed model so model_overrides / models.discuss are honored
+# (the resolver maps gsd-assumptions-analyzer → phaseType "discuss"); thread it below.
+ANALYZER_MODEL=$(gsd_run query resolve-model gsd-assumptions-analyzer --raw)
 ```
 
 Parse JSON for: `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`,
@@ -255,7 +258,7 @@ If no USER-PROFILE.md: calibration_tier = "standard"
 **Spawn Explore subagent** (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze)**:**
 
 ```
-Agent(subagent_type="gsd-assumptions-analyzer", prompt="""
+Agent(subagent_type="gsd-assumptions-analyzer", model="{ANALYZER_MODEL}", prompt="""
 Analyze the codebase for Phase {PHASE}: {phase_name}.
 
 Phase goal: {roadmap_description}

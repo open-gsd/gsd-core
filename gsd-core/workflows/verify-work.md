@@ -58,6 +58,44 @@ MVP_MODE=$(gsd_run query phase.mvp-mode "${phase_number}" ${GSD_WS} --pick activ
 ```
 </step>
 
+<step name="verify_pre_hooks">
+**Verify:pre gate dispatch.** Before verification begins, dispatch every active
+gate hook registered at the `verify:pre` loop extension point. Each gate is
+data-driven — resolved from the capability registry, not hardcoded here.
+
+```bash
+VERIFY_PRE_HOOKS_JSON=$(gsd_run loop render-hooks verify:pre --raw)
+PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
+```
+
+Resolve active gate hooks from `VERIFY_PRE_HOOKS_JSON` where `kind == "gate"`.
+For each active gate hook, run its declared check (a `check.query` gate runs
+`gsd_run check ${hook.check.query} "${PHASE_DIR}" --raw`; a `predicate` gate
+runs `gsd_run check predicate --predicate '<hook.check.predicate as JSON>' --phase-dir "${PHASE_DIR}" --raw`):
+
+```bash
+GATE_RESULT=$(gsd_run check "${hook_check_query}" "${PHASE_DIR}" --raw)
+GATE_BLOCK=$(printf '%s' "$GATE_RESULT" | jq -r '.block // false' 2>/dev/null || echo "false")
+```
+
+**Two-step gate contract (same as execute:wave:post / execute:post):**
+
+- **Step 1 — command failure:** if the `gsd_run check ...` invocation itself
+  fails (non-zero exit, no JSON), route by the gate's `onError`. An `onError:
+  halt` gate HALTs; an `onError: skip` gate logs a warning and continues.
+- **Step 2 — block evaluation:** parse `GATE_RESULT.block`. For a **blocking
+  gate** (`hook.blocking == true`) with `block == true`: HALT — do not begin UAT,
+  present the gate's `message`, and tell the user what artifact resolves it. For
+  a **non-blocking gate** with a non-empty `message`: print
+  `⚠ {hook.capId} advisory: {GATE_RESULT.message}` and continue. For any gate
+  with `block == false`: continue silently.
+
+Example — the `ai-integration` capability's `api-coverage.verify-pre` gate
+(when `workflow.api_coverage_gate` is on) blocks here if the phase integrates an
+external API without a decided COVERAGE.md matrix. Present its `message` and
+point the user at producing COVERAGE.md before re-running verification.
+</step>
+
 <step name="check_active_session">
 **First: Check for active UAT sessions**
 

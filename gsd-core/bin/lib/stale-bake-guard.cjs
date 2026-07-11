@@ -3,9 +3,10 @@
 /**
  * Stale-bake guard for static-frontmatter runtimes (#1688, follow-up to #1650).
  *
- * Runtimes `codex` and `opencode` bake the resolved model ID into each agent's
- * static config at install time (bin/install.js ~5667-5767 for codex,
- * ~10008-10026 for opencode). Their task/spawn_agent interfaces do not accept
+ * Runtimes `codex`, `opencode`, and (since #2093) `kilo` bake the resolved
+ * model ID into each agent's static config at install time (bin/install.js
+ * ~5667-5767 for codex, ~10008-10026 for opencode, and the adjacent kilo
+ * branch added by #2093). Their task/spawn_agent interfaces do not accept
  * an inline `model` parameter, so editing `model_overrides` in
  * `.planning/config.json` or `~/.gsd/defaults.json` has NO effect until the
  * user re-runs `gsd install <runtime>` (or `gsd update`). The failure is
@@ -25,9 +26,17 @@ const os = require('os');
  * Runtimes whose agent config is static frontmatter/TOML baked at install time.
  * MUST stay in sync with the bake paths in bin/install.js. The parity test in
  * tests/stale-bake-guard.test.cjs asserts this matches the runtimes that
- * actually emit a baked model: line id #2256 (opencode) and #49/#2256 (codex).
+ * actually emit a baked model: line id #2256 (opencode), #49/#2256 (codex),
+ * and #2093 (kilo).
  */
-const STATIC_FRONTMATTER_RUNTIMES = Object.freeze(['codex', 'opencode']);
+const STATIC_FRONTMATTER_RUNTIMES = Object.freeze(['codex', 'kilo', 'opencode']);
+
+/** Per-runtime `gsd install` flag, for the remediation hint in the warning. */
+const INSTALL_FLAG_BY_RUNTIME = Object.freeze({
+  codex: '--codex',
+  opencode: '--opencode',
+  kilo: '--kilo',
+});
 
 const _warnedKeys = new Set();
 
@@ -55,7 +64,7 @@ function formatStaleBakeWarning({ runtime, configPath, configMtimeMs, agentMtime
   const signal = detectStaleBake({ runtime, configMtimeMs, agentMtimeMs });
   if (!signal) return '';
   const configDate = new Date(configMtimeMs).toISOString();
-  const installFlag = runtime === 'opencode' ? '--opencode' : '--codex';
+  const installFlag = INSTALL_FLAG_BY_RUNTIME[runtime] || `--${runtime}`;
   return [
     `gsd: model config in ${configPath} changed since agents were last baked (${configDate}).`,
     `     Static-frontmatter runtime '${runtime}' ignores the new model_overrides`,
@@ -79,13 +88,24 @@ function resolveRuntimeFromConfig(config) {
 
 /**
  * Resolve the install root for a runtime's agent files, honoring the same env
- * vars the installer does (CODEX_HOME, OPENCODE_CONFIG_DIR). Returns the
- * absolute directory or `null` for unsupported runtimes.
+ * vars the installer does (CODEX_HOME, OPENCODE_CONFIG_DIR, KILO_CONFIG_DIR).
+ * Returns the absolute directory or `null` for unsupported runtimes.
  */
 function resolveAgentDir(runtime, { env = process.env, homedir = os.homedir } = {}) {
   if (runtime === 'opencode') {
     const base = (env.OPENCODE_CONFIG_DIR && String(env.OPENCODE_CONFIG_DIR).trim()) || path.join(homedir(), '.config', 'opencode');
-    return path.join(base, 'agent');
+    // #2093 fix: the installer writes agents to `<base>/agents` (plural — see
+    // bin/install.js's universal `agentsDest = path.join(targetDir, 'agents')`,
+    // verified against a live `--opencode --global` install). The prior
+    // singular `agent` never matched the real install output, so this guard's
+    // `findOldestAgentMtime` always hit ENOENT and warnIfStaleBake was a
+    // silent no-op for opencode in production — discovered while wiring the
+    // parallel kilo entry below (same bake mechanism, #2093).
+    return path.join(base, 'agents');
+  }
+  if (runtime === 'kilo') {
+    const base = (env.KILO_CONFIG_DIR && String(env.KILO_CONFIG_DIR).trim()) || path.join(homedir(), '.config', 'kilo');
+    return path.join(base, 'agents');
   }
   if (runtime === 'codex') {
     const base = (env.CODEX_HOME && String(env.CODEX_HOME).trim()) || path.join(homedir(), '.codex');
@@ -148,7 +168,7 @@ function findOldestAgentMtime(runtime, { env = process.env, homedir = os.homedir
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.startsWith('gsd-')) continue;
-    const isAgentFile = (runtime === 'opencode' && entry.name.endsWith('.md'))
+    const isAgentFile = ((runtime === 'opencode' || runtime === 'kilo') && entry.name.endsWith('.md'))
       || (runtime === 'codex' && (entry.name.endsWith('.toml') || entry.name.endsWith('.md')));
     if (!isAgentFile) continue;
     try {

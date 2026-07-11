@@ -3412,11 +3412,13 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
     );
   });
 
-  test('copilot/trae/kimi/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
+  test('copilot/trae/windsurf/cline/opencode/kilo: hooksSurface none or copilot-inline/cline-rules, no hookEvents', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
     // opencode and kilo register ZERO lifecycle hooks → hooksSurface none, no hookEvents
-    const noEventsRuntimes = ['trae', 'kimi', 'windsurf', 'opencode', 'kilo'];
+    // #2095: kimi moved OUT of this group — it now has hooksSurface:'kimi-hooks-toml'
+    // and hookEvents:'claude' (see the dedicated kimi hooksSurface test below).
+    const noEventsRuntimes = ['trae', 'windsurf', 'opencode', 'kilo'];
     for (const id of noEventsRuntimes) {
       const rt = registry.runtimes[id].runtime;
       assert.ok(
@@ -3438,6 +3440,22 @@ describe('ADR-1016 phase 5a: sample axis value assertions', () => {
       !Object.prototype.hasOwnProperty.call(copilotRt, 'hookEvents'),
       'copilot.runtime must NOT have hookEvents',
     );
+  });
+
+  test('kimi: hooksSurface === kimi-hooks-toml, hookEvents === claude, extendedHookEvents wired (#2095)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const kimiRt = registry.runtimes['kimi'].runtime;
+    assert.strictEqual(kimiRt.hooksSurface, 'kimi-hooks-toml', 'kimi.hooksSurface must be "kimi-hooks-toml"');
+    assert.strictEqual(kimiRt.hookEvents, 'claude', 'kimi.hookEvents must be "claude" (Kimi\'s 13 lifecycle events include exact-name equivalents for the Claude dialect)');
+    assert.deepStrictEqual(
+      [...kimiRt.extendedHookEvents].sort(),
+      ['PreCompact', 'Stop', 'SubagentStart', 'SubagentStop'].sort(),
+      'kimi.extendedHookEvents must wire SubagentStop/Stop/PreCompact/SubagentStart',
+    );
+    // installSurface stays profile-marker-only — the native config.toml
+    // [[hooks]] write is independent of the artifact-install surface (#2095).
+    assert.strictEqual(kimiRt.installSurface, 'profile-marker-only', 'kimi.installSurface must remain "profile-marker-only"');
   });
 
   test('codex: hooksSurface === codex-hooks-json, cursor: hooksSurface === cursor-hooks-json', () => {
@@ -3949,12 +3967,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_COMMAND_STYLES.size, 2);
   });
 
-  test('VALID_HOOKS_SURFACES has exactly 6 values', () => {
+  test('VALID_HOOKS_SURFACES has exactly 7 values', () => {
     assert.ok(VALID_HOOKS_SURFACES instanceof Set);
-    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']) {
+    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'none']) {
       assert.ok(VALID_HOOKS_SURFACES.has(v), 'VALID_HOOKS_SURFACES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_HOOKS_SURFACES.size, 6);
+    assert.strictEqual(VALID_HOOKS_SURFACES.size, 7);
   });
 
   test('VALID_HOOK_EVENTS has exactly 2 managed-hook dialects (claude/gemini)', () => {
@@ -3967,12 +3985,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
       'opencode-subset is NOT a hookEvents value — it is the extensionEvents vocabulary (#1943)');
   });
 
-  test('VALID_EXTENSION_EVENTS has the extension-system dialects (opencode/pi/none — #1943)', () => {
+  test('VALID_EXTENSION_EVENTS has the extension-system dialects (opencode/pi/hermes/kilo/none — #1943/#2091/#2093)', () => {
     assert.ok(VALID_EXTENSION_EVENTS instanceof Set);
-    for (const v of ['opencode', 'pi', 'none']) {
+    for (const v of ['opencode', 'pi', 'hermes', 'kilo', 'none']) {
       assert.ok(VALID_EXTENSION_EVENTS.has(v), 'VALID_EXTENSION_EVENTS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_EXTENSION_EVENTS.size, 3);
+    assert.strictEqual(VALID_EXTENSION_EVENTS.size, 5);
   });
 
   test('VALID_SANDBOX_TIERS has exactly 2 values', () => {
@@ -4001,9 +4019,9 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
 // ─── 25. ADR-857 phase 5e: closed ConverterName enum (Part B) ─────────────────
 
 describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
-  test('VALID_CONVERTER_NAMES has exactly 25 entries (16 command/skill/workflow + 9 agent converters)', () => {
+  test('VALID_CONVERTER_NAMES has exactly 26 entries (16 command/skill/workflow + 10 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 25, 'VALID_CONVERTER_NAMES must have exactly 25 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 26, 'VALID_CONVERTER_NAMES must have exactly 26 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -4035,6 +4053,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToCodebuddyAgent',
       'convertClaudeAgentToClineAgent',
       'convertClaudeAgentToCodexAgent',
+      // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
+      'convertClaudeAgentToQwenAgent',
     ];
     for (const name of expected) {
       assert.ok(VALID_CONVERTER_NAMES.has(name), 'VALID_CONVERTER_NAMES must contain "' + name + '"');
@@ -4424,19 +4444,21 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     }
   });
 
-  test('VALID_EXTENDED_HOOK_EVENTS covers all 7 known extended events', () => {
+  test('VALID_EXTENDED_HOOK_EVENTS covers all 8 known extended events', () => {
     assert.ok(VALID_EXTENDED_HOOK_EVENTS instanceof Set, 'Must be a Set');
-    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 7, 'Must cover 7 extended hook events');
-    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']) {
+    assert.strictEqual(VALID_EXTENDED_HOOK_EVENTS.size, 8, 'Must cover 8 extended hook events');
+    // SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today).
+    for (const ev of ['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']) {
       assert.ok(VALID_EXTENDED_HOOK_EVENTS.has(ev), 'Must include event "' + ev + '"');
     }
   });
 
-  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo}', () => {
+  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo, antigravity}', () => {
     assert.ok(VALID_PERMISSION_WRITERS instanceof Set, 'Must be a Set');
-    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 2, 'Must cover 2 permission writers');
+    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 3, 'Must cover 3 permission writers');
     assert.ok(VALID_PERMISSION_WRITERS.has('opencode'), 'Must include opencode');
     assert.ok(VALID_PERMISSION_WRITERS.has('kilo'), 'Must include kilo');
+    assert.ok(VALID_PERMISSION_WRITERS.has('antigravity'), 'Must include antigravity (#2096)');
   });
 
   // Confirm the valid base fixture does NOT produce errors (sanity)

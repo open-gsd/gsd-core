@@ -697,26 +697,31 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeAgentToCodebuddyAgent',
   'convertClaudeAgentToClineAgent',
   'convertClaudeAgentToCodexAgent',
+  // ADR-1239 / #2092 Phase B Upgrade 1 — native .qwen/agents/*.md subagent projection.
+  'convertClaudeAgentToQwenAgent',
 ]);
 
 // C3: Validate role:runtime body
 const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'markdown-dir', 'none']);
 const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']);
 const VALID_COMMAND_STYLES = new Set(['slash-hyphen', 'shell-var']);
-const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'none']);
+const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'none']);
 const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
 // extensionEvents — the plugin/extension-system event dialect (ADR-1239 amendment / #1943).
 // DISTINCT from hookEvents (managed-hook dialect): extensionEvents describes the
 // plugin-owned event subset imperative hosts expose (opencode / pi); 'none' = the
 // host exposes no extension surface (engine owns the bus, e.g. VS Code).
-const VALID_EXTENSION_EVENTS = new Set(['opencode', 'pi', 'none']);
+const VALID_EXTENSION_EVENTS = new Set(['opencode', 'pi', 'hermes', 'kilo', 'none']);
 const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
 const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
-const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
-const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel']);
+// 'antigravity' added #2096 Phase B Upgrade 1 — settings.json permissions.allow writer.
+const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo', 'antigravity']);
+// SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today — see
+// capabilities/qwen/capability.json's extendedHookEvents).
+const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']);
 
 // ADR-1239 Phase A: hostIntegration axes (MUST stay parity-identical to HOST_INTEGRATION_AXES in src/host-integration.cts)
 const VALID_EMBEDDING_MODES   = new Set(['imperative', 'declarative']);
@@ -736,13 +741,15 @@ const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
   ['copilot-instructions', new Set(['copilot-inline'])],
   ['cline-rules',          new Set(['cline-rules'])],
   ['cursor-hooks-json',    new Set(['cursor-hooks-json'])],
-  ['profile-marker-only',  new Set(['none'])],
+  ['profile-marker-only',  new Set(['none', 'kimi-hooks-toml'])],
 ]);
 
 // GATE B: extended hook event families → required hookEvents value
 // Gemini agent-events require hookEvents='gemini'; Claude-family events require hookEvents='claude'.
 const GEMINI_AGENT_EVENTS = new Set(['BeforeAgent', 'AfterAgent', 'BeforeModel']);
-const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged']);
+// SubagentStart added #2092 Phase B Upgrade 2 — Claude hook-event dialect
+// counterpart of SubagentStop (qwen-only today).
+const CLAUDE_FAMILY_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'SubagentStart']);
 
 /**
  * Validate a runtime.configHome object per ADR-1016 Decision 1.
@@ -973,7 +980,7 @@ function validateRuntimeBody(cap) {
     );
   }
 
-  // hooksSurface — closed 6-enum (ADR-1016 Decision 5); inline literal guard (CodeQL barrier)
+  // hooksSurface — closed 7-enum (ADR-1016 Decision 5); inline literal guard (CodeQL barrier)
   if (r.hooksSurface === '__proto__' || r.hooksSurface === 'constructor' || r.hooksSurface === 'prototype') {
     errors.push('runtime.hooksSurface "' + r.hooksSurface + '" is a reserved name');
   } else if (!VALID_HOOKS_SURFACES.has(r.hooksSurface)) {

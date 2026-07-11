@@ -836,10 +836,10 @@ para que a alteração entre em vigor. Consulte a issue #2256.
 | Tipo de fase | Agentes |
 |---|---|
 | `planning` | `gsd-planner`, `gsd-roadmapper`, `gsd-pattern-mapper` |
-| `discuss` | (reservado — sem subagente atualmente) |
+| `discuss` | `gsd-assumptions-analyzer` |
 | `research` | `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-codebase-mapper`, `gsd-ui-researcher` |
 | `execution` | `gsd-executor`, `gsd-debugger`, `gsd-doc-writer` |
-| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier` |
+| `verification` | `gsd-verifier`, `gsd-plan-checker`, `gsd-integration-checker`, `gsd-nyquist-auditor`, `gsd-ui-checker`, `gsd-ui-auditor`, `gsd-doc-verifier`, `gsd-code-reviewer` |
 | `completion` | (reservado — sem subagente atualmente) |
 
 `discuss` e `completion` são aceitos pelo esquema para compatibilidade futura; defini-los hoje é um no-op até que um subagente seja mapeado para eles.
@@ -1140,7 +1140,7 @@ A saída JSON de `resolve-model` inclui `reasoning_effort` quando o nível de ru
 | Runtime | `opus` | `sonnet` | `haiku` | reasoning_effort |
 |---------|--------|----------|---------|------------------|
 | `claude` | `claude-opus-4-8` | `claude-sonnet-5` | `claude-haiku-4-5` | (não usado) |
-| `codex` | `gpt-5.5` | `gpt-5.3-codex` | `gpt-5.4-mini` | `xhigh` / `medium` / `medium` |
+| `codex` | `gpt-5.6-sol` | `gpt-5.6-terra` | `gpt-5.6-luna` | `xhigh` / `medium` / `medium` |
 | `gemini` | `gemini-3-pro` | `gemini-3-flash` | `gemini-2.5-flash-lite` | (não usado) |
 | `qwen` | `qwen3-max-2026-01-23` | `qwen3-coder-plus` | `qwen3-coder-next` | (não usado) |
 | `opencode` | `anthropic/claude-opus-4-8` | `anthropic/claude-sonnet-5` | `anthropic/claude-haiku-4-5` | (não usado) |
@@ -1157,7 +1157,7 @@ A saída JSON de `resolve-model` inclui `reasoning_effort` quando o nível de ru
 }
 ```
 
-Isso resolve `gsd-planner` → `gpt-5.5` (xhigh), `gsd-executor` → `gpt-5.3-codex` (medium), `gsd-codebase-mapper` → `gpt-5.4-mini` (medium). O instalador do Codex incorpora `model = "..."` e `model_reasoning_effort = "..."` em cada TOML de agente gerado.
+Isso resolve `gsd-planner` → `gpt-5.6-sol` (xhigh), `gsd-executor` → `gpt-5.6-terra` (medium), `gsd-codebase-mapper` → `gpt-5.6-luna` (medium). O instalador do Codex incorpora `model = "..."` e `model_reasoning_effort = "..."` em cada TOML de agente gerado.
 
 **Exemplo Claude** — opt-in explícito resolve para IDs Claude completos (sem necessidade de `resolve_model_ids: true`):
 
@@ -1222,9 +1222,9 @@ Escolha um provedor e nível de orçamento via o fluxo de configurações; o GSD
   "model_policy": {
     "provider": "openai",
     "budget": "medium",
-    "high":   "gpt-5.5",
-    "medium": "gpt-5.3-codex",
-    "low":    "gpt-5.4-mini"
+    "high":   "gpt-5.6-sol",
+    "medium": "gpt-5.6-terra",
+    "low":    "gpt-5.6-luna"
   }
 }
 ```
@@ -1240,9 +1240,9 @@ Para controle avançado por runtime, `runtime_tiers` aceita entradas explícitas
     "provider": "openai",
     "runtime_tiers": {
       "codex": {
-        "opus":   { "model": "gpt-5.5",        "reasoning_effort": "high" },
-        "sonnet": { "model": "gpt-5.3-codex",  "reasoning_effort": "medium" },
-        "haiku":  { "model": "gpt-5.4-mini",   "reasoning_effort": "low" }
+        "opus":   { "model": "gpt-5.6-sol",        "reasoning_effort": "high" },
+        "sonnet": { "model": "gpt-5.6-terra",     "reasoning_effort": "medium" },
+        "haiku":  { "model": "gpt-5.6-luna",      "reasoning_effort": "low" }
       }
     }
   }

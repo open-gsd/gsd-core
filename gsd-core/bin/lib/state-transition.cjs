@@ -1442,7 +1442,7 @@ function reconcileByPhaseTable(content, deps, timestamp, log) {
  * source to substitute. This is honest — better than silently leaving `[X]`
  * which looks like a value.
  */
-const TEMPLATE_PLACEHOLDER_VALUE = /^\s*\[[^\]]+\]\s*$|^\s*-\s*$/;
+const TEMPLATE_PLACEHOLDER_VALUE = /^\s*\[[^\]]{1,200}\]\s*$|^\s*-\s*$/;
 function stripTemplatePlaceholders(content, timestamp, log) {
     // Scan body `**Field:** value` lines; when value matches the placeholder
     // shape, replace with `(pending)`. We deliberately do NOT touch fields that

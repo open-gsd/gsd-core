@@ -47,6 +47,9 @@ const INSTALL_JS_PATH_HELPERS = [
   'resolveOpencodeConfigPath',
   'computePathPrefix',
   'normalizeInstallRelativePath',
+  // #2088 (ADR-1239 upgrade 3): resolves the skills-install dir honoring a
+  // skills-kind `home` override (e.g. Codex → $HOME/.agents/skills).
+  '_resolveSkillsRootDir',
 ];
 
 describe('portability-vocab drift guard', () => {

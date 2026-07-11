@@ -26,6 +26,7 @@ import { PACKAGE_NAME } from './package-identity.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { isCanonicalPlanningFile } from './artifacts.cjs';
+import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled } = agentInstallCheck;
@@ -37,7 +38,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE } = phaseIdMod;
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -205,8 +206,13 @@ function scanNegativeGrepCommentEcho(content: string): { errors: string[]; warni
   //    while a prose echo on the same line is still caught.
   const cmdSpanRe =
     /grep(?:\s+-{1,2}[A-Za-z][A-Za-z-]*)+\s+(?:'[^']*'|"[^"]*"|[^\s'"|>&;]+)[^\n]*?(?:==|-eq|=)\s*0\b/g;
+  // Security scan: must see the FULL text up to the first </action> — including a
+  // malformed inner <action> — so a grep-echo-0 trick cannot hide behind a
+  // deliberately-unclosed tag. Use a bounded to-first-close scan (ReDoS-safe via
+  // the {0,20000} cap, #2128), NOT the stop-at-next-open extractTaggedBlocks seam
+  // (which would drop the span before an unterminated inner <action>).
   const actionZones: string[] = [];
-  const actionRe = /<action>([\s\S]*?)<\/action>/g;
+  const actionRe = /<action>([\s\S]{0,20000}?)<\/action>/g;
   let acm: RegExpExecArray | null;
   while ((acm = actionRe.exec(text)) !== null) actionZones.push(acm[1]);
   const scannableActionText = actionZones.map((zone) => zone.replace(cmdSpanRe, ' ')).join('\n');
@@ -364,32 +370,21 @@ function scanFileWideNegativeGateConflict(content: string): { warnings: string[]
     gateText: string;  // <verify>+<automated>+<acceptance_criteria> text
     reqText: string;   // <action>+<acceptance_criteria> text (requirement side)
   }
-  const taskRe = /<task[^>]*>([\s\S]*?)<\/task>/g;
   const tasks: TaskInfo[] = [];
-  let tm: RegExpExecArray | null;
-  while ((tm = taskRe.exec(text)) !== null) {
-    const tc = tm[1];
+  for (const tc of extractTaggedBlocks(text, 'task', true)) {
     // Extract task name.
-    const namem = tc.match(/<name>([\s\S]*?)<\/name>/);
-    const name = namem ? namem[1].trim() : 'unnamed';
+    const namem = extractTaggedBlocks(tc, 'name');
+    const name = namem.length ? namem[0].trim() : 'unnamed';
     // Extract <files> entries.
-    const filesm = tc.match(/<files>([\s\S]*?)<\/files>/);
-    const filesText = filesm ? filesm[1] : '';
+    const filesArr = extractTaggedBlocks(tc, 'files');
+    const filesText = filesArr.length ? filesArr[0] : '';
     const files = filesText.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
     // Gate text: <verify>/<automated>/<acceptance_criteria>.
     const gateFragments: string[] = [];
-    for (const tag of ['verify', 'automated', 'acceptance_criteria']) {
-      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
-      let mm: RegExpExecArray | null;
-      while ((mm = re.exec(tc)) !== null) gateFragments.push(mm[1]);
-    }
+    for (const tag of ['verify', 'automated', 'acceptance_criteria']) gateFragments.push(...extractTaggedBlocks(tc, tag));
     // Requirement text: <action>/<acceptance_criteria>.
     const reqFragments: string[] = [];
-    for (const tag of ['action', 'acceptance_criteria']) {
-      const re = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'g');
-      let mm: RegExpExecArray | null;
-      while ((mm = re.exec(tc)) !== null) reqFragments.push(mm[1]);
-    }
+    for (const tag of ['action', 'acceptance_criteria']) reqFragments.push(...extractTaggedBlocks(tc, tag));
     // Strip XML tags from gate text so segments containing embedded
     // XML closing tags (e.g. <automated>cmd</automated> nested inside <verify>)
     // don't bleed into the file-path token extraction.
@@ -577,19 +572,16 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
     if (fm[field] === undefined) errors.push(`Missing required frontmatter field: ${field}`);
   }
 
-  const taskPattern = /<task[^>]*>([\s\S]*?)<\/task>/g;
   const tasks: Record<string, unknown>[] = [];
-  let taskMatch: RegExpExecArray | null;
-  while ((taskMatch = taskPattern.exec(content)) !== null) {
-    const taskContent = taskMatch[1];
-    const nameMatch = taskContent.match(/<name>([\s\S]*?)<\/name>/);
-    const taskName = nameMatch ? nameMatch[1].trim() : 'unnamed';
+  for (const taskContent of extractTaggedBlocks(content, 'task', true)) {
+    const nameArr = extractTaggedBlocks(taskContent, 'name');
+    const taskName = nameArr.length ? nameArr[0].trim() : 'unnamed';
     const hasFiles = /<files>/.test(taskContent);
     const hasAction = /<action>/.test(taskContent);
     const hasVerify = /<verify>/.test(taskContent);
     const hasDone = /<done>/.test(taskContent);
 
-    if (!nameMatch) errors.push('Task missing <name> element');
+    if (nameArr.length === 0) errors.push('Task missing <name> element');
     if (!hasAction) errors.push(`Task '${taskName}' missing <action>`);
     if (!hasVerify) warnings.push(`Task '${taskName}' missing <verify>`);
     if (!hasDone) warnings.push(`Task '${taskName}' missing <done>`);
@@ -1073,7 +1065,7 @@ function checkMilestonePrefixMismatches(
 ): MilestoneMismatch[] {
   const mismatches: MilestoneMismatch[] = [];
   const sections: { version: string; start: number; end: number }[] = [];
-  const sectionRx = /^#{1,3}\s+(?:\[[^\]]+\]\s*)?.*v(\d+\.\d+)/gim;
+  const sectionRx = /^#{1,3}\s+(?:\[[^\]]{1,200}\]\s*)?.*v(\d+\.\d+)/gim;
   let m: RegExpExecArray | null;
   while ((m = sectionRx.exec(roadmapContent)) !== null) {
     if (sections.length > 0) sections[sections.length - 1].end = m.index;
@@ -1081,8 +1073,8 @@ function checkMilestonePrefixMismatches(
   }
   for (const section of sections) {
     const content = roadmapContent.slice(section.start, section.end);
-    // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-    const phaseRx = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]*\))?\s*:/gi;
+    // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phaseRx = /#{2,4}\s*(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
     let pm: RegExpExecArray | null;
     while ((pm = phaseRx.exec(content)) !== null) {
       const phaseId = pm[1];
@@ -1302,14 +1294,18 @@ function cmdValidateHealth(
     repairs.push('regenerateState');
   } else {
     const stateContent = fs.readFileSync(statePath, 'utf-8');
-    const phaseRefs = [...stateContent.matchAll(/[Pp]hase\s+(\d+[A-Z]?(?:\.\d+)*)/g)].map(
+    const phaseRefs = [
+      ...stateContent.matchAll(new RegExp(`[Pp]hase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`, 'g')),
+    ].map(
       (m) => m[1],
     );
     const validPhases = collectDiskPhases(planBase);
     try {
       if (fs.existsSync(roadmapPath)) {
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
-        const all = [...roadmapRaw.matchAll(/#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)/gi)];
+        const all = [
+          ...roadmapRaw.matchAll(new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`, 'gi')),
+        ];
         for (const m of all) validPhases.add(m[1]);
       }
     } catch {
@@ -1808,8 +1804,8 @@ function cmdValidateHealth(
       if (isMarkedComplete) {
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapRaw, cwd);
-        // #1729: `(?:\s*\([^)\n]*\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)(?:\s*\([^)\n]*\))?\s*:\s*([^\n]+)/gi;
+        // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+        const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
         const unstarted: string[] = [];
         let pm: RegExpExecArray | null;
         // Non-hoisted: load-order matters (circular dep guard)
@@ -2090,7 +2086,7 @@ function cmdVerifySchemaDrift(
   const planFiles = fs.readdirSync(phaseDir).filter((f) => f.endsWith('-PLAN.md'));
   for (const pf of planFiles) {
     const content = fs.readFileSync(path.join(phaseDir, pf), 'utf-8');
-    const fmMatch = content.match(/files_modified:\s*\[([^\]]*)\]/);
+    const fmMatch = content.match(/files_modified:\s*\[([^\]]{0,8000})\]/);
     if (fmMatch) {
       const files = fmMatch[1].split(',').map((f) => f.trim()).filter(Boolean);
       allFiles.push(...files);

@@ -94,14 +94,18 @@ if [ -z "$TEST_CMD" ]; then
     echo "⚠ No test runner detected — skipping post-merge test gate"
   fi
 fi
-# Run test suite with 5-minute timeout
+# #1857: normalize to a one-shot form (defeat vitest/jest watch mode) via the
+# same shared normalize-test-command helper the regression gate uses, then bound
+# with the configured timeout so a watch-mode runner cannot hang the gate.
+TEST_CMD=$(gsd_run query normalize-test-command "$TEST_CMD" --cwd . 2>/dev/null || echo "$TEST_CMD")
+TEST_GATE_TIMEOUT=$(gsd_run query config-get workflow.test_gate_timeout 2>/dev/null || echo "600")
 TEST_EXIT=0
-timeout 300 bash -c "$TEST_CMD" 2>&1
+timeout "$TEST_GATE_TIMEOUT" bash -c "$TEST_CMD" 2>&1
 TEST_EXIT=$?
 if [ "${TEST_EXIT}" -eq 0 ]; then
   echo "✓ Post-merge test gate passed — no cross-plan conflicts"
 elif [ "${TEST_EXIT}" -eq 124 ]; then
-  echo "⚠ Post-merge test gate timed out after 5 minutes"
+  echo "⚠ POST-MERGE TEST GATE TIMED OUT after ${TEST_GATE_TIMEOUT}s — the runner did not exit, likely stuck in watch/dev mode (e.g. vitest without 'run'). Verify tests with a one-shot command (e.g. 'vitest run') or raise workflow.test_gate_timeout."
 else
   echo "✗ Post-merge test gate failed (exit code ${TEST_EXIT})"
   WAVE_FAILURE_COUNT=$((WAVE_FAILURE_COUNT + 1))
@@ -110,7 +114,7 @@ fi
 
 **If `TEST_EXIT` is 0 (pass):** `✓ Post-merge test gate: {N} tests passed — no cross-plan conflicts` → continue to orchestrator tracking update.
 
-**If `TEST_EXIT` is 124 (timeout):** Log warning, treat as non-blocking, continue. Tests may need a longer budget or manual run.
+**If `TEST_EXIT` is 124 (timeout):** The runner did not exit within the budget — surface the printed message clearly (watch/dev mode is the likely cause; #1857). Treated as non-blocking (a genuinely long suite may just need a larger `workflow.test_gate_timeout`), but it is NEVER silently ignored — the watch-mode cause is named so the user can fix it (one-shot command / `workflow.test_command` / larger timeout).
 
 **If `TEST_EXIT` is non-zero (test failure):** Increment `WAVE_FAILURE_COUNT` to track
 cumulative failures across waves. Subsequent waves should report:

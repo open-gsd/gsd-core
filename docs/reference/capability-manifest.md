@@ -147,13 +147,13 @@ Runtime capabilities describe how GSD projects its artefacts onto one host CLI. 
 | Config format | `runtime.configFormat` | Closed enum: `settings-json` \| `toml` \| `markdown` \| `markdown-dir` \| `none`. |
 | Artefact layout | `runtime.artifactLayout` | Object with `global` and `local` arrays of `ArtifactKind` (`kind`, `destSubpath`, `prefix`, `nesting`, `recursive`, `stage`). |
 | Command style | `runtime.commandStyle` | Closed enum: `slash-hyphen` \| `shell-var`. |
-| Hooks surface | `runtime.hooksSurface` | Closed enum: `settings-json` \| `codex-hooks-json` \| `cursor-hooks-json` \| `copilot-inline` \| `cline-rules` \| `none`. |
+| Hooks surface | `runtime.hooksSurface` | Closed enum: `settings-json` \| `codex-hooks-json` \| `cursor-hooks-json` \| `copilot-inline` \| `cline-rules` \| `kimi-hooks-toml` \| `none`. |
 | Sandbox tier | `runtime.sandboxTier` | Closed enum: `none` \| `codex-agent-sandbox`. |
 | Support tier | `runtime.supportTier` | Integer: `1` (fully tested first-party) \| `2` (shipped, lower coverage). |
 | Install surface | `runtime.installSurface` | Closed enum: `settings-json` \| `codex-toml` \| `copilot-instructions` \| `cline-rules` \| `cursor-hooks-json` \| `profile-marker-only`. |
 | Shared settings | `runtime.writesSharedSettings` | boolean. Whether the runtime writes a shared `settings.json`. |
-| Permission writer | `runtime.permissionWriter` | `null` \| `"opencode"` \| `"kilo"`. The finish-time permissions-sidecar writer. |
-| Extended hook events | `runtime.extendedHookEvents` | string[] over a closed vocabulary: `SubagentStop`, `Stop`, `PreCompact`, `FileChanged`, `BeforeAgent`, `AfterAgent`, `BeforeModel`. |
+| Permission writer | `runtime.permissionWriter` | `null` \| `"opencode"` \| `"kilo"` \| `"antigravity"`. The finish-time permissions-sidecar writer. |
+| Extended hook events | `runtime.extendedHookEvents` | string[] over a closed vocabulary: `SubagentStop`, `Stop`, `PreCompact`, `FileChanged`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `SubagentStart`. |
 
 For a minimal `role: "runtime"` example, see [ADR-1016 §Decision 8](../adr/1016-runtime-capability-descriptor.md).
 

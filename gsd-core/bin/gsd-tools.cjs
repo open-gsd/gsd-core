@@ -688,7 +688,7 @@ async function main() {
   // phase / roadmap / milestone / progress / etc.
   const TOP_LEVEL_USAGE = 'Usage: gsd-tools <command> [args] [--raw] [--pick <field>] [--cwd <path>] [--ws <name>] [--json-errors]\n' +
     'Commands: agent, agent-skills, assumption-delta, audit-open, audit-uat, check, check-commit, commit, commit-to-subrepo, pr-subrepo, ' +
-    'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, ' +
+    'config-ensure-section, config-get, config-new-project, config-path, config-set, migrate-config, normalize-test-command, ' +
     'current-timestamp, detect-custom-files, docs-init, drift-guard, effort, extract-messages, find-phase, ' +
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
@@ -1288,6 +1288,16 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         output: output,
       });
       if (!handled) config.cmdConfigGet(cwd, args[1], raw, defaultValue);
+      break;
+    }
+
+    case 'normalize-test-command': {
+      // #1857: rewrite a resolved test command to a one-shot form so a
+      // watch-mode runner (vitest/jest) cannot hang a verification gate. Shared
+      // by the regression gate and the post-merge gate. args[1] is the raw
+      // resolved command; --cwd (already parsed into `cwd`) locates package.json.
+      const testCommandNormalizer = require('./lib/normalize-test-command.cjs');
+      testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
       break;
     }
 
@@ -2140,6 +2150,28 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             }
           }
         } catch { /* best-effort — list still works without the inactive annotation */ }
+        // Issue #2045 (DEFECT 3): derive each capability's SURFACED state from the
+        // SAME resolver `capability state` uses (resolveCapabilityRuntimeState), so
+        // `list` and `state` stop disagreeing. `list` previously derived `status`
+        // purely from ledger-entry existence — an installed-but-not-surfaced cap
+        // reported active in `list` and absent in `state`. Surfaced is evaluated at
+        // the default runtime config dir (the resolver resolves it when undefined),
+        // matching `capability state <id>` with no --config-dir. Best-effort: a
+        // resolver failure leaves surfacedById empty (rows report surfaced:null).
+        const surfacedById = {};
+        // surfacedById is keyed by capId only (NOT `${scope} ${capId}`): surface
+        // state is single-source — one runtime config dir → one .gsd-surface.json
+        // → one surfaced truth per capId — and the loader dedupes overlay caps to
+        // one registry entry per id (first-party-wins). So a cap installed in both
+        // scopes correctly shares one surfaced value across its list rows.
+        try {
+          const surfaceState = capabilityState.resolveCapabilityRuntimeState(cwd, undefined);
+          for (const cap of (surfaceState && surfaceState.capabilities) || []) {
+            if (cap && typeof cap.id === 'string') {
+              surfacedById[cap.id] = cap.surfaced === true;
+            }
+          }
+        } catch { /* best-effort — list still works without the surfaced annotation */ }
         for (const capId of Object.keys(fp)) {
           const cap = fp[capId] || {};
           rows.push({
@@ -2150,6 +2182,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
             source: 'first-party',
             scope: 'first-party',
             status: 'active',
+            surfaced: Object.prototype.hasOwnProperty.call(surfacedById, capId) ? surfacedById[capId] === true : null,
             title: cap.title || null,
           });
         }
@@ -2199,6 +2232,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
               scope: sc,
               status,
               reason,
+              // Issue #2045 (DEFECT 3): surfaced reflects surface composition, so
+              // list and state agree. An inactive (unconsented/incompatible) cap is
+              // surfaced:false by definition; otherwise defer to the resolver.
+              surfaced: status === 'active'
+                ? (Object.prototype.hasOwnProperty.call(surfacedById, capId) ? surfacedById[capId] === true : null)
+                : false,
               title: manifest.title || null,
             });
           }
