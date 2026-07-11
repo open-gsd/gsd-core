@@ -334,6 +334,35 @@ Documentation gaps:
 - dispatch.nested
 - dispatch.maxDepth
 
+**EoS migration status (#2097):** Folded onto descriptor-driven dispatch.
+Augment already installed through the declarative adapter (nested-skill
+artifact layout, `settings-json` hook surface, Claude hook event dialect), but
+carried two remaining runtime-literal branches in
+`src/runtime-artifact-conversion.cts`: the 4 `~/.augment`/`$HOME/.augment`
+dot-dir rewrites in `_applyRuntimeRewrites`'s `case 'augment':` block are now
+built from `getDirName('augment')` (dirName-derived, byte-identical) instead
+of a hardcoded `.augment` literal, and the
+`applyRuntimeContentRewritesForCommandsInPlace` command-body conversion
+dispatch now reads `runtime.hostBehaviors.commandBodyConverter`
+(`"convertClaudeToAugmentMarkdown"`) instead of a hardcoded
+`runtime === 'augment'` branch. Two dead-code sites were also removed from
+`bin/install.js`: the orphaned `claudeToAugmentTools` map (superseded by the
+single-sourced converters per ADR-1508 / #1675) and the unreachable
+`else if (isAugment) { content = convertClaudeAgentToAugmentAgent(content); }`
+inline agent-conversion branch (augment has been on the descriptor-agents path
+since `_DESCRIPTOR_AGENTS_RUNTIMES` was introduced, making that `if`/`else if`
+arm dead). **UPGRADE 3 — MCP companion config**
+(`mergeGsdMcpServerIntoSettings`) registers the `gsd` MCP server directly
+inside the same `settings.json` `mcpServers` block GSD's own hook
+registration already writes (Augment hosts MCP in `settings.json`, unlike
+Antigravity's standalone `mcp_config.json`) — non-destructively preserving
+any other user-configured `mcpServers` entries; uninstall removes only the
+GSD-owned `gsd` entry. `settings.json` is golden-excluded
+(`HOOK_CONFIG_FILES`), so this upgrade produces no golden fixture change.
+Source-grep guard + fail-closed negotiation coverage is in
+`tests/declarative-reference-augment.test.cjs`; the dispatch/hook-bus/MCP
+upgrade coverage is in `tests/augment-upgrades.test.cjs`.
+
 ---
 
 ## qwen

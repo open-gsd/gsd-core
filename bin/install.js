@@ -2606,14 +2606,6 @@ function convertClaudeAgentToWindsurfAgent(content) {
 // Augment uses a tool set similar to Cursor/Windsurf.
 // Config lives in .augment/ (local) and ~/.augment/ (global).
 
-const claudeToAugmentTools = {
-  Bash: 'launch-process',
-  Edit: 'str-replace-editor',
-  AskUserQuestion: null,
-  SlashCommand: null,
-  TodoWrite: 'add_tasks',
-};
-
 // #1675 (ADR-1508): the augment converter family below was a byte-identical
 // duplicate of runtime-artifact-conversion.cjs:
 //   convertSlashCommandsToAugmentSkillMentions, convertClaudeToAugmentMarkdown,
@@ -7546,6 +7538,21 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       }
     }
 
+    // #2097 UPGRADE 3 — Remove the MCP companion entry from settings.json for
+    // runtimes that host MCP there (Augment), symmetric to the mcp_config.json
+    // removal for Antigravity below. Only the GSD-owned mcpServers.gsd key is
+    // removed — any other user-configured MCP servers are preserved.
+    if (_hostBehaviors(runtime).mcpCompanion === 'settings-json' &&
+      settings.mcpServers && typeof settings.mcpServers === 'object' &&
+      settings.mcpServers.gsd !== undefined) {
+      delete settings.mcpServers.gsd;
+      if (Object.keys(settings.mcpServers).length === 0) {
+        delete settings.mcpServers;
+      }
+      settingsModified = true;
+      console.log(`  ${green}✓${reset} Removed GSD MCP companion server from settings.json`);
+    }
+
     if (settingsModified) {
       writeSettings(settingsPath, settings);
       removedCount++;
@@ -8076,6 +8083,27 @@ function configureAntigravityMcpConfig(isGlobal = true, configDir = null) {
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
   console.log(`  ${green}✓${reset} Configured Antigravity MCP companion server (gsd)`);
+}
+
+/**
+ * #2097 (ADR-1239 transport:mcp): register the GSD companion MCP server inside a
+ * runtime's settings.json (Augment hosts MCP in settings.json.mcpServers, unlike
+ * Antigravity's standalone mcp_config.json). Mutates the in-memory settings object
+ * that finishInstall already writes — non-destructive + idempotent: only sets
+ * mcpServers.gsd, preserving any user-defined servers (a user's own `gsd` override
+ * is respected — Hyrum's Law).
+ * @param {object} settings - the in-memory settings object finishInstall will write
+ */
+function mergeGsdMcpServerIntoSettings(settings) {
+  if (!settings.mcpServers || typeof settings.mcpServers !== 'object' || Array.isArray(settings.mcpServers)) {
+    settings.mcpServers = {};
+  }
+  if (settings.mcpServers.gsd === undefined) {
+    settings.mcpServers.gsd = {
+      command: 'npx',
+      args: ['-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+    };
+  }
 }
 
 /**
@@ -9643,10 +9671,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = convertClaudeAgentToCopilotAgent(content, isGlobal);
         } else if (isWindsurf) {
           content = convertClaudeAgentToWindsurfAgent(content);
-        } else if (isAugment) {
-          content = convertClaudeAgentToAugmentAgent(content);
-        } else if (isTrae) {
-          content = convertClaudeAgentToTraeAgent(content);
         } else if (isCodebuddy) {
           content = convertClaudeAgentToCodebuddyAgent(content);
         } else if (_hostBehaviors(runtime).frontmatterDialect === 'cline') {
@@ -10918,6 +10942,12 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
     mergeClaudePermissions(settings);
   }
 
+  // #2097 UPGRADE 3 (transport:mcp): companion MCP server for runtimes that host
+  // MCP in settings.json (Augment). settings.json is golden-excluded, so no golden change.
+  if (_hostBehaviors(runtime).mcpCompanion === 'settings-json' && settings && plan.writesSharedSettings) {
+    mergeGsdMcpServerIntoSettings(settings);
+  }
+
   // Write settings when runtime supports settings.json.
   // #3002 CR: defense-in-depth — re-run validateHookFields right before
   // serialization. The push-site guards above already skip null-command
@@ -11930,6 +11960,8 @@ module.exports = {
     buildAntigravityAllowRules,
     configureAntigravityPermissions,
     configureAntigravityMcpConfig,
+    // #2097 UPGRADE 3 — Augment MCP companion (settings.json-hosted)
+    mergeGsdMcpServerIntoSettings,
     claudeToCopilotTools,
     convertCopilotToolName,
     convertClaudeToCopilotContent,

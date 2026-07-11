@@ -360,6 +360,10 @@ const capabilities = {
       "writesSharedSettings": true,
       "permissionWriter": null,
       "extendedHookEvents": [],
+      "hostBehaviors": {
+        "commandBodyConverter": "convertClaudeToAugmentMarkdown",
+        "mcpCompanion": "settings-json"
+      },
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -3953,6 +3957,10 @@ const runtimes = {
       "writesSharedSettings": true,
       "permissionWriter": null,
       "extendedHookEvents": [],
+      "hostBehaviors": {
+        "commandBodyConverter": "convertClaudeToAugmentMarkdown",
+        "mcpCompanion": "settings-json"
+      },
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",

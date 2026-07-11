@@ -1,7 +1,8 @@
 # How to connect a host to the GSD companion MCP server
 
 This guide shows you how to make a MCP-capable host (Claude Code, Codex,
-OpenCode, VS Code, Antigravity CLI, Cursor, Cline, Hermes) drive GSD — run GSD
+OpenCode, VS Code, Antigravity CLI, Cursor, Cline, Hermes, Augment Code) drive
+GSD — run GSD
 commands and read/write `.planning/` state — through the companion MCP server,
 with no bespoke plugin.
 
@@ -28,6 +29,11 @@ host.
 
 - **Claude Code / Codex / Cursor / Cline / Hermes** — under the host's
   `mcpServers` object (project or user config).
+- **Augment Code** — under the `mcpServers` block of its own
+  `settings.json` (not a standalone MCP config file, unlike Antigravity)
+  — global at `~/.augment/settings.json`, project-local at
+  `.augment/settings.json`. GSD's installer configures this entry
+  automatically (`--augment` installs).
 - **VS Code** — in the workspace MCP servers list.
 - **Antigravity** — under the `mcpServers` block of its standalone
   `mcp_config.json` profile (not embedded in `settings.json`) — global at

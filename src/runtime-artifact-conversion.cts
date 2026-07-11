@@ -1107,6 +1107,11 @@ function convertClaudeToAugmentMarkdown(content) {
   return converted;
 }
 
+// #2097 (ADR-1239): command-body converters selected by descriptor
+// (runtime.hostBehaviors.commandBodyConverter) instead of a runtime-name
+// branch. Degrade-closed: unknown/absent name → no conversion.
+const COMMAND_BODY_CONVERTERS = { convertClaudeToAugmentMarkdown };
+
 function getAugmentSkillAdapterHeader(skillName) {
   return `<augment_skill_adapter>
 ## A. Skill Invocation
@@ -2442,19 +2447,24 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       break;
     }
 
-    case 'augment':
+    case 'augment': {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
-      content = content.replace(/~\/\.augment\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.augment\//g, pathPrefix);
-      content = content.replace(/~\/\.augment(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.augment(?![\w-])/g, normalizedPathPrefix);
+      // #2097: dot-dir self-references (~/.augment/…) → resolved prefix,
+      // dirName-derived (no runtime literal). getDirName('augment') resolves
+      // to '.augment', so this is byte-identical to the prior hardcoded regexes.
+      const _dd = escapeRegExp(dirName);
+      content = content.replace(new RegExp('~/' + _dd + '/', 'g'), pathPrefix);
+      content = content.replace(new RegExp('\\$HOME/' + _dd + '/', 'g'), pathPrefix);
+      content = content.replace(new RegExp('~/' + _dd + '(?![\\w-])', 'g'), normalizedPathPrefix);
+      content = content.replace(new RegExp('\\$HOME/' + _dd + '(?![\\w-])', 'g'), normalizedPathPrefix);
       content = processAttribution(content, attribution);
       break;
+    }
 
     case 'trae':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
@@ -2631,8 +2641,11 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
       content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal, attribution);
-      if (runtime === 'augment') {
-        content = convertClaudeToAugmentMarkdown(content);
+      // #2097 (ADR-1239): descriptor-driven — commandBodyConverter name comes
+      // from runtime.hostBehaviors instead of a hardcoded runtime-name branch.
+      const _cmdConv = _hostBehaviors(runtime).commandBodyConverter;
+      if (_cmdConv && COMMAND_BODY_CONVERTERS[_cmdConv]) {
+        content = COMMAND_BODY_CONVERTERS[_cmdConv](content);
       }
       fs.writeFileSync(path.join(tempDir, entry.name), content);
     }

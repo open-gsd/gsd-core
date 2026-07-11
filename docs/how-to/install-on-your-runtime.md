@@ -397,7 +397,7 @@ Qwen Code supports 15 hook events. GSD registers the following events automatica
 npx @opengsd/gsd-core@latest --augment --global
 ```
 
-Skills land in `~/.augment/skills/` and slash command definitions land in `~/.augment/commands/`. GSD installs skills, agents, and commands (`/gsd-phase`, `/gsd-ship`, etc.). No hook or statusline ownership.
+Skills land in `~/.augment/skills/` and slash command definitions land in `~/.augment/commands/`. GSD installs skills, agents, and commands (`/gsd-phase`, `/gsd-ship`, etc.). GSD's managed lifecycle hooks are registered into Augment's own `settings.json` `hooks` block (Claude hook event dialect, covering session-start, tool-use, and phase-boundary events) — no statusline ownership. #2097 also registers the GSD companion MCP server under `settings.json`'s `mcpServers.gsd` (see [Connect a host to the GSD MCP server](connect-gsd-mcp-server.md)).
 
 ---
 
