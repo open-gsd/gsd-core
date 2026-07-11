@@ -87,8 +87,12 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
   test('stamps a blind-review marker on self-reported or scratch-anchored output', () => {
     const block = agyBashBlock();
     assert.ok(
-      /grep -qE 'REVIEWED-WITHOUT-REPO-ACCESS\|antigravity-cli\/scratch'/.test(block),
-      'agy block must detect both blindness tells (self-report line, scratch-workspace declaration)',
+      /head -5 [^|]*\| grep -q 'REVIEWED-WITHOUT-REPO-ACCESS'/.test(block),
+      'the self-report tell must be anchored to the head of the output, not a whole-body substring',
+    );
+    assert.ok(
+      /grep -qiE '\(workspace\|working\) \(directory\|dir\)[^']*antigravity-cli\/scratch'/.test(block),
+      'the scratch tell must be anchored to a workspace-declaration phrasing so a grounded review quoting the path is not mis-stamped',
     );
     assert.ok(
       /\[reviewed-without-repo-access\]/.test(block),
@@ -126,10 +130,14 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
 
   test('cursor-agent prompt carries the same absolute-root anchor (identical gap, #2176 AC5)', () => {
     const block = cursorBashBlock();
+    assert.ok(
+      /_CURSOR_ROOT="\$\(git rev-parse --show-toplevel 2>\/dev\/null \|\| pwd\)"/.test(block),
+      'cursor anchor must resolve the repo TOP-LEVEL (rev-parse, not bare pwd) so subdirectory invocations anchor correctly',
+    );
     const promptLine = block.split('\n').find((l) => l.startsWith('CURSOR_PROMPT_ARG='));
     assert.ok(promptLine, 'cursor block must define CURSOR_PROMPT_ARG');
     assert.ok(
-      /repository under review is at \$\(pwd\)/.test(promptLine),
+      /repository under review is at \$_CURSOR_ROOT/.test(promptLine),
       'CURSOR_PROMPT_ARG must anchor repo-relative references to the absolute repo root',
     );
   });

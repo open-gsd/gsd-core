@@ -368,8 +368,10 @@ fi
 # diagnosable instead of a silent empty result.
 # #2176: same absolute-root anchor as the Antigravity block — cursor-agent runs
 # in the repo cwd, but repo-relative references in the assembled prompt still
-# need an explicit root to resolve against.
-CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $(pwd) — resolve every relative file path in the review request against that absolute root. Output only the resulting markdown review. Do not edit any files."
+# need an explicit root to resolve against. rev-parse (not bare pwd) so the
+# anchor is correct even when /gsd-review is invoked from a repo subdirectory.
+_CURSOR_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $_CURSOR_ROOT — resolve every relative file path in the review request against that absolute root. Output only the resulting markdown review. Do not edit any files."
 cursor-agent -p --mode ask --trust --output-format text "$CURSOR_PROMPT_ARG" 2>/tmp/gsd-review-cursor-{phase}.err > /tmp/gsd-review-cursor-{phase}.md
 if [ ! -s /tmp/gsd-review-cursor-{phase}.md ]; then
   echo "Cursor review failed or returned empty output. stderr:" > /tmp/gsd-review-cursor-{phase}.md
@@ -542,12 +544,17 @@ if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
 fi
 
 # #2176: blind-review marker. Two tells that the reviewer ran without repo
-# access: the prompt's mandated REVIEWED-WITHOUT-REPO-ACCESS self-report, or the
-# agent declaring its scratch dir as workspace. Stamp a machine-readable marker
-# so the Consensus Summary down-weights the review instead of counting an
-# ungrounded verdict at full weight. (Temp file + mv, no in-place sed — BSD/GNU safe.)
+# access: the prompt's mandated REVIEWED-WITHOUT-REPO-ACCESS self-report in the
+# first lines of output, or the agent DECLARING the scratch dir as its
+# workspace. Both patterns are anchored — the self-report to the head of the
+# file, the scratch tell to a workspace-declaration phrasing — so a grounded
+# review that merely QUOTES these strings (e.g. reviewing this very file) is
+# never mis-stamped. Stamp a machine-readable marker so the Consensus Summary
+# down-weights the review instead of counting an ungrounded verdict at full
+# weight. (Temp file + mv, no in-place sed — BSD/GNU safe.)
 if [ -s /tmp/gsd-review-antigravity-{phase}.md ] && \
-   grep -qE 'REVIEWED-WITHOUT-REPO-ACCESS|antigravity-cli/scratch' /tmp/gsd-review-antigravity-{phase}.md; then
+   { head -5 /tmp/gsd-review-antigravity-{phase}.md | grep -q 'REVIEWED-WITHOUT-REPO-ACCESS' || \
+     grep -qiE '(workspace|working) (directory|dir)[^.]{0,40}antigravity-cli/scratch' /tmp/gsd-review-antigravity-{phase}.md; }; then
   {
     echo "> [reviewed-without-repo-access] This reviewer ran without visibility into the repo under review — down-weight its verdict in the Consensus Summary."
     echo ""
