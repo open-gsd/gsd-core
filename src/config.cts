@@ -770,6 +770,10 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     }
   }
 
+  // Statusline GSD-state format enum validation
+  const VALID_STATE_FORMATS = ['full', 'compact'];
+  if (kp === 'statusline.state_format') assertEnumValue(parsedValue, val, VALID_STATE_FORMATS, 'statusline.state_format');
+
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
   if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');

@@ -1363,3 +1363,181 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
     });
   });
 }
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Compact GSD-state format (statusline.state_format)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { cleanup } = require('./helpers.cjs');
+  const statusline = require('../hooks/gsd-statusline.js');
+  const { shortGsdStatus, formatGsdStateCompact, formatGsdState } = statusline;
+  const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
+
+  describe('config schema: statusline.state_format', () => {
+    test('registers statusline.state_format', () => {
+      assert.ok(
+        VALID_CONFIG_KEYS.has('statusline.state_format'),
+        'statusline.state_format must be in VALID_CONFIG_KEYS',
+      );
+    });
+  });
+
+  describe('shortGsdStatus', () => {
+    test('returns null for empty input', () => {
+      assert.equal(shortGsdStatus(null), null);
+      assert.equal(shortGsdStatus(''), null);
+      assert.equal(shortGsdStatus(undefined), null);
+    });
+    test('paused — the canonical stuck state — wins and renders uppercase (#2162 condition)', () => {
+      assert.equal(shortGsdStatus('paused — waiting on credentials'), 'PAUSED');
+      assert.equal(shortGsdStatus('stopped by user'), 'PAUSED');
+    });
+    test('collapses lifecycle narratives to canonical keywords via normalizeStateStatus', () => {
+      assert.equal(shortGsdStatus('Executing phase 7 of the parser milestone'), 'executing');
+      assert.equal(shortGsdStatus('Ready to plan next phase'), 'planning');
+      assert.equal(shortGsdStatus('Discussing scope with user'), 'discussing');
+      assert.equal(shortGsdStatus('Verifying UAT criteria'), 'verifying');
+      assert.equal(shortGsdStatus('Work complete'), 'completed');
+    });
+    test('matches the canonical vocabulary exactly — no drift from normalizeStateStatus', () => {
+      const { normalizeStateStatus } = require('../gsd-core/bin/lib/state-document.cjs');
+      for (const canonical of ['discussing', 'planning', 'executing', 'verifying', 'completed', 'paused']) {
+        const rendered = shortGsdStatus(canonical);
+        const expected = canonical === 'paused' ? 'PAUSED' : canonical;
+        assert.equal(rendered, expected);
+        assert.equal(normalizeStateStatus(canonical, null), canonical,
+          `canonical vocabulary changed upstream: ${canonical}`);
+      }
+    });
+    test('unknown shapes fall back to the first word, capped at 16 chars', () => {
+      assert.equal(shortGsdStatus('reticulating splines'), 'reticulating');
+      assert.equal(shortGsdStatus('supercalifragilisticexpialidocious state'), 'supercalifragili');
+    });
+  });
+
+  describe('formatGsdStateCompact', () => {
+    test('renders version · phase/total · status', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v1.12', phaseNum: '7', phaseTotal: '12',
+        status: 'Executing phase 7 — building the parser',
+      });
+      assert.equal(out, 'v1.12 · P7/12 · executing');
+    });
+    test('prefers lifecycle active_phase over body phase number', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v2.0', activePhase: '4.5', phaseNum: '4', status: 'executing',
+      });
+      assert.equal(out, 'v2.0 · P4.5 · executing');
+    });
+    test('paused state renders uppercase in the compact line', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v2.0', activePhase: '4.5', status: 'paused — waiting on review',
+      });
+      assert.equal(out, 'v2.0 · P4.5 · PAUSED');
+    });
+    test('milestone completion renders "complete"', () => {
+      assert.equal(formatGsdStateCompact({ milestone: 'v2.0', percent: '100' }), 'v2.0 · complete');
+      assert.equal(
+        formatGsdStateCompact({ milestone: 'v2.0', completedPhases: '5', totalPhases: '5' }),
+        'v2.0 · complete');
+    });
+    test('idle with queued next action renders "next <action> <phases>"', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v2.0', nextAction: 'execute-phase', nextPhases: ['4.5', '4.6'],
+      });
+      assert.equal(out, 'v2.0 · next execute-phase 4.5/4.6');
+    });
+    test('empty state renders empty string', () => {
+      assert.equal(formatGsdStateCompact({}), '');
+    });
+    test('drops the milestone name and progress bar the full format shows', () => {
+      const state = {
+        milestone: 'v1.9', milestoneName: 'Code Quality', percent: '40',
+        status: 'executing', phaseNum: '2', phaseTotal: '5',
+      };
+      const full = formatGsdState(state);
+      const compact = formatGsdStateCompact(state);
+      assert.ok(full.includes('Code Quality'), `full keeps name; got: ${full}`);
+      assert.ok(!compact.includes('Code Quality'), `compact drops name; got: ${compact}`);
+      assert.ok(!compact.includes('█'), `compact drops bar; got: ${compact}`);
+    });
+  });
+
+  describe('state_format via renderStatusline', () => {
+    function makeProject(stateFormat) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-fmt-'));
+      fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+      if (stateFormat !== undefined) {
+        fs.writeFileSync(
+          path.join(dir, '.planning', 'config.json'),
+          JSON.stringify({ statusline: { state_format: stateFormat } }),
+        );
+      }
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), [
+        '---',
+        'milestone: v1.9',
+        'milestone_name: Code Quality',
+        'status: executing',
+        '---',
+        '',
+        'Phase: 2 of 5 (parser-rewrite)',
+        '',
+      ].join('\n'));
+      return dir;
+    }
+
+    test('compact format drops the milestone name', () => {
+      const dir = makeProject('compact');
+      try {
+        const out = statusline.renderStatusline({
+          model: { display_name: 'Claude' },
+          workspace: { current_dir: dir },
+        });
+        assert.ok(out.includes('v1.9 · P2/5 · executing'), `expected compact state; got: ${out}`);
+        assert.ok(!out.includes('Code Quality'), `expected no milestone name; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('default (key absent) keeps the full format unchanged', () => {
+      const dir = makeProject(undefined);
+      try {
+        const out = statusline.renderStatusline({
+          model: { display_name: 'Claude' },
+          workspace: { current_dir: dir },
+        });
+        assert.ok(out.includes('Code Quality'), `expected full format; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('explicit "full" matches the default rendering', () => {
+      const dirDefault = makeProject(undefined);
+      const dirFull = makeProject('full');
+      try {
+        const input = (dir) => ({
+          model: { display_name: 'Claude' },
+          workspace: { current_dir: dir },
+        });
+        const a = statusline.renderStatusline(input(dirDefault));
+        const b = statusline.renderStatusline(input(dirFull));
+        // Same STATE.md content → same rendered middle segment (the trailing
+        // directory basename differs per temp dir, so compare with it removed)
+        assert.equal(
+          a.replace(path.basename(dirDefault), ''),
+          b.replace(path.basename(dirFull), ''));
+      } finally {
+        cleanup(dirDefault);
+        cleanup(dirFull);
+      }
+    });
+  });
+}
