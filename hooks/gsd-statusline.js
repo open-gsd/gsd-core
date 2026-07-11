@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFileSync } = require('child_process');
 const { isSemverNewer } = require('../gsd-core/bin/lib/semver-compare.cjs');
 const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
 
@@ -335,9 +336,11 @@ const GIT_STATUS_TIMEOUT_MS = 1500;
  */
 function readGitStatus(dir) {
   try {
-    const { execFileSync } = require('child_process');
+    // 8 MiB maxBuffer (default 1 MiB) headroom for repos with very many changed
+    // or untracked files; overflow still degrades safely to segment-absent via
+    // the catch below.
     return execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
-      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] });
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
   } catch (e) {
     return null;
   }
