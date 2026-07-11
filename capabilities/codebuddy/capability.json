@@ -81,7 +81,12 @@
     "installSurface": "settings-json",
     "writesSharedSettings": true,
     "permissionWriter": null,
-    "extendedHookEvents": [],
+    "extendedHookEvents": [
+      "SubagentStop",
+      "Stop",
+      "PreCompact",
+      "SubagentStart"
+    ],
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-file",
@@ -98,6 +103,9 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "node"
+    },
+    "hostBehaviors": {
+      "reportCommandsDir": true
     }
   }
 }

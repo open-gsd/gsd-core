@@ -1,3 +1,4 @@
+// allow-test-rule: structural-regression-guard — AC2 requires asserting no `runtime === 'antigravity'` string-equality branch (nor an `isAntigravity` helper, nor a `canonical === 'antigravity'` branch) remains in bin/install.js, src/runtime-artifact-conversion.cts, src/shell-command-projection.cts, and src/runtime-name-policy.cts — the descriptor-migration contract is a property of the source text, so a source-grep is the only faithful check (#2096)
 'use strict';
 
 /**
@@ -15,6 +16,17 @@
  * profile via profileOf, (2) confirms the public adapter classifies it as
  * declarative, and (3) round-trips a real install proving a gsd command surface
  * is emitted through the same engine the adapter delegates to.
+ *
+ * #2096 (EoS/antigravity) additions: negotiation fails CLOSED on a corrupted
+ * descriptor, the 4 still-`undocumented` dispatch sub-axes (namedDispatch/
+ * nested/maxDepth/backgroundDispatch) degrade to the most-restrictive known
+ * value (never their optimistic value), the validator accepts the negotiated
+ * subagentToolkit:'full' + permissionWriter:'antigravity' upgrade, and the
+ * hardcoded `runtime === 'antigravity'` / `isAntigravity` / `canonical ===
+ * 'antigravity'` branches are retired from the folded modules (folded into
+ * descriptor-driven `runtime.hostBehaviors` + `runtime.hostIntegration`).
+ * UPGRADE 1 (permission-writer) + UPGRADE 2 (MCP companion) live-install
+ * coverage is in tests/antigravity-upgrades.test.cjs — not duplicated here.
  */
 
 const { test, before } = require('node:test');
@@ -23,12 +35,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { profileOf } = require('../gsd-core/bin/lib/host-integration.cjs');
+const {
+  profileOf,
+  negotiateHostCapabilities,
+  PROFILE_BASELINES,
+  UNDOCUMENTED,
+} = require('../gsd-core/bin/lib/host-integration.cjs');
+const { validateCapability } = require('../gsd-core/bin/lib/capability-validator.cjs');
 const { createDeclarativeAdapter } = require('../gsd-core/bin/lib/adapter-declarative.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { walk, runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 
 const DESC = path.join(__dirname, '..', 'capabilities', 'antigravity', 'capability.json');
+const ANTIGRAVITY_CAP = JSON.parse(fs.readFileSync(DESC, 'utf8'));
+const ANTIGRAVITY_AXES = ANTIGRAVITY_CAP.runtime.hostIntegration;
 
 // hooks/dist is gitignored and built (mirrors golden-install-parity harness).
 before(() => {
@@ -63,6 +83,130 @@ test('a real Antigravity install emits a gsd command/skill surface (invocable)',
       'install must emit a gsd command/skill surface (declarative reference)');
   } finally {
     cleanup(root);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #2096 EoS/antigravity — AC3/AC5: fail-closed negotiation + validator
+// acceptance + the folded descriptor (mirrors kimi/codex reference tests).
+// ---------------------------------------------------------------------------
+
+// -- AC5: negotiation fails CLOSED on a corrupted descriptor ------------------
+
+test('negotiateHostCapabilities never throws for antigravity, even fully corrupted', () => {
+  assert.doesNotThrow(() => negotiateHostCapabilities({}));
+  assert.doesNotThrow(() => negotiateHostCapabilities({ ...ANTIGRAVITY_AXES, embeddingMode: UNDOCUMENTED }));
+  assert.doesNotThrow(() => negotiateHostCapabilities({ ...ANTIGRAVITY_AXES, embeddingMode: 'future-unknown' }));
+  assert.doesNotThrow(() => negotiateHostCapabilities({ ...ANTIGRAVITY_AXES, dispatch: 'corrupted-not-an-object' }));
+  assert.doesNotThrow(() => negotiateHostCapabilities({ ...ANTIGRAVITY_AXES, dispatch: { ...ANTIGRAVITY_AXES.dispatch, maxDepth: 'not-a-number' } }));
+});
+
+test('a partial/empty antigravity descriptor degrades to the safe floor, not the declarative-cli baseline', () => {
+  const result = negotiateHostCapabilities({});
+  assert.equal(result.effective.embeddingMode, 'declarative', 'omitted embeddingMode degrades closed');
+  assert.equal(result.effective.hookBus, 'none');
+  assert.notDeepEqual(result.effective, PROFILE_BASELINES['declarative-cli']);
+  assert.ok(result.warnings.length > 0);
+});
+
+// AC-specific: the 4 still-undocumented dispatch sub-axes must degrade to the
+// most-restrictive KNOWN value, not their optimistic value. Real values below
+// were confirmed via:
+//   node -e "const {negotiateHostCapabilities}=require('./gsd-core/bin/lib/host-integration.cjs');
+//            const cap=require('./capabilities/antigravity/capability.json');
+//            console.log(negotiateHostCapabilities(cap.runtime.hostIntegration).effective.dispatch)"
+// -> { namedDispatch:false, nested:false, maxDepth:0, background:false, subagentToolkit:'full', backgroundDispatch:false }
+test("antigravity's 4 still-undocumented dispatch sub-axes (namedDispatch/nested/maxDepth/backgroundDispatch) degrade to the most-restrictive known value, not their optimistic value", () => {
+  // Sanity: the descriptor itself still declares these 4 as the undocumented
+  // sentinel. subagentToolkit is the ONE dispatch axis Context7 confirmed as
+  // 'full' (antigravity.google/docs/cli/features) — it is deliberately NOT
+  // part of this still-undocumented set.
+  assert.equal(ANTIGRAVITY_AXES.dispatch.namedDispatch, 'undocumented');
+  assert.equal(ANTIGRAVITY_AXES.dispatch.nested, 'undocumented');
+  assert.equal(ANTIGRAVITY_AXES.dispatch.maxDepth, 'undocumented');
+  assert.equal(ANTIGRAVITY_AXES.dispatch.backgroundDispatch, 'undocumented');
+  assert.equal(ANTIGRAVITY_AXES.dispatch.subagentToolkit, 'full', 'sanity: subagentToolkit is documented, not part of the undocumented set');
+
+  const { effective, warnings } = negotiateHostCapabilities(ANTIGRAVITY_AXES);
+
+  assert.equal(effective.dispatch.namedDispatch, false, 'undocumented namedDispatch must degrade to false, never true');
+  assert.equal(effective.dispatch.nested, false, 'undocumented nested must degrade to false, never true');
+  assert.equal(effective.dispatch.maxDepth, 0, 'undocumented maxDepth must degrade to 0, never -1/unbounded');
+  assert.equal(effective.dispatch.backgroundDispatch, false, 'undocumented backgroundDispatch must degrade to false, never true');
+
+  // subagentToolkit is documented 'full' (not undocumented) — it is trusted
+  // and survives negotiation, in contrast to the 4 sub-axes above.
+  assert.equal(effective.dispatch.subagentToolkit, 'full', "documented 'full' subagentToolkit is trusted, unlike the undocumented sub-axes");
+
+  // background is declared `true` (documented, not undocumented) but the
+  // struct-consistency cap in negotiateHostCapabilities still zeroes it
+  // because its sibling namedDispatch degraded to false — a host-declared
+  // `true` never overrides the fail-closed floor forced by a degraded axis.
+  assert.equal(effective.dispatch.background, false, 'background is capped to false once namedDispatch degrades closed');
+
+  for (const axis of ['namedDispatch', 'nested', 'backgroundDispatch']) {
+    assert.ok(
+      warnings.some((w) => w.includes(`dispatch.${axis}`) && w.includes('undocumented')),
+      `a warning must be raised for the undocumented dispatch.${axis} axis`,
+    );
+  }
+  assert.ok(
+    warnings.some((w) => w.includes('dispatch.maxDepth')),
+    'a warning must be raised for the undocumented dispatch.maxDepth axis (reported as missing/non-number)',
+  );
+});
+
+// -- AC3: the validator accepts the negotiated/folded descriptor values ------
+
+test('capabilities/antigravity/capability.json validates — subagentToolkit "full" + permissionWriter "antigravity" are accepted', () => {
+  const errors = validateCapability(ANTIGRAVITY_CAP, 'antigravity');
+  assert.deepEqual(errors, [], `validateCapability must return no errors, got: ${JSON.stringify(errors)}`);
+  assert.equal(ANTIGRAVITY_AXES.dispatch.subagentToolkit, 'full');
+  assert.equal(ANTIGRAVITY_CAP.runtime.permissionWriter, 'antigravity');
+});
+
+// -- AC2: the folded-in hostBehaviors + subagentToolkit upgrade --------------
+
+test('antigravity descriptor declares runtime.hostBehaviors (the folded-in behaviors) + the subagentToolkit upgrade', () => {
+  const hb = ANTIGRAVITY_CAP.runtime.hostBehaviors;
+  assert.ok(hb && typeof hb === 'object');
+  assert.equal(hb.reviewerCli, true);
+  assert.equal(hb.projectInstructionFile, 'GEMINI.md');
+  assert.equal(hb.noPathRewrite, true);
+  assert.equal(hb.hookPathStyle, 'raw');
+  assert.equal(ANTIGRAVITY_AXES.dispatch.subagentToolkit, 'full',
+    'subagentToolkit flipped undocumented -> full (antigravity.google/docs/cli/features)');
+});
+
+// -- AC2: the hardcoded branches are retired across all folded modules -------
+
+test('no `runtime === "antigravity"` string-equality branch (nor `isAntigravity` / `canonical === "antigravity"`) remains in the descriptor-migrated modules (AC2)', () => {
+  const strip = (src) => src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\r\n]*/g, '')
+    .replace(/`[^`]*`/g, '');
+  const repoRoot = path.join(__dirname, '..');
+  const files = [
+    path.join(repoRoot, 'bin', 'install.js'),
+    path.join(repoRoot, 'src', 'runtime-artifact-conversion.cts'),
+    path.join(repoRoot, 'src', 'shell-command-projection.cts'),
+    path.join(repoRoot, 'src', 'runtime-name-policy.cts'),
+  ];
+  for (const file of files) {
+    const src = fs.readFileSync(file, 'utf8');
+    const stripped = strip(src);
+
+    const eqOffenders = stripped.match(/runtime\s*[!=]==\s*'antigravity'/g) || [];
+    assert.deepEqual(eqOffenders, [],
+      `AC2: no hardcoded runtime==='antigravity' branch may remain in ${path.relative(repoRoot, file)}; found: ${eqOffenders.join(', ')}`);
+
+    const isAntigravityHits = stripped.match(/\bisAntigravity\b/g) || [];
+    assert.deepEqual(isAntigravityHits, [],
+      `AC2: no isAntigravity helper may remain in ${path.relative(repoRoot, file)}; found ${isAntigravityHits.length} occurrence(s)`);
+
+    const canonicalOffenders = stripped.match(/canonical\s*===\s*'antigravity'/g) || [];
+    assert.deepEqual(canonicalOffenders, [],
+      `AC2: no canonical==='antigravity' branch may remain in ${path.relative(repoRoot, file)}; found: ${canonicalOffenders.join(', ')}`);
   }
 });
 

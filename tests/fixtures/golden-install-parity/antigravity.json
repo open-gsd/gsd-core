@@ -336,6 +336,7 @@
   "hooks/lib/git-cmd.js": "268ba15992ca0b23",
   "hooks/lib/gsd-graphify-rebuild.sh": "66af89601074d2a9",
   "hooks/managed-hooks-registry.cjs": "721d696556b7509f",
+  "mcp_config.json": "9956d6a6e88a49e1",
   "package.json": "dbf8353f77358bc1",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",

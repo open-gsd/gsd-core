@@ -281,7 +281,7 @@ Documentation gaps:
 | dispatch.nested | undocumented | no authoritative doc — searched: https://antigravity.google/docs/agents | — |
 | dispatch.maxDepth | undocumented | no authoritative doc — searched: https://antigravity.google/docs/agents | — |
 | dispatch.background | true | https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/ | "Antigravity CLI orchestrates multiple agents for complex tasks in the background" |
-| dispatch.subagentToolkit | undocumented | no authoritative doc — searched: https://www.explainx.ai/blog/antigravity-cli-features-sandbox-plugins-subagents-2026 | — |
+| dispatch.subagentToolkit | full | https://antigravity.google/docs/cli/features | "Capabilities: Subagents have full access to tools such as code search, file editing, terminal commands, and web searches to complete their assigned tasks." (#2096 EoS migration — the page is JS-rendered/blank on a static fetch; confirmed via headless-browser render) |
 | dispatch.backgroundDispatch | undocumented | no authoritative doc — Multiple sources consulted: antigravity.google/docs/cli-subagents (returned blank/JS-rendered), antigravity.google/docs/agent (blank), github.com/google-antigravity/antigravity-cli README, Context7 /google-antigravity/antigravity-cli | All documentation consulted describes a two-level orchestrator→subagent architecture. Background subagents run asynchronously while the main agent continues accepting prompts. The DataCamp tutorial st |
 
 Sources consulted:
@@ -292,12 +292,14 @@ Sources consulted:
 - https://www.aibuilderclub.com/blog/antigravity-cli-guide
 - https://antigravity.google/docs/agents
 - https://antigravity.google/docs/hooks
+- https://antigravity.google/docs/cli/features (#2096 — subagentToolkit)
 
 Documentation gaps:
 - dispatch.namedDispatch — docs describe dynamic plain-English goal dispatch where agent names subagents at runtime; no pre-registered named sub-agent API documented.
 - dispatch.nested — no documentation found on whether subagents can themselves spawn further subagents.
 - dispatch.maxDepth — no documented depth limit or explicit unbounded statement found.
-- dispatch.subagentToolkit — docs describe a permissions approval model but do not explicitly state 'full' vs 'read-only' toolkit scope for subagents.
+
+**EoS migration status (#2096):** Migrated onto the declarative adapter. All `runtime === 'antigravity'` / `isAntigravity` / `canonical === 'antigravity'` branches folded into descriptor-driven `runtime.hostBehaviors` + `runtime.hostIntegration`: `getConfigDirFromHome` (`bin/install.js`) now branches on `configHome.kind === 'dot-home-nested'` instead of a hardcoded runtime literal; `projectLocalHookPrefix` (`src/shell-command-projection.cts`) reads `hostBehaviors.hookPathStyle` (`'raw'` → bare `dirName`, no `$CLAUDE_PROJECT_DIR` anchor); `applyAgentPathRewrites` (`src/runtime-artifact-conversion.cts`) reads `hostBehaviors.noPathRewrite` to skip the `~/.claude/` → pathPrefix rewrites; and `getProjectInstructionFile` (`src/runtime-name-policy.cts`) reads `hostBehaviors.projectInstructionFile` (`"GEMINI.md"` — Antigravity CLI's `contextFileName`, successor to the sunset Gemini CLI per #1928) instead of a hardcoded `canonical === 'antigravity'` check. The dead `isAntigravity` branches these functions previously carried are removed. `dispatch.subagentToolkit` flipped `undocumented` → `full` per the citation above (antigravity.google/docs/cli/features); `dispatch.namedDispatch`/`nested`/`maxDepth`/`backgroundDispatch` stay `undocumented` — no authoritative source states named/nested/depth-bounded dispatch or a `run_in_background`-style call-time param, so `negotiateHostCapabilities` degrades all four closed to their most-restrictive value (false/0), and `shouldFlattenDispatch` still forces antigravity's dispatch to flatten (inline) despite `dispatch.background: true`, because `backgroundDispatch` itself never reaches `true`. Two upgrades land: **UPGRADE 1 — permission-writer** (`configureAntigravityPermissions`, `runtime.permissionWriter: "antigravity"`) writes Antigravity's native `{"permissions":{"allow":[...]}}` schema (antigravity.google/docs/cli/permissions) into the same `settings.json` GSD's own hook registration writes, granting GSD's own `read_file`/`command` rules non-destructively. **UPGRADE 2 — MCP companion config** (`configureAntigravityMcpConfig`) writes a standalone `mcp_config.json` (antigravity.google/docs/cli/gcli-migration) registering the `gsd` MCP server, non-destructively preserving any other `mcpServers` entries. Both upgrades are covered by `tests/antigravity-upgrades.test.cjs`; the axis/negotiation/source-grep coverage above is in `tests/declarative-reference-antigravity.test.cjs`.
 
 ---
 
@@ -331,6 +333,35 @@ Sources consulted:
 Documentation gaps:
 - dispatch.nested
 - dispatch.maxDepth
+
+**EoS migration status (#2097):** Folded onto descriptor-driven dispatch.
+Augment already installed through the declarative adapter (nested-skill
+artifact layout, `settings-json` hook surface, Claude hook event dialect), but
+carried two remaining runtime-literal branches in
+`src/runtime-artifact-conversion.cts`: the 4 `~/.augment`/`$HOME/.augment`
+dot-dir rewrites in `_applyRuntimeRewrites`'s `case 'augment':` block are now
+built from `getDirName('augment')` (dirName-derived, byte-identical) instead
+of a hardcoded `.augment` literal, and the
+`applyRuntimeContentRewritesForCommandsInPlace` command-body conversion
+dispatch now reads `runtime.hostBehaviors.commandBodyConverter`
+(`"convertClaudeToAugmentMarkdown"`) instead of a hardcoded
+`runtime === 'augment'` branch. Two dead-code sites were also removed from
+`bin/install.js`: the orphaned `claudeToAugmentTools` map (superseded by the
+single-sourced converters per ADR-1508 / #1675) and the unreachable
+`else if (isAugment) { content = convertClaudeAgentToAugmentAgent(content); }`
+inline agent-conversion branch (augment has been on the descriptor-agents path
+since `_DESCRIPTOR_AGENTS_RUNTIMES` was introduced, making that `if`/`else if`
+arm dead). **UPGRADE 3 — MCP companion config**
+(`mergeGsdMcpServerIntoSettings`) registers the `gsd` MCP server directly
+inside the same `settings.json` `mcpServers` block GSD's own hook
+registration already writes (Augment hosts MCP in `settings.json`, unlike
+Antigravity's standalone `mcp_config.json`) — non-destructively preserving
+any other user-configured `mcpServers` entries; uninstall removes only the
+GSD-owned `gsd` entry. `settings.json` is golden-excluded
+(`HOOK_CONFIG_FILES`), so this upgrade produces no golden fixture change.
+Source-grep guard + fail-closed negotiation coverage is in
+`tests/declarative-reference-augment.test.cjs`; the dispatch/hook-bus/MCP
+upgrade coverage is in `tests/augment-upgrades.test.cjs`.
 
 ---
 
@@ -395,6 +426,8 @@ Sources consulted:
 - https://www.codebuddy.ai/docs/cli/sdk
 - https://www.codebuddy.ai/docs/cli/settings
 - /websites/codebuddy_cn (Context7)
+
+**EoS migration status (#2098):** Migrated onto the declarative adapter (dogfooded in `tests/declarative-reference-codebuddy.test.cjs`). The two remaining `isCodebuddy` branches in `bin/install.js` — a duplicate `commands/` slash-command output report, and a dead legacy agent-converter dispatch arm (unreachable since codebuddy is in `_DESCRIPTOR_AGENTS_RUNTIMES`) — were folded onto the already-generic `runtime.hostBehaviors.reportCommandsDir` (shared with Cursor) and removed outright; `isCodebuddy` no longer appears as a live read anywhere in `bin/install.js`, `src/runtime-artifact-conversion.cts`, `src/shell-command-projection.cts`, or `src/runtime-name-policy.cts`. Two upgrades land: (1) **extended hook events** — codebuddy's `extendedHookEvents` was previously `[]` (none wired); this PR wires all four — `SubagentStop`/`Stop`/`PreCompact`/`SubagentStart` — into `extendedHookEvents` (mirrors qwen/kimi), so an install now registers all four as hooks in `settings.json` alongside the pre-existing base session/tool events (`SessionStart`/`PreToolUse`/`PostToolUse`); cite https://www.codebuddy.ai/docs/cli/hooks. (2) **`dispatch.background`** — the descriptor already declared `true`, exceeding the `declarative-cli` profile baseline of `false`; the negotiation contract (`negotiateHostCapabilities`) now surfaces that value with no downgrade warning, documenting the legitimate deviation. Note: the CodeBuddy CLI has no background-dispatch frontmatter field on sub-agents (`agentMode`/`enabledAutoRun` are IDE-only per https://www.codebuddy.ai/docs/cli/sub-agents) — background dispatch remains a caller-side invocation parameter (`run_in_background: true`), not a field GSD's agent artifacts emit.
 
 ---
 

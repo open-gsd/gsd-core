@@ -165,7 +165,7 @@ const capabilities = {
       "supportTier": 1,
       "installSurface": "settings-json",
       "writesSharedSettings": true,
-      "permissionWriter": null,
+      "permissionWriter": "antigravity",
       "extendedHookEvents": [],
       "hostIntegration": {
         "embeddingMode": "declarative",
@@ -175,7 +175,7 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented",
+          "subagentToolkit": "full",
           "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
@@ -185,7 +185,11 @@ const capabilities = {
         "runtime": "go"
       },
       "hostBehaviors": {
-        "reviewerCli": true
+        "reviewerCli": true,
+        "projectInstructionFile": "GEMINI.md",
+        "noPathRewrite": true,
+        "hookPathStyle": "raw",
+        "globalDirResolver": "antigravity"
       }
     }
   },
@@ -356,6 +360,10 @@ const capabilities = {
       "writesSharedSettings": true,
       "permissionWriter": null,
       "extendedHookEvents": [],
+      "hostBehaviors": {
+        "commandBodyConverter": "convertClaudeToAugmentMarkdown",
+        "mcpCompanion": "settings-json"
+      },
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -780,7 +788,12 @@ const capabilities = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": [],
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -797,6 +810,9 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reportCommandsDir": true
       }
     }
   },
@@ -3837,7 +3853,7 @@ const runtimes = {
       "supportTier": 1,
       "installSurface": "settings-json",
       "writesSharedSettings": true,
-      "permissionWriter": null,
+      "permissionWriter": "antigravity",
       "extendedHookEvents": [],
       "hostIntegration": {
         "embeddingMode": "declarative",
@@ -3847,7 +3863,7 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented",
+          "subagentToolkit": "full",
           "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
@@ -3857,7 +3873,11 @@ const runtimes = {
         "runtime": "go"
       },
       "hostBehaviors": {
-        "reviewerCli": true
+        "reviewerCli": true,
+        "projectInstructionFile": "GEMINI.md",
+        "noPathRewrite": true,
+        "hookPathStyle": "raw",
+        "globalDirResolver": "antigravity"
       }
     }
   },
@@ -3945,6 +3965,10 @@ const runtimes = {
       "writesSharedSettings": true,
       "permissionWriter": null,
       "extendedHookEvents": [],
+      "hostBehaviors": {
+        "commandBodyConverter": "convertClaudeToAugmentMarkdown",
+        "mcpCompanion": "settings-json"
+      },
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -4221,7 +4245,12 @@ const runtimes = {
       "installSurface": "settings-json",
       "writesSharedSettings": true,
       "permissionWriter": null,
-      "extendedHookEvents": [],
+      "extendedHookEvents": [
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "SubagentStart"
+      ],
       "hostIntegration": {
         "embeddingMode": "declarative",
         "commandSurface": "slash-file",
@@ -4238,6 +4267,9 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "reportCommandsDir": true
       }
     }
   },

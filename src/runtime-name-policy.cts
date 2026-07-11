@@ -120,13 +120,26 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
  * Aliases are normalized via `canonicalizeRuntimeName` first, so inputs like
  * `codex-cli` resolve to `codex` → `AGENTS.md`. Replaces the prior codex-only
  * override in profile-output.cjs (#3163) which left AGENTS-native runtimes
- * (opencode/kilo/kimi) incorrectly emitting `.claude/CLAUDE.md`. Pure: no I/O.
+ * (opencode/kilo/kimi) incorrectly emitting `.claude/CLAUDE.md`. Pure: no I/O
+ * (the lazy `require` below reads a static generated module, not the disk).
+ *
+ * Descriptor-driven (ADR-1239 / #2096): antigravity's `GEMINI.md` is folded
+ * from a hardcoded `canonical === 'antigravity'` literal into a read of
+ * `runtime.hostBehaviors.projectInstructionFile`. claude/copilot stay
+ * hardcoded (out of scope here) mirroring `getDirName` below, which already
+ * lazy-`require`s `capability-registry.cjs` inside the function body to
+ * avoid a circular dependency at module load.
  */
 export function getProjectInstructionFile(runtime: unknown): string {
   const canonical = canonicalizeRuntimeName(runtime);
   if (canonical === 'claude') return '.claude/CLAUDE.md';
   if (canonical === 'copilot') return '.github/copilot-instructions.md';
-  if (canonical === 'antigravity') return 'GEMINI.md';
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { runtimes } = require('./capability-registry.cjs') as {
+    runtimes: Record<string, { runtime?: { hostBehaviors?: { projectInstructionFile?: string } } } | undefined>;
+  };
+  const declared = canonical ? runtimes[canonical]?.runtime?.hostBehaviors?.projectInstructionFile : undefined;
+  if (typeof declared === 'string' && declared.length > 0) return declared;
   // codex, opencode, kilo, kimi, AND unknown/future runtimes all default to
   // root AGENTS.md (the safe cross-agent instruction file).
   return 'AGENTS.md';

@@ -152,8 +152,8 @@ Runtime capabilities describe how GSD projects its artefacts onto one host CLI. 
 | Support tier | `runtime.supportTier` | Integer: `1` (fully tested first-party) \| `2` (shipped, lower coverage). |
 | Install surface | `runtime.installSurface` | Closed enum: `settings-json` \| `codex-toml` \| `copilot-instructions` \| `cline-rules` \| `cursor-hooks-json` \| `profile-marker-only`. |
 | Shared settings | `runtime.writesSharedSettings` | boolean. Whether the runtime writes a shared `settings.json`. |
-| Permission writer | `runtime.permissionWriter` | `null` \| `"opencode"` \| `"kilo"`. The finish-time permissions-sidecar writer. |
-| Extended hook events | `runtime.extendedHookEvents` | string[] over a closed vocabulary: `SubagentStop`, `Stop`, `PreCompact`, `FileChanged`, `BeforeAgent`, `AfterAgent`, `BeforeModel`. |
+| Permission writer | `runtime.permissionWriter` | `null` \| `"opencode"` \| `"kilo"` \| `"antigravity"`. The finish-time permissions-sidecar writer. |
+| Extended hook events | `runtime.extendedHookEvents` | string[] over a closed vocabulary: `SubagentStop`, `Stop`, `PreCompact`, `FileChanged`, `BeforeAgent`, `AfterAgent`, `BeforeModel`, `SubagentStart`. |
 
 For a minimal `role: "runtime"` example, see [ADR-1016 §Decision 8](../adr/1016-runtime-capability-descriptor.md).
 

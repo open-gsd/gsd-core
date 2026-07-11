@@ -82,6 +82,10 @@
     "writesSharedSettings": true,
     "permissionWriter": null,
     "extendedHookEvents": [],
+    "hostBehaviors": {
+      "commandBodyConverter": "convertClaudeToAugmentMarkdown",
+      "mcpCompanion": "settings-json"
+    },
     "hostIntegration": {
       "embeddingMode": "declarative",
       "commandSurface": "slash-file",

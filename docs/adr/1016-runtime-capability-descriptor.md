@@ -116,9 +116,9 @@ Selects which config-writing adapter `resolveRuntimeConfigIntent` (in `runtime-c
 
 Whether the runtime writes a shared `settings.json`. Replaces the former inline boolean per runtime in `runtime-config-adapter-registry`. Together with `installSurface` this fully parameterises the adapter-selection path.
 
-#### `permissionWriter` — `null | 'opencode' | 'kilo'`
+#### `permissionWriter` — `null | 'opencode' | 'kilo' | 'antigravity'`
 
-The finish-time permissions-sidecar writer (the JSONC file opencode and kilo require). Replaces the old `finishPermissionWriter` field in the `runtime-config-adapter-registry` `REGISTRY` table. All 14 runtimes that write no permissions sidecar carry `null`.
+The finish-time permissions-sidecar writer. `opencode`/`kilo` write a dedicated JSONC config file; `antigravity` (#2096 Phase B Upgrade 1) instead merges a `permissions.allow` array into the SAME shared `settings.json` GSD's own hook registration writes, plus a standalone `mcp_config.json` MCP-companion profile (Upgrade 2, dispatched alongside it). Replaces the old `finishPermissionWriter` field in the `runtime-config-adapter-registry` `REGISTRY` table. All 13 runtimes that write no permissions sidecar carry `null`.
 
 #### `extendedHookEvents` — `string[]` over a closed event vocabulary
 
