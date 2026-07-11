@@ -1385,6 +1385,14 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       assert.equal(compactModelName('Sonnet 5 (500K context)'), 'Sonnet 5 (500K)');
       assert.equal(compactModelName('Opus 5 (2M context)'), 'Opus 5 (2M)');
     });
+    test('handles the abbreviated "ctx" variant (#2160 approval condition)', () => {
+      assert.equal(compactModelName('Sonnet 4.5 (1M ctx)'), 'Sonnet 4.5 (1M)');
+      assert.equal(compactModelName('Opus 5 (2M CTX)'), 'Opus 5 (2M)');
+    });
+    test('leaves non-context parentheticals untouched', () => {
+      assert.equal(compactModelName('Sonnet 5 (beta)'), 'Sonnet 5 (beta)');
+      assert.equal(compactModelName('Opus 4 (deprecated)'), 'Opus 4 (deprecated)');
+    });
     test('leaves ordinary names unchanged', () => {
       assert.equal(compactModelName('Claude'), 'Claude');
       assert.equal(compactModelName('Sonnet 4.5'), 'Sonnet 4.5');

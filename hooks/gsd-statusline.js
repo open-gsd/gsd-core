@@ -329,7 +329,7 @@ function contextTokenSuffix(currentUsage) {
  */
 function compactModelName(name) {
   if (typeof name !== 'string') return name;
-  return name.replace(/\s*\(([^)]+?)\s+context\)$/i, ' ($1)');
+  return name.replace(/\s*\(([^)]+?)\s+(?:context|ctx)\)$/i, ' ($1)');
 }
 
 // --- stdin ------------------------------------------------------------------
