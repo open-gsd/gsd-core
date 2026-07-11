@@ -363,12 +363,20 @@ describe('isValidGsdRange', () => {
     );
   });
 
-  test('fast-check property: strings with letters where digits are expected are invalid', () => {
+  test('fast-check property: a non-numeric major segment is always invalid', () => {
+    // Replacing a numeric segment with letters can never be a well-formed range.
+    // Letters-only (not arbitrary garbage) keeps the generator from accidentally
+    // producing a valid semver-with-prerelease like `1.2.3-rc` — `>=1.2.3-rc.0.0`
+    // IS a legitimate prerelease range the validator accepts, which would make an
+    // "always invalid" assertion intermittently fail (a hidden flake).
     fc.assert(
       fc.property(
-        fc.string({ minLength: 1, maxLength: 8 }).filter((s) => /[A-Za-z]/.test(s) && !/^\s*$/.test(s)),
-        (garbage) => {
-          assert.equal(isValidGsdRange(`>=${garbage}.0.0`), false, garbage);
+        fc.constantFrom('', '>=', '>', '<=', '<', '=', '^', '~'),
+        fc
+          .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), { minLength: 1, maxLength: 6 })
+          .map((chars) => chars.join('')),
+        (op, letters) => {
+          assert.equal(isValidGsdRange(`${op}${letters}.0.0`), false, `${op}${letters}.0.0`);
         },
       ),
     );
