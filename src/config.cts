@@ -763,6 +763,13 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   const VALID_CONTEXT_POSITIONS = ['front', 'end'];
   if (kp === 'statusline.context_position') assertEnumValue(parsedValue, val, VALID_CONTEXT_POSITIONS, 'statusline.context_position');
 
+  // statusline.show_context_tokens — boolean only
+  if (kp === 'statusline.show_context_tokens') {
+    if (typeof parsedValue !== 'boolean') {
+      error(`Invalid statusline.show_context_tokens '${val}'. Must be a boolean (true or false).`);
+    }
+  }
+
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
   if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');
