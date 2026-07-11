@@ -2743,9 +2743,11 @@ function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames
  *   ~/\.claude\b → normalizedPathPrefix
  *   $HOME/\.claude\b → normalizedPathPrefix
  *
- * Skipped for copilot and antigravity (which do NOT do path rewrites in the
- * inline loop). NO stamp (_stampNonClaudeRuntimeDefaults) — agents are NOT
- * stamped in the inline loop.
+ * Skipped for copilot (hardcoded — #2099 will fold it) and for any runtime
+ * that declares `hostBehaviors.noPathRewrite` (descriptor-driven, ADR-1239 /
+ * #2096 — folds the prior hardcoded `runtime === 'antigravity'` literal;
+ * Antigravity does NOT do path rewrites in the inline loop). NO stamp
+ * (_stampNonClaudeRuntimeDefaults) — agents are NOT stamped in the inline loop.
  *
  * ADR-1235 §1: pre-converter cross-cutting for descriptor-driven agent pipeline.
  * Exported as `applyAgentPathRewrites` for testing and for injection into
@@ -2754,10 +2756,10 @@ function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames
  * @param content     raw agent file content
  * @param runtime     canonical runtime ID
  * @param pathPrefix  trailing-slash path prefix (e.g. '$HOME/.cursor/')
- * @returns content with path-prefix rewrites applied (or unchanged for copilot/antigravity)
+ * @returns content with path-prefix rewrites applied (or unchanged for copilot / noPathRewrite runtimes)
  */
 function applyAgentPathRewrites(content: string, runtime: string, pathPrefix: string): string {
-  if (runtime === 'copilot' || runtime === 'antigravity') return content;
+  if (runtime === 'copilot' || _hostBehaviors(runtime).noPathRewrite === true) return content;
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
   content = content.replace(/~\/\.claude\//g, pathPrefix);
   content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);

@@ -717,7 +717,8 @@ const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
 const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
-const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo']);
+// 'antigravity' added #2096 Phase B Upgrade 1 — settings.json permissions.allow writer.
+const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo', 'antigravity']);
 // SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today — see
 // capabilities/qwen/capability.json's extendedHookEvents).
 const VALID_EXTENDED_HOOK_EVENTS = new Set(['SubagentStop', 'Stop', 'PreCompact', 'FileChanged', 'BeforeAgent', 'AfterAgent', 'BeforeModel', 'SubagentStart']);

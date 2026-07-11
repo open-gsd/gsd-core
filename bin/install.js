@@ -386,6 +386,12 @@ const FALLBACK_HOST_BEHAVIORS = Object.freeze({
     legacyCommandsGsdInstallMigration: true,
     legacyCommandsGsdUninstall: 'global',
   }),
+  // antigravity's global config dir is resolved dynamically (env-overridable,
+  // multi-segment) via resolveAntigravityGlobalDir in getConfigDirFromHome. If the
+  // registry fails to load, this floor keeps that routing intact instead of
+  // silently falling through to the generic getGlobalConfigHomeFragment default
+  // (which would return the wrong '.claude' fragment). (ADR-1239 / #2096)
+  antigravity: Object.freeze({ globalDirResolver: 'antigravity' }),
 });
 
 /**
@@ -640,7 +646,15 @@ function getConfigDirFromHome(runtime, isGlobal) {
   // multi-segment via resolveAntigravityGlobalDir + path.relative) — not a table
   // entry. (The prior inner `if (!isGlobal) return "'.agents'"` was unreachable:
   // !isGlobal returns at the top of this function.)
-  if (runtime === 'antigravity') {
+  // Descriptor-driven (ADR-1239 / #2096): folded from a hardcoded
+  // `runtime === 'antigravity'` literal into a read of the runtime's
+  // `hostBehaviors.globalDirResolver` descriptor field (via _hostBehaviors, which
+  // also degrades to FALLBACK_HOST_BEHAVIORS on registry-load failure). This is
+  // antigravity-unique: unlike `configHome.kind === 'dot-home-nested'` (which
+  // windsurf also declares — see capabilities/windsurf/capability.json — and
+  // would wrongly route windsurf's global dir through
+  // resolveAntigravityGlobalDir), `globalDirResolver` is only set by antigravity.
+  if (_hostBehaviors(runtime).globalDirResolver === 'antigravity') {
     const antigravityDir = resolveAntigravityGlobalDir();
     const rel = path.relative(os.homedir(), antigravityDir);
     const segments = rel.split(path.sep).filter(Boolean);
@@ -6843,7 +6857,8 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // skipSharedHooksInstall fold (was never referenced here besides the
   // destructure). #2095: isKimi likewise dropped — kimi is now a hooks/
   // consumer, so its former `&& !isKimi` uninstall guards were removed.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
+  // #2096: isAntigravity dropped — unused in this function.
+  const { isOpencode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -7505,6 +7520,32 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       }
     }
 
+    // #2096 Phase B Upgrade 1 — Remove GSD-owned Antigravity permissions.allow
+    // rules from settings.json. Symmetric to the Claude branch above: filters
+    // only the exact GSD-owned rule strings (regenerated from the current
+    // configDir) to preserve any user-added allow entries and all deny/ask.
+    if (resolveInstallPlan(runtime).finishPermissionWriter === 'antigravity' && settings.permissions) {
+      let antigravityPermissionsModified = false;
+      if (Array.isArray(settings.permissions.allow)) {
+        const gsdRules = new Set(buildAntigravityAllowRules(targetDir));
+        const before = settings.permissions.allow.length;
+        settings.permissions.allow = settings.permissions.allow.filter((e) => !gsdRules.has(e));
+        if (settings.permissions.allow.length !== before) {
+          antigravityPermissionsModified = true;
+        }
+        if (settings.permissions.allow.length === 0) {
+          delete settings.permissions.allow;
+        }
+      }
+      if (Object.keys(settings.permissions).length === 0) {
+        delete settings.permissions;
+      }
+      if (antigravityPermissionsModified) {
+        settingsModified = true;
+        console.log(`  ${green}✓${reset} Removed GSD permissions from settings.json`);
+      }
+    }
+
     if (settingsModified) {
       writeSettings(settingsPath, settings);
       removedCount++;
@@ -7588,6 +7629,29 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
           fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
           removedCount++;
           console.log(`  ${green}✓${reset} Removed GSD permissions from ${path.basename(configPath)}`);
+        }
+      } catch (e) {
+        // Ignore JSON parse errors
+      }
+    }
+  }
+
+  // 8. For Antigravity, remove the MCP companion entry from mcp_config.json
+  // (#2096 Phase B Upgrade 2). Only the GSD-owned mcpServers.gsd key is
+  // removed — any other user-configured MCP servers are preserved.
+  if (resolveInstallPlan(runtime).finishPermissionWriter === 'antigravity') {
+    const mcpConfigPath = path.join(targetDir, 'mcp_config.json');
+    if (fs.existsSync(mcpConfigPath)) {
+      try {
+        const mcpConfig = JSON.parse(fs.readFileSync(mcpConfigPath, 'utf8'));
+        if (mcpConfig && typeof mcpConfig === 'object' && mcpConfig.mcpServers && mcpConfig.mcpServers.gsd !== undefined) {
+          delete mcpConfig.mcpServers.gsd;
+          if (Object.keys(mcpConfig.mcpServers).length === 0) {
+            delete mcpConfig.mcpServers;
+          }
+          fs.writeFileSync(mcpConfigPath, JSON.stringify(mcpConfig, null, 2) + '\n');
+          removedCount++;
+          console.log(`  ${green}✓${reset} Removed GSD MCP companion server from mcp_config.json`);
         }
       } catch (e) {
         // Ignore JSON parse errors
@@ -7849,6 +7913,172 @@ function configureKiloPermissions(isGlobal = true, configDir = null) {
 }
 
 /**
+ * Convert an absolute path to a `~`-relative form when it lives under the
+ * user's home directory (generalizes configureKiloPermissions'
+ * single-default-dir shorthand to Antigravity's three probed sibling config
+ * dirs — antigravity/antigravity-ide/antigravity-cli under ~/.gemini — none of
+ * which is a single fixed "default").
+ */
+function toTildePosixPath(absPath) {
+  const posixPath = absPath.replace(/\\/g, '/');
+  const posixHome = os.homedir().replace(/\\/g, '/');
+  return posixPath === posixHome || posixPath.startsWith(`${posixHome}/`)
+    ? `~${posixPath.slice(posixHome.length)}`
+    : posixPath;
+}
+
+/**
+ * Antigravity permission rule strings this installer contributes.
+ * Schema: antigravity.google/docs/cli/permissions — "action(target)" rule
+ * strings in permissions.{allow,deny,ask}, evaluated deny > ask > allow. GSD
+ * only ever contributes to `allow` — never deny/ask (those are user-owned risk
+ * decisions this installer has no business making).
+ */
+function buildAntigravityAllowRules(configDir) {
+  const gsdPath = toTildePosixPath(configDir);
+  return [
+    `read_file(${gsdPath}/gsd-core/*)`,
+    `read_file(${gsdPath}/agents/gsd-*)`,
+    `read_file(${gsdPath}/skills/gsd-*)`,
+    `command(node ${gsdPath}/hooks/*)`,
+  ];
+}
+
+/**
+ * Configure Antigravity permissions to allow reading/executing GSD's installed
+ * tree without per-call approval prompts (#2096 Phase B Upgrade 1 — mirrors
+ * configureKiloPermissions/configureOpencodePermissions).
+ *
+ * Antigravity's permission schema (antigravity.google/docs/cli/permissions) is
+ * `{"permissions":{"allow":[...],"deny":[...],"ask":[...]}}`, living in the
+ * SAME settings.json GSD's own hook registration writes for this runtime
+ * (installSurface: 'settings-json', writesSharedSettings: true) — unlike
+ * Kilo/OpenCode, which write a separate native config file. This function
+ * re-reads the file (already containing GSD's hooks by the time finishInstall
+ * reaches this call) and only appends to permissions.allow.
+ *
+ * Non-destructive + idempotent: only `permissions.allow` is touched; an
+ * existing user permissions block (including any deny/ask entries, or
+ * unrelated allow entries) is preserved untouched.
+ *
+ * @param {boolean} isGlobal - Whether this is a global or local install
+ * @param {string|null} configDir - Resolved config directory when already known
+ */
+function configureAntigravityPermissions(isGlobal = true, configDir = null) {
+  // For local installs, use ./.agents/ (GSD's antigravity localConfigDir)
+  // For global installs, use the resolved ~/.gemini/antigravity{,-ide,-cli}
+  const antigravityConfigDir = configDir || (isGlobal
+    ? getGlobalConfigDir('antigravity', explicitConfigDir)
+    : path.join(process.cwd(), '.agents'));
+  // Ensure config directory exists
+  fs.mkdirSync(antigravityConfigDir, { recursive: true });
+
+  const configPath = path.join(antigravityConfigDir, 'settings.json');
+
+  // Read existing settings.json (readSettings tolerates JSONC + missing file;
+  // returns null — and warns — only when the file exists but fails to parse).
+  const config = readSettings(configPath);
+  if (config === null) {
+    // Cannot parse — DO NOT overwrite user's config (readSettings already warned).
+    return;
+  }
+
+  // Ensure permission structure exists
+  if (!config.permissions || typeof config.permissions !== 'object' || Array.isArray(config.permissions)) {
+    config.permissions = {};
+  }
+  if (!Array.isArray(config.permissions.allow)) {
+    config.permissions.allow = [];
+  }
+
+  let modified = false;
+  for (const rule of buildAntigravityAllowRules(antigravityConfigDir)) {
+    if (!config.permissions.allow.includes(rule)) {
+      config.permissions.allow.push(rule);
+      modified = true;
+    }
+  }
+
+  if (!modified) {
+    return; // Already configured
+  }
+
+  writeSettings(configPath, config);
+  console.log(`  ${green}✓${reset} Configured Antigravity permissions for GSD paths`);
+}
+
+/**
+ * Configure Antigravity's MCP companion server config (#2096 Phase B
+ * Upgrade 2).
+ *
+ * Antigravity CLI manages MCP servers via standalone `mcp_config.json`
+ * profiles rather than nesting them in settings.json (antigravity.google/docs/
+ * cli/gcli-migration: "Antigravity CLI uses standalone mcp_config.json
+ * profiles in ~/.gemini/config/ for global servers and .agents/mcp_config.json
+ * for workspace servers"). The raw schema for the Antigravity IDE surface
+ * itself is unpublished (docs are JS-rendered), so this follows the CLI's
+ * documented standalone-profile convention plus the standard Gemini/MCP
+ * `mcpServers` shape.
+ *
+ * BEST-EFFORT PATH CHOICE: rather than the CLI doc's separate `~/.gemini/config/`
+ * directory for global scope, this writes `<configDir>/mcp_config.json` — the
+ * SAME resolved configDir as settings.json (configureAntigravityPermissions) —
+ * because (1) GSD's own antigravity configDir resolution already varies
+ * per-user across three sibling dirs (antigravity/antigravity-ide/
+ * antigravity-cli — see resolveAntigravityGlobalDir), so a hardcoded separate
+ * shared path would not track that resolution, and (2) it matches the doc's
+ * OWN workspace-scope convention exactly (`.agents/mcp_config.json`, which IS
+ * GSD's local configDir for antigravity), keeping global/local symmetric and
+ * consistent with the configDir-relative convention every other GSD
+ * permission writer (kilo/opencode) already uses.
+ *
+ * Non-destructive + idempotent: only adds mcpServers.gsd when entirely absent;
+ * any other user-configured mcpServers entries (or a user's OWN "gsd" override)
+ * are preserved untouched (Hyrum's Law — mirrors OpenCode's config.mcp.gsd guard).
+ *
+ * @param {boolean} isGlobal - Whether this is a global or local install
+ * @param {string|null} configDir - Resolved config directory when already known
+ */
+function configureAntigravityMcpConfig(isGlobal = true, configDir = null) {
+  const antigravityConfigDir = configDir || (isGlobal
+    ? getGlobalConfigDir('antigravity', explicitConfigDir)
+    : path.join(process.cwd(), '.agents'));
+  fs.mkdirSync(antigravityConfigDir, { recursive: true });
+
+  const configPath = path.join(antigravityConfigDir, 'mcp_config.json');
+
+  let config = {};
+  if (fs.existsSync(configPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      config = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+    } catch (e) {
+      // Cannot parse - DO NOT overwrite user's config
+      console.log(`  ${yellow}⚠${reset} Could not parse mcp_config.json - skipping MCP companion config`);
+      console.log(`    ${dim}Reason: ${e.message}${reset}`);
+      console.log(`    ${dim}Your config was NOT modified. Fix the syntax manually if needed.${reset}`);
+      return;
+    }
+  }
+
+  if (!config.mcpServers || typeof config.mcpServers !== 'object' || Array.isArray(config.mcpServers)) {
+    config.mcpServers = {};
+  }
+
+  if (config.mcpServers.gsd !== undefined) {
+    return; // Already configured (or a user-owned override) — never clobber.
+  }
+
+  config.mcpServers.gsd = {
+    command: 'npx',
+    args: ['-y', '-p', PACKAGE_NAME, 'gsd-mcp-server'],
+  };
+
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+  console.log(`  ${green}✓${reset} Configured Antigravity MCP companion server (gsd)`);
+}
+
+/**
  * Verify a directory exists and contains files
  */
 function verifyInstalled(dirPath, description) {
@@ -7962,7 +8192,8 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // above, now covered by hostBehaviors.skipSharedHooksInstall.
   // #2095: isKimi dropped — kimi is now a hooks/ consumer like every other
   // settings-json-adjacent runtime, so the `&& !isKimi` term below was removed.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
+  // #2096: isAntigravity dropped — unused in this function.
+  const { isOpencode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // Claude local uses flatCommandsDir instead for manifest recording.
@@ -8469,7 +8700,11 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // below were removed, leaving isKimi unused in this function (the kimi
   // local-install-deferred branch above already reads
   // _hostBehaviors(runtime).localInstallDeferred instead of this flag).
-  const { isOpencode, isZcode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
+  // #2096: isAntigravity dropped — antigravity is in
+  // _DESCRIPTOR_AGENTS_RUNTIMES below, so its two legacy-agent-loop branches
+  // (the path-rewrite skip and the converter dispatch) were unreachable dead
+  // code; both were removed rather than re-gated on hostBehaviors.
+  const { isOpencode, isZcode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -9351,7 +9586,11 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         const bareDirRegex = /~\/\.claude\b/g;
         const bareHomeDirRegex = /\$HOME\/\.claude\b/g;
         const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
-        if (!isCopilot && !isAntigravity) {
+        // #2096: `&& !isAntigravity` dropped — antigravity is in
+        // _DESCRIPTOR_AGENTS_RUNTIMES above, so this whole branch is already
+        // unreachable for it; the path-rewrite skip for antigravity now lives
+        // in the descriptor-driven `applyAgentPathRewrites` (hostBehaviors.noPathRewrite).
+        if (!isCopilot) {
           content = content.replace(dirRegex, pathPrefix);
           content = content.replace(homeDirRegex, pathPrefix);
           content = content.replace(bareDirRegex, normalizedPathPrefix);
@@ -9402,8 +9641,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = convertClaudeAgentToCodexAgent(content);
         } else if (isCopilot) {
           content = convertClaudeAgentToCopilotAgent(content, isGlobal);
-        } else if (isAntigravity) {
-          content = convertClaudeAgentToAntigravityAgent(content, isGlobal);
         } else if (isWindsurf) {
           content = convertClaudeAgentToWindsurfAgent(content);
         } else if (isAugment) {
@@ -10437,7 +10674,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Claude Code sets $CLAUDE_PROJECT_DIR; Antigravity does not — and on
   // Windows its own substitution logic doubles the path (#2557). It runs
   // project hooks with the project dir as cwd, so bare relative paths work.
-  const localPrefix = projectLocalHookPrefix({ runtime, dirName });
+  // Descriptor-driven (ADR-1239 / #2096): hookPathStyle comes from the
+  // runtime's hostBehaviors instead of a hardcoded `runtime === 'antigravity'`
+  // check inside projectLocalHookPrefix.
+  const localPrefix = projectLocalHookPrefix({ runtime, dirName, hookPathStyle: _hostBehaviors(runtime).hookPathStyle });
   const hookOpts = { portableHooks: hasPortableHooks, runtime };
   // #2979: local-install hook commands also use the absolute node path so
   // GUI/minimal-PATH runtimes can resolve them. Bare `node` fails when the
@@ -10615,7 +10855,8 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // #2094: isTrae dropped — unused in this function.
   // #2095: isKimi dropped — the Kimi "Done!" banner below reads
   // _hostBehaviors(runtime).doneBannerStyle === 'kimi-agent-file' (descriptor-driven), not this flag.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
+  // #2096: isAntigravity dropped — unused in this function.
+  const { isOpencode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {
@@ -10696,6 +10937,15 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // Configure Kilo permissions
   if (plan.finishPermissionWriter === 'kilo') {
     configureKiloPermissions(isGlobal, configDir);
+  }
+
+  // Configure Antigravity permissions + MCP companion server (#2096 Phase B
+  // Upgrades 1+2). Not GSD_TEST_MODE-gated — mirrors Kilo's dispatch exactly;
+  // both writers target files (settings.json, mcp_config.json) scoped under
+  // this runtime's own configDir, so they are safe to run unconditionally.
+  if (plan.finishPermissionWriter === 'antigravity') {
+    configureAntigravityPermissions(isGlobal, configDir);
+    configureAntigravityMcpConfig(isGlobal, configDir);
   }
 
   // For non-Claude runtimes, DEFAULT resolve_model_ids to "omit" in ~/.gsd/defaults.json
@@ -11675,6 +11925,11 @@ module.exports = {
     getConfigDirFromHome,
     resolveKiloConfigPath,
     configureKiloPermissions,
+    // #2096 Phase B Upgrades 1+2 — Antigravity permission-writer + MCP companion
+    toTildePosixPath,
+    buildAntigravityAllowRules,
+    configureAntigravityPermissions,
+    configureAntigravityMcpConfig,
     claudeToCopilotTools,
     convertCopilotToolName,
     convertClaudeToCopilotContent,

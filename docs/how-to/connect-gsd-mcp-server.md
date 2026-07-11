@@ -29,7 +29,12 @@ host.
 - **Claude Code / Codex / Cursor / Cline / Hermes** — under the host's
   `mcpServers` object (project or user config).
 - **VS Code** — in the workspace MCP servers list.
-- **Antigravity CLI** — under its `mcpServers` block.
+- **Antigravity** — under the `mcpServers` block of its standalone
+  `mcp_config.json` profile (not embedded in `settings.json`) — global at
+  `~/.gemini/antigravity/mcp_config.json` (or the sibling
+  `antigravity-ide`/`antigravity-cli` dir GSD resolved into), project-local at
+  `.agents/mcp_config.json`. GSD's installer configures this entry
+  automatically (`--antigravity` installs).
 - **OpenCode** — under the `mcp` key (**not** `mcpServers`), in
   `~/.config/opencode/opencode.jsonc` (global) or `./opencode.json`
   (project). The entry shape also differs — see below.

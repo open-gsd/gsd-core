@@ -165,7 +165,7 @@ const capabilities = {
       "supportTier": 1,
       "installSurface": "settings-json",
       "writesSharedSettings": true,
-      "permissionWriter": null,
+      "permissionWriter": "antigravity",
       "extendedHookEvents": [],
       "hostIntegration": {
         "embeddingMode": "declarative",
@@ -175,7 +175,7 @@ const capabilities = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented",
+          "subagentToolkit": "full",
           "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
@@ -185,7 +185,11 @@ const capabilities = {
         "runtime": "go"
       },
       "hostBehaviors": {
-        "reviewerCli": true
+        "reviewerCli": true,
+        "projectInstructionFile": "GEMINI.md",
+        "noPathRewrite": true,
+        "hookPathStyle": "raw",
+        "globalDirResolver": "antigravity"
       }
     }
   },
@@ -3837,7 +3841,7 @@ const runtimes = {
       "supportTier": 1,
       "installSurface": "settings-json",
       "writesSharedSettings": true,
-      "permissionWriter": null,
+      "permissionWriter": "antigravity",
       "extendedHookEvents": [],
       "hostIntegration": {
         "embeddingMode": "declarative",
@@ -3847,7 +3851,7 @@ const runtimes = {
           "nested": "undocumented",
           "maxDepth": "undocumented",
           "background": true,
-          "subagentToolkit": "undocumented",
+          "subagentToolkit": "full",
           "backgroundDispatch": "undocumented"
         },
         "modelMode": "passive",
@@ -3857,7 +3861,11 @@ const runtimes = {
         "runtime": "go"
       },
       "hostBehaviors": {
-        "reviewerCli": true
+        "reviewerCli": true,
+        "projectInstructionFile": "GEMINI.md",
+        "noPathRewrite": true,
+        "hookPathStyle": "raw",
+        "globalDirResolver": "antigravity"
       }
     }
   },

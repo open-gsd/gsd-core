@@ -71,7 +71,7 @@
     "supportTier": 1,
     "installSurface": "settings-json",
     "writesSharedSettings": true,
-    "permissionWriter": null,
+    "permissionWriter": "antigravity",
     "extendedHookEvents": [],
     "hostIntegration": {
       "embeddingMode": "declarative",
@@ -81,7 +81,7 @@
         "nested": "undocumented",
         "maxDepth": "undocumented",
         "background": true,
-        "subagentToolkit": "undocumented",
+        "subagentToolkit": "full",
         "backgroundDispatch": "undocumented"
       },
       "modelMode": "passive",
@@ -91,7 +91,11 @@
       "runtime": "go"
     },
     "hostBehaviors": {
-      "reviewerCli": true
+      "reviewerCli": true,
+      "projectInstructionFile": "GEMINI.md",
+      "noPathRewrite": true,
+      "hookPathStyle": "raw",
+      "globalDirResolver": "antigravity"
     }
   }
 }

@@ -4453,11 +4453,12 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     }
   });
 
-  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo}', () => {
+  test('VALID_PERMISSION_WRITERS covers exactly {opencode, kilo, antigravity}', () => {
     assert.ok(VALID_PERMISSION_WRITERS instanceof Set, 'Must be a Set');
-    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 2, 'Must cover 2 permission writers');
+    assert.strictEqual(VALID_PERMISSION_WRITERS.size, 3, 'Must cover 3 permission writers');
     assert.ok(VALID_PERMISSION_WRITERS.has('opencode'), 'Must include opencode');
     assert.ok(VALID_PERMISSION_WRITERS.has('kilo'), 'Must include kilo');
+    assert.ok(VALID_PERMISSION_WRITERS.has('antigravity'), 'Must include antigravity (#2096)');
   });
 
   // Confirm the valid base fixture does NOT produce errors (sanity)

@@ -22,9 +22,12 @@
  *     false for codex / copilot / kilo / cursor / windsurf / trae / cline / kimi (legacy exclusion list).
  *     true for all other runtimes.
  * - `finishPermissionWriter` names the finishInstall-phase dedicated config writer:
- *     'opencode' → writes BOTH shared settings AND its own permissions file.
- *     'kilo'     → writes only its own permissions file.
- *     null       → no dedicated permission writer.
+ *     'opencode'    → writes BOTH shared settings AND its own permissions file.
+ *     'kilo'        → writes only its own permissions file.
+ *     'antigravity' → writes BOTH shared settings.json permissions.allow AND a
+ *                      standalone mcp_config.json MCP companion profile (#2096
+ *                      Phase B Upgrades 1+2).
+ *     null          → no dedicated permission writer.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -45,7 +48,7 @@ type ConfigInstallSurface =
   | 'cursor-hooks-json'
   | 'profile-marker-only';
 
-type FinishPermissionWriter = 'opencode' | 'kilo' | null;
+type FinishPermissionWriter = 'opencode' | 'kilo' | 'antigravity' | null;
 
 type HooksSurface =
   | 'settings-json'

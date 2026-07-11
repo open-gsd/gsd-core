@@ -98,9 +98,17 @@ export function formatManagedHookScriptToken(scriptPath: string, opts: { platfor
   return JSON.stringify(scriptPath.replace(/\\/g, '/'));
 }
 
-export function projectLocalHookPrefix({ runtime = 'claude', dirName }: { runtime?: string; dirName?: string | null }): string | undefined | null {
+export function projectLocalHookPrefix({ runtime: _runtime = 'claude', dirName, hookPathStyle }: { runtime?: string; dirName?: string | null; hookPathStyle?: string | null }): string | undefined | null {
   if (!dirName) return dirName;
-  return (runtime === 'antigravity')
+  // Descriptor-driven (ADR-1239 / #2096): folded from a hardcoded
+  // `runtime === 'antigravity'` literal into the runtime's declared
+  // `hostBehaviors.hookPathStyle`. Runtimes that always run project hooks
+  // with the project dir as cwd (Antigravity today) declare 'raw' and get
+  // the bare dirName; every other runtime keeps the $CLAUDE_PROJECT_DIR-
+  // anchored prefix. `runtime` itself is now unused here but stays in the
+  // signature for call-site/back-compat parity (kept `_`-prefixed to
+  // satisfy no-unused-vars).
+  return (hookPathStyle === 'raw')
     ? dirName
     : `"$CLAUDE_PROJECT_DIR"/${dirName}`;
 }
