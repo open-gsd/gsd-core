@@ -1363,3 +1363,50 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
     });
   });
 }
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Compact 1M model badge
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const statusline = require('../hooks/gsd-statusline.js');
+  const { compactModelName } = statusline;
+
+  describe('compactModelName', () => {
+    test('collapses "(1M context)" to "(1M)"', () => {
+      assert.equal(compactModelName('Sonnet 4.5 (1M context)'), 'Sonnet 4.5 (1M)');
+    });
+    test('is case-insensitive on "context" and preserves the token case', () => {
+      assert.equal(compactModelName('Opus 4.6  (1m CONTEXT)'), 'Opus 4.6 (1m)');
+    });
+    test('tolerates future window sizes (#2160 approval condition)', () => {
+      assert.equal(compactModelName('Sonnet 5 (500K context)'), 'Sonnet 5 (500K)');
+      assert.equal(compactModelName('Opus 5 (2M context)'), 'Opus 5 (2M)');
+    });
+    test('leaves ordinary names unchanged', () => {
+      assert.equal(compactModelName('Claude'), 'Claude');
+      assert.equal(compactModelName('Sonnet 4.5'), 'Sonnet 4.5');
+    });
+    test('only matches the suffix position', () => {
+      assert.equal(
+        compactModelName('(1M context) Special'), '(1M context) Special');
+    });
+    test('passes non-strings through', () => {
+      assert.equal(compactModelName(undefined), undefined);
+      assert.equal(compactModelName(null), null);
+    });
+  });
+
+  describe('renderStatusline uses the compact badge', () => {
+    test('rendered output carries (1M), not (1M context)', () => {
+      const out = statusline.renderStatusline({
+        model: { display_name: 'Sonnet 4.5 (1M context)' },
+        workspace: { current_dir: require('node:os').tmpdir() },
+      });
+      assert.ok(out.includes('Sonnet 4.5 (1M)'), `expected compact badge; got: ${out}`);
+      assert.ok(!out.includes('(1M context)'), `expected no verbose suffix; got: ${out}`);
+    });
+  });
+}
