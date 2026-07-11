@@ -342,9 +342,13 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
     let destName: string;
     if (kind.kind === 'agents') {
       // Agent files already carry the gsd- prefix in the source dir.
-      // #1575: copilot agents get .agent.md suffix (mirrors inline loop line ~9118).
-      destName = runtime === 'copilot'
-        ? entry.name.replace(/\.md$/, '.agent.md')
+      // #2099: descriptor-driven via hostBehaviors.agentFileExtension (was
+      // hardcoded `runtime === 'copilot'`). copilot declares '.agent.md';
+      // every other runtime's descriptor leaves this unset, so destName falls
+      // back to entry.name unchanged (byte-parity, #1575 origin comment).
+      const _agentExt = runtime ? _hostBehaviors(runtime).agentFileExtension : undefined;
+      destName = _agentExt
+        ? entry.name.replace(/\.md$/, _agentExt)
         : entry.name;
     } else if (namespacedByDir) {
       // Directory is the namespace; don't double-prefix the filename

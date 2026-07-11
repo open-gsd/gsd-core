@@ -6851,7 +6851,9 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // consumer, so its former `&& !isKimi` uninstall guards were removed.
   // #2096: isAntigravity dropped — unused in this function.
   // #2098: isCodebuddy dropped — unused in this function.
-  const { isOpencode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCline } = runtimeFlags(runtime);
+  // #2099: isCopilot dropped — both Copilot side-effect branches below are now
+  // gated on resolveInstallPlan(runtime).installSurface === 'copilot-instructions'.
+  const { isOpencode, isCodex, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCline } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -6880,7 +6882,13 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // #786: AGENTS.md lives at the repo root (outside targetDir) for local Copilot
   // installs, so its cleanup must run even when .github (targetDir) was already
   // removed — i.e. BEFORE the "target directory missing" early-return below.
-  if (isCopilot && !isGlobal) {
+  // #2099: descriptor-driven via resolveInstallPlan(runtime).installSurface ===
+  // 'copilot-instructions' (was hardcoded `isCopilot`). Mirrors the install-time
+  // gate at the 'copilot-instructions' branch below (~line 10471 equivalent),
+  // which writes this same repo-root AGENTS.md only for local ('!isGlobal')
+  // installs — 'copilot-instructions' is unique to copilot's descriptor, so
+  // this is byte-parity.
+  if (resolveInstallPlan(runtime).installSurface === 'copilot-instructions' && !isGlobal) {
     const agentsMdPath = path.join(process.cwd(), 'AGENTS.md');
     if (fs.existsSync(agentsMdPath)) {
       const content = fs.readFileSync(agentsMdPath, 'utf8');
@@ -7064,7 +7072,10 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   }
 
   // 1b. Non-layout Copilot side-effect: copilot-instructions.md cleanup
-  if (isCopilot) {
+  // #2099: descriptor-driven via resolveInstallPlan(runtime).installSurface ===
+  // 'copilot-instructions' (was hardcoded `isCopilot`), mirroring the same
+  // gate used at the install-time 'copilot-instructions' branch.
+  if (resolveInstallPlan(runtime).installSurface === 'copilot-instructions') {
     const instructionsPath = path.join(targetDir, 'copilot-instructions.md');
     if (fs.existsSync(instructionsPath)) {
       const content = fs.readFileSync(instructionsPath, 'utf8');
@@ -8223,7 +8234,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // settings-json-adjacent runtime, so the `&& !isKimi` term below was removed.
   // #2096: isAntigravity dropped — unused in this function.
   // #2098: isCodebuddy dropped — unused in this function.
-  const { isOpencode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCline } = runtimeFlags(runtime);
+  // #2099: isCopilot dropped — was only used in the hooks-tracking conditional
+  // above, now covered by hostBehaviors.skipSharedHooksInstall.
+  const { isOpencode, isCodex, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCline } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // Claude local uses flatCommandsDir instead for manifest recording.
@@ -8335,7 +8348,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
   // #2095: kimi is now a hooks/ consumer (native config.toml [[hooks]] bus) —
   // the redundant `&& !isKimi` was removed so its hook files are tracked too.
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf) {
+  // #2099: Copilot's exclusion is likewise descriptor-driven (copilot declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isCopilot` was removed.
+  if (!isCodex && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf) {
     const hooksDir = path.join(configDir, 'hooks');
     if (fs.existsSync(hooksDir)) {
       // Drive from INSTALLED_HOOK_FILES (the canonical HOOKS_TO_COPY set from
@@ -8738,7 +8753,14 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // _DESCRIPTOR_AGENTS_RUNTIMES below, so its legacy converter-dispatch branch
   // (the `isCodebuddy` arm calling convertClaudeAgentToCodebuddyAgent) was
   // unreachable dead code and was removed rather than re-gated.
-  const { isOpencode, isZcode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCline } = runtimeFlags(runtime);
+  // #2099: isCopilot dropped — copilot is also in _DESCRIPTOR_AGENTS_RUNTIMES
+  // below, so its three legacy-agent-loop branches (the path-rewrite skip,
+  // the converter dispatch, and the .agent.md destName ternary) were
+  // unreachable dead code and were removed rather than re-gated; the
+  // .agent.md suffix now lives on hostBehaviors.agentFileExtension in
+  // src/install-engine.cts, and the skipSharedHooksInstall check above no
+  // longer needs `&& !isCopilot`.
+  const { isOpencode, isZcode, isCodex, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -9608,12 +9630,14 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         // _DESCRIPTOR_AGENTS_RUNTIMES above, so this whole branch is already
         // unreachable for it; the path-rewrite skip for antigravity now lives
         // in the descriptor-driven `applyAgentPathRewrites` (hostBehaviors.noPathRewrite).
-        if (!isCopilot) {
-          content = content.replace(dirRegex, pathPrefix);
-          content = content.replace(homeDirRegex, pathPrefix);
-          content = content.replace(bareDirRegex, normalizedPathPrefix);
-          content = content.replace(bareHomeDirRegex, normalizedPathPrefix);
-        }
+        // #2099: `if (!isCopilot)` guard dropped — copilot is ALSO in
+        // _DESCRIPTOR_AGENTS_RUNTIMES (line ~9564 above), so this whole
+        // `else if (fs.existsSync(agentsSrc))` branch is unreachable for it;
+        // isCopilot was therefore always false here, making the guard a no-op.
+        content = content.replace(dirRegex, pathPrefix);
+        content = content.replace(homeDirRegex, pathPrefix);
+        content = content.replace(bareDirRegex, normalizedPathPrefix);
+        content = content.replace(bareHomeDirRegex, normalizedPathPrefix);
         content = processAttribution(content, getCommitAttribution(runtime));
         // Convert frontmatter for runtime compatibility (agents need different handling)
         if (_hostBehaviors(runtime).frontmatterDialect === 'opencode') {
@@ -9657,8 +9681,11 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           content = convertClaudeToKiloFrontmatter(content, { isAgent: true, modelOverride: _kiloModelOverride });
         } else if (_hostBehaviors(runtime).frontmatterDialect === 'codex') {
           content = convertClaudeAgentToCodexAgent(content);
-        } else if (isCopilot) {
-          content = convertClaudeAgentToCopilotAgent(content, isGlobal);
+        // #2099: `else if (isCopilot)` arm dropped — copilot is unreachable
+        // here (see the isCopilot-guard-drop comment above); its content
+        // conversion is applied pre-staging via the descriptor's
+        // artifactLayout.converter (runtime-artifact-layout.cts), independent
+        // of this legacy loop.
         } else if (isWindsurf) {
           content = convertClaudeAgentToWindsurfAgent(content);
         } else if (_hostBehaviors(runtime).frontmatterDialect === 'cline') {
@@ -9698,7 +9725,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         // shouldNormalizeHyphenNamespaceInAgentBody above. Mirrors the
         // SKILL.md-body fix shipped via #3629.
         content = normalizeAgentBodyForRuntime(content, runtime, readGsdCommandNames());
-        const destName = isCopilot ? entry.name.replace('.md', '.agent.md') : entry.name;
+        // #2099: `isCopilot ? ... : entry.name` ternary dropped — copilot is
+        // unreachable here (see the isCopilot-guard-drop comment above), so
+        // the ternary always evaluated to entry.name in practice; its
+        // .agent.md suffix is applied by the descriptor-driven fold in
+        // src/install-engine.cts (hostBehaviors.agentFileExtension).
+        const destName = entry.name;
         fs.writeFileSync(path.join(agentsDest, destName), content);
       }
     }
@@ -9886,7 +9918,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // resolveKimiHooksTomlDir) via installSharedHooksBundle, at the
   // kimi-hooks-toml branch further below — never under the generic
   // Agent-Skills configDir GSD installs skills/agents into for kimi.
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isZcode) {
+  // #2099: Copilot's exclusion is likewise descriptor-driven (copilot declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isCopilot` was removed.
+  if (!isCodex && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isZcode) {
     if (!installSharedHooksBundle(targetDir)) {
       failures.push('hooks');
     }
@@ -10869,7 +10903,8 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   // _hostBehaviors(runtime).doneBannerStyle === 'kimi-agent-file' (descriptor-driven), not this flag.
   // #2096: isAntigravity dropped — unused in this function.
   // #2098: isCodebuddy dropped — unused in this function.
-  const { isOpencode, isCodex, isCopilot, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCline } = runtimeFlags(runtime);
+  // #2099: isCopilot dropped — unused in this function.
+  const { isOpencode, isCodex, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {

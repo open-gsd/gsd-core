@@ -83,6 +83,21 @@ function _hostBehaviors(runtime: string): Record<string, unknown> {
   );
 }
 
+/**
+ * Public accessor for the `hostBehaviors.agentFileExtension` descriptor field
+ * (ADR-1239 / #2099 / #2103). Returns the runtime's declared agent-file
+ * destination-suffix rename target (e.g. copilot's `.agent.md`), or
+ * `undefined` when the runtime declares none (the generic no-rename
+ * default). Exported so callers outside this module (surface.cts's
+ * `_syncGsdDir`) can derive the SAME rename decision as
+ * install-engine.cts's staged-copy loop from ONE descriptor read, instead of
+ * duplicating a hardcoded `runtime === 'copilot'` check (#2103 fold).
+ */
+function agentFileExtensionFor(runtime: string): string | undefined {
+  const ext = _hostBehaviors(runtime).agentFileExtension;
+  return typeof ext === 'string' ? ext : undefined;
+}
+
 
 const colorNameToHex = {
   cyan: '#00FFFF',
@@ -2756,10 +2771,12 @@ function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames
  *   ~/\.claude\b → normalizedPathPrefix
  *   $HOME/\.claude\b → normalizedPathPrefix
  *
- * Skipped for copilot (hardcoded — #2099 will fold it) and for any runtime
- * that declares `hostBehaviors.noPathRewrite` (descriptor-driven, ADR-1239 /
- * #2096 — folds the prior hardcoded `runtime === 'antigravity'` literal;
- * Antigravity does NOT do path rewrites in the inline loop). NO stamp
+ * Skipped for any runtime that declares `hostBehaviors.noPathRewrite`
+ * (descriptor-driven, ADR-1239 / #2096 — folds the prior hardcoded
+ * `runtime === 'antigravity'` literal; Antigravity does NOT do path rewrites
+ * in the inline loop / #2103 — folds the prior hardcoded
+ * `runtime === 'copilot'` literal onto the same descriptor field, since
+ * copilot also skips these rewrites). NO stamp
  * (_stampNonClaudeRuntimeDefaults) — agents are NOT stamped in the inline loop.
  *
  * ADR-1235 §1: pre-converter cross-cutting for descriptor-driven agent pipeline.
@@ -2769,10 +2786,10 @@ function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames
  * @param content     raw agent file content
  * @param runtime     canonical runtime ID
  * @param pathPrefix  trailing-slash path prefix (e.g. '$HOME/.cursor/')
- * @returns content with path-prefix rewrites applied (or unchanged for copilot / noPathRewrite runtimes)
+ * @returns content with path-prefix rewrites applied (or unchanged for noPathRewrite runtimes, e.g. copilot)
  */
 function applyAgentPathRewrites(content: string, runtime: string, pathPrefix: string): string {
-  if (runtime === 'copilot' || _hostBehaviors(runtime).noPathRewrite === true) return content;
+  if (_hostBehaviors(runtime).noPathRewrite === true) return content;
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
   content = content.replace(/~\/\.claude\//g, pathPrefix);
   content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
@@ -2813,6 +2830,11 @@ function processAttribution(
 
 export = {
   processAttribution,
+  // #2103: public accessor for hostBehaviors.agentFileExtension, exported so
+  // surface.cts's _syncGsdDir can derive the .agent.md rename from the SAME
+  // descriptor read as install-engine.cts (folds a duplicated hardcoded
+  // `runtime === 'copilot'` literal).
+  agentFileExtensionFor,
   yamlIdentifier,
   yamlQuote,
   toSingleLine,

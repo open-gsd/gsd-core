@@ -312,7 +312,7 @@
   "gsd-core/workflows/validate-phase.md": "2f705775a4b76d42",
   "gsd-core/workflows/verify-phase.md": "5c72780e34214e27",
   "gsd-core/workflows/verify-work.md": "c966971a3cbd1d71",
-  "hooks/gsd-session.json": "0a462834f2a28fee",
+  "hooks/gsd-session.json": "3382597f61e3a559",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
   "scripts/changeset/github-release-notes.cjs": "795677f0c009b132",

@@ -84,6 +84,39 @@ const GSD_COPILOT_SESSION_HOOK_PWSH =
   `{ '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_PRESENT}"}' } ` +
   `else { '{"additionalContext":"${GSD_COPILOT_SESSION_MSG_ABSENT}"}' }`;
 
+// #2099 UPGRADE 1: multi-event hook bus. Each additional event is a static,
+// deterministic advisory (no branching/no-op-style, matching sessionStart's
+// tone) so the emitted hooks/gsd-session.json stays golden-trackable — no
+// node-runner invocation, no filesystem probing beyond what sessionStart
+// already does.
+const GSD_COPILOT_PRE_TOOL_MSG =
+  'GSD: confirm this tool use is in scope for the active phase before proceeding.';
+const GSD_COPILOT_PRE_TOOL_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_PRE_TOOL_MSG}"}'`;
+const GSD_COPILOT_PRE_TOOL_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_PRE_TOOL_MSG}"}'`;
+
+const GSD_COPILOT_POST_TOOL_MSG =
+  'GSD: review the tool result against the active phase before continuing.';
+const GSD_COPILOT_POST_TOOL_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_POST_TOOL_MSG}"}'`;
+const GSD_COPILOT_POST_TOOL_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_POST_TOOL_MSG}"}'`;
+
+const GSD_COPILOT_PROMPT_SUBMIT_MSG =
+  'GSD: check this request against .planning/STATE.md scope before acting.';
+const GSD_COPILOT_PROMPT_SUBMIT_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_PROMPT_SUBMIT_MSG}"}'`;
+const GSD_COPILOT_PROMPT_SUBMIT_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_PROMPT_SUBMIT_MSG}"}'`;
+
+const GSD_COPILOT_SESSION_END_MSG =
+  'GSD: update .planning/STATE.md with the session outcome before ending.';
+const GSD_COPILOT_SESSION_END_HOOK_BASH =
+  `printf '%s' '{"additionalContext":"${GSD_COPILOT_SESSION_END_MSG}"}'`;
+const GSD_COPILOT_SESSION_END_HOOK_PWSH =
+  `'{"additionalContext":"${GSD_COPILOT_SESSION_END_MSG}"}'`;
+
 // ---------------------------------------------------------------------------
 // Cursor hook constants
 // ---------------------------------------------------------------------------
@@ -1144,6 +1177,41 @@ function buildCopilotHookConfig(): Record<string, unknown> {
           type: 'command',
           bash: GSD_COPILOT_SESSION_HOOK_BASH,
           powershell: GSD_COPILOT_SESSION_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      // #2099 UPGRADE 1: multi-event hook bus — preToolUse (worktree/read-safety
+      // advisory), postToolUse (context-monitor advisory), userPromptSubmitted
+      // (prompt-guard advisory), sessionEnd (session-finalize advisory).
+      preToolUse: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_PRE_TOOL_HOOK_BASH,
+          powershell: GSD_COPILOT_PRE_TOOL_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      postToolUse: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_POST_TOOL_HOOK_BASH,
+          powershell: GSD_COPILOT_POST_TOOL_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      userPromptSubmitted: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_PROMPT_SUBMIT_HOOK_BASH,
+          powershell: GSD_COPILOT_PROMPT_SUBMIT_HOOK_PWSH,
+          timeoutSec: 10,
+        },
+      ],
+      sessionEnd: [
+        {
+          type: 'command',
+          bash: GSD_COPILOT_SESSION_END_HOOK_BASH,
+          powershell: GSD_COPILOT_SESSION_END_HOOK_PWSH,
           timeoutSec: 10,
         },
       ],
