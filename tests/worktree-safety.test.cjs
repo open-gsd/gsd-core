@@ -860,6 +860,61 @@ describe('regressions: #1995 agent-<id> namespace acceptance', () => {
   });
 });
 
+// ─── regressions: #1995 parity — hand-synced namespace regex copies ──────────
+// PR #1997 review (Major finding): the agent-namespace pattern has 5 live,
+// hand-synced representations — src/worktree-safety.cts, hooks/lib/agent-namespace.js,
+// and 3 bash literals (gsd-core/references/worktree-branch-check.md,
+// agents/gsd-executor.md's embedded copy of the same guard, and
+// gsd-core/workflows/execute-phase.md's cwd-drift prefix-only guard). Nothing
+// failed if any of these diverged — exactly the divergence CLAUDE.md's
+// Generative-Fix-Divergence rule requires a parity assertion for. Each test
+// extracts the literal from its source file and diffs it against the canonical
+// string, so a future one-sided namespace edit fails CI instead of silently
+// reintroducing the #1995 bug in whichever copy was missed.
+describe('regressions: #1995 parity — hand-synced namespace regex copies must agree', () => {
+  const fs = require('node:fs');
+  const repoRoot = path.join(__dirname, '..');
+  const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+
+  const ANCHORED_SOURCE = '^(worktree-)?agent-[A-Za-z0-9._/-]+$';
+  const PREFIX_SOURCE = '^(worktree-)?agent-';
+
+  test('src/worktree-safety.cts defines the canonical anchored pattern', () => {
+    const src = read('src/worktree-safety.cts');
+    const m = src.match(/const AGENT_NAMESPACE_BRANCH_RE = \/(.+)\/;/);
+    assert.ok(m, 'expected an AGENT_NAMESPACE_BRANCH_RE regex literal in worktree-safety.cts');
+    assert.equal(m[1], ANCHORED_SOURCE);
+  });
+
+  test('hooks/lib/agent-namespace.js builds matching anchored + prefix patterns', () => {
+    const { AGENT_NAMESPACE_BRANCH_RE, AGENT_NAMESPACE_PREFIX_RE } =
+      require('../hooks/lib/agent-namespace.js');
+    assert.equal(AGENT_NAMESPACE_BRANCH_RE.source, ANCHORED_SOURCE);
+    assert.equal(AGENT_NAMESPACE_PREFIX_RE.source, PREFIX_SOURCE);
+  });
+
+  test('gsd-core/references/worktree-branch-check.md embeds the same anchored bash literal', () => {
+    const src = read('gsd-core/references/worktree-branch-check.md');
+    const m = src.match(/grep -Eq '(\^\(worktree-\)\?agent-[^']+)'/);
+    assert.ok(m, 'expected the branch-namespace grep literal in worktree-branch-check.md');
+    assert.equal(m[1], ANCHORED_SOURCE);
+  });
+
+  test('agents/gsd-executor.md embeds the same anchored bash literal (copy of the guard snippet)', () => {
+    const src = read('agents/gsd-executor.md');
+    const m = src.match(/grep -Eq '(\^\(worktree-\)\?agent-[^']+)'/);
+    assert.ok(m, 'expected the branch-namespace grep literal in gsd-executor.md');
+    assert.equal(m[1], ANCHORED_SOURCE);
+  });
+
+  test("execute-phase.md's cwd-drift guard embeds the same loose prefix literal", () => {
+    const src = read('gsd-core/workflows/execute-phase.md');
+    const m = src.match(/grep -Eq '(\^\(worktree-\)\?agent-[^']*)'/);
+    assert.ok(m, 'expected the cwd-drift prefix-check grep literal in execute-phase.md');
+    assert.equal(m[1], PREFIX_SOURCE);
+  });
+});
+
 // ─── cmdWorktreeRecordAgent (#1298 CLI wrapper) ───────────────────────────────
 
 describe('cmdWorktreeRecordAgent', () => {
@@ -3208,22 +3263,26 @@ describe('#1342 — GSD-activity gate + fail-open for no-repo targets', () => {
   let nonAgentWorktree;        // on branch 'feature-x' — non-GSD
   let agentWorktree;           // on branch 'worktree-agent-foo' — GSD-managed (legacy namespace)
   let agentWorktreeCurrent;    // on branch 'agent-foo' — GSD-managed (current Claude Code namespace, #1995)
+  let agentWorktreeOddChars;   // on branch 'agent-!weird' — git-legal, outside the id charset (PR #1997 review)
 
   before(() => {
     mainRepo1342 = realp(makeMainRepo());
     nonAgentWorktree = realp(makeWorktree(mainRepo1342, 'feature-x'));
     agentWorktree    = realp(makeWorktree(mainRepo1342, 'worktree-agent-foo'));
     agentWorktreeCurrent = realp(makeWorktree(mainRepo1342, 'agent-foo'));
+    agentWorktreeOddChars = realp(makeWorktree(mainRepo1342, 'agent-!weird'));
   });
 
   after(() => {
     try { git(mainRepo1342, ['worktree', 'remove', '--force', nonAgentWorktree]); } catch { /* ignore */ }
     try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktree]); } catch { /* ignore */ }
     try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktreeCurrent]); } catch { /* ignore */ }
+    try { git(mainRepo1342, ['worktree', 'remove', '--force', agentWorktreeOddChars]); } catch { /* ignore */ }
     cleanup(mainRepo1342);
     cleanup(nonAgentWorktree);
     cleanup(agentWorktree);
     cleanup(agentWorktreeCurrent);
+    cleanup(agentWorktreeOddChars);
   });
 
   // Test 1 — reporter repro: non-agent worktree writing outside all git repos → exit 0
@@ -3366,6 +3425,31 @@ describe('#1342 — GSD-activity gate + fail-open for no-repo targets', () => {
     assert.strictEqual(result.status, 2,
       `Current-namespace agent-<id> worktree must be guarded (exit 2), not no-op'd. ` +
       `Got exit ${result.status}. stderr: ${result.stderr}`
+    );
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');
+    assert.strictEqual(parsed.decision, 'block', 'Expected decision:"block" in output');
+  });
+
+  // Test 8 — guard-asymmetry regression (PR #1997 review): the applicability
+  // check must use the loose PREFIX matcher, not the anchored BRANCH matcher.
+  // `agent-!weird` is a git-legal branch that matches the agent- prefix but
+  // contains a character (`!`) outside the anchored id charset
+  // [A-Za-z0-9._/-]. Gating on the anchored regex made this hook silently
+  // no-op (exit 0) on such a branch — fail-open on exactly the #260 escape
+  // guard it exists to enforce — while the sibling gsd-workflow-guard.js
+  // (which already used the prefix matcher) still treated the branch as
+  // GSD-managed. Gating on the prefix matcher closes the asymmetry.
+  test('(8) GSD-managed worktree on a branch outside the id charset (`agent-!weird`) still exits 2, not fail-open (PR #1997 guard-asymmetry)', () => {
+    const payload = {
+      cwd: agentWorktreeOddChars,
+      tool_name: 'Edit',
+      tool_input: { file_path: path.join(mainRepo1342, 'src', 'index.ts') },
+    };
+    const result = runHook(agentWorktreeOddChars, payload);
+    assert.strictEqual(result.status, 2,
+      `A branch matching the agent- prefix but outside the anchored id charset must still be ` +
+      `guarded (exit 2), not fail open. Got exit ${result.status}. stderr: ${result.stderr}`
     );
     let parsed;
     assert.doesNotThrow(() => { parsed = JSON.parse(result.stdout); }, 'stdout must be valid JSON');

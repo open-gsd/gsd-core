@@ -17,7 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { AGENT_NAMESPACE_BRANCH_RE } = require('./lib/agent-namespace.js');
+const { AGENT_NAMESPACE_PREFIX_RE } = require('./lib/agent-namespace.js');
 
 const SPAWNOPT = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000, windowsHide: true };
 
@@ -78,9 +78,14 @@ process.stdin.on('end', () => {
     // worktree-branch-check.md (#2924, #1995). A manually-created linked worktree
     // (plain non-GSD work, e.g. Claude Code plan-mode) is on the user's own branch,
     // so the guard must be a no-op there. Detached HEAD / error → not GSD-managed → no-op.
+    // Uses the loose prefix matcher (not the anchored branch matcher) so the
+    // guard still activates on a git-legal agent-prefixed branch containing a
+    // character outside the id charset — the anchored form would fail-open here
+    // and disable the #260 escape guard exactly on the branches it exists to
+    // protect (PR #1997 review, guard-asymmetry finding).
     const branchResult = git(['symbolic-ref', '--short', 'HEAD'], cwd);
     const branch = branchResult.status === 0 && branchResult.stdout ? branchResult.stdout.trim() : '';
-    if (!AGENT_NAMESPACE_BRANCH_RE.test(branch)) {
+    if (!AGENT_NAMESPACE_PREFIX_RE.test(branch)) {
       process.exit(0); // not a GSD-managed executor worktree — no-op
     }
 
