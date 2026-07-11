@@ -2561,6 +2561,10 @@ const capabilities = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "skipSharedHooksInstall": true,
+        "soloStageMetadata": "workflow"
       }
     }
   },
@@ -5084,6 +5088,10 @@ const runtimes = {
         "stateIO": "filesystem",
         "transport": "mcp",
         "runtime": "node"
+      },
+      "hostBehaviors": {
+        "skipSharedHooksInstall": true,
+        "soloStageMetadata": "workflow"
       }
     }
   },

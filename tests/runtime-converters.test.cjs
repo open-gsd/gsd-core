@@ -19,6 +19,7 @@ const {
   convertClaudeAgentToAntigravityAgent,
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,
+  convertClaudeCommandToTraeSkill,
   neutralizeAgentReferences,
 } = require('../bin/install.js');
 
@@ -264,6 +265,48 @@ describe('convertClaudeToKiloFrontmatter output parity: bin/install.js vs runtim
     const viaInstall = convertClaudeToKiloFrontmatter(SAMPLE_COMMAND, { isAgent: false, modelOverride: 'x' });
     const viaModule = convertViaConversionModule(SAMPLE_COMMAND, { isAgent: false, modelOverride: 'x' });
     assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical command output');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DEFECT.GENERATIVE-FIX output-parity guard: convertClaudeCommandToTraeSkill is
+// defined TWICE — once in bin/install.js (dead for the live skills-install
+// path; kept for this file's own module-level export/test surface) and once in
+// src/runtime-artifact-conversion.cts, compiled to
+// gsd-core/bin/lib/runtime-artifact-conversion.cjs (used by
+// src/install-engine.cts's skills-install path via SKILLS_CONVERTER_REGISTRY,
+// see install-engine.cts ~L754). Both copies are LIVE call surfaces — neither
+// re-exports the other — so #2094's `stage:` emission had to be applied to
+// bin/install.js's copy by hand to keep parity. Source-text identity can't be
+// asserted (they live in different module systems: plain CJS vs a
+// tsc-compiled .cts output with different surrounding comments), so this
+// instead proves the two implementations still produce IDENTICAL output for
+// representative command input. If a future edit changes one copy's behavior
+// without mirroring it into the other, this test is the guard that catches
+// the divergence.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('convertClaudeCommandToTraeSkill output parity: bin/install.js vs runtime-artifact-conversion.cjs (#2094)', () => {
+  const { convertClaudeCommandToTraeSkill: convertViaConversionModule } =
+    require('../gsd-core/bin/lib/runtime-artifact-conversion.cjs');
+
+  test('identical output for a representative command, including the #2094 stage: field', () => {
+    const viaInstall = convertClaudeCommandToTraeSkill(SAMPLE_COMMAND, 'gsd-execute-phase');
+    const viaModule = convertViaConversionModule(SAMPLE_COMMAND, 'gsd-execute-phase');
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical command output');
+    assert.match(viaInstall, /\nstage: workflow\n/, 'both copies must emit the #2094 stage: field');
+  });
+
+  test('identical output when the source has no description (falls back to generic description)', () => {
+    const noDescriptionCommand = `---
+name: gsd-noop
+allowed-tools:
+  - Read
+---
+
+Do nothing.`;
+    const viaInstall = convertClaudeCommandToTraeSkill(noDescriptionCommand, 'gsd-noop');
+    const viaModule = convertViaConversionModule(noDescriptionCommand, 'gsd-noop');
+    assert.equal(viaInstall, viaModule, 'bin/install.js and runtime-artifact-conversion.cjs must emit identical output when description is absent');
   });
 });
 

@@ -81,6 +81,10 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "node"
+    },
+    "hostBehaviors": {
+      "skipSharedHooksInstall": true,
+      "soloStageMetadata": "workflow"
     }
   }
 }

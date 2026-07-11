@@ -266,6 +266,11 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
  * function declaration block (the add-a-host tax ADR-1239 Phase B / #1679 AC2
  * removes).
  */
+// #2094: 'trae' stays here — bin/install.js's agents-converter dispatch
+// (convertClaudeAgentToTraeAgent selection) still reads isTrae directly.
+// Removing it is gated on migrating that runtime-keyed `else if` chain to a
+// cross-runtime agents-dispatch table (out of scope for #2094, which only
+// folds the shared-hooks-install skip).
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
   'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'zcode',

@@ -1169,6 +1169,12 @@ function convertClaudeToTraeMarkdown(content) {
   return converted;
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// convertClaudeCommandToTraeSkill (dead for the live skills-install path,
+// which routes here via install-engine.cts's SKILLS_CONVERTER_REGISTRY; kept
+// for bin/install.js's own module-level export/test surface). Neither copy
+// re-exports the other — mirror any behavior change into both. Guarded by
+// the output-parity test in tests/runtime-converters.test.cjs (#2094).
 function convertClaudeCommandToTraeSkill(content, skillName) {
   const converted = convertClaudeToTraeMarkdown(content);
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
@@ -1183,7 +1189,16 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
   // #2876: quote so YAML flow indicators (`[BETA] …`) don't break Trae's
   // frontmatter parser.
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
+  let fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n`;
+  // #2094: emit `stage:` so Trae's SOLO agent can auto-invoke GSD skills at
+  // the corresponding stage (docs.trae.ai/ide/agent). The field name/schema
+  // is not formally documented (thin SPA docs) — descriptor-driven, single
+  // fixed GSD-side value (runtime.hostBehaviors.soloStageMetadata), inferred/
+  // best-effort.
+  const soloStage = _hostBehaviors('trae').soloStageMetadata as string | undefined;
+  if (soloStage) fm += `stage: ${soloStage}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
 }
 
 function convertSlashCommandsToCodebuddySkillMentions(content) {
@@ -2431,7 +2446,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-      content = content.replace(/~\/\.trae\//g, pathPrefix);
+      // #2094: descriptor-driven — dirName resolves to '.trae' via
+      // getDirName()/localConfigDir, so this regex is built rather than
+      // hardcoded as `/~\/\.trae\//g` (byte-identical output for trae).
+      content = content.replace(new RegExp('~/' + escapeRegExp(dirName) + '/', 'g'), pathPrefix);
       content = processAttribution(content, attribution);
       break;
 

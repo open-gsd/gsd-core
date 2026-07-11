@@ -2618,6 +2618,14 @@ function convertClaudeToTraeMarkdown(content) {
   return converted;
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in
+// src/runtime-artifact-conversion.cts's convertClaudeCommandToTraeSkill (used
+// by src/install-engine.cts's skills-install path via
+// SKILLS_CONVERTER_REGISTRY). This bin/install.js copy is dead for the live
+// skills-install path — kept for this file's own module-level export/test
+// surface. Neither copy re-exports the other — mirror any behavior change
+// into both. Guarded by the output-parity test in
+// tests/runtime-converters.test.cjs (#2094).
 function convertClaudeCommandToTraeSkill(content, skillName) {
   const converted = convertClaudeToTraeMarkdown(content);
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
@@ -2632,7 +2640,16 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
   // #2876: quote so YAML flow indicators (`[BETA] …`) don't break Trae's
   // frontmatter parser.
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
+  let fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n`;
+  // #2094: emit `stage:` so Trae's SOLO agent can auto-invoke GSD skills at
+  // the corresponding stage (docs.trae.ai/ide/agent). The field name/schema
+  // is not formally documented (thin SPA docs) — descriptor-driven, single
+  // fixed GSD-side value (runtime.hostBehaviors.soloStageMetadata), inferred/
+  // best-effort.
+  const soloStage = _hostBehaviors('trae').soloStageMetadata;
+  if (soloStage) fm += `stage: ${soloStage}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
 }
 
 function convertClaudeAgentToTraeAgent(content) {
@@ -6803,7 +6820,10 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   // #2093: isKilo dropped — the Kilo permission-cleanup branch below is
   // descriptor-driven (resolveInstallPlan(runtime).finishPermissionWriter),
   // not gated on this flag.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2094: isTrae dropped — unused in this function after the
+  // skipSharedHooksInstall fold (was never referenced here besides the
+  // destructure).
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const dirName = getDirName(runtime);
 
   // Get the target directory based on runtime and install type. Cline local
@@ -7845,7 +7865,9 @@ function resolveInstallRelativePath(baseDir, relPath) {
  */
 function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // #2093: isKilo dropped — unused in this function.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2094: isTrae dropped — was only used in the hooks-tracking conditional
+  // above, now covered by hostBehaviors.skipSharedHooksInstall.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const gsdDir = path.join(configDir, 'gsd-core');
   // #1367: Claude local now writes flat gsd-*.md files at commands/ (not commands/gsd/).
   // Claude local uses flatCommandsDir instead for manifest recording.
@@ -7953,7 +7975,9 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   // Hooks are only installed for runtimes that use settings.json (not Codex/Copilot/Cline)
   // Descriptor-driven (ADR-1239 / #2089+#2090): cline's exclusion is via
   // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCline).
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi) {
+  // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isKimi) {
     const hooksDir = path.join(configDir, 'hooks');
     if (fs.existsSync(hooksDir)) {
       // Drive from INSTALLED_HOOK_FILES (the canonical HOOKS_TO_COPY set from
@@ -9373,8 +9397,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // skipSharedHooksInstall:true) — the redundant `&& !isCline` was removed.
   // #2093: Kilo's exclusion is likewise descriptor-driven (kilo declares
   // skipSharedHooksInstall:true) — the redundant `&& !isKilo` was removed.
+  // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
   // ZCode still has an empty hostBehaviors, so `&& !isZcode` stays.
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isZcode) {
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isKimi && !isZcode) {
     // Write package.json to force CommonJS mode for GSD scripts
     // Prevents "require is not defined" errors when project has "type": "module"
     // Node.js walks up looking for package.json - this stops inheritance from project
@@ -9469,15 +9495,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // Codex/Copilot/Cursor/Windsurf/Trae/Cline/Kilo do not use the shared hooks/lib/
   // helpers (Cursor uses standalone .js hook scripts registered via hooks.json — gated
   // descriptor-driven via hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise
-  // #2090; Kilo likewise #2093; Codex uses hooks.json directly; the others skip hooks
-  // entirely); Kilo and ZCode also skip hooks entirely (hooksSurface:'none' with no
-  // plugin surface — #1821). ZCode's hostBehaviors is still empty, so `&& !isZcode`
-  // stays hardcoded. OpenCode is NOT excluded: its #1914 plugin adapter spawns the
-  // staged hooks and requires hooks/lib/ helpers. None of the excluded runtimes must
-  // receive the hooks/lib/ helpers — otherwise the Codex comment downstream ("we
-  // deliberately do *not* copy hooks/lib/ for Codex") is contradicted in practice.
+  // #2090; Kilo likewise #2093; Trae likewise #2094; Codex uses hooks.json directly;
+  // the others skip hooks entirely); Kilo and ZCode also skip hooks entirely
+  // (hooksSurface:'none' with no plugin surface — #1821). ZCode's hostBehaviors is
+  // still empty, so `&& !isZcode` stays hardcoded. OpenCode is NOT excluded: its
+  // #1914 plugin adapter spawns the staged hooks and requires hooks/lib/ helpers.
+  // None of the excluded runtimes must receive the hooks/lib/ helpers — otherwise
+  // the Codex comment downstream ("we deliberately do *not* copy hooks/lib/ for
+  // Codex") is contradicted in practice.
   const hooksLibSrc = path.join(src, 'hooks', 'lib');
-  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isTrae && !isKimi && !isZcode && fs.existsSync(hooksLibSrc)) {
+  if (!isCodex && !isCopilot && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isWindsurf && !isKimi && !isZcode && fs.existsSync(hooksLibSrc)) {
     const hooksLibDest = path.join(targetDir, 'hooks', 'lib');
     fs.mkdirSync(hooksLibDest, { recursive: true });
     copyLibDir(hooksLibSrc, hooksLibDest, GSD_HOOK_LIB_FILES);
@@ -10413,7 +10440,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
 function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallStatusline, runtime = DEFAULT_RUNTIME, isGlobal = true, configDir = null, bannerOpts = {}) {
   // #2093: isKilo dropped — the Kilo permissions-writer call below is gated
   // on plan.finishPermissionWriter === 'kilo' (descriptor-driven), not this flag.
-  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isTrae, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
+  // #2094: isTrae dropped — unused in this function.
+  const { isOpencode, isCodex, isCopilot, isAntigravity, isCursor, isWindsurf, isAugment, isQwen, isHermes, isCodebuddy, isCline, isKimi } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
 
   if (shouldInstallStatusline && plan.writesSharedSettings && !_hostBehaviors(runtime).skipSettingsUi) {
