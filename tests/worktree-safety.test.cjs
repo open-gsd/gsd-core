@@ -3604,6 +3604,29 @@ describe('bug #261: workflow guard blocks forced git add on worktree-agent branc
     }
   });
 
+  test('DX-nuisance (documented, not a bypass): blocks git add -f on an ordinary `agent-*`-prefixed branch that is not a real per-agent worktree (PR #1997 review)', () => {
+    // AGENT_NAMESPACE_PREFIX_RE is intentionally loose (prefix-only, no id-charset
+    // validation) — see hooks/lib/agent-namespace.js. A human-created branch like
+    // `agent-onboarding-notes` matches the prefix even though it is not a GSD
+    // per-agent worktree branch, so this guard still activates on it. That is a
+    // false-positive DX nuisance (an ordinary branch loses `git add -f`), not a
+    // security bypass — the guard fails toward MORE restriction, never less. This
+    // test locks in the known, accepted trade-off rather than treating it as a bug.
+    const dir = makeRepo('agent-onboarding-notes');
+    try {
+      setWorkflowGuard(dir, true);
+      const result = runBashHook(dir, 'git add -f .planning/phases/01/01-01-SUMMARY.md');
+      assert.strictEqual(result.status, 2,
+        `Expected the loose prefix matcher to (over-)apply to an ordinary agent-* branch. Got ${result.status}.`
+      );
+      const envelope = JSON.parse(result.stdout);
+      assert.strictEqual(envelope.decision, 'block');
+      assert.strictEqual(envelope.code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
+    } finally {
+      cleanup(dir);
+    }
+  });
+
   test('blocks git add --force with git global options on worktree-agent branch', () => {
     const dir = makeRepo('worktree-agent-b2');
     try {

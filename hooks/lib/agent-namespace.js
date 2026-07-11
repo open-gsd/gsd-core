@@ -3,11 +3,12 @@
 /**
  * Canonical per-agent worktree branch namespace for the hooks tree (#1995, #2924).
  *
- * Claude Code renamed its `isolation="worktree"` branches from the legacy
- * `worktree-agent-<id>` to the current `agent-<id>`; both are accepted. When the
- * namespace changes again, edit ONLY this file — every hook derives its matcher
- * from the constants here (previously each hook carried its own literal, so a
- * rename had to be re-applied at every site — see PR #1997 review).
+ * The upstream CLI's `isolation="worktree"` sub-agent runtime renamed its
+ * branches from the legacy `worktree-agent-<id>` to the current `agent-<id>`;
+ * both are accepted. When the namespace changes again, edit ONLY this file —
+ * every hook derives its matcher from the constants here (previously each hook
+ * carried its own literal, so a rename had to be re-applied at every site —
+ * see PR #1997 review).
  *
  * NOTE: the CLI-lib tree keeps its own mirror of this pattern in
  * `src/worktree-safety.cts` (`AGENT_NAMESPACE_BRANCH_RE`). The hooks tree and
