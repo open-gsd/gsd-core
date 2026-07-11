@@ -37,43 +37,93 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
   let totalPlans: number | null = null;
 
   try {
-    // Count Complete rows in the progress table (Status column = "Complete").
-    // Pattern: row where the phase cell starts with a digit (data row, not header),
-    // followed by any cell content, then a "Complete" status cell.
-    // Handles both short form ("| 4. |") and long form ("| 01. Foundation |").
-    // See phase-lifecycle.ts ~line 1655 for the original SDK pattern.
-    const tableCompletePattern = /\|\s*\d+[^|]*\|\s*[^|]*\|\s*Complete\s*\|/gi;
-    const completeMatches = roadmapContent.match(tableCompletePattern);
-    completedPhases = completeMatches ? completeMatches.length : null;
+    // Parse the Progress table by HEADER, not by a fixed column count. The
+    // writer (cmdPhaseComplete) already branches on `cells.length === 5`, so it
+    // understands both the 4-column greenfield table
+    //   | Phase | Plans Complete | Status | Completed |
+    // and the 5-column milestone-grouped table the same template ships
+    //   | Phase | Milestone | Plans Complete | Status | Completed |
+    // The reader used two 4-column-only regexes, so every project past its v1.0
+    // milestone (5-column shape) parsed to all-null and phase.complete silently
+    // skipped the STATE progress write. Reading column indices by NAME keeps the
+    // reader and writer in agreement across both shapes and any future column
+    // (#2137). The table is located by its header row rather than a `## Progress`
+    // heading because some callers pass a milestone slice with no heading (#1445).
+    //
+    // When a `## Progress` heading IS present, scope the search to that section
+    // (mirroring the writer's #2012 scoping in cmdPhaseComplete) so the reader
+    // cannot bind to an earlier Phase/Status/Completed-shaped table elsewhere in
+    // the roadmap. Callers that pass a headingless milestone slice fall back to
+    // scanning the whole input.
+    // Line-anchored h2 match — `indexOf('## Progress')` would also match inside
+    // an h3 `### Progress` (the `## Progress` substring starts at the 2nd hash),
+    // letting a decoy subheading hijack the slice.
+    // Case-insensitive to match the case-insensitive header-cell comparison below.
+    const progressMatch = roadmapContent.match(/^##[ \t]+Progress\b/im);
+    let scoped = roadmapContent;
+    if (progressMatch && progressMatch.index !== undefined) {
+      // Slice from `## Progress` to the next h1/h2 heading (or end); h3+ headings
+      // inside the section do not terminate it. The heading sits at index 0 of
+      // this slice with no leading newline, so the `\n#` search cannot match it.
+      const afterHeading = roadmapContent.slice(progressMatch.index);
+      const nextHeading = afterHeading.search(/\n#{1,2}[ \t]/);
+      scoped = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
+    }
+    const lines = scoped.split('\n');
 
-    // Count total phase rows in the progress table.
-    // Identify the table by looking for Phase|...|Status|...|Completed header.
-    const progressTableMatch = roadmapContent.match(
-      // allow-adhoc-markdown: table-scoped regex with heading lookahead as stop; table parsing, out of seam scope; pending #1372
-      /\|\s*Phase\s*\|[^|]*\|[^|]*Status[^|]*\|[^|]*Completed[^|]*\|[\s\S]*?(?=\n\n|\n##|$)/i,
-    );
-    if (progressTableMatch) {
-      const tableText = progressTableMatch[0];
-      // Count data rows (rows starting with pipe then a phase number),
-      // excluding 999.x backlog phases. Mirrors init.cts /^999(?:\.|$)/ filter.
-      const dataRowPattern = /^\|\s*(\d+[^|]*)\|/gm;
-      let dataRowCount = 0;
-      let drm: RegExpExecArray | null;
-      while ((drm = dataRowPattern.exec(tableText)) !== null) {
-        if (/^999\b/.test(drm[1].trim())) continue;
-        dataRowCount++;
+    // Split a markdown table row into trimmed cells — the same
+    // `split('|').slice(1, -1)` boundary the writer uses (phase.cts).
+    const rowCells = (line: string): string[] =>
+      line.split('|').slice(1, -1).map((c) => c.trim());
+    const isTableRow = (line: string): boolean => line.trim().startsWith('|');
+    const isSeparatorRow = (cells: string[]): boolean =>
+      cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+
+    let headerLine = -1;
+    let phaseIdx = -1;
+    let statusIdx = -1;
+    let plansIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (!isTableRow(lines[i])) continue;
+      const lc = rowCells(lines[i]).map((c) => c.toLowerCase());
+      const p = lc.indexOf('phase');
+      const s = lc.indexOf('status');
+      const c = lc.indexOf('completed');
+      if (p >= 0 && s >= 0 && c >= 0) {
+        headerLine = i;
+        phaseIdx = p;
+        statusIdx = s;
+        plansIdx = lc.findIndex((h) => h.includes('plans'));
+        break;
       }
-      totalPhases = dataRowCount > 0 ? dataRowCount : null;
     }
 
-    // Sum plan counts from M/N columns in progress table
-    let totalPlansSum = 0;
-    const planCellPattern = /\|\s*\d+[^|]*\|\s*(\d+)\/(\d+)\s*\|/gi;
-    let pm: RegExpExecArray | null;
-    while ((pm = planCellPattern.exec(roadmapContent)) !== null) {
-      totalPlansSum += parseInt(pm[2], 10);
+    if (headerLine >= 0) {
+      let phaseCount = 0;
+      let completedCount = 0;
+      let plansSum = 0;
+      // Walk the contiguous rows after the header; a markdown table ends at the
+      // first non-`|` line.
+      for (let i = headerLine + 1; i < lines.length; i++) {
+        if (!isTableRow(lines[i])) break;
+        const cells = rowCells(lines[i]);
+        if (isSeparatorRow(cells)) continue;
+        const phaseToken = (cells[phaseIdx] ?? '').trim();
+        if (!/^\d/.test(phaseToken)) continue; // not a data row
+        if (/^999\b/.test(phaseToken)) continue; // 999.x backlog sentinel (#1445)
+        phaseCount++;
+        if ((cells[statusIdx] ?? '').toLowerCase() === 'complete') completedCount++;
+        if (plansIdx >= 0) {
+          const mn = (cells[plansIdx] ?? '').match(/^(\d+)\/(\d+)$/);
+          if (mn) plansSum += parseInt(mn[2], 10);
+        }
+      }
+      // Preserve the prior contract: a count of 0 is reported as null (absent),
+      // so the consumer leaves the existing STATE value untouched.
+      completedPhases = completedCount > 0 ? completedCount : null;
+      totalPhases = phaseCount > 0 ? phaseCount : null;
+      totalPlans = plansSum > 0 ? plansSum : null;
     }
-    if (totalPlansSum > 0) totalPlans = totalPlansSum;
   } catch { /* intentionally empty — fall through to existing values */ }
 
   return { completedPhases, totalPhases, totalPlans };
