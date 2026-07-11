@@ -339,6 +339,12 @@ describe('renderMarkdown', () => {
     assert.ok(rendered.includes(entry.discussion), 'expected rendered output to include the discussion URL');
   });
 
+  test('renders the author for a populated registry', () => {
+    const entry = validCapabilityEntry();
+    const rendered = renderMarkdown([entry], { type: 'capability', sourceFile: 'capabilities.json' });
+    assert.match(rendered, /- \*\*Author:\*\* Octocat/);
+  });
+
   test('contains the empty-state text for zero entries', () => {
     const rendered = renderMarkdown([], { type: 'capability', sourceFile: 'capabilities.json' });
     assert.match(rendered, /No entries yet/);
@@ -392,5 +398,232 @@ describe('isValidGsdRange', () => {
     for (const bad of ['1.0', '>=abc', '']) {
       assert.equal(isValidGsdRange(bad), false, bad);
     }
+  });
+});
+
+// ─── renderMarkdown: Markdown-injection escaping (adversarial-review hardening) ──
+
+describe('renderMarkdown: mdInline escaping neutralizes untrusted free text', () => {
+  test('description containing a table-breakout + link-hijack payload is escaped', () => {
+    const entry = validCapabilityEntry();
+    entry.description = 'Good stuff | ![x](https://evil/track.png) | text';
+    const rendered = renderMarkdown([entry], { type: 'capability', sourceFile: 'capabilities.json' });
+    assert.ok(rendered.includes('\\|'), 'expected an escaped pipe (\\|) in the rendered output');
+    assert.ok(
+      !rendered.includes('![x](https://evil/track.png)'),
+      'expected the raw unescaped link-hijack payload to NOT appear verbatim',
+    );
+    assert.ok(rendered.includes('\\['), 'expected an escaped [ (\\[), proving the hijack bracket was neutralized');
+  });
+
+  test('name containing a link-hijack payload is escaped (no raw ](url) survives)', () => {
+    const entry = validCapabilityEntry();
+    entry.name = 'Evil] (https://evil.example) [';
+    const rendered = renderMarkdown([entry], { type: 'capability', sourceFile: 'capabilities.json' });
+    assert.ok(
+      !rendered.includes('](https://evil.example)'),
+      'expected the ] to be escaped, breaking the hijacked link destination pairing',
+    );
+  });
+
+  test('install containing an embedded ``` run gets a longer fence, keeping injected content inside the block', () => {
+    const entry = validCapabilityEntry();
+    entry.install = 'echo a\n```\n## FAKE\n```sh\nbad';
+    const rendered = renderMarkdown([entry], { type: 'capability', sourceFile: 'capabilities.json' });
+
+    const openIdx = rendered.indexOf('````sh');
+    assert.ok(openIdx !== -1, 'expected a 4-backtick opening fence (longer than the embedded 3-backtick run)');
+
+    const afterOpen = rendered.slice(openIdx + '````sh'.length);
+    const closeIdx = afterOpen.indexOf('````');
+    assert.ok(closeIdx !== -1, 'expected a matching 4-backtick closing fence');
+
+    const blockBody = afterOpen.slice(0, closeIdx);
+    assert.ok(
+      blockBody.includes('## FAKE'),
+      'expected the injected "## FAKE" heading to remain INSIDE the fenced block, not escape it',
+    );
+  });
+
+  test('name/description with a raw newline: validateEntries rejects it, and if rendered anyway the newline collapses', () => {
+    const nameEntry = validCapabilityEntry();
+    nameEntry.name = 'Evil\nName';
+    assert.equal(validateEntries([nameEntry], { type: 'capability' }).ok, false);
+
+    const descEntry = validCapabilityEntry();
+    descEntry.description = 'Evil\nDescription';
+    assert.equal(validateEntries([descEntry], { type: 'capability' }).ok, false);
+
+    // Defense in depth: renderMarkdown does not itself call validateEntries, so
+    // confirm mdInline still collapses an embedded newline to a single space —
+    // no raw newline lands inside a rendered table row.
+    const rendered = renderMarkdown([nameEntry], { type: 'capability', sourceFile: 'capabilities.json' });
+    const matchingRows = rendered.split('\n').filter((line) => line.startsWith('| [Evil'));
+    assert.equal(matchingRows.length, 1, 'expected the newline-containing name to collapse into a single table row');
+    assert.ok(matchingRows[0].includes('Evil Name'), `expected collapsed "Evil Name", got: ${matchingRows[0]}`);
+  });
+});
+
+// ─── validateEntries: null/non-object element guard (F2) ──────────────────────
+
+describe('validateEntries: null/non-object element guard (F2)', () => {
+  test('a null entry fails without throwing', () => {
+    let verdict;
+    assert.doesNotThrow(() => {
+      verdict = validateEntries([null], { type: 'capability' });
+    });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === '(entry)'));
+  });
+
+  test('an undefined entry fails without throwing', () => {
+    let verdict;
+    assert.doesNotThrow(() => {
+      verdict = validateEntries([undefined], { type: 'capability' });
+    });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === '(entry)'));
+  });
+
+  test('primitive and array elements fail without throwing', () => {
+    const verdict = validateEntries(['a string', [1, 2, 3], 42], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.errors.filter((e) => e.field === '(entry)').length, 3);
+  });
+});
+
+// ─── renderMarkdown: eos registry (F4) ─────────────────────────────────────────
+
+describe('renderMarkdown: eos registry (F4)', () => {
+  test('renders the eos heading, the free-form dispatch text, protocol wording, and integration wording', () => {
+    const rendered = renderMarkdown([validEosEntry()], { type: 'eos', sourceFile: 'eos.json' });
+    assert.match(rendered, /# GSD EoS Registry/);
+    assert.ok(rendered.includes('Supports nested background dispatch up to depth 3.'));
+    assert.match(rendered, /protocol v1/);
+    assert.match(rendered, /integration/);
+  });
+});
+
+// ─── validateEntries: interactions guards (F4) ─────────────────────────────────
+
+describe('validateEntries: interactions guards (F4)', () => {
+  test('capability interactions.someUnknownKey fails at the qualified field', () => {
+    const entry = validCapabilityEntry();
+    entry.interactions.someUnknownKey = 'x';
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'interactions.someUnknownKey'));
+  });
+
+  test('eos interactions.someUnknownKey fails at the qualified field', () => {
+    const entry = validEosEntry();
+    entry.interactions.someUnknownKey = 'x';
+    const verdict = validateEntries([entry], { type: 'eos' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'interactions.someUnknownKey'));
+  });
+
+  test('interactions.configKeys as a non-array string fails', () => {
+    const entry = validCapabilityEntry();
+    entry.interactions.configKeys = 'nope';
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'interactions.configKeys'));
+  });
+
+  test('interactions.configKeys with non-string elements fails', () => {
+    const entry = validCapabilityEntry();
+    entry.interactions.configKeys = [123];
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'interactions.configKeys'));
+  });
+
+  test('eos interactions.axes as a non-object string fails', () => {
+    const entry = validEosEntry();
+    entry.interactions.axes = 'nope';
+    const verdict = validateEntries([entry], { type: 'eos' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'interactions.axes'));
+  });
+});
+
+// ─── validateEntries: new hardening checks (length caps, tightened regexes) ────
+
+describe('validateEntries: description length cap (max 1000)', () => {
+  test('999 chars (limit-1) passes the cap', () => {
+    const entry = validCapabilityEntry();
+    entry.description = 'x'.repeat(999);
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.ok(!verdict.errors.some((e) => e.field === 'description' && /exceeds max length/.test(e.reason)));
+  });
+
+  test('1000 chars (limit) passes the cap', () => {
+    const entry = validCapabilityEntry();
+    entry.description = 'x'.repeat(1000);
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.ok(!verdict.errors.some((e) => e.field === 'description' && /exceeds max length/.test(e.reason)));
+  });
+
+  test('1001 chars (limit+1) fails the cap', () => {
+    const entry = validCapabilityEntry();
+    entry.description = 'x'.repeat(1001);
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'description' && /exceeds max length 1000/.test(e.reason)));
+  });
+});
+
+describe('validateEntries: entry-count cap (max 2000)', () => {
+  function makeEntries(n) {
+    return Array.from({ length: n }, (_, i) => ({
+      ...validCapabilityEntry(),
+      id: `cap-${i}`,
+      repo: `octocat/cap-${i}`,
+      discussion: `https://github.com/octocat/cap-${i}/discussions/1`,
+    }));
+  }
+
+  test('1999 entries (limit-1) does not trip the cap', () => {
+    const verdict = validateEntries(makeEntries(1999), { type: 'capability' });
+    assert.ok(!verdict.errors.some((e) => e.field === '(root)'));
+  });
+
+  test('2000 entries (limit) does not trip the cap', () => {
+    const verdict = validateEntries(makeEntries(2000), { type: 'capability' });
+    assert.ok(!verdict.errors.some((e) => e.field === '(root)'));
+  });
+
+  test('2001 entries (limit+1) trips the cap with a single root error', () => {
+    const verdict = validateEntries(makeEntries(2001), { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.equal(verdict.errors.length, 1);
+    assert.equal(verdict.errors[0].field, '(root)');
+    assert.match(verdict.errors[0].reason, /max 2000/);
+  });
+});
+
+describe('validateEntries: tightened discussion/license regexes', () => {
+  test('discussion URL containing an injection char ([) fails the tightened regex', () => {
+    const entry = validCapabilityEntry();
+    entry.discussion = 'https://github.com/a[b/c/discussions/1';
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'discussion'));
+  });
+
+  test('license containing a newline fails the tightened regex', () => {
+    const entry = validCapabilityEntry();
+    entry.license = 'MIT\nEVIL';
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.equal(verdict.ok, false);
+    assert.ok(verdict.errors.some((e) => e.field === 'license'));
+  });
+
+  test('a compound SPDX license ("MIT OR Apache-2.0") still passes', () => {
+    const entry = validCapabilityEntry();
+    entry.license = 'MIT OR Apache-2.0';
+    const verdict = validateEntries([entry], { type: 'capability' });
+    assert.ok(!verdict.errors.some((e) => e.field === 'license'));
   });
 });

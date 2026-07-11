@@ -102,6 +102,33 @@ describe('gen-registry CLI (subprocess)', () => {
   });
 });
 
+describe('gen-registry CLI (subprocess): F3 — missing capabilities.json is an error, not a silent pass', () => {
+  test('--check exits non-zero when docs/registries/ exists but capabilities.json is absent', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-gen-registry-nocaps-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'docs', 'registries'), { recursive: true });
+      // Deliberately do NOT write capabilities.json — only eos.json is optional.
+      const check = runGen(tmp, ['--check']);
+      assert.notEqual(check.status, 0, `expected non-zero exit, got 0. stdout: ${check.stdout}`);
+      assert.match(check.stderr, /capabilities\.json/);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('default mode (no flag) also hard-errors when capabilities.json is absent', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-gen-registry-nocaps-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'docs', 'registries'), { recursive: true });
+      const result = runGen(tmp, []);
+      assert.notEqual(result.status, 0, `expected non-zero exit, got 0. stdout: ${result.stdout}`);
+      assert.match(result.stderr, /capabilities\.json/);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});
+
 describe('gen-registry: renderMarkdown (direct, via registry-schema)', () => {
   test('renders empty-state text for an empty capability registry', () => {
     const rendered = renderMarkdown([], { type: 'capability', sourceFile: 'capabilities.json' });

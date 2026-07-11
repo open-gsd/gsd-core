@@ -122,6 +122,21 @@ const EOS_REQUIRED = Object.freeze([
   'protocolVersion',
 ]);
 
+// Escape Markdown inline metacharacters in UNTRUSTED free text so a registry
+// entry cannot inject links/tables/code-spans into the generated catalog.
+// Neutralizes: link hijack ([ ] ( )), table breakout (|), code span (`),
+// and backslash. Newlines are collapsed to a single space (inline contexts).
+function mdInline(value) {
+  return String(value).replace(/[\\`*_[\]()|~<>]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+}
+// A fenced-code fence guaranteed longer than any backtick run in `value`, so a
+// value containing ``` cannot escape the block (CommonMark rule). Min length 3.
+function fenceFor(value) {
+  const runs = String(value).match(/`+/g) || [];
+  const longest = runs.reduce((m, r) => Math.max(m, r.length), 0);
+  return '`'.repeat(Math.max(3, longest + 1));
+}
+
 // A single `engines.gsd` range clause: optional comparison operator, optional
 // leading `v`, exactly three dot-separated numeric segments, optional
 // prerelease (`-...`) and build (`+...`) suffixes. Operator alternation order
@@ -244,6 +259,8 @@ function validateEosInteractions(interactions, addError) {
           if (allowedValues === AXES_FREE_STRING) {
             if (typeof v !== 'string' || v.trim() === '') {
               addError(`interactions.axes.${key}`, 'must be a non-empty string');
+            } else if (v.length > 300) {
+              addError(`interactions.axes.${key}`, 'exceeds max length 300');
             }
           } else if (typeof v !== 'string' || !allowedValues.includes(v)) {
             addError(`interactions.axes.${key}`, `must be one of the allowed values for ${key}`);
@@ -267,6 +284,12 @@ function validateEntries(entries, opts) {
     return { ok: false, errors: [{ index: -1, field: '(root)', reason: 'entries must be an array' }] };
   }
 
+  // Entry-count cap: a pathologically large array (e.g. from an automated or
+  // malicious PR) is rejected wholesale rather than validated entry-by-entry.
+  if (entries.length > 2000) {
+    return { ok: false, errors: [{ index: -1, field: '(root)', reason: 'too many entries (max 2000)' }] };
+  }
+
   const required = opts.type === 'eos' ? EOS_REQUIRED : CAPABILITY_REQUIRED;
   const requiredSet = new Set(required);
   const seenIds = new Set();
@@ -275,9 +298,17 @@ function validateEntries(entries, opts) {
   entries.forEach((entry, index) => {
     const addError = (field, reason) => {
       const err = { index, field, reason };
-      if (typeof entry.id === 'string') err.id = entry.id;
+      if (entry && typeof entry === 'object' && typeof entry.id === 'string') err.id = entry.id;
       errors.push(err);
     };
+
+    // Null/non-object element guard — a malformed array element (null,
+    // undefined-via-hole, a primitive, or an array) cannot be destructured by
+    // the field checks below, so reject it outright rather than throwing.
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+      addError('(entry)', 'entry must be a JSON object');
+      return;
+    }
 
     for (const key of Object.keys(entry)) {
       if (!requiredSet.has(key)) addError(key, 'unknown field');
@@ -291,6 +322,35 @@ function validateEntries(entries, opts) {
       }
     }
 
+    // Control-character rejection (defense in depth): `allowTabNewline` widens
+    // the reject-set exception for the two shell-snippet fields (install/
+    // uninstall), which legitimately contain tabs/newlines; every other free
+    // text field disallows ALL C0 control characters plus DEL (incl. \n/\t).
+    // Checked via char codes (not a literal control-char regex range) — same
+    // approach as capability-validator.cjs's hooks[].matcher check, which
+    // avoids tripping ESLint's no-control-regex rule.
+    const hasDisallowedControlChar = (v, allowTabNewline) => {
+      for (let c = 0; c < v.length; c += 1) {
+        const code = v.charCodeAt(c);
+        if (allowTabNewline && (code === 0x09 || code === 0x0a)) continue;
+        if (code < 0x20 || code === 0x7f) return true;
+      }
+      return false;
+    };
+    const checkNoControlChars = (field, allowTabNewline) => {
+      if (missing.has(field)) return;
+      const v = entry[field];
+      if (typeof v !== 'string') return;
+      if (hasDisallowedControlChar(v, allowTabNewline)) addError(field, 'must not contain control characters');
+    };
+    // Length cap: reject oversized fields (untrusted third-party input feeding
+    // a committed Markdown catalog should not be allowed to blow up the doc).
+    const checkMaxLength = (field, max) => {
+      if (missing.has(field)) return;
+      const v = entry[field];
+      if (typeof v === 'string' && v.length > max) addError(field, `exceeds max length ${max}`);
+    };
+
     if (!missing.has('id')) {
       const id = entry.id;
       if (typeof id !== 'string' || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(id)) {
@@ -302,12 +362,17 @@ function validateEntries(entries, opts) {
         seenIds.add(id);
       }
     }
+    checkMaxLength('id', 100);
 
     for (const field of ['name', 'description', 'author']) {
       if (missing.has(field)) continue;
       const v = entry[field];
       if (typeof v !== 'string' || v.trim() === '') addError(field, 'must be a non-empty string');
+      checkNoControlChars(field, false);
     }
+    checkMaxLength('name', 120);
+    checkMaxLength('author', 120);
+    checkMaxLength('description', 1000);
 
     if (!missing.has('type') && entry.type !== opts.type) {
       addError('type', `type must be "${opts.type}"`);
@@ -318,30 +383,37 @@ function validateEntries(entries, opts) {
         addError('repo', 'repo must be in "owner/repo" form');
       }
     }
+    checkMaxLength('repo', 100);
 
     if (!missing.has('license')) {
       const v = entry.license;
-      if (typeof v !== 'string' || v.trim() === '' || !/^[A-Za-z0-9.+()\-\s]+$/.test(v)) {
+      if (typeof v !== 'string' || v.trim() === '' || !/^[A-Za-z0-9.+()\- ]+$/.test(v)) {
         addError('license', 'license must be a non-empty SPDX-like string');
       }
     }
+    checkMaxLength('license', 120);
 
     if (!missing.has('enginesGsd') && !isValidGsdRange(entry.enginesGsd)) {
       addError('enginesGsd', 'enginesGsd must be a valid semver range');
     }
+    checkMaxLength('enginesGsd', 100);
 
     for (const field of ['install', 'uninstall']) {
       if (missing.has(field)) continue;
       const v = entry[field];
       if (typeof v !== 'string' || v.trim() === '') addError(field, 'must be a non-empty string');
+      checkNoControlChars(field, true);
     }
+    checkMaxLength('install', 2000);
+    checkMaxLength('uninstall', 2000);
 
     if (!missing.has('discussion')) {
       const v = entry.discussion;
-      if (typeof v !== 'string' || !/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/discussions\/\d+$/.test(v)) {
+      if (typeof v !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/discussions\/\d+$/.test(v)) {
         addError('discussion', 'discussion must be a GitHub discussions URL');
       }
     }
+    checkMaxLength('discussion', 300);
 
     if (!missing.has('interactions')) {
       const interactions = entry.interactions;
@@ -401,8 +473,12 @@ function renderMarkdown(entries, opts) {
   lines.push('| Name | What it is | Latest release | GSD compat | Discussion |');
   lines.push('|---|---|---|---|---|');
   for (const entry of sorted) {
+    // entry.repo/enginesGsd/discussion are regex-constrained (validateEntries)
+    // and used as link DESTINATIONS / badge URLs here — never mdInline those,
+    // it would corrupt the URL. entry.name/description are untrusted free-text
+    // link TEXT / body copy and MUST be escaped.
     lines.push(
-      `| [${entry.name}](https://github.com/${entry.repo}) | ${entry.description} | ` +
+      `| [${mdInline(entry.name)}](https://github.com/${entry.repo}) | ${mdInline(entry.description)} | ` +
         `![release](https://img.shields.io/github/v/release/${entry.repo}?sort=semver&include_prereleases) | ` +
         `\`${entry.enginesGsd}\` | [discuss](${entry.discussion}) |`,
     );
@@ -412,20 +488,25 @@ function renderMarkdown(entries, opts) {
   sorted.forEach((entry, i) => {
     const interactions = entry.interactions || {};
 
-    lines.push(`## ${entry.name}`);
+    lines.push(`## ${mdInline(entry.name)}`);
     lines.push(
       `- **Repository:** https://github.com/${entry.repo} — [latest release](https://github.com/${entry.repo}/releases/latest)`,
     );
-    lines.push(`- **What it is:** ${entry.description}`);
+    lines.push(`- **What it is:** ${mdInline(entry.description)}`);
+    lines.push(`- **Author:** ${mdInline(entry.author)}`);
 
     if (isEos) {
       const axesSummary = Object.keys(AXES)
         .map((key) => `${key}=${interactions.axes ? interactions.axes[key] : undefined}`)
         .join(', ');
-      lines.push(
-        `- **Every interaction with GSD:** Interface points: ${(interactions.interfacePoints || []).join(', ')}; ` +
-          `profile: ${interactions.profile}; protocol v${entry.protocolVersion}; axes: ${axesSummary}`,
-      );
+      const summary =
+        `Interface points: ${(interactions.interfacePoints || []).join(', ')}; ` +
+        `profile: ${interactions.profile}; protocol v${entry.protocolVersion}; axes: ${axesSummary}`;
+      // Single mdInline pass over the fully-assembled summary: none of the
+      // literal separator text above contains Markdown metacharacters, so
+      // this equally neutralizes every embedded free-text/vocab value
+      // (notably interactions.axes.dispatch, a free-form untrusted string).
+      lines.push(`- **Every interaction with GSD:** ${mdInline(summary)}`);
     } else {
       let summary =
         `Loop Extension Points: ${(interactions.loopExtensionPoints || []).join(', ')}; ` +
@@ -434,24 +515,33 @@ function renderMarkdown(entries, opts) {
         const v = interactions[field];
         if (Array.isArray(v) && v.length > 0) summary += `; ${field}: ${v.join(', ')}`;
       }
-      lines.push(`- **Every interaction with GSD:** ${summary}`);
+      // configKeys/requires/runtimeCompat/produces/consumes are untrusted
+      // free-form strings (schema only requires "array of strings") — same
+      // single-pass mdInline rationale as the eos branch above.
+      lines.push(`- **Every interaction with GSD:** ${mdInline(summary)}`);
     }
 
+    // Code-span content (install/uninstall) is NOT mdInline-escaped — it is a
+    // verbatim shell snippet, not inline prose. Instead each block picks a
+    // fence strictly longer than any backtick run inside its own content, so
+    // an embedded ``` cannot prematurely close the fence (CommonMark rule).
+    const installFence = fenceFor(entry.install);
     lines.push('- **Install:**');
-    lines.push('```sh');
+    lines.push(`${installFence}sh`);
     lines.push(entry.install);
-    lines.push('```');
+    lines.push(installFence);
+    const uninstallFence = fenceFor(entry.uninstall);
     lines.push('- **Uninstall:**');
-    lines.push('```sh');
+    lines.push(`${uninstallFence}sh`);
     lines.push(entry.uninstall);
-    lines.push('```');
+    lines.push(uninstallFence);
 
     lines.push(
       isEos
         ? `- **GSD compatibility:** \`${entry.enginesGsd}\`, protocol v${entry.protocolVersion}`
         : `- **GSD compatibility:** \`${entry.enginesGsd}\``,
     );
-    lines.push(`- **License:** ${entry.license}`);
+    lines.push(`- **License:** ${mdInline(entry.license)}`);
     lines.push(`- **Discussion / ranking:** ${entry.discussion}`);
 
     if (i < sorted.length - 1) lines.push('');
