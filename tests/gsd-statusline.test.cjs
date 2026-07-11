@@ -1419,6 +1419,11 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       assert.equal(shortGsdStatus('reticulating splines'), 'reticulating');
       assert.equal(shortGsdStatus('supercalifragilisticexpialidocious state'), 'supercalifragili');
     });
+    test('16-char cap boundary: limit-1 / limit / limit+1', () => {
+      assert.equal(shortGsdStatus('x'.repeat(15)), 'x'.repeat(15));
+      assert.equal(shortGsdStatus('x'.repeat(16)), 'x'.repeat(16));
+      assert.equal(shortGsdStatus('x'.repeat(17)), 'x'.repeat(16));
+    });
   });
 
   describe('formatGsdStateCompact', () => {
