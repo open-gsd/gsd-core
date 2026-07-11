@@ -97,6 +97,9 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "electron"
+    },
+    "hostBehaviors": {
+      "skipSharedHooksInstall": true
     }
   }
 }
