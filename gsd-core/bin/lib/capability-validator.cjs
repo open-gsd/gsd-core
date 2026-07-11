@@ -705,7 +705,7 @@ const VALID_CONVERTER_NAMES = new Set([
 const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'markdown-dir', 'none']);
 const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']);
 const VALID_COMMAND_STYLES = new Set(['slash-hyphen', 'shell-var']);
-const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'none']);
+const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'windsurf-hooks-json', 'none']);
 const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
 // extensionEvents — the plugin/extension-system event dialect (ADR-1239 amendment / #1943).
 // DISTINCT from hookEvents (managed-hook dialect): extensionEvents describes the
@@ -741,7 +741,7 @@ const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
   ['copilot-instructions', new Set(['copilot-inline'])],
   ['cline-rules',          new Set(['cline-rules'])],
   ['cursor-hooks-json',    new Set(['cursor-hooks-json'])],
-  ['profile-marker-only',  new Set(['none', 'kimi-hooks-toml'])],
+  ['profile-marker-only',  new Set(['none', 'kimi-hooks-toml', 'windsurf-hooks-json'])],
 ]);
 
 // GATE B: extended hook event families → required hookEvents value

@@ -554,6 +554,8 @@ Full listing: `hooks/`.
 | `gsd-cursor-stop.js` | Cursor `stop` | Cursor-native verify-work reminder on agent stop (ADR-1239 / #2089) |
 | `gsd-cursor-subagent-start.js` | Cursor `subagentStart` | Cursor-native subagent context injection (ADR-1239 / #2089) |
 | `gsd-cursor-subagent-stop.js` | Cursor `subagentStop` | Cursor-native subagent completion reminder (ADR-1239 / #2089) |
+| `gsd-windsurf-pre-write.js` | Windsurf/Cascade `pre_write_code` | Blocking (exit-code-2) write-path guard — blocks a write resolving to a different git root than cwd, or inside `.git/` internals (ADR-1239 / #2100) |
+| `gsd-windsurf-pre-command.js` | Windsurf/Cascade `pre_run_command` | Blocking (exit-code-2) destructive-command guard — conservative deny-list (`rm -rf` root/home wipes, force-push to a protected branch) (ADR-1239 / #2100) |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt-injection patterns (advisory) |
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on unread files |

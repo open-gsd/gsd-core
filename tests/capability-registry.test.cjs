@@ -3967,12 +3967,12 @@ describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
     assert.strictEqual(VALID_COMMAND_STYLES.size, 2);
   });
 
-  test('VALID_HOOKS_SURFACES has exactly 7 values', () => {
+  test('VALID_HOOKS_SURFACES has exactly 8 values', () => {
     assert.ok(VALID_HOOKS_SURFACES instanceof Set);
-    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'none']) {
+    for (const v of ['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'windsurf-hooks-json', 'none']) {
       assert.ok(VALID_HOOKS_SURFACES.has(v), 'VALID_HOOKS_SURFACES must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_HOOKS_SURFACES.size, 7);
+    assert.strictEqual(VALID_HOOKS_SURFACES.size, 8);
   });
 
   test('VALID_HOOK_EVENTS has exactly 2 managed-hook dialects (claude/gemini)', () => {

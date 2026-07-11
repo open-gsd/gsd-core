@@ -311,6 +311,8 @@
   "gsd-core/workflows/validate-phase.md": "2db47bf5547d7b9d",
   "gsd-core/workflows/verify-phase.md": "f961cdb3ef03ff05",
   "gsd-core/workflows/verify-work.md": "cce8ae44b30957f1",
+  "hooks/gsd-windsurf-pre-command.js": "7467a8a63e354aad",
+  "hooks/gsd-windsurf-pre-write.js": "1c8a776d7ae2dcce",
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
   "scripts/changeset/github-release-notes.cjs": "795677f0c009b132",

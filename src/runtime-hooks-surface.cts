@@ -1165,6 +1165,215 @@ function removeCursorHooksJson(targetDir: string): { changed: boolean } {
 }
 
 // ---------------------------------------------------------------------------
+// Windsurf/Cascade hook functions (ADR-1239 / #2100 Stage 2 — HOOK-BRIDGE)
+//
+// Cascade (Windsurf's agent) hooks.json format is DISTINCT from Cursor's:
+//   { "hooks": { "<event>": [ { "command": "<shell cmd>", ... } ] } }
+// Each entry carries a bare `command` STRING (a shell command line) — not
+// Cursor's `{ type: 'command', command: <cmd> }` wrapper — and there is no
+// top-level `version` field. Docs (reference): https://docs.windsurf.com/llms-full.txt ,
+// https://docs.devin.ai/desktop/cascade/hooks
+//
+// Cascade blocks via EXIT CODE 2 (+ a stderr reason), not Cursor's stdout-JSON
+// `{ block: true, reason }` form — so the two hook scripts installed here
+// (hooks/gsd-windsurf-pre-write.js, hooks/gsd-windsurf-pre-command.js) speak a
+// different protocol than the Cursor scripts, even though the surrounding
+// install/reconcile infra mirrors writeCursorHooksJson/removeCursorHooksJson.
+//
+// Only 2 of GSD's 6 Cursor-parity hook events have a Cascade counterpart with
+// BLOCKING semantics: pre_write_code and pre_run_command. Cascade has no
+// context-injection channel (no `additional_context`-style advisory
+// response), so the 4 advisory events GSD registers on Cursor (sessionStart,
+// postToolUse, stop, subagentStart/subagentStop) are deliberately NOT ported.
+// ---------------------------------------------------------------------------
+
+const GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT = 'gsd-windsurf-pre-write.js';
+const GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT = 'gsd-windsurf-pre-command.js';
+const GSD_WINDSURF_HOOK_MARKER = 'gsd-managed';
+
+/** The 2 Cascade hook events GSD wires with blocking (exit-code-2) guards. */
+const WINDSURF_HOOK_EVENTS = Object.freeze(['pre_write_code', 'pre_run_command'] as const);
+
+/** Event → hook-script mapping (mirrors CURSOR_EVENT_SCRIPT_MAP's convention). */
+const WINDSURF_EVENT_SCRIPT_MAP: Readonly<Record<string, string>> = Object.freeze({
+  pre_write_code: GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
+  pre_run_command: GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT,
+});
+
+/** All GSD-managed Windsurf hook scripts (used by uninstall cleanup). */
+const GSD_WINDSURF_HOOK_SCRIPTS = [
+  GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
+  GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT,
+];
+
+/**
+ * Build a single Cascade hooks.json managed entry. Cascade's entry shape has
+ * no `type` field (unlike Cursor's `{ type: 'command', command }`) — just a
+ * bare `command` shell string plus the GSD marker.
+ */
+function buildWindsurfHookEntry(command: string): Record<string, unknown> {
+  return {
+    command,
+    [GSD_WINDSURF_HOOK_MARKER]: true,
+  };
+}
+
+function isManagedWindsurfHookEntry(entry: unknown): boolean {
+  return Boolean(entry && typeof entry === 'object' && (entry as Record<string, unknown>)[GSD_WINDSURF_HOOK_MARKER]);
+}
+
+interface WindsurfManagedEntries {
+  pre_write_code?: Record<string, unknown> | null;
+  pre_run_command?: Record<string, unknown> | null;
+  [event: string]: Record<string, unknown> | null | undefined;
+}
+
+/**
+ * Reconcile GSD's managed Cascade hook entries into `<targetDir>/hooks.json`,
+ * preserving any user-owned entries. Mirrors reconcileCursorHooksJson's
+ * merge/no-write-when-unchanged semantics, adapted to Cascade's flatter
+ * `{ hooks: { <event>: [...] } }` shape (no `version` field, no legacy
+ * top-level-array lift — Cascade's hooks.json is a brand-new surface with no
+ * prior shape to migrate from).
+ */
+function reconcileWindsurfHooksJson(hooksJsonPath: string, managedEntries: WindsurfManagedEntries | null): ReconcileResult {
+  let parsed: Record<string, unknown> = {};
+  let currentContent: string | null = null;
+
+  if (fs.existsSync(hooksJsonPath)) {
+    const raw = fs.readFileSync(hooksJsonPath, 'utf8');
+    currentContent = raw;
+    if (raw.trim()) {
+      try {
+        parsed = JSON.parse(raw) as Record<string, unknown>;
+      } catch (err) {
+        throw new Error(`Windsurf hooks.json parse failed: ${err && (err as Error).message ? (err as Error).message : String(err)}`);
+      }
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) parsed = {};
+
+  const hasNestedHooksObject =
+    parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']);
+  if (!hasNestedHooksObject) parsed['hooks'] = {};
+  const hookTable = parsed['hooks'] as Record<string, unknown>;
+
+  const entries = managedEntries || {};
+
+  for (const event of WINDSURF_HOOK_EVENTS) {
+    const existing = Array.isArray(hookTable[event]) ? (hookTable[event] as unknown[]) : [];
+    const userOwned = existing.filter((e) => !isManagedWindsurfHookEntry(e));
+    const newEntry = entries[event] || null;
+    if (newEntry) {
+      hookTable[event] = [...userOwned, newEntry];
+    } else if (userOwned.length > 0) {
+      hookTable[event] = userOwned;
+    } else {
+      delete hookTable[event];
+    }
+  }
+
+  // Avoid writing an empty `{ "hooks": {} }` artifact.
+  if (Object.keys(hookTable).length === 0) delete parsed['hooks'];
+
+  const nextContent = `${JSON.stringify(parsed, null, 2)}\n`;
+  const changed = currentContent !== nextContent;
+  const shouldWrite = changed && (currentContent !== null || Object.keys(parsed).length > 0);
+  if (shouldWrite) {
+    atomicWriteFileSync(hooksJsonPath, nextContent, 'utf8');
+  }
+
+  return { changed: changed, wrote: shouldWrite, path: hooksJsonPath };
+}
+
+interface WriteWindsurfHooksJsonOpts {
+  platform?: string;
+}
+
+/**
+ * Write GSD-managed Cascade lifecycle hooks into `<targetDir>/hooks.json`.
+ * Both managed hook scripts (gsd-windsurf-pre-write.js,
+ * gsd-windsurf-pre-command.js) are copied from the GSD hooks/ source to
+ * `<targetDir>/hooks/` first, so the hooks.json entries never reference a
+ * script that wasn't installed. Mirrors writeCursorHooksJson's structure;
+ * `buildHookCommand` is runtime-agnostic (it already returns a plain shell
+ * command string), so it is reused as-is with `runtime: 'windsurf'` — only
+ * the hooks.json ENTRY shape (buildWindsurfHookEntry) and the reconcile
+ * function differ from Cursor's.
+ *
+ * @param targetDir - The Windsurf config dir (global: ~/.codeium/windsurf; local: .windsurf)
+ * @param src       - The GSD install source root (for copying hook scripts)
+ * @param opts      - `{ platform? }`
+ * @returns `{ hooksJsonPath, changed }`
+ */
+function writeWindsurfHooksJson(targetDir: string, src: string, opts?: WriteWindsurfHooksJsonOpts): { hooksJsonPath: string; changed: boolean } {
+  opts = opts || {};
+  const hooksDir = path.join(targetDir, 'hooks');
+  fs.mkdirSync(hooksDir, { recursive: true });
+
+  const srcHooksDir = path.join(src, 'hooks');
+  const installedScripts = new Set<string>();
+  for (const script of GSD_WINDSURF_HOOK_SCRIPTS) {
+    const srcPath = path.join(srcHooksDir, script);
+    const destPath = path.join(hooksDir, script);
+    if (fs.existsSync(srcPath)) {
+      let content = fs.readFileSync(srcPath, 'utf8');
+      content = content.replace(/gsd:/gi, 'gsd-');
+      fs.writeFileSync(destPath, content);
+      try { fs.chmodSync(destPath, 0o755); } catch { /* Windows: ignore chmod */ }
+      installedScripts.add(script);
+    }
+  }
+
+  const hookOpts: BuildHookCommandOpts = { runtime: 'windsurf', platform: opts.platform || process.platform };
+  const commands: Record<string, string | null> = {};
+  for (const ev of WINDSURF_HOOK_EVENTS) {
+    const script = WINDSURF_EVENT_SCRIPT_MAP[ev];
+    commands[ev] = (script && installedScripts.has(script)) ? buildHookCommand(targetDir, script, hookOpts) : null;
+  }
+
+  const managedEntries: WindsurfManagedEntries = {};
+  for (const ev of WINDSURF_HOOK_EVENTS) {
+    const cmd = commands[ev];
+    if (cmd) managedEntries[ev] = buildWindsurfHookEntry(cmd);
+  }
+
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  const result = reconcileWindsurfHooksJson(hooksJsonPath, managedEntries);
+  return { hooksJsonPath, changed: result.changed };
+}
+
+/**
+ * Remove all GSD-managed Cascade hook entries from hooks.json. User-owned
+ * entries are preserved. If the file becomes empty, it is removed.
+ *
+ * @param targetDir - The Windsurf config dir
+ * @returns `{ changed }`
+ */
+function removeWindsurfHooksJson(targetDir: string): { changed: boolean } {
+  const hooksJsonPath = path.join(targetDir, 'hooks.json');
+  if (!fs.existsSync(hooksJsonPath)) return { changed: false };
+  const result = reconcileWindsurfHooksJson(hooksJsonPath, null);
+  if (result.changed) {
+    try {
+      const contentRaw = fs.readFileSync(hooksJsonPath, 'utf8');
+      const parsed = JSON.parse(contentRaw) as Record<string, unknown>;
+      const hookTable = (parsed['hooks'] && typeof parsed['hooks'] === 'object' && !Array.isArray(parsed['hooks']))
+        ? (parsed['hooks'] as Record<string, unknown>)
+        : {};
+      const hasAnyEvents = Object.keys(hookTable).some(
+        (k) => Array.isArray(hookTable[k]) && (hookTable[k] as unknown[]).length > 0,
+      );
+      if (!hasAnyEvents) {
+        fs.unlinkSync(hooksJsonPath);
+        return { changed: true };
+      }
+    } catch { /* best-effort: leave the file */ }
+  }
+  return { changed: result.changed };
+}
+
+// ---------------------------------------------------------------------------
 // Copilot hook functions
 // ---------------------------------------------------------------------------
 
@@ -2064,6 +2273,19 @@ export = {
   GSD_CURSOR_SUBAGENT_START_HOOK_SCRIPT,
   GSD_CURSOR_SUBAGENT_STOP_HOOK_SCRIPT,
   GSD_CURSOR_HOOK_MARKER,
+
+  // Windsurf/Cascade
+  buildWindsurfHookEntry,
+  isManagedWindsurfHookEntry,
+  reconcileWindsurfHooksJson,
+  writeWindsurfHooksJson,
+  removeWindsurfHooksJson,
+  WINDSURF_HOOK_EVENTS,
+  WINDSURF_EVENT_SCRIPT_MAP,
+  GSD_WINDSURF_PRE_WRITE_HOOK_SCRIPT,
+  GSD_WINDSURF_PRE_COMMAND_HOOK_SCRIPT,
+  GSD_WINDSURF_HOOK_SCRIPTS,
+  GSD_WINDSURF_HOOK_MARKER,
 
   // Copilot
   buildCopilotHookConfig,
