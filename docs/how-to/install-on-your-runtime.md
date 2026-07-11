@@ -457,6 +457,8 @@ npx @opengsd/gsd-core@latest --zcode --global
 
 ZCode's skill format is identical to Claude Code's, so no runtime-specific converter is required — GSD lands as a pure declarative descriptor with no hardcoded installer branches. ZCode also natively imports skills and MCP config from `~/.claude`; if you install GSD for **both** Claude and ZCode, you may see duplicate GSD skills inside ZCode, which is expected. To connect ZCode's MCP servers to GSD's companion server, see [how to connect the GSD MCP server](connect-gsd-mcp-server.md).
 
+GSD's hook-automation and native-MCP-registration integrations are not yet wired for ZCode — both are blocked on ZCode not yet publishing the on-disk config format for its plugin `Hook` component or the settings filename/schema for its MCP store. See the [`## zcode`](host-integration-capability-matrix.md#zcode) section of the host-integration capability matrix for the cited source URLs.
+
 ---
 
 ## Local vs global install

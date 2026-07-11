@@ -8859,7 +8859,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // hostBehaviors.skipSharedHooksInstall respectively; its legacy-agent-loop
   // converter arm was likewise unreachable dead code (windsurf is in
   // _DESCRIPTOR_AGENTS_RUNTIMES) and was removed above.
-  const { isOpencode, isZcode, isCodex, isCursor, isAugment, isTrae, isQwen, isHermes, isCline } = runtimeFlags(runtime);
+  // #2101: isZcode dropped — folded onto hostBehaviors.skipSharedHooksInstall.
+  const { isOpencode, isCodex, isCursor, isAugment, isTrae, isQwen, isHermes, isCline } = runtimeFlags(runtime);
   const plan = resolveInstallPlan(runtime);
   const dirName = getDirName(runtime);
   const src = path.join(__dirname, '..');
@@ -10026,7 +10027,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // skipSharedHooksInstall:true) — the redundant `&& !isKilo` was removed.
   // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
   // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
-  // ZCode still has an empty hostBehaviors, so `&& !isZcode` stays.
+  // #2101: ZCode's exclusion is likewise descriptor-driven (zcode declares
+  // skipSharedHooksInstall:true) — the redundant `&& !isZcode` was removed.
   // #2095: Kimi's exclusion is likewise descriptor-driven (kimi declares
   // skipSharedHooksInstall:true) — kimi's shared hooks/ + package.json marker
   // are instead installed into its OWN native hook root (~/.kimi, resolved by
@@ -10037,7 +10039,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // skipSharedHooksInstall:true) — the redundant `&& !isCopilot` was removed.
   // #2100: Windsurf's exclusion is likewise descriptor-driven (windsurf declares
   // skipSharedHooksInstall:true) — the redundant `&& !isWindsurf` was removed.
-  if (!isCodex && _hostBehaviors(runtime).skipSharedHooksInstall !== true && !isZcode) {
+  if (!isCodex && _hostBehaviors(runtime).skipSharedHooksInstall !== true) {
     if (!installSharedHooksBundle(targetDir)) {
       failures.push('hooks');
     }
