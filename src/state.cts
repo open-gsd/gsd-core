@@ -2759,7 +2759,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     return;
   }
 
-  const today = realClock.today();
+  const today = realClock.localToday();
   const updated: string[] = [];
 
   readModifyWriteStateMd(statePath, (content) => {
