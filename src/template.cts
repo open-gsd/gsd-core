@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -110,7 +111,7 @@ function cmdTemplateFill(cwd: string, templateType: string | null | undefined, o
   if (!phaseInfo || !phaseInfo.found) { output({ error: 'Phase not found', phase: options.phase }, raw, undefined); return; }
 
   const padded = normalizePhaseName(options.phase);
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   const phaseName = options.name || phaseInfo.phase_name || 'Unnamed';
   const phaseSlug = phaseInfo.phase_slug || generateSlugInternal(phaseName);
   const phaseId = `${padded}-${phaseSlug}`;
