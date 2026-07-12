@@ -42,8 +42,10 @@ describe('#2196 debug.md session-manager spawn contract', () => {
   });
 
   test('a lost handoff has a recovery path (preserve checkpoint + resume)', () => {
-    assert.ok(/continue \{slug\}|\/gsd-debug continue/.test(section),
-      'the contract must point to /gsd-debug continue {slug} as the resume path');
+    // Pin the CANONICAL colon form — the retired /gsd-debug hyphen syntax is
+    // rejected by the slash-command-namespace guard, so this must be /gsd:debug.
+    assert.ok(/\/gsd:debug continue \{slug\}/.test(section),
+      'the contract must point to /gsd:debug continue {slug} (canonical colon form) as the resume path');
     assert.ok(/do not claim|do NOT claim/i.test(section),
       'the contract must forbid claiming a lost-handoff session is still running');
   });
