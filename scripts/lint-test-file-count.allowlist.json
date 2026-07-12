@@ -50,11 +50,12 @@
     },
     "security": {
       "files": [
+        "security-dead-exports.regression.test.cjs",
         "security-prompt-injection.security.test.cjs",
         "security-scan.security.test.cjs",
         "security.test.cjs"
       ],
-      "issue": "TBD"
+      "issue": "2198"
     },
     "state": {
       "files": [

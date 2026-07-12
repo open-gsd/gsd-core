@@ -37,6 +37,9 @@ export const BUNDLED_GSD_HOOK_FILES: ReadonlySet<string> = Object.freeze(new Set
   'hooks/gsd-cursor-stop.js',
   'hooks/gsd-cursor-subagent-start.js',
   'hooks/gsd-cursor-subagent-stop.js',
+  // Windsurf/Cascade blocking hooks — registered by writeWindsurfHooksJson (#2100).
+  'hooks/gsd-windsurf-pre-write.js',
+  'hooks/gsd-windsurf-pre-command.js',
   'hooks/gsd-ensure-canonical-path.js',
   'hooks/gsd-graphify-update.sh',
   'hooks/gsd-phase-boundary.sh',

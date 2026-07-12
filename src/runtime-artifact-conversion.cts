@@ -83,6 +83,21 @@ function _hostBehaviors(runtime: string): Record<string, unknown> {
   );
 }
 
+/**
+ * Public accessor for the `hostBehaviors.agentFileExtension` descriptor field
+ * (ADR-1239 / #2099 / #2103). Returns the runtime's declared agent-file
+ * destination-suffix rename target (e.g. copilot's `.agent.md`), or
+ * `undefined` when the runtime declares none (the generic no-rename
+ * default). Exported so callers outside this module (surface.cts's
+ * `_syncGsdDir`) can derive the SAME rename decision as
+ * install-engine.cts's staged-copy loop from ONE descriptor read, instead of
+ * duplicating a hardcoded `runtime === 'copilot'` check (#2103 fold).
+ */
+function agentFileExtensionFor(runtime: string): string | undefined {
+  const ext = _hostBehaviors(runtime).agentFileExtension;
+  return typeof ext === 'string' ? ext : undefined;
+}
+
 
 const colorNameToHex = {
   cyan: '#00FFFF',
@@ -505,6 +520,14 @@ function convertGsdCommandReferencesToKimiSkillInvocations(content, cmdNames) {
     .replace(hyphenPattern, (_, cmd) => `/skill:gsd-${cmd}`);
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// convertClaudeCommandToKimiSkill (kept for bin/install.js's own
+// module-level export/test surface; dead for the live skills-install path,
+// which routes here via install-engine.cts's SKILLS_CONVERTER_REGISTRY
+// through the kimi capability descriptor's artifactLayout
+// `converter: "convertClaudeCommandToKimiSkill"`). Neither copy re-exports
+// the other — mirror any behavior change into both. Guarded by the
+// output-parity test in tests/runtime-converters.test.cjs (#2095).
 function convertClaudeCommandToKimiSkill(content, skillName, _runtime = null, cmdNames = null) {
   const { frontmatter, body } = extractFrontmatterAndBody(content);
   const kimiSkillName = normalizeKimiSkillName(skillName);
@@ -649,6 +672,15 @@ function buildKimiSubagentYaml({ name, description, tools }) {
   return `${lines.join('\n')}\n`;
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// buildKimiAgentArtifacts (kept for bin/install.js's own module-level
+// export/test surface; dead for the live install path, which routes here via
+// runtime-artifact-layout.cts's kimiAgentsKind through a dynamic
+// `conversionExports['buildKimiAgentArtifacts']` lookup against this
+// compiled module). Neither copy re-exports the other — mirror any behavior
+// change into both, including the kimi_cli.tools.agent:Agent grant that
+// enables background dispatch (#2095 Upgrade 2). Guarded by the
+// output-parity test in tests/runtime-converters.test.cjs (#2095).
 function buildKimiAgentArtifacts({
   rootAgent = '',
   subagents = [],
@@ -1090,6 +1122,11 @@ function convertClaudeToAugmentMarkdown(content) {
   return converted;
 }
 
+// #2097 (ADR-1239): command-body converters selected by descriptor
+// (runtime.hostBehaviors.commandBodyConverter) instead of a runtime-name
+// branch. Degrade-closed: unknown/absent name → no conversion.
+const COMMAND_BODY_CONVERTERS = { convertClaudeToAugmentMarkdown };
+
 function getAugmentSkillAdapterHeader(skillName) {
   return `<augment_skill_adapter>
 ## A. Skill Invocation
@@ -1169,6 +1206,12 @@ function convertClaudeToTraeMarkdown(content) {
   return converted;
 }
 
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// convertClaudeCommandToTraeSkill (dead for the live skills-install path,
+// which routes here via install-engine.cts's SKILLS_CONVERTER_REGISTRY; kept
+// for bin/install.js's own module-level export/test surface). Neither copy
+// re-exports the other — mirror any behavior change into both. Guarded by
+// the output-parity test in tests/runtime-converters.test.cjs (#2094).
 function convertClaudeCommandToTraeSkill(content, skillName) {
   const converted = convertClaudeToTraeMarkdown(content);
   const { frontmatter, body } = extractFrontmatterAndBody(converted);
@@ -1183,7 +1226,16 @@ function convertClaudeCommandToTraeSkill(content, skillName) {
   const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
   // #2876: quote so YAML flow indicators (`[BETA] …`) don't break Trae's
   // frontmatter parser.
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n${body}`;
+  let fm = `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n`;
+  // #2094: emit `stage:` so Trae's SOLO agent can auto-invoke GSD skills at
+  // the corresponding stage (docs.trae.ai/ide/agent). The field name/schema
+  // is not formally documented (thin SPA docs) — descriptor-driven, single
+  // fixed GSD-side value (runtime.hostBehaviors.soloStageMetadata), inferred/
+  // best-effort.
+  const soloStage = _hostBehaviors('trae').soloStageMetadata as string | undefined;
+  if (soloStage) fm += `stage: ${soloStage}\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
 }
 
 function convertSlashCommandsToCodebuddySkillMentions(content) {
@@ -1676,7 +1728,12 @@ function convertClaudeToOpencodeFrontmatter(content, { isAgent = false, modelOve
 }
 
 // Kilo CLI — same conversion logic as OpenCode, different config paths.
-function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
+// DEFECT.GENERATIVE-FIX: this body is mirrored in bin/install.js's
+// convertClaudeToKiloFrontmatter (used by bin/install.js's own legacy install
+// path). Neither copy re-exports the other — mirror any behavior change into
+// both. Guarded by the output-parity test in tests/runtime-converters.test.cjs
+// (#2093).
+function convertClaudeToKiloFrontmatter(content, { isAgent = false, modelOverride = null } = {}) {
   // Replace tool name references in content (applies to all files)
   let convertedContent = content;
   convertedContent = convertedContent.replace(/\bAskUserQuestion\b/g, 'question');
@@ -1835,6 +1892,14 @@ function convertClaudeToKiloFrontmatter(content, { isAgent = false } = {}) {
   // For agents: add required Kilo agent fields
   if (isAgent) {
     newLines.push('mode: subagent');
+    // Embed model override from ~/.gsd/defaults.json so model_overrides is
+    // respected on Kilo (which uses static agent frontmatter, not inline
+    // Task() model parameters) — mirrors convertClaudeToOpencodeFrontmatter's
+    // model emission exactly (#2093 UPGRADE 2 / ADR-1239; Kilo is an OpenCode
+    // fork with the same static-frontmatter model constraint). See #2256.
+    if (modelOverride) {
+      newLines.push(['model:', modelOverride].join(' '));
+    }
     newLines.push(...buildKiloAgentPermissionBlock(agentTools));
   }
 
@@ -2397,19 +2462,24 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       break;
     }
 
-    case 'augment':
+    case 'augment': {
       content = content.replace(/~\/\.claude\//g, pathPrefix);
       content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
       content = content.replace(/\.\/\.claude\//g, `./${dirName}/`);
       content = content.replace(/~\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.claude(?![\w-])/g, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude(?![\w-])/g, `./${dirName}`);
-      content = content.replace(/~\/\.augment\//g, pathPrefix);
-      content = content.replace(/\$HOME\/\.augment\//g, pathPrefix);
-      content = content.replace(/~\/\.augment(?![\w-])/g, normalizedPathPrefix);
-      content = content.replace(/\$HOME\/\.augment(?![\w-])/g, normalizedPathPrefix);
+      // #2097: dot-dir self-references (~/.augment/…) → resolved prefix,
+      // dirName-derived (no runtime literal). getDirName('augment') resolves
+      // to '.augment', so this is byte-identical to the prior hardcoded regexes.
+      const _dd = escapeRegExp(dirName);
+      content = content.replace(new RegExp('~/' + _dd + '/', 'g'), pathPrefix);
+      content = content.replace(new RegExp('\\$HOME/' + _dd + '/', 'g'), pathPrefix);
+      content = content.replace(new RegExp('~/' + _dd + '(?![\\w-])', 'g'), normalizedPathPrefix);
+      content = content.replace(new RegExp('\\$HOME/' + _dd + '(?![\\w-])', 'g'), normalizedPathPrefix);
       content = processAttribution(content, attribution);
       break;
+    }
 
     case 'trae':
       content = content.replace(/~\/\.claude\//g, pathPrefix);
@@ -2418,7 +2488,10 @@ function _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal = false, a
       content = content.replace(/~\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\$HOME\/\.claude\b/g, normalizedPathPrefix);
       content = content.replace(/\.\/\.claude\b/g, `./${dirName}`);
-      content = content.replace(/~\/\.trae\//g, pathPrefix);
+      // #2094: descriptor-driven — dirName resolves to '.trae' via
+      // getDirName()/localConfigDir, so this regex is built rather than
+      // hardcoded as `/~\/\.trae\//g` (byte-identical output for trae).
+      content = content.replace(new RegExp('~/' + escapeRegExp(dirName) + '/', 'g'), pathPrefix);
       content = processAttribution(content, attribution);
       break;
 
@@ -2583,8 +2656,11 @@ function applyRuntimeContentRewritesForCommandsInPlace(stagedDir, runtime, pathP
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
       let content = fs.readFileSync(path.join(stagedDir, entry.name), 'utf8');
       content = _applyRuntimeRewrites(content, runtime, pathPrefix, isGlobal, attribution);
-      if (runtime === 'augment') {
-        content = convertClaudeToAugmentMarkdown(content);
+      // #2097 (ADR-1239): descriptor-driven — commandBodyConverter name comes
+      // from runtime.hostBehaviors instead of a hardcoded runtime-name branch.
+      const _cmdConv = _hostBehaviors(runtime).commandBodyConverter;
+      if (_cmdConv && COMMAND_BODY_CONVERTERS[_cmdConv]) {
+        content = COMMAND_BODY_CONVERTERS[_cmdConv](content);
       }
       fs.writeFileSync(path.join(tempDir, entry.name), content);
     }
@@ -2695,9 +2771,13 @@ function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames
  *   ~/\.claude\b → normalizedPathPrefix
  *   $HOME/\.claude\b → normalizedPathPrefix
  *
- * Skipped for copilot and antigravity (which do NOT do path rewrites in the
- * inline loop). NO stamp (_stampNonClaudeRuntimeDefaults) — agents are NOT
- * stamped in the inline loop.
+ * Skipped for any runtime that declares `hostBehaviors.noPathRewrite`
+ * (descriptor-driven, ADR-1239 / #2096 — folds the prior hardcoded
+ * `runtime === 'antigravity'` literal; Antigravity does NOT do path rewrites
+ * in the inline loop / #2103 — folds the prior hardcoded
+ * `runtime === 'copilot'` literal onto the same descriptor field, since
+ * copilot also skips these rewrites). NO stamp
+ * (_stampNonClaudeRuntimeDefaults) — agents are NOT stamped in the inline loop.
  *
  * ADR-1235 §1: pre-converter cross-cutting for descriptor-driven agent pipeline.
  * Exported as `applyAgentPathRewrites` for testing and for injection into
@@ -2706,10 +2786,10 @@ function normalizeAgentBodyForRuntime(content: string, runtime: string, cmdNames
  * @param content     raw agent file content
  * @param runtime     canonical runtime ID
  * @param pathPrefix  trailing-slash path prefix (e.g. '$HOME/.cursor/')
- * @returns content with path-prefix rewrites applied (or unchanged for copilot/antigravity)
+ * @returns content with path-prefix rewrites applied (or unchanged for noPathRewrite runtimes, e.g. copilot)
  */
 function applyAgentPathRewrites(content: string, runtime: string, pathPrefix: string): string {
-  if (runtime === 'copilot' || runtime === 'antigravity') return content;
+  if (_hostBehaviors(runtime).noPathRewrite === true) return content;
   const normalizedPathPrefix = pathPrefix.replace(/\/$/, '');
   content = content.replace(/~\/\.claude\//g, pathPrefix);
   content = content.replace(/\$HOME\/\.claude\//g, pathPrefix);
@@ -2750,6 +2830,11 @@ function processAttribution(
 
 export = {
   processAttribution,
+  // #2103: public accessor for hostBehaviors.agentFileExtension, exported so
+  // surface.cts's _syncGsdDir can derive the .agent.md rename from the SAME
+  // descriptor read as install-engine.cts (folds a duplicated hardcoded
+  // `runtime === 'copilot'` literal).
+  agentFileExtensionFor,
   yamlIdentifier,
   yamlQuote,
   toSingleLine,

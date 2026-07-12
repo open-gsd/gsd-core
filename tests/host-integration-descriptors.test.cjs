@@ -38,9 +38,9 @@ const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'sub
 const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
-// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, qwen, trae (9)
+// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, pi, qwen, trae (10)
 // declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
-// ide: 0
+// ide: vscode (1) — #2103, the first installed ide-profile host.
 const EXPECTED_PROFILES = {
   claude:      'programmatic-cli',
   cline:       'programmatic-cli',
@@ -49,6 +49,7 @@ const EXPECTED_PROFILES = {
   kilo:        'programmatic-cli',
   kimi:        'programmatic-cli',
   opencode:    'programmatic-cli',
+  pi:          'programmatic-cli',
   qwen:        'programmatic-cli',
   trae:        'programmatic-cli',
   antigravity: 'declarative-cli',
@@ -58,6 +59,7 @@ const EXPECTED_PROFILES = {
   copilot:     'declarative-cli',
   windsurf:    'declarative-cli',
   zcode:       'declarative-cli',
+  vscode:      'ide',
 };
 
 describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
@@ -214,7 +216,9 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
   test('contract-pin: profile split is internally consistent with EXPECTED_PROFILES (count-agnostic)', () => {
     // The counts are DERIVED from the curated EXPECTED_PROFILES map rather than
     // hand-pinned, so adding a runtime + its profile entry updates the counts
-    // automatically. ide must remain 0 (no installed ide-profile host yet).
+    // automatically. #2103: vscode is now the first installed ide-profile host,
+    // so 'ide' is no longer pinned at a hardcoded 0 — it is derived below like
+    // the other two profiles.
     const counts = { 'programmatic-cli': 0, 'declarative-cli': 0, 'ide': 0 };
     for (const id of RUNTIME_IDS) {
       const cap = registry.runtimes[id];
@@ -235,7 +239,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     }
     assert.strictEqual(counts['programmatic-cli'], expectedCounts['programmatic-cli']);
     assert.strictEqual(counts['declarative-cli'], expectedCounts['declarative-cli']);
-    assert.strictEqual(counts['ide'], 0, 'no installed host may carry the ide profile yet');
+    assert.strictEqual(counts['ide'], expectedCounts['ide'],
+      'ide-profile count must match EXPECTED_PROFILES (#2103: vscode is the first ide-profile host)');
   });
 
   // ─── backgroundDispatch presence ─────────────────────────────────────────────
@@ -262,7 +267,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── shouldFlattenDispatch per-host (#853 discriminator) ─────────────────────
 
-  // Expected: false (may background) for codex and cursor ONLY; true (must inline) for the other 15.
+  // Expected: false (may background) for codex, cursor, kimi, and opencode;
+  // true (must inline) for the other 13.
   const EXPECTED_FLATTEN = {
     antigravity: true,
     augment:     true,
@@ -274,14 +280,25 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     cursor:      false,
     hermes:      true,
     kilo:        true,
-    kimi:        true,
+    // #2095: Kimi Upgrade 2 — Kimi's Agent tool takes a run_in_background
+    // call-time param (Context7 agents.html) → backgroundDispatch flipped to
+    // true → dispatch.background/backgroundDispatch both true → NOT
+    // force-flattened (mirrors the #2087 OpenCode precedent below).
+    kimi:        false,
     // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
     // dispatch.background/backgroundDispatch true → NOT force-flattened.
     opencode:    false,
+    // #2102: pi's dispatch.background/backgroundDispatch are both false
+    // (undocumented background-subagent primitive) → force-flattened.
+    pi:          true,
     qwen:        true,
     trae:        true,
     windsurf:    true,
     zcode:       true,
+    // #2103: vscode's dispatch.backgroundDispatch is 'undocumented' (no
+    // documented background-subagent primitive) → fails closed to false →
+    // force-flattened, mirroring the pi (#2102) precedent above.
+    vscode:      true,
   };
 
   for (const id of RUNTIME_IDS) {

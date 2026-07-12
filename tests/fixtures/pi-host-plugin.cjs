@@ -14,10 +14,18 @@
  * behaviorally testable without a live pi runtime. The default export matches
  * pi's extension entry shape: `export default function (pi: ExtensionAPI) { … }`.
  *
+ * #2102 Stage 2: registerCommand takes `handler(args, ctx)` (args is the raw
+ * string after the command) — NOT `execute(ctx)`, which the original #1682
+ * cut used. gsd_invoke's `execute` takes pi's real 5-arg tool-execute
+ * signature `(toolCallId, params, signal, onUpdate, ctx)`. See pi/gsd.cjs for
+ * the full production binding this reference fixture mirrors.
+ *
  * NOTE: this is the reference binding that proves the ExtensionAPI imperative
- * adapter (#1682 AC). Full `--pi` installable-runtime integration (descriptor +
- * installer wiring + golden parity 16→17) is a larger follow-up tracked
- * separately — it is intentionally NOT added to the runtime registry here.
+ * adapter (#1682 AC), kept as a mock-friendly fixture independent of the real
+ * `pi/gsd.cjs` extension. Full `--pi` installable-runtime integration
+ * (descriptor + installer wiring + golden parity 16→17) shipped in #2102
+ * Stage 1 — see capabilities/pi/capability.json and
+ * tests/fixtures/golden-install-parity/pi.json.
  *
  * @param {object} pi  pi ExtensionAPI (registerTool/registerCommand/on/…)
  */
@@ -30,9 +38,12 @@ module.exports = function gsdPiPlugin(pi) {
   // imperative adapter (createImperativeAdapter({runtime:'pi'}) + dispatch).
   pi.registerCommand('gsd', {
     description: 'Invoke a GSD command via the embedded engine (imperative adapter).',
-    execute: async function /* ctx */ () {
+    handler: async function (args, ctx) {
+      void args;
+      void ctx;
       // Engine dispatch is wired by the host at load (createImperativeAdapter).
-      // Kept declarative in the reference; the real binding dispatches the hub.
+      // Kept declarative in the reference; the real binding (pi/gsd.cjs)
+      // dispatches through gsd-tools.cjs via dispatchGsdCommand.
     },
   });
 
@@ -41,7 +52,12 @@ module.exports = function gsdPiPlugin(pi) {
   pi.registerTool({
     name: 'gsd_invoke',
     description: 'Invoke a GSD command family/subcommand through the engine.',
-    execute: async function () {
+    execute: async function (toolCallId, params, signal, onUpdate, ctx) {
+      void toolCallId;
+      void params;
+      void signal;
+      void onUpdate;
+      void ctx;
       return 'ok';
     },
   });

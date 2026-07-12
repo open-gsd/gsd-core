@@ -74,9 +74,15 @@ describe('extensionEventSurfaceFor (extension-system event dialect — #1943)', 
     assert.equal(extensionEventSurfaceFor('nope'), null);
     assert.equal(extensionEventSurfaceFor(undefined), null);
   });
-  test('EXTENSION_EVENT_SURFACES is frozen + covers opencode/pi/hermes/none', () => {
+  test('EXTENSION_EVENT_SURFACES is frozen + covers opencode/pi/hermes/kilo/none', () => {
     assert.equal(Object.isFrozen(EXTENSION_EVENT_SURFACES), true);
-    assert.deepEqual(Object.keys(EXTENSION_EVENT_SURFACES).sort(), ['hermes', 'none', 'opencode', 'pi']);
+    assert.deepEqual(Object.keys(EXTENSION_EVENT_SURFACES).sort(), ['hermes', 'kilo', 'none', 'opencode', 'pi']);
+  });
+  test('kilo reuses the IDENTICAL event array as opencode (Kilo is an OpenCode fork, same bus — #2093)', () => {
+    const kiloSurface = extensionEventSurfaceFor('kilo');
+    const opencodeSurface = extensionEventSurfaceFor('opencode');
+    assert.ok(kiloSurface, 'kilo must resolve (non-null) — it is a consumed extensionEvents value');
+    assert.deepEqual(kiloSurface, opencodeSurface);
   });
 });
 

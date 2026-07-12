@@ -22,9 +22,12 @@
  *     false for codex / copilot / kilo / cursor / windsurf / trae / cline / kimi (legacy exclusion list).
  *     true for all other runtimes.
  * - `finishPermissionWriter` names the finishInstall-phase dedicated config writer:
- *     'opencode' → writes BOTH shared settings AND its own permissions file.
- *     'kilo'     → writes only its own permissions file.
- *     null       → no dedicated permission writer.
+ *     'opencode'    → writes BOTH shared settings AND its own permissions file.
+ *     'kilo'        → writes only its own permissions file.
+ *     'antigravity' → writes BOTH shared settings.json permissions.allow AND a
+ *                      standalone mcp_config.json MCP companion profile (#2096
+ *                      Phase B Upgrades 1+2).
+ *     null          → no dedicated permission writer.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -43,9 +46,13 @@ type ConfigInstallSurface =
   | 'copilot-instructions'
   | 'cline-rules'
   | 'cursor-hooks-json'
-  | 'profile-marker-only';
+  | 'profile-marker-only'
+  // #2103 — Marketplace/VSIX-distributed hosts (e.g. VS Code) with no CLI
+  // install surface at all. Never dispatched through install()/finishInstall()
+  // (see the ALLOWED_CONFIG_RUNTIMES filter below, which excludes it).
+  | 'none';
 
-type FinishPermissionWriter = 'opencode' | 'kilo' | null;
+type FinishPermissionWriter = 'opencode' | 'kilo' | 'antigravity' | null;
 
 type HooksSurface =
   | 'settings-json'
@@ -53,6 +60,8 @@ type HooksSurface =
   | 'cursor-hooks-json'
   | 'cline-rules'
   | 'copilot-inline'
+  | 'kimi-hooks-toml'
+  | 'windsurf-hooks-json'
   | 'none';
 
 interface RuntimeConfigIntent {
@@ -84,10 +93,20 @@ interface InstallPlan extends RuntimeConfigIntent {
 
 type RuntimeDescriptorMap = Record<string, { runtime: Record<string, unknown> | undefined }>;
 
-/** The complete set of 16 supported runtimes for config-adapter dispatch. */
+/**
+ * The complete set of 16 supported runtimes for config-adapter dispatch.
+ *
+ * Excludes runtimes whose installSurface is 'none' (#2103 — e.g. VS Code): a
+ * 'none' installSurface means the runtime has NO CLI install surface at all
+ * (Marketplace/VSIX-distributed, never dispatched through
+ * install()/finishInstall()), so it is not a "config-adapter runtime" by
+ * definition. This keeps this set in lockstep with bin/install.js's
+ * `allRuntimes` (see tests/issue-57-runtime-install-no-drift.test.cjs) without
+ * needing a separate hand-kept exclusion list.
+ */
 const ALLOWED_CONFIG_RUNTIMES: ReadonlySet<string> = new Set(
   Object.entries(runtimes)
-    .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime['installSurface'] === 'string')
+    .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime['installSurface'] === 'string' && cap.runtime['installSurface'] !== 'none')
     .map(([id]) => id),
 );
 
@@ -99,6 +118,7 @@ const INSTALL_SURFACES: ReadonlyArray<ConfigInstallSurface> = Object.freeze([
   'cline-rules',
   'cursor-hooks-json',
   'profile-marker-only',
+  'none',
 ]);
 
 /**

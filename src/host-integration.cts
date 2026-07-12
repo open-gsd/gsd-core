@@ -551,14 +551,26 @@ function hookEventSurfaceFor(hookEvents: unknown): readonly string[] | null {
 // events (session/tool/file/permission); pi ~30 fine-grained extension events;
 // 'none' = the host exposes no extension surface and the engine owns the bus
 // (VS Code). Declarative hosts (no plugin API) do not set `extensionEvents`.
+// OpenCode's plugin event surface (ADR-1239 §research; ~25 documented events,
+// GSD binds this subset). Hoisted to a named const — rather than duplicated
+// object literals — so the `kilo` dialect below (#2093) can reuse the IDENTICAL
+// array instead of a copy-pasted one that could silently drift out of sync.
+const OPENCODE_EXTENSION_EVENTS = Object.freeze([
+  'session.created', 'session.idle', 'experimental.session.compacting',
+  'tool.execute.before', 'tool.execute.after', 'file.edited',
+  // #2087 — additional documented plugin events GSD binds (opencode.ai/docs/plugins):
+  // permission decisions + session error surface.
+  'permission.asked', 'permission.replied', 'session.error',
+]);
+
 const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  opencode: Object.freeze([
-    'session.created', 'session.idle', 'experimental.session.compacting',
-    'tool.execute.before', 'tool.execute.after', 'file.edited',
-    // #2087 — additional documented plugin events GSD binds (opencode.ai/docs/plugins):
-    // permission decisions + session error surface.
-    'permission.asked', 'permission.replied', 'session.error',
-  ]),
+  opencode: OPENCODE_EXTENSION_EVENTS,
+  // #2093 — Kilo Code is an OpenCode fork sharing the same plugin/extension
+  // event bus (host hook bus, UPGRADE 1): reuses OPENCODE_EXTENSION_EVENTS
+  // verbatim (not a re-derivation), so the two dialects stay pinned together
+  // by construction. See .kilo/plugins/gsd-core.js (copied verbatim from
+  // .opencode/plugins/gsd-core.js).
+  kilo: OPENCODE_EXTENSION_EVENTS,
   // #2091 — Hermes Agent real plugin hook vocabulary (13 events).
   // Cite: https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/hooks.md
   // Replaces the borrowed `hookEvents: "claude"` 6-event surface that silently
@@ -572,7 +584,21 @@ const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Ob
     'pre_gateway_dispatch', 'pre_approval_request',
     'transform_tool_result',
   ]),
-  pi: Object.freeze(['tool_call']),
+  // #2102 Stage 2 — pi's real ExtensionAPI event vocabulary (~30 fine-grained
+  // extension events; documentation-sourced, ADR-1239 §research). Replaces the
+  // placeholder single-event ['tool_call'] surface — the Stage 1 value only
+  // covered the one event pi/gsd.cjs happened to bind at the time, not the
+  // full declared surface.
+  pi: Object.freeze([
+    'session_start', 'project_trust', 'resources_discover', 'input',
+    'before_agent_start', 'agent_start', 'message_start', 'message_update',
+    'message_end', 'turn_start', 'context', 'before_provider_request',
+    'after_provider_response', 'tool_execution_start', 'tool_execution_update',
+    'tool_execution_end', 'tool_call', 'tool_result', 'turn_end', 'agent_end',
+    'session_before_switch', 'session_shutdown', 'session_before_fork',
+    'session_info_changed', 'session_before_compact', 'session_compact',
+    'session_before_tree', 'session_tree', 'thinking_level_select', 'model_select',
+  ]),
   none: Object.freeze([]),
 });
 

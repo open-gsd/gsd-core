@@ -84,6 +84,24 @@ const PKG_VERSION = require('../package.json').version;
 // node-runner command as settings.json, so excluded for the same reason (#2086).
 const HOOK_CONFIG_FILES = new Set(['settings.json', 'settings.local.json', 'hooks.json']);
 
+// Kimi's native config.toml (#2095 EoS/kimi Upgrade 1) embeds the same
+// platform-varying node-runner command as the HOOK_CONFIG_FILES above (via the
+// same buildHookCommand/projectManagedHookCommand machinery), so it needs the
+// same exclusion — but it is NOT matched by basename like HOOK_CONFIG_FILES:
+// Codex's OWN config.toml (installSurface 'codex-toml') is a stable, tracked
+// top-level `config.toml` entry in its golden fixture (it only ever gets a
+// platform-stable `[features] hooks = true` flag — the real hook commands
+// live in Codex's separate hooks.json, already excluded above). Blanket-
+// excluding the 'config.toml' basename would silently blind Codex's fixture
+// to any future regression there. Kimi's config.toml instead lives OUTSIDE
+// its GSD configDir at runtime (resolveKimiHooksTomlDir resolves ~/.kimi, a
+// sibling of the configDir ~/.config/agents) — it only appears inside this
+// harness's walked tree at all because runMinimalInstall sets HOME to the
+// same temp root used as --config-dir, collapsing the two into one directory
+// for the isolated test run. So it is excluded by its exact relative path
+// under that collapsed root, not by basename.
+const HOOK_CONFIG_RELATIVE_PATHS = new Set(['.kimi/config.toml']);
+
 // Path prefixes excluded from the parity manifest. `gsd-core/bin/lib/` holds the
 // tsc-built runtime artifacts (compiled from src/*.cts) that the install COPIES
 // verbatim — they are NOT produced by installRuntimeArtifacts (the move's parity
@@ -130,6 +148,7 @@ function buildParityManifest(configDir, root) {
 
     if (VOLATILE_FILES.has(rel)) continue;
     if (HOOK_CONFIG_FILES.has(path.basename(rel))) continue;
+    if (HOOK_CONFIG_RELATIVE_PATHS.has(rel)) continue;
     if (EXCLUDED_PREFIXES.some((p) => rel.startsWith(p))) continue;
 
     const content = fs.readFileSync(full);

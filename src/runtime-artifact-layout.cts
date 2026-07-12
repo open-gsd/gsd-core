@@ -77,6 +77,12 @@ interface ArtifactKind {
    *  specifies one (e.g. codex skills → $HOME/.agents). Undefined means the
    *  kind installs under the runtime's normal configDir. */
   home?: string;
+  /** Name of the converter function in Runtime Artifact Conversion exports, as
+   *  declared on the descriptor's `converter` field. Only populated for the
+   *  `skills` kind today — lets bespoke callers (e.g. the OpenCode-family
+   *  combined installer, ADR-1239 / #2093) look up the descriptor-declared
+   *  converter by name instead of re-deriving it from a runtime === check. */
+  converter?: string;
 }
 
 interface Layout {
@@ -323,6 +329,7 @@ function skillsKind(
     kind: 'skills',
     destSubpath,
     prefix,
+    converter: converterName,
     stage: (resolved) => {
       const realConverter = conversionExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[], isGlobal: boolean) => string;
       // Compute cmdNames once per stage call for performance (#3583).

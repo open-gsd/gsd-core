@@ -57,6 +57,11 @@ const PATH_RETURNING_FNS = [
   'resolveSkillsBaseFromDescriptor',
   'resolveConfigHomeFromDescriptor',
   'resolveKimiGlobalDir',
+  // #2095 (EoS/kimi): resolves the directory holding Kimi CLI's OWN native
+  // config.toml (~/.kimi by default, KIMI_SHARE_DIR override) — a sibling of,
+  // and deliberately separate from, resolveKimiGlobalDir's generic
+  // Agent-Skills root above.
+  'resolveKimiHooksTomlDir',
   'resolveAntigravityGlobalDir',
   'getGlobalDir',
   'getConfigDirFromHome',

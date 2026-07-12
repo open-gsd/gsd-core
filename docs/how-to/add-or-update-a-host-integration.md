@@ -147,6 +147,19 @@ yields the same truth value**, so behavior is unchanged and only the brittle cou
    the host correctly, negotiation fails closed on a corrupted descriptor, and — with a source-grep behind
    an `// allow-test-rule:` exemption — that **no `runtime === '<id>'` branch remains** in `bin/install.js`.
 
+**Another completed worked example: `copilot` (#2099).** Copilot was already installing through the
+declarative artifactLayout (not the direct `installRuntimeArtifacts` calls step 4 describes), so its
+migration folded the *residual* hardcoded branches rather than the whole install path: the `.agent.md`
+destination-suffix rename in `src/install-engine.cts` (→ `hostBehaviors.agentFileExtension`), two
+uninstall side-effect branches in `bin/install.js` (→
+`resolveInstallPlan(runtime).installSurface === 'copilot-instructions'`, already a live descriptor field
+elsewhere in the same file), and two `skipSharedHooksInstall` gates (→
+`hostBehaviors.skipSharedHooksInstall: true`). A dead legacy agent-converter dispatch arm — unreachable
+because copilot is a member of `_DESCRIPTOR_AGENTS_RUNTIMES` — was deleted outright rather than re-gated,
+mirroring step 6's guard: `tests/declarative-reference-copilot.test.cjs` source-greps both files for the
+retired `isCopilot` reads. See the `copilot` section of the reference matrix for the full EoS migration
+note, including the two upgrades (multi-event hook bus; negotiated `dispatch.background`) this PR adds.
+
 ---
 
 ## Related

@@ -120,22 +120,62 @@ export function resolveRuntimeNameFromCandidates(...candidates: unknown[]): stri
  * Aliases are normalized via `canonicalizeRuntimeName` first, so inputs like
  * `codex-cli` resolve to `codex` → `AGENTS.md`. Replaces the prior codex-only
  * override in profile-output.cjs (#3163) which left AGENTS-native runtimes
- * (opencode/kilo/kimi) incorrectly emitting `.claude/CLAUDE.md`. Pure: no I/O.
+ * (opencode/kilo/kimi) incorrectly emitting `.claude/CLAUDE.md`. Pure: no I/O
+ * (the lazy `require` below reads a static generated module, not the disk).
+ *
+ * Descriptor-driven (ADR-1239 / #2096): antigravity's `GEMINI.md` is folded
+ * from a hardcoded `canonical === 'antigravity'` literal into a read of
+ * `runtime.hostBehaviors.projectInstructionFile`. claude/copilot stay
+ * hardcoded (out of scope here) mirroring `getDirName` below, which already
+ * lazy-`require`s `capability-registry.cjs` inside the function body to
+ * avoid a circular dependency at module load.
  */
 export function getProjectInstructionFile(runtime: unknown): string {
   const canonical = canonicalizeRuntimeName(runtime);
   if (canonical === 'claude') return '.claude/CLAUDE.md';
   if (canonical === 'copilot') return '.github/copilot-instructions.md';
-  if (canonical === 'antigravity') return 'GEMINI.md';
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { runtimes } = require('./capability-registry.cjs') as {
+    runtimes: Record<string, { runtime?: { hostBehaviors?: { projectInstructionFile?: string } } } | undefined>;
+  };
+  const declared = canonical ? runtimes[canonical]?.runtime?.hostBehaviors?.projectInstructionFile : undefined;
+  if (typeof declared === 'string' && declared.length > 0) return declared;
   // codex, opencode, kilo, kimi, AND unknown/future runtimes all default to
   // root AGENTS.md (the safe cross-agent instruction file).
   return 'AGENTS.md';
 }
 
 /**
+ * Sentinel returned by {@link getDirName} for a runtime whose
+ * `runtime.configHome.kind === 'none'` (#2103 — a Marketplace/VSIX-distributed
+ * host with NO file-projected config directory at all, e.g. VS Code).
+ *
+ * A plain fallback to `.claude` would be actively wrong here — it would read
+ * as "this runtime installs into .claude", which is false. This sentinel is
+ * a string (not `null`) so `getDirName`'s return type and every existing
+ * template-literal call site (`` `${getDirName(runtime)}` `` in bin/install.js
+ * / runtime-artifact-conversion.cjs / install-engine.cjs) are unaffected —
+ * widening the return type to `string | null` would require auditing every
+ * call site for a null-check, which is out of scope for a runtime that is
+ * never actually dispatched through those installer paths (vscode has no
+ * install surface — see capabilities/vscode/capability.json). The value is
+ * deliberately NOT a plausible dot-dir name (parens are not valid in a
+ * directory-name token GSD would ever generate) so a future caller that
+ * mistakenly interpolates it into a path fails obviously rather than
+ * silently colliding with a real directory.
+ */
+export const NO_LOCAL_CONFIG_DIR_SENTINEL = '(no-local-config-dir)';
+
+/**
  * Map a canonical runtime id to its on-disk local config directory name
  * (e.g. `cursor` -> `.cursor`, `windsurf` -> `.windsurf`). Unknown/empty inputs
  * fall back to `.claude`.
+ *
+ * #2103: a runtime whose descriptor declares `configHome.kind === 'none'`
+ * (no file-projected config directory at all) returns
+ * {@link NO_LOCAL_CONFIG_DIR_SENTINEL} instead of falling through to
+ * `.claude` — it has no local config dir, and `.claude` would be a wrong
+ * answer, not just an imprecise one.
  *
  * Pure runtime-identity projection. Relocated from `bin/install.js` per
  * ADR-1508 (epic #1507, #1510 Phase 1) so the Runtime Artifact Conversion
@@ -146,10 +186,12 @@ export function getDirName(runtime: string): string {
   if (!runtime) return '.claude';
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { runtimes } = require('./capability-registry.cjs') as {
-    runtimes: Record<string, { runtime?: { localConfigDir?: string } } | undefined>;
+    runtimes: Record<string, { runtime?: { localConfigDir?: string; configHome?: { kind?: string } } } | undefined>;
   };
-  const dir = runtimes[runtime]?.runtime?.localConfigDir;
+  const entry = runtimes[runtime]?.runtime;
+  const dir = entry?.localConfigDir;
   if (typeof dir === 'string' && dir.length > 0) return dir;
+  if (entry?.configHome?.kind === 'none') return NO_LOCAL_CONFIG_DIR_SENTINEL;
   return '.claude';
 }
 
@@ -197,6 +239,12 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
   zcode: 'ZCode',
+  pi: 'pi',
+  // #2103: vscode is a registered (role:runtime) capability for validator +
+  // host-integration coverage, even though it is never CLI-installed (no
+  // --vscode flag — see NON_INSTALLABLE_RUNTIMES in tests/runtime-flags.test.cjs).
+  // A distinct label is still required by the drift guard below.
+  vscode: 'VS Code',
 };
 
 /**
@@ -245,6 +293,12 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
   zcode:     "'.zcode'",
+  // pi's global config home is ~/.pi/agent (configHome: dot-home-nested,
+  // parent '.pi', name 'agent' — capabilities/pi/capability.json), matching
+  // resolveConfigHomeFromDescriptor's `path.join(home, parent, name)` for the
+  // no-probe dot-home-nested case (src/runtime-homes.cts). Two-segment
+  // path.join args, same shape as opencode/kilo/kimi above.
+  pi:        "'.pi', 'agent'",
 };
 
 /**
@@ -266,9 +320,14 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
  * function declaration block (the add-a-host tax ADR-1239 Phase B / #1679 AC2
  * removes).
  */
+// #2094: 'trae' stays here — bin/install.js's agents-converter dispatch
+// (convertClaudeAgentToTraeAgent selection) still reads isTrae directly.
+// Removing it is gated on migrating that runtime-keyed `else if` chain to a
+// cross-runtime agents-dispatch table (out of scope for #2094, which only
+// folds the shared-hooks-install skip).
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'zcode',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'zcode', 'pi',
 ] as const);
 
 /**

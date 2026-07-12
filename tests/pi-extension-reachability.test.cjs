@@ -1,57 +1,115 @@
 'use strict';
 
 /**
- * pi extension reachability test — ADR-1239 Phase D / #1944.
+ * pi extension reachability test — ADR-1239 Phase D / #1944, upgraded #2102.
  *
- * Proves the pi extension is keystone-WIRED: the registered /gsd command
- * handler dispatches through the GSD command-routing hub and returns a result
- * (not just a registration on a mock). This is the "user can invoke X" proof.
+ * Proves the pi extension is keystone-WIRED: the registered /gsd command's
+ * `handler(args, ctx)` (pi's REAL ExtensionAPI shape — NOT the `execute(ctx)`
+ * shape the original #1944 cut used) dispatches through gsd-tools.cjs
+ * (subprocess-reuse — dispatchGsdCommand) and returns real output, not just a
+ * registration on a mock. This is the "user can invoke X" proof.
+ *
+ * Dispatch is exercised with a real read-only family/subcommand
+ * (progress/json) against a real temp project, matching the sibling
+ * tests/vscode-extension-reachability.test.cjs pattern — no fake dispatcher
+ * injected, because the whole point of "reachability" is that the real
+ * engine is reached.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const gsdPiExtension = require('../pi/gsd.cjs');
+const { _internals } = require('../pi/gsd.cjs');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 function mockPi() {
-  const recorded = { commands: {}, tools: {}, events: [] };
+  const recorded = { commands: {}, tools: {}, events: {} };
   return {
     registerCommand(name, def) { recorded.commands[name] = def; },
     registerTool(def) { if (def && def.name) recorded.tools[def.name] = def; },
-    on(event) { recorded.events.push(event); },
+    on(event, handler) { (recorded.events[event] = recorded.events[event] || []).push(handler); },
     _recorded: recorded,
   };
 }
 
-test('the pi extension registers /gsd + gsd_invoke + tool_call via ExtensionAPI', () => {
+test('the pi extension registers /gsd (with getArgumentCompletions + handler) + gsd_invoke + the event surface via ExtensionAPI', () => {
   const pi = mockPi();
   gsdPiExtension(pi);
-  assert.ok(pi._recorded.commands['gsd'], 'registers /gsd command');
+  const gsdCommand = pi._recorded.commands['gsd'];
+  assert.ok(gsdCommand, 'registers /gsd command');
+  assert.equal(typeof gsdCommand.handler, 'function', '/gsd registers a handler(args, ctx) — pi\'s REAL ExtensionAPI shape, not execute(ctx)');
+  assert.equal(typeof gsdCommand.getArgumentCompletions, 'function', '/gsd registers getArgumentCompletions');
   assert.ok(pi._recorded.tools['gsd_invoke'], 'registers gsd_invoke tool');
-  assert.ok(pi._recorded.events.includes('tool_call'), 'subscribes to tool_call');
+  assert.equal(typeof pi._recorded.tools['gsd_invoke'].execute, 'function');
+  assert.ok(pi._recorded.events['tool_call'], 'subscribes to tool_call');
+  assert.ok(pi._recorded.events['before_provider_request'], 'subscribes to before_provider_request');
 });
 
-test('REACHABILITY: the /gsd handler dispatches through the engine hub (keystone wired)', async () => {
-  const pi = mockPi();
-  gsdPiExtension(pi);
-  // Invoke the registered /gsd handler — it must dispatch through createHub
-  // and return a JSON result (not throw). This is the keystone-wired proof.
-  const result = await pi._recorded.commands['gsd'].execute({
-    family: 'query',
-    subcommand: 'help',
-  });
-  assert.equal(typeof result, 'string', '/gsd handler returns a string result');
-  const parsed = JSON.parse(result);
-  assert.ok(parsed !== null && typeof parsed === 'object',
-    '/gsd dispatch produced a result object (the engine was reached)');
+test('REACHABILITY: parseGsdCommandArgs tokenizes a raw args string into {family, subcommand, args}', () => {
+  const parsed = _internals.parseGsdCommandArgs('phase add --name test');
+  assert.deepEqual(parsed, { family: 'phase', subcommand: 'add', args: ['--name', 'test'] });
 });
 
-test('REACHABILITY: the gsd_invoke tool dispatches through the engine hub', async () => {
+test('REACHABILITY: empty args dispatch a working default (gsd-tools.cjs --help), not the broken "query help"', () => {
+  const parsed = _internals.parseGsdCommandArgs('');
+  assert.equal(parsed.family, '--help');
+  assert.equal(parsed.subcommand, undefined);
+});
+
+test('REACHABILITY: the /gsd handler dispatches a real family through gsd-tools.cjs and returns real output (keystone wired)', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
-  const result = await pi._recorded.tools['gsd_invoke'].execute();
-  assert.equal(typeof result, 'string');
-  JSON.parse(result); // must be valid JSON (engine was reached)
+  const dir = createTempDir();
+  try {
+    const result = await pi._recorded.commands['gsd'].handler('progress json', { cwd: dir });
+    assert.equal(typeof result, 'string', '/gsd handler returns a string result');
+    const parsed = JSON.parse(result);
+    assert.equal(typeof parsed.percent, 'number', '/gsd dispatch reached gsd-tools.cjs for real (the engine was reached)');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('REACHABILITY: an unknown family surfaces a clear GSD error string, not a throw', async () => {
+  const pi = mockPi();
+  gsdPiExtension(pi);
+  const dir = createTempDir();
+  try {
+    const result = await pi._recorded.commands['gsd'].handler('no-such-family-8675309', { cwd: dir });
+    assert.equal(typeof result, 'string');
+    assert.match(result, /GSD error:/);
+    assert.match(result, /no-such-family-8675309|Unknown command/);
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('REACHABILITY: the gsd_invoke tool dispatches through the engine and returns real content', async () => {
+  const pi = mockPi();
+  gsdPiExtension(pi);
+  const dir = createTempDir();
+  try {
+    const result = await pi._recorded.tools['gsd_invoke'].execute(
+      'call-1',
+      { family: 'progress', subcommand: 'json' },
+      null,
+      null,
+      { cwd: dir },
+    );
+    assert.ok(result && Array.isArray(result.content), 'gsd_invoke returns {content:[...]}');
+    const parsed = JSON.parse(result.content[0].text);
+    assert.equal(typeof parsed.percent, 'number', 'gsd_invoke dispatch reached gsd-tools.cjs for real');
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test('gsd_invoke rejects a missing "family" without dispatching', async () => {
+  const pi = mockPi();
+  gsdPiExtension(pi);
+  const result = await pi._recorded.tools['gsd_invoke'].execute('call-2', {}, null, null, {});
+  assert.match(result.content[0].text, /requires a non-empty string "family"/);
 });
 
 test('gsdPiExtension throws without pi ExtensionAPI (fail-closed)', () => {

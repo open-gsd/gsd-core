@@ -36,6 +36,8 @@ const MANAGED_HOOKS = [
   'gsd-statusline.js',
   'gsd-update-banner.js',
   'gsd-validate-commit.sh',
+  'gsd-windsurf-pre-command.js',
+  'gsd-windsurf-pre-write.js',
   'gsd-workflow-guard.js',
   'gsd-worktree-path-guard.js',
 ];

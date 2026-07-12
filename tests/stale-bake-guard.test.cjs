@@ -1,7 +1,7 @@
 /**
  * Stale-bake guard tests (#1688, follow-up to #1650).
  *
- * Regression contract: on a static-frontmatter runtime (codex/opencode), if
+ * Regression contract: on a static-frontmatter runtime (codex/opencode/kilo), if
  * `.planning/config.json` or `~/.gsd/defaults.json` was edited AFTER the
  * installed agent files were baked, `warnIfStaleBake` MUST emit a single
  * stderr warning naming the config path and the remediation command. Before
@@ -71,6 +71,13 @@ describe('stale-bake-guard.detectStaleBake (pure decision)', () => {
     );
   });
 
+  test('kilo runtime honored symmetrically with opencode/codex (#2093)', () => {
+    assert.deepEqual(
+      detectStaleBake({ runtime: 'kilo', configMtimeMs: AGENT_MS + 5000, agentMtimeMs: AGENT_MS }),
+      { stale: true, deltaMs: 5000 },
+    );
+  });
+
   test('non-finite mtimes rejected (NaN / Infinity)', () => {
     assert.equal(detectStaleBake({ runtime: 'opencode', configMtimeMs: NaN, agentMtimeMs: AGENT_MS }), null);
     assert.equal(detectStaleBake({ runtime: 'opencode', configMtimeMs: Infinity, agentMtimeMs: AGENT_MS }), null);
@@ -114,6 +121,13 @@ describe('stale-bake-guard.formatStaleBakeWarning (pure formatter)', () => {
     assert.match(w, /gsd install --codex/);
     assert.doesNotMatch(w, /--opencode/);
   });
+
+  test('kilo warning uses --kilo flag (not --opencode/--codex) (#2093)', () => {
+    const w = formatStaleBakeWarning({ runtime: 'kilo', configPath: '/x', configMtimeMs: 1_700_000_000_000, agentMtimeMs: 1 });
+    assert.match(w, /gsd install --kilo/);
+    assert.doesNotMatch(w, /--opencode/);
+    assert.doesNotMatch(w, /--codex\b/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -143,17 +157,29 @@ describe('stale-bake-guard.resolveAgentDir (env-var aware)', () => {
   // the raw return — that fails windows-latest CI.
   const posix = (p) => String(p).replace(/\\/g, '/');
 
-  test('opencode default lands under ~/.config/opencode/agent', () => {
-    assert.equal(posix(resolveAgentDir('opencode', { env: {}, homedir: () => '/H' })), '/H/.config/opencode/agent');
+  // #2093: fixed from the stale singular `.../agent` — the real installer
+  // writes to the plural `agents/` dir (bin/install.js's universal
+  // `agentsDest = path.join(targetDir, 'agents')`), verified against a live
+  // `--opencode --global` install. The prior singular assertion here matched
+  // the (wrong) implementation, which made `warnIfStaleBake` a silent no-op
+  // for opencode in production — see resolveAgentDir's inline comment.
+  test('opencode default lands under ~/.config/opencode/agents', () => {
+    assert.equal(posix(resolveAgentDir('opencode', { env: {}, homedir: () => '/H' })), '/H/.config/opencode/agents');
   });
   test('opencode honors OPENCODE_CONFIG_DIR', () => {
-    assert.equal(posix(resolveAgentDir('opencode', { env: { OPENCODE_CONFIG_DIR: '/custom/oc' }, homedir: () => '/H' })), '/custom/oc/agent');
+    assert.equal(posix(resolveAgentDir('opencode', { env: { OPENCODE_CONFIG_DIR: '/custom/oc' }, homedir: () => '/H' })), '/custom/oc/agents');
   });
   test('codex default lands under ~/.codex/agents', () => {
     assert.equal(posix(resolveAgentDir('codex', { env: {}, homedir: () => '/H' })), '/H/.codex/agents');
   });
   test('codex honors CODEX_HOME', () => {
     assert.equal(posix(resolveAgentDir('codex', { env: { CODEX_HOME: '/custom/cx' }, homedir: () => '/H' })), '/custom/cx/agents');
+  });
+  test('kilo default lands under ~/.config/kilo/agents (#2093)', () => {
+    assert.equal(posix(resolveAgentDir('kilo', { env: {}, homedir: () => '/H' })), '/H/.config/kilo/agents');
+  });
+  test('kilo honors KILO_CONFIG_DIR (#2093)', () => {
+    assert.equal(posix(resolveAgentDir('kilo', { env: { KILO_CONFIG_DIR: '/custom/ko' }, homedir: () => '/H' })), '/custom/ko/agents');
   });
   test('unsupported runtime → null', () => {
     assert.equal(resolveAgentDir('gemini', { env: {}, homedir: () => '/H' }), null);
@@ -210,11 +236,14 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
   function cxEnv(agentParentDir) {
     return { CODEX_HOME: agentParentDir };
   }
+  function koEnv(agentParentDir) {
+    return { KILO_CONFIG_DIR: agentParentDir };
+  }
 
   test('claude runtime → no warning even when config is newer than agents', () => {
     // OpenCode agent dir shape so the runtime path resolves, but runtime is claude.
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'claude', configMtime: NEWER, agentDir, agentMtime: OLDER });
     const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) });
     assert.equal(wrote, false);
@@ -223,7 +252,7 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
 
   test('opencode: config NEWER than agents → warning written (the #1650 failure mode)', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'opencode', configMtime: NEWER, agentDir, agentMtime: OLDER });
     const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) });
     assert.equal(wrote, true);
@@ -242,9 +271,31 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
     assert.match(chunks[0], /gsd install --codex/);
   });
 
+  // #2093: kilo bakes model: like opencode (same static-frontmatter constraint).
+  test('kilo: config NEWER than agents → warning written with --kilo flag', () => {
+    const agentParent = path.join(tmpRoot, 'ko-config');
+    const agentDir = path.join(agentParent, 'agents');
+    setupProject({ runtime: 'kilo', configMtime: NEWER, agentDir, agentMtime: OLDER });
+    const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: koEnv(agentParent) });
+    assert.equal(wrote, true);
+    assert.equal(chunks.length, 1);
+    assert.match(chunks[0], /model config in .*config\.json changed since agents were last baked/);
+    assert.match(chunks[0], /'kilo'/);
+    assert.match(chunks[0], /gsd install --kilo/);
+  });
+
+  test('kilo: config OLDER than agents → no warning (boundary limit-1)', () => {
+    const agentParent = path.join(tmpRoot, 'ko-config');
+    const agentDir = path.join(agentParent, 'agents');
+    setupProject({ runtime: 'kilo', configMtime: OLDER, agentDir, agentMtime: NEWER });
+    const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: koEnv(agentParent) });
+    assert.equal(wrote, false);
+    assert.deepEqual(chunks, []);
+  });
+
   test('opencode: config OLDER than agents → no warning (boundary limit-1)', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'opencode', configMtime: OLDER, agentDir, agentMtime: NEWER });
     const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) });
     assert.equal(wrote, false);
@@ -253,7 +304,7 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
 
   test('opencode: config EQUAL to agents → no warning (boundary limit)', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'opencode', configMtime: NEWER, agentDir, agentMtime: NEWER });
     const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) });
     assert.equal(wrote, false);
@@ -272,7 +323,7 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
 
   test('opencode: agent dir present but no gsd-* files → no warning', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'opencode', configMtime: NEWER, agentDir, agentMtime: OLDER, agentFiles: ['some-other-agent.md'] });
     const wrote = warnIfStaleBake(tmpRoot, { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) });
     assert.equal(wrote, false);
@@ -280,7 +331,7 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
 
   test('dedup: second call with same (runtime, cwd) → no repeat warning', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'opencode', configMtime: NEWER, agentDir, agentMtime: OLDER });
     const opts = { stderr: stderrStub, homedir: () => tmpRoot, env: ocEnv(agentParent) };
     const w1 = warnIfStaleBake(tmpRoot, opts);
@@ -292,7 +343,7 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
 
   test('global ~/.gsd/defaults.json (in tmp homedir) NEWER than agents → warning', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     fs.mkdirSync(agentDir, { recursive: true });
     const ap = path.join(agentDir, 'gsd-executor.md');
     fs.writeFileSync(ap, '---\n---\n');
@@ -311,7 +362,7 @@ describe('stale-bake-guard.warnIfStaleBake (orchestrator, fixtures)', () => {
 
   test('guard never throws — stderr.write failure is swallowed', () => {
     const agentParent = path.join(tmpRoot, 'oc-config');
-    const agentDir = path.join(agentParent, 'agent');
+    const agentDir = path.join(agentParent, 'agents');
     setupProject({ runtime: 'opencode', configMtime: NEWER, agentDir, agentMtime: OLDER });
     const throwingStderr = { write: () => { throw new Error('boom'); } };
     let threw = false;
@@ -378,8 +429,8 @@ describe('stale-bake-guard parity with bin/install.js bake paths', () => {
     return;
   }
 
-  test('STATIC_FRONTMATTER_RUNTIMES is exactly codex + opencode (no silent drift)', () => {
-    assert.deepEqual([...STATIC_FRONTMATTER_RUNTIMES].sort(), ['codex', 'opencode']);
+  test('STATIC_FRONTMATTER_RUNTIMES is exactly codex + kilo + opencode (no silent drift)', () => {
+    assert.deepEqual([...STATIC_FRONTMATTER_RUNTIMES].sort(), ['codex', 'kilo', 'opencode']);
   });
 
   test('opencode converter bakes a model: line when modelOverride is provided', () => {
@@ -389,6 +440,23 @@ describe('stale-bake-guard parity with bin/install.js bake paths', () => {
       typeof out === 'string' && out.includes('model: opencode-go/deepseek-v4-flash'),
       'opencode converter no longer bakes modelOverride — STATIC_FRONTMATTER_RUNTIMES is stale vs bin/install.js',
     );
+  });
+
+  // #2093: kilo bakes model: the same way opencode does (same static-frontmatter constraint).
+  test('kilo converter bakes a model: line when modelOverride is provided', () => {
+    const sample = '---\nname: gsd-executor\ndescription: x\nmodel: sonnet\ntools: Read\n---\nbody\n';
+    const out = install.convertClaudeToKiloFrontmatter(sample, { isAgent: true, modelOverride: 'anthropic/claude-sonnet-5' });
+    assert.ok(
+      typeof out === 'string' && out.includes('model: anthropic/claude-sonnet-5'),
+      'kilo converter no longer bakes modelOverride — STATIC_FRONTMATTER_RUNTIMES is stale vs bin/install.js',
+    );
+  });
+
+  test('kilo converter omits model: when no override (stale-bake fallback shape)', () => {
+    const sample = '---\nname: gsd-executor\ndescription: x\nmodel: sonnet\ntools: Read\n---\nbody\n';
+    const out = install.convertClaudeToKiloFrontmatter(sample, { isAgent: true });
+    assert.ok(typeof out === 'string', 'converter must return a string');
+    assert.doesNotMatch(out, /^model:/m, 'no-override path should not emit a model: line');
   });
 
   test('opencode converter omits model: when no override (stale-bake fallback shape)', () => {
