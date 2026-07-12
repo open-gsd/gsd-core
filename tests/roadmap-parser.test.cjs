@@ -396,6 +396,88 @@ describe('roadmap-parser: getMilestoneInfo', () => {
   });
 });
 
+// ─── getMilestoneInfo — #2135 milestone_name clobber ──────────────────────────
+// The `##` heading regex was unanchored (no `^`/`m`), so it matched a `##`
+// quoted mid-line inside a Milestones bullet and captured a delimiter-led
+// fragment into `milestone_name`. The fix: consult the 🚧 name-bearing marker
+// FIRST, anchor the `##` regex to line start, and strip a leading delimiter.
+
+describe('roadmap-parser: getMilestoneInfo #2135 — milestone_name clobber', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('case A: 🚧 bullet quoting a nameless ## heading in backticks', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v1.8' });
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '',
+      '## Milestones',
+      '',
+      '- 🚧 **v1.8 user session cleanup** — Phases 36-41 — see `## v1.8 — Active Milestone` below',
+      '',
+      '## v1.8 — Active Milestone',
+      '',
+      '### Phase 36: Something',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v1.8');
+    assert.strictEqual(info.name, 'user session cleanup');
+  });
+
+  test('case B: nameless ## heading + 🚧 marker carries the real name', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v1.9' });
+    writeRoadmap(tmpDir, [
+      '## v1.9 — Active Milestone',
+      '',
+      '### 🚧 v1.9 — Falsifiability',
+      '',
+      '### Phase 1: Hypothesis',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v1.9');
+    assert.strictEqual(info.name, 'Falsifiability');
+  });
+
+  test('case C: canonical ## vX.Y: Name (no regression)', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v2.0' });
+    writeRoadmap(tmpDir, '## v2.0: The Big Launch\n### Phase 1: Setup\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v2.0');
+    assert.strictEqual(info.name, 'The Big Launch');
+  });
+
+  test('case D: canonical ## vX.Y — Name (em-dash delimiter stripped)', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v2.5' });
+    writeRoadmap(tmpDir, '## v2.5 — Galaxy Release\n### Phase 1: Start\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v2.5');
+    assert.strictEqual(info.name, 'Galaxy Release');
+  });
+
+  test('case E: 🚧 bullet only, no ## heading (no regression)', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v1.5' });
+    writeRoadmap(tmpDir, 'Some intro text.\n\n- 🚧 **v1.5 Quick Fix** — minor\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v1.5');
+    assert.strictEqual(info.name, 'Quick Fix');
+  });
+
+  test('anchored regex never matches a ## heading quoted inside backticks mid-line', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v3.0' });
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '',
+      'See `## v3.0 — Active Milestone` referenced here.',
+      '',
+      '## v3.0: Real Name',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.name, 'Real Name');
+  });
+});
+
 // ─── getMilestonePhaseFilter ──────────────────────────────────────────────────
 
 describe('roadmap-parser: getMilestonePhaseFilter', () => {
