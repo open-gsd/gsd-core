@@ -1,7 +1,7 @@
 {
   "id": "vscode",
   "role": "runtime",
-  "version": "1.7.0-rc.5",
+  "version": "1.7.0-rc.6",
   "title": "VS Code",
   "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
   "tier": "core",
