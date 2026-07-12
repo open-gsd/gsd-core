@@ -20,6 +20,8 @@ export interface Clock {
   now(): number;
   nowIso(): string;
   today(): string;
+  /** Host-local calendar day as YYYY-MM-DD — for operator-facing date-only fields. */
+  localToday(): string;
   sleep(ms: number): void;
 }
 
@@ -85,6 +87,26 @@ export const realClock: Clock = {
    */
   today(): string {
     return this.nowIso().split('T')[0];
+  },
+
+  /**
+   * Return today's date as a YYYY-MM-DD string in the HOST-LOCAL calendar day.
+   * Uses this.now() so the subprocess time-pin adapter (GSD_NOW_MS) is honoured
+   * exactly as today()/nowIso() are — deterministic when GSD_NOW_MS and TZ are
+   * both pinned (#2136).
+   *
+   * Operator-facing date-only fields (last_activity, "completed <date>", etc.)
+   * must use the local calendar day: an operator reads them as "the day I did
+   * this", and they must never name a day ahead of `last_updated`'s local date.
+   * `today()` (UTC) stays the source for internal/cosmetic stamps.
+   *
+   * @returns e.g. "2020-06-14" (local), which may differ from today() near UTC midnight
+   */
+  localToday(): string {
+    const d = new Date(this.now());
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return d.getFullYear() + '-' + mm + '-' + dd;
   },
 
   /**
