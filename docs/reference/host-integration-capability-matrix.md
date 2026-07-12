@@ -691,3 +691,80 @@ EoS migration status (#2102 Stage 2, ADR-1239): Stage 1's "in-process `gsd-core`
 
 **Adversarial-review correction (#2102 Stage 2, post-review):** the event bridges above and the `/gsd` tokenizer's `hooks/lib/git-cmd.js` require were DEAD in a real install — Stage 1's `hostBehaviors.skipSharedHooksInstall:true` meant pi shipped NO `hooks/` directory at all, so `runHook('gsd-ensure-canonical-path.js', ...)` etc. always hit the "hook file absent → silent no-op" branch, and the tokenizer always fell back to plain whitespace-splitting. The tests masked this because they run against the dev tree, where `hooks/` genuinely exists. **Fix:** `capabilities/pi/capability.json` no longer sets `skipSharedHooksInstall` — pi is architecturally identical to OpenCode here (`hooksSurface: "none"` + a native extension that spawns the staged hooks), not to Kilo/ZCode (`hooksSurface: "none"` with NO plugin surface, where the same hooks genuinely are dead weight). pi now installs `hooks/` + `hooks/lib/` (27 entries: the same `INSTALLED_HOOK_FILES` set OpenCode gets) alongside `extensions/gsd.cjs`, verified end-to-end via a real `node bin/install.js --pi --global`/`--local` — `resolveEngineRoot`'s walk-up from the installed extension's own directory finds `ENGINE_ROOT/hooks/{gsd-ensure-canonical-path.js,gsd-workflow-guard.js,gsd-context-monitor.js,lib/git-cmd.js}`, and each bridge/`runHook` call exits 0 against the real installed files. `hooksSurface: "none"` + `configFormat: "none"` + `writesSharedSettings: false` are unaffected — no settings/hooks.json/config.toml is written for pi; the extension spawns hooks by absolute path, not via a config-file hook bus. `tests/fixtures/golden-install-parity/pi.json` grew from 292 → 320 entries (the 28 new `hooks/`/`hooks/lib/` files); `commands/`, `agents/`, `skills/` remain absent (`pluginOnlyInstall` is untouched — it only gates the declarative-markdown surfaces, not hooks). `tests/install-minimal-hooks.test.cjs`'s #1821 suite moved pi from the Kilo/ZCode (no-hooks) group into the OpenCode (ships-hooks) group accordingly.
 
+## vscode
+
+> VS Code is the IDE-profile reference host: a Marketplace/VSIX-distributed extension, NOT
+> file-projected onto a config directory — it has no `runtime.localConfigDir` in the usual sense
+> (`configHome.kind: "none"`, `localConfigDir: null`) and no CLI install surface at all
+> (`installSurface: "none"`; it is never installed by `bin/install.js` — no `--vscode` flag, no
+> `allRuntimes` membership; see `capabilities/vscode/capability.json`). The extension IS the host.
+> **Sourcing note:** the citations below are the VS Code extension API documentation pages named
+> in ADR-1239 (#2103) as the source for each axis; this environment did not have live Context7/
+> web-fetch access at authoring time, so the Evidence column is a paraphrase of VS Code's
+> documented extension model rather than a verbatim excerpt — a maintainer with Context7/web
+> access should verify the exact wording before treating this section as fully cited (same caveat
+> already flagged for the pi section above).
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | imperative | https://code.visualstudio.com/api/references/vscode-api | The extension is loaded in-process by the extension host and calls the `vscode` namespace API directly (`vscode.commands.registerCommand`, `vscode.chat.createChatParticipant`, `vscode.lm.registerTool`) — an in-process programmatic API, not a config-file-only integration. |
+| commandSurface | palette | https://code.visualstudio.com/api/extension-guides/command | Commands are contributed via `contributes.commands` in package.json and registered with `vscode.commands.registerCommand`, surfaced through the Command Palette (and the Chat view via the chat participant) — not a markdown/TOML slash-command file format. |
+| modelMode | active | https://code.visualstudio.com/api/extension-guides/ai/language-model | The `vscode.lm` namespace lets an extension actively select a model (`vscode.lm.selectChatModels`) and send requests to it programmatically, rather than only reading a static config value. |
+| hookBus | engine | https://code.visualstudio.com/api/references/activation-events | VS Code has no cross-extension lifecycle-hook bus that GSD subscribes to; the extension host (the "engine" here, per this axis's own `host`/`engine`/`none` vocabulary) owns activation events, and GSD's own hook lifecycle runs fully in-process/engine-owned inside the extension. |
+| stateIO | sandboxed-storage | https://code.visualstudio.com/api/references/vscode-api#Memento | `context.globalState`/`context.workspaceState` (both `Memento`) are the extension's persistent storage surface — sandboxed key/value storage scoped to the extension, not unrestricted local filesystem access. |
+| transport | mcp | https://code.visualstudio.com/api/extension-guides/ai/mcp | VS Code 1.99 added native MCP client support; on the Web (webworker) entry, full GSD command dispatch is available through VS Code's native MCP client connecting to the GSD companion MCP server (`gsd-mcp-server`), not an in-process Node dispatch (which the web entry cannot run at all). |
+| runtime | sandboxed-web | https://code.visualstudio.com/api/extension-guides/web-extensions | The `browser` entry point (`vscode/browser.js`) runs in a webworker context with no Node core modules — the Web Extension execution model VS Code documents for extensions that must run in vscode.dev/github.dev. |
+| dispatch.namedDispatch | true | https://code.visualstudio.com/docs/copilot/chat/chat-agent-mode#_agent-mode-tools | Registered `languageModelTools` (and the chat participant) are addressable by name — the primary agent references a tool/participant by its declared name/`toolReferenceName`, not only positionally. |
+| dispatch.nested | true | https://code.visualstudio.com/docs/copilot/copilot-chat-agents (subagents) | VS Code's chat subagent model (`#runSubagent`) explicitly supports a subagent invoking further subagents, gated by `chat.subagents.allowInvocationsFromSubagents`. |
+| dispatch.maxDepth | 5 | https://code.visualstudio.com/docs/copilot/copilot-chat-agents (subagents) | Documented as VS Code's maximum nesting depth for `#runSubagent` chains — also matches this repo's existing `PROFILE_BASELINES.ide.dispatch.maxDepth` baseline. |
+| dispatch.background | true | https://code.visualstudio.com/api/extension-guides/ai/tools | Language Model Tools can be invoked as part of an asynchronous agent turn (the primary agent does not block synchronously on a single extension call). |
+| dispatch.subagentToolkit | undocumented | no authoritative doc found at authoring time | VS Code's subagent documentation does not state whether a subagent's tool surface is restricted to read-only tools or the full set an extension registers; recorded `undocumented` (fails closed to `read-only` in negotiation) rather than guessed. |
+| dispatch.backgroundDispatch | undocumented | no authoritative doc found at authoring time | Whether a background-dispatched subagent can itself spawn further NAMED subagents (the #853 discriminator) is not stated in the sources reviewed; recorded `undocumented` (fails closed to `false`) rather than guessed. |
+
+Sources consulted:
+- https://code.visualstudio.com/api/references/vscode-api
+- https://code.visualstudio.com/api/extension-guides/command
+- https://code.visualstudio.com/api/extension-guides/ai/language-model
+- https://code.visualstudio.com/api/extension-guides/ai/tools
+- https://code.visualstudio.com/api/extension-guides/ai/mcp
+- https://code.visualstudio.com/api/extension-guides/web-extensions
+- https://code.visualstudio.com/api/references/activation-events
+- https://code.visualstudio.com/docs/copilot/copilot-chat-agents
+
+Documentation gaps:
+- dispatch.subagentToolkit / dispatch.backgroundDispatch — the reviewed sources document that
+  `#runSubagent` exists (v1.105+, `chat.subagents.allowInvocationsFromSubagents`, max nesting
+  depth 5) but do not state the subagent tool-restriction model or whether a background-dispatched
+  subagent can itself spawn further named subagents; both stay `undocumented` and negotiation
+  fails closed.
+- This section's Evidence-column wording was authored without live Context7/web-fetch access (see
+  the sourcing note above the table) — verify against the cited pages before relying on it for a
+  future capability upgrade, same caveat as the pi section above.
+
+EoS migration status (#2103): vscode lands as a registry runtime (role:runtime) for
+validator/host-integration coverage ONLY — it is deliberately NOT a CLI-installable runtime
+(`installSurface: "none"`, never in `bin/install.js`'s `allRuntimes`; see the
+`NON_INSTALLABLE_RUNTIMES` carve-out in `tests/runtime-flags.test.cjs`). The extension surface
+(`vscode/extension.js`, `vscode/browser.js`, `vscode/host-binding.js`, `vscode/package.json`) is
+distributed via the Marketplace/VSIX, not `npx --vscode` — there is no `docs/how-to/install-on-
+your-runtime.md` entry for it. Dispatch is SUBPROCESS REUSE on desktop (the same shared
+`dispatchGsdCommand` in `gsd-core/bin/lib/shell-command-projection.cjs` the pi extension and the
+companion MCP server use) via `vscode/extension.js`'s `main` entry (Node). The `browser` entry
+(`vscode/browser.js`) is a SEPARATE, independently zero-Node-API file: it does NOT require
+`host-binding.js` because that module's engine-lib dependencies (`state-io.cjs`,
+`adapter-imperative.cjs` → `install-engine.cjs`/`capability-loader.cjs`,
+`model-adapter.cjs` → `model-resolver.cjs` → `config-loader.cjs`/`configuration.cjs`) all pull in
+Node's `fs`/`os`/`path` at module-load time — requiring any of them from a webworker context would
+throw immediately. `browser.js` instead composes its own minimal surface directly against
+`vscode.lm`, and its command/tool/chat handlers surface an honest "full dispatch is unavailable on
+web; configure the GSD MCP server" message rather than a silent failure. The chat participant
+(`@gsd`) and Language Model Tools (a representative 3-tool set — `gsd_progress`, `gsd_workstreams`,
+`gsd_plan_phase` — matching real shipped skills that map onto a single, safe, read-only
+`gsd-tools.cjs` command) are registered on BOTH entries identically; only the dispatch behavior
+differs. `#runSubagent` wiring (`registerSubagentDispatch`/`dispatchAsSubagent`, gated on
+`chat.subagents.allowInvocationsFromSubagents` availability, fail-soft on older/Insiders-gated
+hosts) adds a belt-and-suspenders `maxDepth: 5` ceiling independent of whatever VS Code's own chat
+engine enforces natively — there is no separate extension-side "subagent contribution"
+registration API beyond the chat participant + Language Model Tools already registered; VS Code's
+chat engine surfaces them to `#runSubagent` on its own.
+

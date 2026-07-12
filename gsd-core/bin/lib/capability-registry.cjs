@@ -2756,6 +2756,57 @@ const capabilities = {
       }
     ]
   },
+  "vscode": {
+    "id": "vscode",
+    "role": "runtime",
+    "version": "1.7.0-rc.5",
+    "title": "VS Code",
+    "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "none",
+        "name": "vscode",
+        "env": []
+      },
+      "localConfigDir": null,
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "extensionEvents": "none",
+      "sandboxTier": "none",
+      "supportTier": 1,
+      "installSurface": "none",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "palette",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 5,
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "engine",
+        "stateIO": "sandboxed-storage",
+        "transport": "mcp",
+        "runtime": "sandboxed-web"
+      }
+    }
+  },
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
@@ -5290,6 +5341,57 @@ const runtimes = {
       }
     }
   },
+  "vscode": {
+    "id": "vscode",
+    "role": "runtime",
+    "version": "1.7.0-rc.5",
+    "title": "VS Code",
+    "description": "VS Code — Marketplace/VSIX extension; no file-projected config directory; IDE-profile reference host (active vscode.lm model, engine-owned hook bus, sandboxed globalState/workspaceState stateIO).",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "none",
+        "name": "vscode",
+        "env": []
+      },
+      "localConfigDir": null,
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "extensionEvents": "none",
+      "sandboxTier": "none",
+      "supportTier": 1,
+      "installSurface": "none",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "palette",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": 5,
+          "background": true,
+          "subagentToolkit": "undocumented",
+          "backgroundDispatch": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "engine",
+        "stateIO": "sandboxed-storage",
+        "transport": "mcp",
+        "runtime": "sandboxed-web"
+      }
+    }
+  },
   "windsurf": {
     "id": "windsurf",
     "role": "runtime",
@@ -5667,6 +5769,7 @@ const _requiresGraph = {
   "tdd": [],
   "trae": [],
   "ui": [],
+  "vscode": [],
   "windsurf": [],
   "zcode": []
 };
