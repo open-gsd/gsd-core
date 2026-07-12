@@ -5,22 +5,80 @@
   "version": "1.7.0-rc.5",
   "publisher": "opengsd",
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.105.0"
   },
   "categories": [
     "Other"
   ],
-  "activationPoints": {
-    "onCommand": [
-      "gsd.invoke"
-    ]
-  },
+  "activationEvents": [
+    "onCommand:gsd.invoke"
+  ],
   "main": "./extension.js",
+  "browser": "./browser.js",
   "contributes": {
     "commands": [
       {
         "command": "gsd.invoke",
         "title": "GSD: Invoke Command"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "gsd",
+        "name": "gsd",
+        "fullName": "GSD Core",
+        "description": "Invoke GSD orchestration commands from chat.",
+        "isSticky": true
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "gsd_progress",
+        "tags": ["gsd", "status"],
+        "toolReferenceName": "gsd-progress",
+        "displayName": "GSD Progress",
+        "modelDescription": "Reports GSD milestone/phase progress (percent complete, plan and summary counts) for the current project.",
+        "userDescription": "Check GSD project progress.",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gsd_workstreams",
+        "tags": ["gsd", "status"],
+        "toolReferenceName": "gsd-workstreams",
+        "displayName": "GSD Workstreams",
+        "modelDescription": "Lists the GSD parallel workstreams for the current project (or reports flat/single-workstream mode).",
+        "userDescription": "List GSD workstreams.",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "gsd_plan_phase",
+        "tags": ["gsd", "plan"],
+        "toolReferenceName": "gsd-plan-phase",
+        "displayName": "GSD Plan Phase",
+        "modelDescription": "Looks up the plan index (plans, waves, checkpoints) for a named GSD phase. Read-only — does not create or modify a phase plan; use the /gsd-plan-phase chat workflow for full phase planning.",
+        "userDescription": "Look up a GSD phase's plan index.",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "phase": {
+              "type": "string",
+              "description": "The GSD phase name to look up (e.g. \"01-core\")."
+            }
+          },
+          "required": ["phase"],
+          "additionalProperties": false
+        }
       }
     ]
   }

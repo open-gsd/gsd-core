@@ -703,7 +703,9 @@ const VALID_CONVERTER_NAMES = new Set([
 
 // C3: Validate role:runtime body
 const VALID_CONFIG_FORMATS = new Set(['settings-json', 'toml', 'markdown', 'markdown-dir', 'none']);
-const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']);
+// 'none' added #2103 — Marketplace/VSIX-distributed hosts (e.g. VS Code) with
+// no file-projected config directory at all.
+const VALID_CONFIG_HOME_KINDS = new Set(['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'none']);
 const VALID_COMMAND_STYLES = new Set(['slash-hyphen', 'shell-var']);
 const VALID_HOOKS_SURFACES = new Set(['settings-json', 'codex-hooks-json', 'cursor-hooks-json', 'copilot-inline', 'cline-rules', 'kimi-hooks-toml', 'windsurf-hooks-json', 'none']);
 const VALID_HOOK_EVENTS = new Set(['claude', 'gemini']);
@@ -716,7 +718,9 @@ const VALID_SANDBOX_TIERS = new Set(['none', 'codex-agent-sandbox']);
 const VALID_ARTIFACT_KIND_NAMES = new Set(['commands', 'agents', 'skills', 'kimi-agents']);
 const VALID_ARTIFACT_NESTINGS = new Set(['flat', 'nested']);
 const FEATURE_FIELDS_FORBIDDEN_ON_RUNTIME = ['skills', 'agents', 'steps', 'contributions', 'gates', 'hooks', 'activationKey'];
-const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only']);
+// 'none' added #2103 — Marketplace/VSIX-distributed hosts (e.g. VS Code) that
+// are never CLI-installed (no allRuntimes membership, no install flag).
+const VALID_INSTALL_SURFACES = new Set(['settings-json', 'codex-toml', 'copilot-instructions', 'cline-rules', 'cursor-hooks-json', 'profile-marker-only', 'none']);
 // 'antigravity' added #2096 Phase B Upgrade 1 — settings.json permissions.allow writer.
 const VALID_PERMISSION_WRITERS = new Set(['opencode', 'kilo', 'antigravity']);
 // SubagentStart added #2092 Phase B Upgrade 2 (qwen-only today — see
@@ -742,6 +746,9 @@ const INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES = new Map([
   ['cline-rules',          new Set(['cline-rules'])],
   ['cursor-hooks-json',    new Set(['cursor-hooks-json'])],
   ['profile-marker-only',  new Set(['none', 'kimi-hooks-toml', 'windsurf-hooks-json'])],
+  // 'none' added #2103 — VS Code has no CLI install surface at all; its only
+  // valid hooksSurface pairing is the other 'none' (engine owns the hook bus).
+  ['none',                 new Set(['none'])],
 ]);
 
 // GATE B: extended hook event families → required hookEvents value
@@ -778,9 +785,18 @@ function validateConfigHome(capId, ch) {
     );
   }
 
-  // name — required string
-  if (typeof ch.name !== 'string' || ch.name.length === 0) {
-    errors.push(ctx + '.name must be a non-empty string');
+  // name — required string, except when kind === 'none': the runtime has no
+  // file-projected config directory at all, so a descriptive name is
+  // optional (a carve-out mirroring the dot-home-nested⇒parent conditional
+  // below, not a new validation mechanism). If present it must still be a
+  // non-empty string (e.g. vscode's configHome.name stays a descriptive
+  // "vscode" string even though it is never used to build a path).
+  if (ch.kind !== 'none') {
+    if (typeof ch.name !== 'string' || ch.name.length === 0) {
+      errors.push(ctx + '.name must be a non-empty string');
+    }
+  } else if (ch.name !== undefined && (typeof ch.name !== 'string' || ch.name.length === 0)) {
+    errors.push(ctx + '.name must be a non-empty string if present when kind is "none"');
   }
 
   // parent — required when kind == dot-home-nested
@@ -1061,14 +1077,26 @@ function validateRuntimeBody(cap) {
   // localConfigDir — REQUIRED non-empty dot-dir string (ADR-1239 Phase B #1679)
   // Must start with '.' (e.g. ".claude", ".cursor"). Validated here so the registry
   // generator catches any descriptor missing the field before regenerating.
-  if (typeof r.localConfigDir !== 'string' || r.localConfigDir.length === 0) {
+  //
+  // #2103: conditional on configHome.kind !== 'none' — a Marketplace/VSIX
+  // host with no file-projected config directory (e.g. VS Code) has no
+  // local dir to name; localConfigDir may be null/absent for such runtimes.
+  const configHomeKind = (r.configHome && typeof r.configHome === 'object') ? r.configHome.kind : undefined;
+  if (configHomeKind !== 'none') {
+    if (typeof r.localConfigDir !== 'string' || r.localConfigDir.length === 0) {
+      errors.push(
+        'runtime.localConfigDir is required and must be a non-empty string (e.g. ".claude"); ' +
+        'got: ' + JSON.stringify(r.localConfigDir),
+      );
+    } else if (!r.localConfigDir.startsWith('.')) {
+      errors.push(
+        'runtime.localConfigDir must start with "." (a dot-dir); got: ' + JSON.stringify(r.localConfigDir),
+      );
+    }
+  } else if (r.localConfigDir !== null && r.localConfigDir !== undefined) {
     errors.push(
-      'runtime.localConfigDir is required and must be a non-empty string (e.g. ".claude"); ' +
+      'runtime.localConfigDir must be null or absent when configHome.kind is "none"; ' +
       'got: ' + JSON.stringify(r.localConfigDir),
-    );
-  } else if (!r.localConfigDir.startsWith('.')) {
-    errors.push(
-      'runtime.localConfigDir must start with "." (a dot-dir); got: ' + JSON.stringify(r.localConfigDir),
     );
   }
 
@@ -2175,6 +2203,9 @@ const INSTALL_SURFACE_TO_CONFIG_FORMAT = new Map([
   ['cline-rules',          'markdown-dir'],
   ['cursor-hooks-json',    'none'],
   ['profile-marker-only',  'none'],
+  // 'none' added #2103 — a runtime with NO CLI install surface at all (e.g.
+  // VS Code) has no config-file format to write either.
+  ['none',                 'none'],
 ]);
 
 /**

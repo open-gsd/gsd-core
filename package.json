@@ -21,7 +21,8 @@
     "GEMINI.md",
     "hooks",
     "scripts",
-    "pi"
+    "pi",
+    "vscode"
   ],
   "keywords": [
     "claude",
