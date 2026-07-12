@@ -613,17 +613,33 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
   const _totalSummaries = totalSummaries;
 
   readModifyWriteStateMd(statePath, (content) => {
-    // Try **Progress:** bold format first, then plain Progress: format
-    const boldProgressPattern = /(\*\*Progress:\*\*\s*).*/i;
-    const plainProgressPattern = /^(Progress:\s*).*/im;
-    if (boldProgressPattern.test(content)) {
-      updated = true;
-      return content.replace(boldProgressPattern, (_match, prefix: string) => `${prefix}${progressStr}`);
-    } else if (plainProgressPattern.test(content)) {
-      updated = true;
-      return content.replace(plainProgressPattern, (_match, prefix: string) => `${prefix}${progressStr}`);
-    }
-    return content;
+    // #2177: match against the BODY only. With /i the patterns below would
+    // otherwise hit the YAML frontmatter `progress:` key first (and `\s*` would
+    // eat its newline, mangling the nested block), while the body Progress: line
+    // — which frontmatter `percent` is re-derived from on every write — stays
+    // stale and silently reverts the update.
+    const body = stripFrontmatter(content);
+    const fmPrefix = content.slice(0, content.length - body.length);
+
+    // Swap only the machine segment ("[bar] NN%" or bare "NN%"), preserving any
+    // descriptive suffix an agent authored, e.g. "(2/4 plans done; blocked on…)".
+    const machineSegment = /(?:\[[^\]\r\n]*\][ \t]*)?\d{1,3}%/;
+    const replaceValue = (value: string) => machineSegment.test(value)
+      ? value.replace(machineSegment, progressStr)
+      : progressStr;
+
+    // Try **Progress:** bold format first, then plain Progress: format.
+    const boldProgressPattern = /(\*\*Progress:\*\*[ \t]*)([^\r\n]*)/i;
+    const plainProgressPattern = /^(Progress:[ \t]*)([^\r\n]*)/im;
+    const pattern = boldProgressPattern.test(body)
+      ? boldProgressPattern
+      : plainProgressPattern.test(body)
+        ? plainProgressPattern
+        : null;
+    if (!pattern) return content;
+
+    updated = true;
+    return fmPrefix + body.replace(pattern, (_match, prefix: string, value: string) => `${prefix}${replaceValue(value)}`);
   }, cwd);
 
   if (updated) {
