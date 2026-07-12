@@ -402,7 +402,7 @@ would otherwise trigger (GitHub honors `[ci skip]` / `[skip ci]`):
 
 ```bash
 gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER} [ci skip]" --files .planning/STATE.md
-git push origin ${CURRENT_BRANCH} 2>&1
+git push origin ${CURRENT_BRANCH} 2>&1 || echo "⚠ track_shipping: ship-note push failed — it is local-only; rerun: git push origin ${CURRENT_BRANCH}"
 ```
 </step>
 
