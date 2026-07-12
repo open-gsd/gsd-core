@@ -38,9 +38,9 @@
       "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "kilo": {
-      "opus": null,
-      "sonnet": null,
-      "haiku": null
+      "opus": { "model": "anthropic/claude-opus-4-8" },
+      "sonnet": { "model": "anthropic/claude-sonnet-5" },
+      "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "cline": {
       "opus": null,
@@ -86,6 +86,11 @@
       "opus": null,
       "sonnet": null,
       "haiku": null
+    },
+    "pi": {
+      "opus": { "model": "claude-opus-4-8" },
+      "sonnet": { "model": "claude-sonnet-5" },
+      "haiku": { "model": "claude-haiku-4-5" }
     }
   },
   "providerPresets": {

@@ -133,11 +133,16 @@ file before the job passes.
 
 ### 2.4 Locale-safe text scanning
 
-**Control:** Text output and user-facing strings are scanned for locale-unsafe
-constructs (non-ASCII homoglyphs, bidirectional override characters, invisible
-Unicode) that could be used to obscure malicious content in diffs or logs.
+**Control:** Text output and user-facing strings are scanned for invisible
+Unicode and bidirectional override characters that could be used to obscure
+malicious content in diffs or logs. The live hooks
+(`gsd-prompt-guard.js`, `gsd-read-injection-scanner.js`) inline their own
+Unicode-detection patterns for hook independence — they do not call
+`scanForInjection` from `security.cts`. The centralized `scanForInjection`
+function serves as the CI codebase-scanner engine
+(`tests/prompt-injection-scan.security.test.cjs`).
 
-**Why it matters:** Unicode homoglyph and BiDi attacks are documented
+**Why it matters:** Unicode invisible-character and BiDi attacks are documented
 supply-chain vectors (CVE-2021-42574 — "Trojan Source"). Detecting them at scan
 time prevents invisible payload injection in source and output files.
 

@@ -370,6 +370,31 @@ export function resolveKimiGlobalDir(opts: ResolveKimiOpts = {}): string {
 }
 
 /**
+ * Resolve the directory holding Kimi CLI's OWN native config.toml (the file
+ * Kimi itself reads for providers/models/hooks/etc — see
+ * moonshotai.github.io/kimi-cli/en/configuration/data-locations.html and
+ * .../reference/kimi-command.html). Default `~/.kimi`, overridden by
+ * `KIMI_SHARE_DIR` per Kimi's own upstream env-var (NOT `KIMI_CONFIG_DIR`,
+ * which is a GSD-installer write-location override for the unrelated generic
+ * Agent-Skills root resolved by resolveKimiGlobalDir above).
+ *
+ * This is deliberately a SEPARATE directory from GSD's kimi configHome
+ * (~/.config/agents): Kimi's own docs confirm the Agent-Skills search path is
+ * independent of KIMI_SHARE_DIR ("This variable does not affect Agent Skills
+ * search paths, which are handled separately"). #2095 Upgrade 1 writes GSD's
+ * native [[hooks]] entries into `<this dir>/config.toml`, never into the
+ * skills configDir.
+ */
+export function resolveKimiHooksTomlDir(opts: ResolveKimiOpts = {}): string {
+  const env: Record<string, string | undefined> = opts.env ?? process.env;
+  const home = opts.home ?? os.homedir();
+  return resolveConfigHomeFromDescriptor(
+    { kind: 'dot-home', name: '.kimi', env: ['KIMI_SHARE_DIR'] },
+    { env, home },
+  );
+}
+
+/**
  * Return the global config base directory for the given runtime.
  * Respects the same env-var overrides as bin/install.js getGlobalDir().
  *

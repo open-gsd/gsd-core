@@ -177,6 +177,106 @@ describe('init commands', () => {
     assert.strictEqual(output.phase_number, null);
   });
 
+  // #2104: the #2056 guard must also cover init execute-phase, verify-work,
+  // and phase-op — all three had unguarded findPhaseInternal/getRoadmapPhaseInternal
+  // calls that collapsed foreign prefixes (MEM-01 → 01) to numeric phases.
+  test('#2104 — init execute-phase does not collapse foreign-prefixed task IDs', () => {
+    seedPhase(tmpDir, '01-stable-baseline-on-main', {
+      '01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Stable Baseline On Main\n**Goal:** Establish baseline\n**Plans:** 1 plan\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init execute-phase MEM-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, false, 'MEM-01 must NOT resolve to numeric Phase 01');
+    assert.strictEqual(output.phase_number, null);
+  });
+
+  test('#2104 — init verify-work does not collapse foreign-prefixed task IDs', () => {
+    seedPhase(tmpDir, '01-stable-baseline-on-main', {
+      '01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Stable Baseline On Main\n**Goal:** Establish baseline\n**Plans:** 1 plan\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init verify-work MEM-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, false, 'MEM-01 must NOT resolve to numeric Phase 01');
+  });
+
+  // #2104 accept-branch: a real foreign-prefixed phase dir MUST still resolve
+  // through the now-guarded commands, proving the guard narrows but does not block.
+  test('#2104 — init execute-phase resolves a real foreign-prefixed phase dir', () => {
+    seedPhase(tmpDir, 'MEM-01-integration', {
+      'MEM-01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init execute-phase MEM-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true, 'a real MEM-01-* dir must resolve under its own prefix');
+    assert.strictEqual(output.phase_dir, '.planning/phases/MEM-01-integration');
+  });
+
+  test('#2104 — init verify-work resolves a real foreign-prefixed phase dir', () => {
+    seedPhase(tmpDir, 'MEM-01-integration', {
+      'MEM-01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init verify-work MEM-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, true, 'a real MEM-01-* dir must resolve under its own prefix');
+  });
+
+  test('#2104 — init phase-op does not collapse foreign-prefixed task IDs', () => {
+    seedPhase(tmpDir, '01-stable-baseline-on-main', {
+      '01-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 1: Stable Baseline On Main\n**Goal:** Establish baseline\n**Plans:** 1 plan\n',
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'LKML' }, null, 2),
+    );
+
+    const result = runGsdTools('init phase-op MEM-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.phase_found, false, 'MEM-01 must NOT resolve to numeric Phase 01');
+    assert.strictEqual(output.phase_number, null);
+  });
+
   test('init plan-phase exposes text_mode from config (defaults false)', () => {
     const result = runGsdTools('init plan-phase 03', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);

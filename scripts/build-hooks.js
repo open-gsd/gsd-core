@@ -44,6 +44,9 @@ const HOOKS_TO_COPY = [
   'gsd-cursor-stop.js',
   'gsd-cursor-subagent-start.js',
   'gsd-cursor-subagent-stop.js',
+  // Windsurf/Cascade lifecycle hooks (ADR-1239/#2100 Stage 2): 2 blocking events
+  'gsd-windsurf-pre-write.js',
+  'gsd-windsurf-pre-command.js',
   // Claude Code FileChanged hook (#770) — hot-reloads gsd config when
   // .planning/config.json changes mid-session. Must ship to dist so the
   // installer can copy it to the target hooks/ dir and register FileChanged.

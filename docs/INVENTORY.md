@@ -312,6 +312,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
 | `prohibition-probe.md` | Spec-phase prohibition-completeness probe — the two-stage adversarial-recall → precision protocol that surfaces the unwritten *must-NOT* constraints (values/safety/ethics), with status×verification (`test`/`judgment`) tiering and canon-referral breadcrumbs (Step 5.6); second adapter of the `probe-core` resolution model. |
+| `ui-consideration-probe.md` | UI-phase state-completeness probe — the closed shape-rooted UI-state taxonomy (empty/loading/error/populated/partial/overflow/zero-one-many/long-text), element-cue relevance filter, and `{explicit, backstop}` tiering; third adapter of the `probe-core` model (ADR-550 D7), run at ui-phase Step 9.5; the MIXED axis routes open UX (real-time/a11y/i18n-RTL) to `domain-probes.md` (#1867). |
 | `honest-verifier.md` | Verify-time abstention on non-inferable (`backstop`) truths — the truth-axis mirror of the prohibition judgment-tier disposition (ADR-550 D4): a `backstop` truth the verifier can't confirm with explicit evidence abstains → `human_needed` (reason `insufficient_spec`), never a silent pass (#1154). |
 | `gate-prompts.md` | Gate/checkpoint prompt templates. |
 | `loop-hook-dispatch.md` | Generic dispatch contract for consuming `gsd_run loop render-hooks <point> --raw` output in any host-loop workflow — envelope shape, per-kind dispatch rules (contribution/step/gate), and liveness banner. |
@@ -516,6 +517,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `normalize-test-command.cjs` | Normalizes a resolved test command to a one-shot form so a watch-mode runner (vitest/jest) cannot hang a verification gate (#1857); shared by all four test-command gates (regression, post-merge, audit-fix, verify-phase) |
 | `uat.cjs` | UAT file parsing, verification debt tracking, audit-uat support |
 | `uat-predicate.cjs` | UAT-passed predicate — markdown-aware evaluation of HUMAN-UAT results; returns pass only when all required checks pass; ignores false-positive contexts (frontmatter, fenced code, blockquotes, HTML comments) |
+| `ui-consideration-probe.cjs` | Spec-completeness UI-consideration probe (compiled from `src/ui-consideration-probe.cts`, gitignored) — the third adapter of the `probe-core` resolution model (ADR-550 Decision 7): element-kind classification, applicable-category relevance filter, consideration proposal, `proposeElements`/`autoResolve` (propose-then-confirm + the `--auto` never-dismiss floor), and the `{explicit, backstop}` validators; delegates merge/rollup/CLI to `probe-core`; exports `classifyElement`, `applicableCategories`, `proposeConsiderations`, `proposeElements`, `autoResolve`, `analyzeCoverage`, `UI_TAXONOMY` (#1867) |
 | `ui-safety-gate.cjs` | Shell-free word-boundary UI token detector (#3706, #3718); reads phase-section text from stdin, exits 0 (UI found) or 1 (no UI); also deployed to `gsd-core/bin/lib/` so the GSD installer ships it to `$RUNTIME_DIR` (#448) |
 | `update-context.cjs` | Pure install-context resolver for `/gsd:update` — runtime/scope/config-dir/version detection (LOCAL/GLOBAL/UNKNOWN) ported from update.md bash; backs `gsd-tools update-context` (#498) |
 | `validate-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools validate` |
@@ -552,6 +554,8 @@ Full listing: `hooks/`.
 | `gsd-cursor-stop.js` | Cursor `stop` | Cursor-native verify-work reminder on agent stop (ADR-1239 / #2089) |
 | `gsd-cursor-subagent-start.js` | Cursor `subagentStart` | Cursor-native subagent context injection (ADR-1239 / #2089) |
 | `gsd-cursor-subagent-stop.js` | Cursor `subagentStop` | Cursor-native subagent completion reminder (ADR-1239 / #2089) |
+| `gsd-windsurf-pre-write.js` | Windsurf/Cascade `pre_write_code` | Blocking (exit-code-2) write-path guard — blocks a write resolving to a different git root than cwd, or inside `.git/` internals (ADR-1239 / #2100) |
+| `gsd-windsurf-pre-command.js` | Windsurf/Cascade `pre_run_command` | Blocking (exit-code-2) destructive-command guard — conservative deny-list (`rm -rf` root/home wipes, force-push to a protected branch) (ADR-1239 / #2100) |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt-injection patterns (advisory) |
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on unread files |

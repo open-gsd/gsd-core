@@ -702,6 +702,36 @@ describe('issue #2612: runtime "opencode" — OpenCode tier resolution', () => {
   });
 });
 
+// ─── Issue #2093: kilo runtime tier resolution ───────────────────────────────
+// Kilo is an OpenCode fork and shares the IDENTICAL built-in tier IDs (UPGRADE 2
+// / ADR-1239). Kilo moved from Group B (no built-in defaults) to Group A here.
+describe('issue #2093: runtime "kilo" — Kilo tier resolution', () => {
+  let tmpDir;
+  beforeEach(() => { isolateHome(); tmpDir = createTempProject(); resetRuntimeWarningCaches(); });
+  afterEach(() => { cleanup(tmpDir); restoreHome(); });
+
+  test('opus tier -> anthropic/claude-opus-4-8', () => {
+    writeConfig(tmpDir, { runtime: 'kilo', model_profile: 'quality' });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
+  });
+
+  test('sonnet tier -> anthropic/claude-sonnet-5', () => {
+    writeConfig(tmpDir, { runtime: 'kilo', model_profile: 'balanced' });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'anthropic/claude-sonnet-5');
+  });
+
+  test('haiku tier -> anthropic/claude-haiku-4-5', () => {
+    writeConfig(tmpDir, { runtime: 'kilo', model_profile: 'budget' });
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'anthropic/claude-haiku-4-5');
+  });
+
+  test('kilo: effort resolves universally but render param is null (no wire param)', () => {
+    writeConfig(tmpDir, { runtime: 'kilo', model_profile: 'quality' });
+    const eff = resolveEffortInternal(tmpDir, 'gsd-planner');
+    assert.strictEqual(renderEffortForRuntime('kilo', eff).param, null);
+  });
+});
+
 // ─── Issue #2612: copilot runtime tier resolution ────────────────────────────
 describe('issue #2612: runtime "copilot" — Copilot tier resolution', () => {
   let tmpDir;
@@ -734,10 +764,6 @@ describe('issue #2612: runtime "copilot" — Copilot tier resolution', () => {
 describe('issue #2612: Group B runtimes — no built-in map, use unknown-runtime fallback', () => {
   test('cursor is not in RUNTIME_PROFILE_MAP (uses unknown-runtime fallback)', () => {
     assert.strictEqual(RUNTIME_PROFILE_MAP.cursor, undefined);
-  });
-
-  test('kilo is not in RUNTIME_PROFILE_MAP', () => {
-    assert.strictEqual(RUNTIME_PROFILE_MAP.kilo, undefined);
   });
 
   test('windsurf is not in RUNTIME_PROFILE_MAP', () => {
@@ -829,5 +855,22 @@ describe('issue #2612: partial override merge for new Group A runtimes', () => {
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'claude-haiku-4-6');
     // gsd-planner budget -> sonnet -> built-in default
     assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'claude-sonnet-5');
+  });
+
+  // #2093: kilo just moved into Group A — same partial-merge coverage as opencode.
+  test('kilo.sonnet override wins; opus and haiku still use built-in defaults', () => {
+    writeConfig(tmpDir, {
+      runtime: 'kilo',
+      model_profile: 'balanced',
+      model_profile_overrides: {
+        kilo: { sonnet: 'anthropic/claude-sonnet-4-7' },
+      },
+    });
+    // gsd-planner balanced -> opus -> built-in default
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-planner'), 'anthropic/claude-opus-4-8');
+    // gsd-roadmapper balanced -> sonnet -> overridden
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-roadmapper'), 'anthropic/claude-sonnet-4-7');
+    // gsd-codebase-mapper balanced -> haiku -> built-in default (haiku not overridden)
+    assert.strictEqual(resolveModelInternal(tmpDir, 'gsd-codebase-mapper'), 'anthropic/claude-haiku-4-5');
   });
 });

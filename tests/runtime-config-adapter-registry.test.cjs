@@ -197,13 +197,24 @@ describe('resolveRuntimeConfigIntent — fresh object each call', () => {
 // ---------------------------------------------------------------------------
 
 describe('ALLOWED_CONFIG_RUNTIMES completeness', () => {
-  test('ALLOWED_CONFIG_RUNTIMES equals the registry runtimes that declare an installSurface', () => {
+  test('ALLOWED_CONFIG_RUNTIMES equals the registry runtimes that declare a real (non-"none") installSurface', () => {
+    // #2103: installSurface 'none' means "no CLI install surface at all"
+    // (e.g. vscode — Marketplace/VSIX-distributed, never CLI-installed), so
+    // it is excluded from the config-adapter runtime set by definition — this
+    // mirrors the exclusion already baked into the production
+    // ALLOWED_CONFIG_RUNTIMES filter (src/runtime-config-adapter-registry.cts).
     const descriptorAllowed = new Set(
       Object.entries(registry.runtimes)
-        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string')
+        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string' && cap.runtime.installSurface !== 'none')
         .map(([id]) => id),
     );
     assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), descriptorAllowed);
+  });
+
+  test('#2103: vscode declares installSurface "none" and is registered but intentionally excluded from ALLOWED_CONFIG_RUNTIMES', () => {
+    assert.strictEqual(registry.runtimes.vscode.runtime.installSurface, 'none');
+    assert.ok(!ALLOWED_CONFIG_RUNTIMES.has('vscode'),
+      'vscode must not be a config-adapter runtime — it has no CLI install surface');
   });
 
   test('every member of ALLOWED_CONFIG_RUNTIMES resolves without throwing', () => {
@@ -225,9 +236,11 @@ describe('INSTALL_SURFACES export', () => {
     'cline-rules',
     'cursor-hooks-json',
     'profile-marker-only',
+    // 'none' added #2103 — vscode has no CLI install surface at all.
+    'none',
   ]);
 
-  test('INSTALL_SURFACES contains exactly the 6 surface strings', () => {
+  test('INSTALL_SURFACES contains exactly the 7 surface strings', () => {
     assert.deepStrictEqual(new Set(INSTALL_SURFACES), EXPECTED_SURFACES);
   });
 });

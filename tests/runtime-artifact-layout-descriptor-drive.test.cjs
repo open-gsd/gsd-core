@@ -143,11 +143,15 @@ const GOLDEN = {
 
   // ── qwen ─────────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // ADR-1239 / #2092 Phase B Upgrade 1: agents kind added (native
+  // .qwen/agents/*.md subagent projection).
   'qwen/global': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
   'qwen/local': [
     { kind: 'skills', destSubpath: 'skills', prefix: 'gsd-' },
+    { kind: 'agents', destSubpath: 'agents', prefix: 'gsd-' },
   ],
 
   // ── hermes ───────────────────────────────────────────────────────────────────

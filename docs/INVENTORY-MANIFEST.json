@@ -275,6 +275,7 @@
       "thinking-models-verification.md",
       "thinking-partner.md",
       "ui-brand.md",
+      "ui-consideration-probe.md",
       "universal-anti-patterns.md",
       "untrusted-input-boundary.md",
       "user-profiling.md",
@@ -431,6 +432,7 @@
       "template.cjs",
       "uat-predicate.cjs",
       "uat.cjs",
+      "ui-consideration-probe.cjs",
       "ui-safety-gate.cjs",
       "update-context.cjs",
       "validate-command-router.cjs",
@@ -467,6 +469,8 @@
       "gsd-statusline.js",
       "gsd-update-banner.js",
       "gsd-validate-commit.sh",
+      "gsd-windsurf-pre-command.js",
+      "gsd-windsurf-pre-write.js",
       "gsd-workflow-guard.js",
       "gsd-worktree-path-guard.js"
     ]
