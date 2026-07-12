@@ -255,7 +255,7 @@ export type ProgressRecord = Record<string, unknown>;
 
 export type StateTransitionDeps = {
   progressProvider: () => ProgressRecord | null;
-  clock: { today: () => string; nowIso: () => string };
+  clock: { today: () => string; localToday: () => string; nowIso: () => string };
   /**
    * Roadmap content provider for transitions that re-derive milestone-wide
    * progress from ROADMAP.md (completePhase). Optional: transitions that don't
@@ -418,7 +418,7 @@ function beginPhaseCore(
       ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
       : b;
 
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
 
   // Consult the field-classification table for the frontmatter keys this
   // transition touches (codex Phase 1 review: "table not consulted by
@@ -721,7 +721,7 @@ function mutateCurrentPositionForAdvance(
  * adapter to construct CLI output.
  */
 function advancePlanCore(content: string, deps: StateTransitionDeps): StateTransitionResult {
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
 
   // #1255: body-field replacements operate on body only (frontmatter stripped),
   // not on the full content. The YAML `status:` key matches `^Status:\s*`
@@ -849,7 +849,7 @@ function completePhaseCore(
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
 
   // Consult the field-classification table for the frontmatter keys this
   // transition touches (same guard beginPhaseCore applies). A missing row is a
@@ -1020,7 +1020,7 @@ function plannedPhaseCore(
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
 
   for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
     const cls = getFieldClassification(fmKey);
@@ -1124,7 +1124,7 @@ function milestoneSwitchCore(
   intent: { kind: 'milestoneSwitch'; version: string; name: string },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
   const updated: string[] = [
     'milestone',
     'milestone_name',
@@ -1222,7 +1222,7 @@ function milestoneCompleteCore(
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
   const version = intent.version;
 
   for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
@@ -1520,7 +1520,7 @@ function syncCore(
   intent: { kind: 'sync'; totalPlansInPhase: number | null; percent: number | null },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
-  const today = deps.clock.today();
+  const today = deps.clock.localToday();
   const changes: string[] = [];
   let modified = content;
   const updated: string[] = [];

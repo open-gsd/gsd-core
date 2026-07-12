@@ -497,7 +497,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   const verificationPassed = readVerificationStatus(phaseDir).status === 'passed';
   const isComplete = summaryCount >= planCount && verificationPassed;
   const status = isComplete ? 'Complete' : summaryCount > 0 ? 'In Progress' : 'Planned';
-  const today = realClock.today();
+  const today = realClock.localToday();
 
   if (!fs.existsSync(roadmapPath)) {
     output({ updated: false, reason: 'ROADMAP.md not found', plan_count: planCount, summary_count: summaryCount }, raw, 'no roadmap');
