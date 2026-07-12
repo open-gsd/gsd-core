@@ -1573,8 +1573,18 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   // existing frontmatter already holds; only an empty derived value falls through
   // to this guard (the primary #905 preserve path below handles that).
   const MILESTONE_NAME_PLACEHOLDER = 'milestone';
+  // #2135: widen the preserve guard. A bad derive is not always the literal
+  // placeholder — getMilestoneInfo can return a delimiter-led fragment
+  // ("— Active Milestone") when the roadmap regex mis-binds. Preserve the
+  // existing curated name unless the derived value actually looks like a name:
+  // non-empty, not the placeholder, and not punctuation-led.
+  const derivedName = derivedFm['milestone_name'];
+  const derivedLooksLikeName = typeof derivedName === 'string'
+    && derivedName.length > 0
+    && derivedName !== MILESTONE_NAME_PLACEHOLDER
+    && !/^[\s—–:-]/.test(derivedName);
   if (
-    derivedFm['milestone_name'] === MILESTONE_NAME_PLACEHOLDER &&
+    !derivedLooksLikeName &&
     existingFm['milestone_name'] &&
     existingFm['milestone_name'] !== MILESTONE_NAME_PLACEHOLDER
   ) {
