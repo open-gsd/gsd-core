@@ -275,6 +275,19 @@ interface MilestoneInfo {
   name: string;
 }
 
+/**
+ * Strip a leading delimiter run (whitespace, em/en-dash, colon, hyphen) from a
+ * milestone-name capture. Markdown headings commonly take the shape
+ * `## vX.Y — Name` or `## vX.Y: Name`; the raw capture includes the delimiter
+ * because `.trim()` only removes whitespace, not punctuation. A name beginning
+ * with punctuation is a delimiter-led fragment, not the curated name (#2135).
+ * NOTE: do not strip `#` — a name beginning with `#` is a heading-parse failure
+ * that should stay loud rather than be silently cleaned.
+ */
+function stripLeadingDelimiter(s: string): string {
+  return s.replace(/^[\s—–:-]+/, '').trim();
+}
+
 function getMilestoneInfo(cwd: string): MilestoneInfo {
   try {
     const roadmap = platformReadSync(path.join(planningDir(cwd), 'ROADMAP.md'));
@@ -294,22 +307,34 @@ function getMilestoneInfo(cwd: string): MilestoneInfo {
 
     if (stateVersion) {
       const escapedVer = escapeRegex(stateVersion);
-      const headingMatch = roadmap.match(
-        new RegExp(`##[^\\n]*${escapedVer}[:\\s]+([^\\n(]+)`, 'i')
+
+      // #2135: consult the 🚧 name-bearing marker FIRST. It is the only construct
+      // guaranteed to carry the milestone's curated name adjacent to its version
+      // (the active-milestone bullet). A `##` heading is often nameless
+      // ("## vX.Y — Active Milestone") and, when unanchored, was matched
+      // spuriously on a copy quoted inside backticks in this very bullet.
+      const listMatch = roadmap.match(
+        new RegExp(`🚧\\s*\\*?\\*?${escapedVer}\\s+([^*\\n]+)`, 'i')
       );
-      if (headingMatch) {
-        if (!headingMatch[0].includes('✅')) {
-          return { version: stateVersion, name: headingMatch[1].trim() };
-        }
-      } else {
-        const listMatch = roadmap.match(
-          new RegExp(`🚧\\s*\\*?\\*?${escapedVer}\\s+([^*\\n]+)`, 'i')
-        );
-        if (listMatch) {
-          return { version: stateVersion, name: listMatch[1].trim() };
-        }
-        return { version: stateVersion, name: 'milestone' };
+      if (listMatch) {
+        const name = stripLeadingDelimiter(listMatch[1]);
+        if (name) return { version: stateVersion, name };
       }
+
+      // Fall back to the `##` heading — ANCHORED to line start (`^` + `m` flag)
+      // so a heading quoted inside backticks or prose mid-line can no longer
+      // match. Skip shipped (✅) headings.
+      const headingMatch = roadmap.match(
+        new RegExp(`^##[^\\n]*${escapedVer}[:\\s]+([^\\n(]+)`, 'im')
+      );
+      if (headingMatch && !headingMatch[0].includes('✅')) {
+        // Strip a leading delimiter — `.trim()` removes whitespace, not the
+        // em-dash/colon that conventionally separates version from name.
+        const name = stripLeadingDelimiter(headingMatch[1]);
+        if (name) return { version: stateVersion, name };
+      }
+
+      return { version: stateVersion, name: 'milestone' };
     }
 
     const inProgressMatch = roadmap.match(/🚧\s*\*\*v(\d+(?:\.\d+)+)\s+([^*]+)\*\*/);

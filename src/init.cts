@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
@@ -820,8 +821,8 @@ function cmdInitQuick(cwd: string, description: string | undefined, raw: boolean
     slug: slug,
     description: description || null,
 
-    date: now.toISOString().split('T')[0],
-    timestamp: now.toISOString(),
+    date: realClock.localToday(),
+    timestamp: realClock.nowIso(),
 
     quick_dir: '.planning/quick',
     task_dir: slug ? `.planning/quick/${quickId}-${slug}` : null,
@@ -1133,7 +1134,6 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
 
 function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void {
   const config = loadConfig(cwd);
-  const now = new Date();
 
   const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
   let count = 0;
@@ -1176,8 +1176,8 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
   const result: Record<string, unknown> = {
     commit_docs: config.commit_docs,
 
-    date: now.toISOString().split('T')[0],
-    timestamp: now.toISOString(),
+    date: realClock.localToday(),
+    timestamp: realClock.nowIso(),
 
     todo_count: count,
     todos,
@@ -1306,7 +1306,6 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
 
 function cmdInitMapCodebase(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  const now = new Date();
 
   const codebaseDir = path.join(planningRoot(cwd), 'codebase');
   let existingMaps: string[] = [];
@@ -1324,8 +1323,8 @@ function cmdInitMapCodebase(cwd: string, raw: boolean): void {
     parallelization: config.parallelization,
     subagent_timeout: config.subagent_timeout,
 
-    date: now.toISOString().split('T')[0],
-    timestamp: now.toISOString(),
+    date: realClock.localToday(),
+    timestamp: realClock.nowIso(),
 
     codebase_dir: '.planning/codebase',
 
