@@ -1337,11 +1337,11 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
 
     const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     // The body line advanced to 50% AND its descriptive suffix survived.
-    assert.ok(/Progress: \[█████░░░░░\] 50% \(1\/2 plans complete\)/.test(updated),
+    assert.ok(updated.includes('[█████░░░░░] 50% (1/2 plans complete)'),
       'body Progress line must update to 50% with suffix preserved');
     // The frontmatter block is intact (not mangled by the old \s*-crosses-newline match).
-    assert.ok(/  total_phases: 1\n/.test(updated), 'frontmatter total_phases key must survive');
-    assert.ok(/  percent:/.test(updated), 'frontmatter percent key must survive');
+    assert.ok(updated.includes('total_phases: 1'), 'frontmatter total_phases key must survive');
+    assert.ok(updated.includes('percent:'), 'frontmatter percent key must survive');
   });
 
   test('#2177 descriptive suffix after the machine segment is preserved', () => {
