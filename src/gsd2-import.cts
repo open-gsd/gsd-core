@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { platformWriteSync } from './shell-command-projection.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output } = ioMod;
@@ -351,7 +352,7 @@ function buildStateMd(phaseMap: PhaseMapEntry[]): string {
 
   const filled = Math.round(pct / 10);
   const bar = `[${'█'.repeat(filled)}${'░'.repeat(10 - filled)}]`;
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
 
   return [
     '# Project State',

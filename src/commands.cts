@@ -1431,6 +1431,9 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, raw: boolean
 function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: boolean): void {
   const { phase, name } = options;
   const padded = phase ? normalizePhaseName(phase) : '00';
+  // #2136 sibling site (deliberately deferred per the issue's scope): scaffold's
+  // date stays on the raw UTC slice for now; route through realClock.localToday()
+  // alongside workstream.cts/gsd2-import.cts/template.cts/verify.cts in a follow-up.
   const today = realClock.localToday();
 
   // Find phase directory

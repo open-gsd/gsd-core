@@ -2572,7 +2572,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   // Write archived entries to STATE-ARCHIVE.md
   if (archived.length > 0) {
-    const timestamp = realClock.today();
+    const timestamp = realClock.localToday();
     let archiveContent = platformReadSync(archivePath);
     if (archiveContent === null) {
       archiveContent = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
