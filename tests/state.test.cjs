@@ -1295,6 +1295,85 @@ describe('cmdStateUpdateProgress (state update-progress)', () => {
     assert.ok(output.reason !== undefined, 'should have a reason');
   });
 
+  // ── #2177: frontmatter `progress:` key must not shadow the body Progress: line ──
+
+  test('#2177 frontmatter progress: key is not matched — body Progress: line is the target', () => {
+    // A STATE.md carrying YAML frontmatter (which writeStateMd adds to every
+    // STATE.md). The lowercase `progress:` key used to be matched first by the
+    // case-insensitive pattern, mangling the frontmatter and leaving the body
+    // line stale.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      [
+        '---',
+        'gsd_state_version: 1.0',
+        'status: executing',
+        'progress:',
+        '  total_phases: 1',
+        '  completed_phases: 0',
+        '  total_plans: 2',
+        '  completed_plans: 1',
+        '  percent: 20',
+        '---',
+        '',
+        '# Project State',
+        '',
+        'Progress: [██░░░░░░░░] 20% (1/2 plans complete)',
+        '',
+      ].join('\n')
+    );
+    // 1 of 2 plans complete → 50%.
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), '# Plan\n');
+
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, true);
+    assert.strictEqual(out.percent, 50);
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    // The body line advanced to 50% AND its descriptive suffix survived.
+    assert.ok(updated.includes('[█████░░░░░] 50% (1/2 plans complete)'),
+      'body Progress line must update to 50% with suffix preserved');
+    // The frontmatter block is intact (not mangled by the old \s*-crosses-newline match).
+    assert.ok(updated.includes('total_phases: 1'), 'frontmatter total_phases key must survive');
+    assert.ok(updated.includes('percent:'), 'frontmatter percent key must survive');
+  });
+
+  test('#2177 descriptive suffix after the machine segment is preserved', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      '# Project State\n\n**Progress:** [█████░░░░░] 50% (2/4 plans done; blocked on API keys)\n'
+    );
+    // 1 of 1 plan complete → 100%.
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '01');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '01-01-SUMMARY.md'), '# Summary\n');
+
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success);
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(/\[██████████\] 100% \(2\/4 plans done; blocked on API keys\)/.test(updated),
+      'the machine segment updates to 100% while the suffix is preserved verbatim');
+  });
+
+  test('#2177 no body Progress: line → updated:false even if frontmatter has a progress: key', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      ['---', 'progress:', '  percent: 0', '---', '', '# Project State', '', '**Status:** Active', ''].join('\n')
+    );
+    const result = runGsdTools('state update-progress', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.updated, false,
+      'a frontmatter progress: key with no body Progress: line must not report a false success');
+  });
+
   test('returns error when STATE.md missing', () => {
     const result = runGsdTools('state update-progress', tmpDir);
     assert.ok(result.success, `Command should exit 0: ${result.error}`);
