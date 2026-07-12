@@ -146,9 +146,36 @@ export function getProjectInstructionFile(runtime: unknown): string {
 }
 
 /**
+ * Sentinel returned by {@link getDirName} for a runtime whose
+ * `runtime.configHome.kind === 'none'` (#2103 — a Marketplace/VSIX-distributed
+ * host with NO file-projected config directory at all, e.g. VS Code).
+ *
+ * A plain fallback to `.claude` would be actively wrong here — it would read
+ * as "this runtime installs into .claude", which is false. This sentinel is
+ * a string (not `null`) so `getDirName`'s return type and every existing
+ * template-literal call site (`` `${getDirName(runtime)}` `` in bin/install.js
+ * / runtime-artifact-conversion.cjs / install-engine.cjs) are unaffected —
+ * widening the return type to `string | null` would require auditing every
+ * call site for a null-check, which is out of scope for a runtime that is
+ * never actually dispatched through those installer paths (vscode has no
+ * install surface — see capabilities/vscode/capability.json). The value is
+ * deliberately NOT a plausible dot-dir name (parens are not valid in a
+ * directory-name token GSD would ever generate) so a future caller that
+ * mistakenly interpolates it into a path fails obviously rather than
+ * silently colliding with a real directory.
+ */
+export const NO_LOCAL_CONFIG_DIR_SENTINEL = '(no-local-config-dir)';
+
+/**
  * Map a canonical runtime id to its on-disk local config directory name
  * (e.g. `cursor` -> `.cursor`, `windsurf` -> `.windsurf`). Unknown/empty inputs
  * fall back to `.claude`.
+ *
+ * #2103: a runtime whose descriptor declares `configHome.kind === 'none'`
+ * (no file-projected config directory at all) returns
+ * {@link NO_LOCAL_CONFIG_DIR_SENTINEL} instead of falling through to
+ * `.claude` — it has no local config dir, and `.claude` would be a wrong
+ * answer, not just an imprecise one.
  *
  * Pure runtime-identity projection. Relocated from `bin/install.js` per
  * ADR-1508 (epic #1507, #1510 Phase 1) so the Runtime Artifact Conversion
@@ -159,10 +186,12 @@ export function getDirName(runtime: string): string {
   if (!runtime) return '.claude';
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { runtimes } = require('./capability-registry.cjs') as {
-    runtimes: Record<string, { runtime?: { localConfigDir?: string } } | undefined>;
+    runtimes: Record<string, { runtime?: { localConfigDir?: string; configHome?: { kind?: string } } } | undefined>;
   };
-  const dir = runtimes[runtime]?.runtime?.localConfigDir;
+  const entry = runtimes[runtime]?.runtime;
+  const dir = entry?.localConfigDir;
   if (typeof dir === 'string' && dir.length > 0) return dir;
+  if (entry?.configHome?.kind === 'none') return NO_LOCAL_CONFIG_DIR_SENTINEL;
   return '.claude';
 }
 
@@ -211,6 +240,11 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   cline: 'Cline',
   zcode: 'ZCode',
   pi: 'pi',
+  // #2103: vscode is a registered (role:runtime) capability for validator +
+  // host-integration coverage, even though it is never CLI-installed (no
+  // --vscode flag — see NON_INSTALLABLE_RUNTIMES in tests/runtime-flags.test.cjs).
+  // A distinct label is still required by the drift guard below.
+  vscode: 'VS Code',
 };
 
 /**

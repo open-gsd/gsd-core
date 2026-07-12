@@ -122,11 +122,11 @@ Handle return:
 
 **State B (create):**
 1. Read template from `~/.claude/gsd-core/templates/VALIDATION.md`
-2. Fill: frontmatter, Test Infrastructure, Per-Task Map, Manual-Only, Sign-Off
+2. Fill: frontmatter (**set `status: validated`**), Test Infrastructure, Per-Task Map, Manual-Only, Sign-Off
 3. Write to `${PHASE_DIR}/${PADDED_PHASE}-VALIDATION.md`
 
 **State A (update):**
-1. Update Per-Task Map statuses, add escalated to Manual-Only, update frontmatter
+1. Update Per-Task Map statuses, add escalated to Manual-Only, update frontmatter (**set `status: validated`**)
 2. Append audit trail:
 
 ```markdown

@@ -51,8 +51,10 @@ const GOLDEN_FRAGMENT_MAP = {
 };
 
 // Runtimes intentionally NOT in the table: claude is the default; antigravity is
-// resolved dynamically by the caller (resolveAntigravityGlobalDir + path.relative).
-const SPECIAL_CASED = new Set(['claude', 'antigravity']);
+// resolved dynamically by the caller (resolveAntigravityGlobalDir + path.relative);
+// vscode (#2103) is extension-distributed with no file-projected config home at
+// all — getGlobalConfigHomeFragment is never invoked for it (no install surface).
+const SPECIAL_CASED = new Set(['claude', 'antigravity', 'vscode']);
 
 test('getGlobalConfigHomeFragment: golden map matches for all 13 table runtimes', () => {
   for (const [id, expected] of Object.entries(GOLDEN_FRAGMENT_MAP)) {

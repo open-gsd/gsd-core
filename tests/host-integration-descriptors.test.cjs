@@ -40,7 +40,7 @@ const RUNTIME_IDS = Object.keys(registry.runtimes);
 // Contract-pinned profile split (derived from .host-cli-final.json):
 // programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, pi, qwen, trae (10)
 // declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
-// ide: 0
+// ide: vscode (1) — #2103, the first installed ide-profile host.
 const EXPECTED_PROFILES = {
   claude:      'programmatic-cli',
   cline:       'programmatic-cli',
@@ -59,6 +59,7 @@ const EXPECTED_PROFILES = {
   copilot:     'declarative-cli',
   windsurf:    'declarative-cli',
   zcode:       'declarative-cli',
+  vscode:      'ide',
 };
 
 describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
@@ -215,7 +216,9 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
   test('contract-pin: profile split is internally consistent with EXPECTED_PROFILES (count-agnostic)', () => {
     // The counts are DERIVED from the curated EXPECTED_PROFILES map rather than
     // hand-pinned, so adding a runtime + its profile entry updates the counts
-    // automatically. ide must remain 0 (no installed ide-profile host yet).
+    // automatically. #2103: vscode is now the first installed ide-profile host,
+    // so 'ide' is no longer pinned at a hardcoded 0 — it is derived below like
+    // the other two profiles.
     const counts = { 'programmatic-cli': 0, 'declarative-cli': 0, 'ide': 0 };
     for (const id of RUNTIME_IDS) {
       const cap = registry.runtimes[id];
@@ -236,7 +239,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     }
     assert.strictEqual(counts['programmatic-cli'], expectedCounts['programmatic-cli']);
     assert.strictEqual(counts['declarative-cli'], expectedCounts['declarative-cli']);
-    assert.strictEqual(counts['ide'], 0, 'no installed host may carry the ide profile yet');
+    assert.strictEqual(counts['ide'], expectedCounts['ide'],
+      'ide-profile count must match EXPECTED_PROFILES (#2103: vscode is the first ide-profile host)');
   });
 
   // ─── backgroundDispatch presence ─────────────────────────────────────────────
@@ -291,6 +295,10 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     trae:        true,
     windsurf:    true,
     zcode:       true,
+    // #2103: vscode's dispatch.backgroundDispatch is 'undocumented' (no
+    // documented background-subagent primitive) → fails closed to false →
+    // force-flattened, mirroring the pi (#2102) precedent above.
+    vscode:      true,
   };
 
   for (const id of RUNTIME_IDS) {
