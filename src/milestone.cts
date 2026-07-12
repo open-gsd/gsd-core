@@ -67,41 +67,58 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   const updated: string[] = [];
   const alreadyComplete: string[] = [];
   const notFound: string[] = [];
+  // #2140: IDs reconciled on the checkbox surface only — a traceability table
+  // exists but has no row for the ID. Without this bucket the payload for a
+  // partial reconcile is byte-identical to a full one, and audit-milestone (which
+  // reads the table) still sees Pending while the CLI reported success.
+  const tableUnmatched: string[] = [];
+
+  // A traceability table is present if the file has a "| Requirement | … |"
+  // header. A REQUIREMENTS.md with no such table is legitimate (mid-roadmap), so
+  // a missing row only counts as drift when a table actually exists.
+  const hasTable = /^\|\s*Requirement\s*\|/im.test(reqContent);
 
   for (const reqId of reqIds) {
-    let found = false;
     const reqEscaped = escapeRegex(reqId);
 
-    // Update checkbox: - [ ] **REQ-ID** → - [x] **REQ-ID**
-    // Use replace() directly and compare — avoids test()+replace() global regex
+    // Surface 1 — the checkbox: - [ ] **REQ-ID** → - [x] **REQ-ID**
+    // Use replace() + compare to avoid the test()+replace() global regex
     // lastIndex bug where test() advances state and replace() misses matches.
     const checkboxPattern = new RegExp(`(-\\s*\\[)[ ](\\]\\s*\\*\\*${reqEscaped}\\*\\*)`, 'gi');
     const afterCheckbox = reqContent.replace(checkboxPattern, '$1x$2');
-    if (afterCheckbox !== reqContent) {
-      reqContent = afterCheckbox;
-      found = true;
-    }
+    const checkboxHit = afterCheckbox !== reqContent;
+    if (checkboxHit) reqContent = afterCheckbox;
 
-    // Update traceability table: | REQ-ID | Phase N | Pending | → | REQ-ID | Phase N | Complete |
+    // Surface 2 — the traceability row: | REQ-ID | Phase N | Pending | → ... Complete |
     const tablePattern = new RegExp(`(\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|)\\s*Pending\\s*(\\|)`, 'gi');
     const afterTable = reqContent.replace(tablePattern, '$1 Complete $2');
-    if (afterTable !== reqContent) {
-      reqContent = afterTable;
-      found = true;
-    }
+    const tableHit = afterTable !== reqContent;
+    if (tableHit) reqContent = afterTable;
 
-    if (found) {
+    // Coverage of the traceability surface for this ID (computed after any flip).
+    const hasRow = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|`, 'i').test(reqContent);
+    const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
+    const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i').test(reqContent);
+
+    if (checkboxHit || tableHit) {
       updated.push(reqId);
-    } else {
-      // Check if already complete before declaring not_found.
-      // Non-global flag is fine here — we only need to know if a match exists.
-      const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i');
-      const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i');
-      if (doneCheckbox.test(reqContent) || doneTable.test(reqContent)) {
-        alreadyComplete.push(reqId);
-      } else {
-        notFound.push(reqId);
-      }
+    } else if (doneTable || (doneCheckbox && !hasTable)) {
+      // Fully reconciled: the table row is Complete, OR the checkbox is done and
+      // there is no table to reconcile against. (A [x] checkbox with a Pending or
+      // absent row is NOT fully reconciled when a table exists — #2140.)
+      alreadyComplete.push(reqId);
+    } else if (!doneCheckbox && !doneTable) {
+      notFound.push(reqId);
+    }
+    // else: doneCheckbox && hasTable && !doneTable — partially reconciled. It is
+    // neither updated, already_complete, nor not_found; the table_unmatched bucket
+    // below carries the truthful partial-reconcile signal.
+
+    // Surface traceability drift: checkbox reconciled (this run or before) but the
+    // table has no row for this ID. This is what makes a partial reconcile
+    // distinguishable from a full one (#2140).
+    if (hasTable && doneCheckbox && !hasRow) {
+      tableUnmatched.push(reqId);
     }
   }
 
@@ -115,6 +132,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       marked_complete: updated,
       already_complete: alreadyComplete,
       not_found: notFound,
+      table_unmatched: tableUnmatched,
       total: reqIds.length,
     },
     raw,
