@@ -1500,6 +1500,41 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       }
     });
 
+    // Deterministic IO-failure injection (repo convention, cf. the fs
+    // monkeypatch in ensure-runtime-build.test.cjs): readGitStatus shares the
+    // one cached child_process module object, so replacing execFileSync here
+    // injects the failure without a real hang or oversized repo.
+    test('maxBuffer overflow degrades to null (segment absent)', () => {
+      const childProcess = require('node:child_process');
+      const original = childProcess.execFileSync;
+      childProcess.execFileSync = () => {
+        const err = new RangeError('stdout maxBuffer length exceeded');
+        err.code = 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER';
+        throw err;
+      };
+      try {
+        assert.equal(readGitStatus('/tmp'), null);
+      } finally {
+        childProcess.execFileSync = original;
+      }
+    });
+
+    test('spawn timeout degrades to null (segment absent)', () => {
+      const childProcess = require('node:child_process');
+      const original = childProcess.execFileSync;
+      childProcess.execFileSync = () => {
+        const err = new Error('spawnSync git ETIMEDOUT');
+        err.code = 'ETIMEDOUT';
+        err.errno = -110;
+        throw err;
+      };
+      try {
+        assert.equal(readGitStatus('/tmp'), null);
+      } finally {
+        childProcess.execFileSync = original;
+      }
+    });
+
     test('fresh repo with an untracked file is counted', () => {
       const { dir } = makeGitRepo();
       try {
