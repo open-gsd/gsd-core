@@ -153,17 +153,20 @@ Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` a
 
 If no active validate-phase step hook exists: skip entirely.
 
-For each phase directory, check `*-VALIDATION.md`. If exists, parse frontmatter (`nyquist_compliant`, `wave_0_complete`).
+For each phase directory, check `*-VALIDATION.md`. If exists, parse frontmatter (`status`, `nyquist_compliant`, `wave_0_complete`).
 
 Classify per phase:
 
 | Status | Condition |
 |--------|-----------|
-| COMPLIANT | `nyquist_compliant: true` and all tasks green |
-| PARTIAL | VALIDATION.md exists, `nyquist_compliant: false` or red/pending |
+| COMPLIANT | `status: validated` and `nyquist_compliant: true` and all tasks green |
+| PARTIAL | `status: validated` and (`nyquist_compliant: false` or red/pending) |
+| NOT-VALIDATED | `status: draft` (or absent) — validate-phase has not yet reconciled this file (#2117) |
 | MISSING | No VALIDATION.md |
 
-Add to audit YAML: `nyquist: { compliant_phases, partial_phases, missing_phases, overall }`
+> **NOT-VALIDATED vs PARTIAL (#2117):** A phase reads `status: draft` when it was seeded by plan-phase but never reconciled by validate-phase, OR when its `VALIDATION.md` predates the `status` field (files written before #2117 stay `draft` whether or not validation ran). In both cases `nyquist_compliant` is not authoritative, so this is a coverage TODO ("run validate-phase") — not a compliance failure. Re-running validate-phase promotes the file to `status: validated` and yields the real COMPLIANT/PARTIAL verdict. Only `status: validated` + `nyquist_compliant: false` is a genuine PARTIAL.
+
+Add to audit YAML: `nyquist: { compliant_phases, partial_phases, not_validated_phases, missing_phases, overall }`
 
 Discovery only — never auto-calls `/gsd:validate-phase`.
 
