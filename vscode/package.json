@@ -2,7 +2,7 @@
   "name": "gsd-core-vscode",
   "displayName": "GSD Core",
   "description": "GSD orchestration engine embedded in VS Code (ADR-1239 IDE profile).",
-  "version": "1.7.0-rc.5",
+  "version": "1.7.0-rc.6",
   "publisher": "opengsd",
   "engines": {
     "vscode": "^1.105.0"
@@ -34,7 +34,10 @@
     "languageModelTools": [
       {
         "name": "gsd_progress",
-        "tags": ["gsd", "status"],
+        "tags": [
+          "gsd",
+          "status"
+        ],
         "toolReferenceName": "gsd-progress",
         "displayName": "GSD Progress",
         "modelDescription": "Reports GSD milestone/phase progress (percent complete, plan and summary counts) for the current project.",
@@ -48,7 +51,10 @@
       },
       {
         "name": "gsd_workstreams",
-        "tags": ["gsd", "status"],
+        "tags": [
+          "gsd",
+          "status"
+        ],
         "toolReferenceName": "gsd-workstreams",
         "displayName": "GSD Workstreams",
         "modelDescription": "Lists the GSD parallel workstreams for the current project (or reports flat/single-workstream mode).",
@@ -62,7 +68,10 @@
       },
       {
         "name": "gsd_plan_phase",
-        "tags": ["gsd", "plan"],
+        "tags": [
+          "gsd",
+          "plan"
+        ],
         "toolReferenceName": "gsd-plan-phase",
         "displayName": "GSD Plan Phase",
         "modelDescription": "Looks up the plan index (plans, waves, checkpoints) for a named GSD phase. Read-only — does not create or modify a phase plan; use the /gsd-plan-phase chat workflow for full phase planning.",
@@ -76,7 +85,9 @@
               "description": "The GSD phase name to look up (e.g. \"01-core\")."
             }
           },
-          "required": ["phase"],
+          "required": [
+            "phase"
+          ],
           "additionalProperties": false
         }
       }
