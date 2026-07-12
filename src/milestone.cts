@@ -96,7 +96,9 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     if (tableHit) reqContent = afterTable;
 
     // Coverage of the traceability surface for this ID (computed after any flip).
-    const hasRow = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|`, 'i').test(reqContent);
+    // hasRow keys on the ID + a second cell (`| ID | <phase> |`) so a bare mention
+    // of the ID in a non-traceability table does not masquerade as a real row.
+    const hasRow = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|`, 'i').test(reqContent);
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
     const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i').test(reqContent);
 
