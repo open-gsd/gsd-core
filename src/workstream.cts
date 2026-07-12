@@ -14,6 +14,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import io = require('./io.cjs');
 const { output, error } = io;
@@ -177,7 +178,7 @@ function cmdWorkstreamCreate(cwd: string, name: string | null | undefined, optio
   platformEnsureDir(wsDir);
   platformEnsureDir(path.join(wsDir, 'phases'));
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   const stateContent = [
     '---',
     `workstream: ${slug}`,
@@ -297,7 +298,7 @@ function cmdWorkstreamComplete(cwd: string, name: string | null | undefined, opt
   if (active === name) setActiveWorkstream(cwd, null as unknown as string);
 
   const archiveDir = path.join(root, 'milestones');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   let archivePath = path.join(archiveDir, `ws-${name}-${today}`);
   let suffix = 1;
   while (fs.existsSync(archivePath)) {

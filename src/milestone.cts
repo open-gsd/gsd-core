@@ -158,7 +158,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   const milestonesPath = path.join(planningBase, 'MILESTONES.md');
   const archiveDir = path.join(planningBase, 'milestones');
   const phasesDir = planningPaths(cwd).phases;
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   const milestoneName = options.name || version;
 
   // Ensure archive directory exists

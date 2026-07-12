@@ -1401,7 +1401,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const today = realClock.today();
+  const today = realClock.localToday();
 
   const phaseInfoRaw = findPhaseInternal(cwd, phaseNum);
   if (!phaseInfoRaw) {
