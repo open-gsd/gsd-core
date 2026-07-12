@@ -138,11 +138,17 @@ describe('#2133 fast.md log_to_state schema gate', () => {
     assert.ok(appended.includes(TASK_DESC), 'appended row must carry the task description');
   });
 
-  test('column count is derived with NF-2, not NF-1 (the off-by-one root cause)', () => {
+  test('column count awk uses NF-2 (real columns — the off-by-one root cause)', () => {
     // The deployed bash must compute the real column count. A 5-column header
     // split on '|' yields NF=7; the correct real-column formula is NF-2=5.
-    assert.match(bashBlock, /NF-2/, 'column count must use NF-2 (real columns), not NF-1');
-    assert.doesNotMatch(bashBlock, /NF-1/, 'the off-by-one NF-1 formula must be gone');
+    // (NF-1 was the off-by-one bug: it returned 6, making `-eq 5` unsatisfiable.)
+    // Match the executable COL_COUNT assignment specifically — the explanatory
+    // comment may still reference "NF-1" to document the history.
+    assert.match(
+      bashBlock,
+      /COL_COUNT=\$\(.+awk -F'\|' '\{print NF-2\}'\)/,
+      'COL_COUNT must be derived via awk NF-2 (NF-1 was the off-by-one bug)'
+    );
   });
 
   test('unrecognized schema still skips with a warning (safety guard intact)', (t) => {
