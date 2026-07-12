@@ -367,8 +367,11 @@ function formatGsdStateCompact(s) {
     parts.push(s.phaseTotal ? `P${phaseId}/${s.phaseTotal}` : `P${phaseId}`);
   }
 
-  const done = Number(s.percent) === 100 ||
-    (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases);
+  // Scene exclusivity mirrors formatGsdState's if/else chain: an in-flight
+  // phase (Scene 1) always wins over the milestone-complete state (Scene 3),
+  // even if a non-atomic STATE.md edit leaves percent=100 alongside a phase id.
+  const done = !phaseId && (Number(s.percent) === 100 ||
+    (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases));
 
   if (done) {
     parts.push('complete');

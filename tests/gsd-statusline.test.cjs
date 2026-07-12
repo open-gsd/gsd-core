@@ -1374,7 +1374,7 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
   const fs = require('node:fs');
   const os = require('node:os');
   const path = require('node:path');
-  const { cleanup } = require('./helpers.cjs');
+  const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
   const statusline = require('../hooks/gsd-statusline.js');
   const { shortGsdStatus, formatGsdStateCompact, formatGsdState } = statusline;
   const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
@@ -1385,6 +1385,24 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
         VALID_CONFIG_KEYS.has('statusline.state_format'),
         'statusline.state_format must be in VALID_CONFIG_KEYS',
       );
+    });
+    // Direct config-set write-path coverage, mirroring the sibling
+    // context_position tests (the ENUM_KEYS matrix covers only the JSON
+    // coercion-bypass shapes, not the plain-string paths).
+    test('config-set accepts "compact" and rejects an invalid plain string', () => {
+      const tmpDir = createTempProject();
+      try {
+        const ok = runGsdTools(['config-set', 'statusline.state_format', 'compact'], tmpDir);
+        assert.ok(ok.success, ok.error);
+        const bad = runGsdTools(['config-set', 'statusline.state_format', 'tiny'], tmpDir);
+        assert.equal(bad.success, false, 'invalid enum value must be rejected');
+        assert.ok(
+          /statusline\.state_format|Invalid/i.test(bad.error),
+          `stderr must reference key or "Invalid"; got: ${bad.error}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
     });
   });
 
@@ -1451,6 +1469,22 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       assert.equal(
         formatGsdStateCompact({ milestone: 'v2.0', completedPhases: '5', totalPhases: '5' }),
         'v2.0 · complete');
+    });
+    test('scene exclusivity: an in-flight phase wins over milestone-complete', () => {
+      // Non-atomic STATE.md edits can leave active_phase populated alongside
+      // percent=100 — the compact format must mirror formatGsdState's
+      // if/else-chain precedence (Scene 1 beats Scene 3), never render both.
+      const state = {
+        milestone: 'v2.0', activePhase: '4.5', percent: '100', status: 'executing',
+      };
+      assert.equal(formatGsdStateCompact(state), 'v2.0 · P4.5 · executing');
+      const full = formatGsdState(state);
+      assert.ok(!/(complete)/.test(full) || !/4\.5/.test(full),
+        `full format must not co-render phase and complete either; got: ${full}`);
+      // Body phase number (no lifecycle field) gets the same guard.
+      assert.equal(
+        formatGsdStateCompact({ milestone: 'v2.0', phaseNum: '5', phaseTotal: '5', percent: '100', status: 'verifying' }),
+        'v2.0 · P5/5 · verifying');
     });
     test('idle with queued next action renders "next <action> <phases>"', () => {
       const out = formatGsdStateCompact({
