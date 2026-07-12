@@ -297,6 +297,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       version,
       name: milestoneName,
       stats: { phases: phaseCount, plans: totalPlans, tasks: totalTasks },
+      accomplishments,
       would_archive: {
         roadmap: fs.existsSync(roadmapPath)
           ? { source: path.relative(cwd, roadmapPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-ROADMAP.md`)).split(path.sep).join('/') }
@@ -314,7 +315,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         state_md: fs.existsSync(statePath) ? path.relative(cwd, statePath).split(path.sep).join('/') : null,
       },
     };
-    output(dryRunResult, raw, 'dry-run');
+    output(dryRunResult, raw);
     return;
   }
 
