@@ -96,6 +96,18 @@ describe('checkUiPresence', () => {
       'a phase that explicitly declares UI hint: yes must be flagged as UI');
   });
 
+  test('#2150 `**UI hint**: yes` over a pure-backend body still flags UI', () => {
+    const result = checkUiPresence('**UI hint**: yes\n\nBackend API refactor.\n');
+    assert.strictEqual(result.hasUI, true, 'hint:yes is authoritative even with no UI tokens');
+    assert.deepStrictEqual(result.tokens, []);
+  });
+
+  test('#2150 hint value is whole-word matched (nope/not do not mean no)', () => {
+    const result = checkUiPresence('**UI hint**: nope\n\nBuild a dashboard component.\n');
+    assert.strictEqual(result.hasUI, true,
+      'a malformed hint value like "nope" must not be read as "no"; fall through to token-sniffing');
+  });
+
   test('#2150 a hint line without yes/no is stripped (bare UI token does not fire)', () => {
     // A malformed hint (`UI hint: maybe`) must not false-positive on the bare
     // `UI` token in the line itself; other UI tokens elsewhere still detect.

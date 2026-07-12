@@ -81,8 +81,10 @@ export function checkUiPresence(text: string): UiPresenceResult {
   // authoritative declaration of whether the phase has a UI surface — progress.md
   // and new-project.md already parse this line (`UI hint.*yes`). The bare token
   // `UI` in the line itself must not count as a UI indicator, and the declaration
-  // overrides token-sniffing.
-  const hintMatch = normalised.match(/\*\*UI hint\*\*\s*:\s*(yes|no)/i);
+  // overrides token-sniffing. Line-anchored (`m`) so a mid-line prose mention is
+  // not treated as the metadata line; word-boundary on the value so `nope`/`not`
+  // do not match `no`.
+  const hintMatch = normalised.match(/^\s*\*\*UI hint\*\*\s*:\s*(yes|no)\b/im);
   const hint = hintMatch ? hintMatch[1].toLowerCase() : null;
 
   // Strip ANY `**UI hint**:` line before token-sniffing so a hint without a
