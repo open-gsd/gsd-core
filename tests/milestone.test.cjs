@@ -488,6 +488,71 @@ describe('requirements mark-complete command', () => {
 | INFRA-01 | Phase 6 | Pending |
 `;
 
+  // #2140: a traceability table EXISTS but has no row for the ID being completed.
+  // Only the checkbox can reconcile; the table surface is unsynced. The CLI must
+  // not report this as a payload indistinguishable from a full reconcile.
+  const TABLE_WITHOUT_FOO = `# Requirements
+
+## Coverage
+- [ ] **FOO-01**: feature one
+- [ ] **BAR-01**: feature two
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| BAR-01 | Phase 1 | Pending |
+`;
+
+  test('#2140 checkbox-only reconcile surfaces table_unmatched (not silent success)', () => {
+    writeRequirements(tmpDir, TABLE_WITHOUT_FOO);
+
+    const result = runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    assert.ok(result.success);
+
+    const out = JSON.parse(result.output);
+    // The checkbox WAS written, so it is in marked_complete...
+    assert.ok(out.marked_complete.includes('FOO-01'), 'checkbox reconcile is reported');
+    // ...but the traceability table had no FOO-01 row, which must be surfaced.
+    assert.ok(Array.isArray(out.table_unmatched), 'table_unmatched bucket must exist');
+    assert.ok(out.table_unmatched.includes('FOO-01'),
+      'an ID with a checkbox but no table row must be surfaced as table_unmatched');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **FOO-01**'), 'checkbox should be checked');
+    // The table is untouched (no FOO-01 row synthesized).
+    assert.ok(!content.includes('FOO-01 | Phase'), 'no FOO-01 row should be invented');
+  });
+
+  test('#2140 re-run on the half-written file does NOT mask the drift as already_complete', () => {
+    writeRequirements(tmpDir, TABLE_WITHOUT_FOO);
+    // First run: flips the checkbox, surfaces table_unmatched.
+    runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    // Second run on the now-[x]-checkbox-with-no-row file.
+    const result = runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.ok(!out.already_complete.includes('FOO-01'),
+      'a [x] checkbox with no table row is PARTIALLY reconciled, not already_complete');
+    assert.ok(!out.marked_complete.includes('FOO-01'),
+      'nothing flipped on re-run, so not marked_complete');
+    assert.ok(out.table_unmatched.includes('FOO-01'),
+      'the drift must still be surfaced as table_unmatched on re-run');
+  });
+
+  test('#2140 no traceability table at all → still a clean success (no table_unmatched)', () => {
+    // A REQUIREMENTS.md with no traceability table is legitimate; a checkbox-only
+    // reconcile must remain an unqualified success with no table_unmatched entry.
+    writeRequirements(tmpDir, '# Requirements\n\n- [ ] **NO-TABLE-01**: thing\n');
+    const result = runGsdTools('requirements mark-complete NO-TABLE-01', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+    assert.ok(out.marked_complete.includes('NO-TABLE-01'));
+    assert.ok(!out.table_unmatched || !out.table_unmatched.includes('NO-TABLE-01'),
+      'no table_unmatched when there is no traceability table');
+  });
+
   test('marks single requirement complete (checkbox + table)', () => {
     writeRequirements(tmpDir, STANDARD_REQUIREMENTS);
 
