@@ -1190,6 +1190,33 @@ test('config-set rejects invalid statusline.context_position', () => {
     cleanup(tmpDir);
   }
 });
+
+// Same write-path enforcement for the boolean statusline.show_context_tokens
+// key (#2161) — mirrors the workflow.post_planning_gaps precedent the issue's
+// scope names (tests/post-planning-gaps-2493.test.cjs).
+test('config-set statusline.show_context_tokens true → persisted as boolean', () => {
+  const tmpDir = createTempProject();
+  try {
+    const r = runGsdTools(['config-set', 'statusline.show_context_tokens', 'true'], tmpDir);
+    assert.ok(r.success, r.error);
+    const config = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf-8'));
+    assert.strictEqual(config.statusline.show_context_tokens, true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('config-set statusline.show_context_tokens yes → rejected', () => {
+  const tmpDir = createTempProject();
+  try {
+    const r = runGsdTools(['config-set', 'statusline.show_context_tokens', 'yes'], tmpDir);
+    assert.equal(r.success, false, 'non-boolean value must be rejected');
+    assert.match(r.error || r.output, /boolean|true|false/i);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
   });
 }
 

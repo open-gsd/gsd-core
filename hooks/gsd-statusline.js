@@ -571,7 +571,8 @@ module.exports = {
   composeStatusline,
   isInstalledAheadOfLatest,
   evaluateUpdateCache,
-  formatTokens, contextTokenSuffix,
+  formatTokens,
+  contextTokenSuffix,
 };
 
 /**
