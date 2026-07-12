@@ -1,7 +1,7 @@
 {
   "id": "qwen",
   "role": "runtime",
-  "version": "1.7.0-rc.5",
+  "version": "1.7.0-rc.6",
   "title": "Qwen Code",
   "description": "Qwen Code (Alibaba) — nested-skill artifact layout; settings-json hook surface; Claude hook event dialect; tier-2 support.",
   "tier": "core",
@@ -90,7 +90,11 @@
     },
     "hostBehaviors": {
       "skillPriorityFrontmatter": true,
-      "brandingRewrites": { "CLAUDE.md": "QWEN.md", "Claude Code": "Qwen Code", ".claude/": ".qwen/" },
+      "brandingRewrites": {
+        "CLAUDE.md": "QWEN.md",
+        "Claude Code": "Qwen Code",
+        ".claude/": ".qwen/"
+      },
       "legacyCommandsGsdCleanup": true,
       "legacyCommandsGsdInstallMigration": true,
       "legacyCommandsGsdUninstall": true,

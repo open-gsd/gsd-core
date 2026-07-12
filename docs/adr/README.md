@@ -67,6 +67,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [1990-existing-code-onboarding.md](1990-existing-code-onboarding.md) | Existing Code Onboarding Module owns deterministic repo-state detection and onboarding route selection | Proposed |
 | [2121-phase-identifier-parsing-consolidation.md](2121-phase-identifier-parsing-consolidation.md) | Phase-identifier parsing consolidation — single canonical owner (phase-id.cts) + anti-divergence guard | Accepted |
 | [2143-markdown-table-and-mutation-consolidation.md](2143-markdown-table-and-mutation-consolidation.md) | Markdown table model, bounded mutation, and fail-loud consolidation (#1372 part 2) | Accepted |
+| [2164-statusline-scope-boundary.md](2164-statusline-scope-boundary.md) | Statusline draws its data boundary at local, read-only sources (no external/credentialed data) | Accepted |
 
 ## Seam map
 

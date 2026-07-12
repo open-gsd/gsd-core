@@ -26,7 +26,11 @@ const VOLATILE_FILES = new Set([
   '.gsd-source',
   'gsd-core/CHANGELOG.md',
 ]);
-const HOOK_CONFIG_FILES = new Set(['settings.json', 'hooks.json']);
+// Must match tests/golden-install-parity.test.cjs exactly — settings.local.json
+// (Claude LOCAL hook surface, #338/#2086) embeds the same platform-varying
+// node-runner command and is excluded there; omitting it here mis-generated the
+// claude-local fixture (#2100).
+const HOOK_CONFIG_FILES = new Set(['settings.json', 'settings.local.json', 'hooks.json']);
 // Kimi's native config.toml (#2095) — see tests/golden-install-parity.test.cjs'
 // HOOK_CONFIG_RELATIVE_PATHS comment for why this is an exact relative-path
 // exclusion rather than a HOOK_CONFIG_FILES basename entry (a basename entry

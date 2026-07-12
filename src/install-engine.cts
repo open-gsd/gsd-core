@@ -342,9 +342,13 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
     let destName: string;
     if (kind.kind === 'agents') {
       // Agent files already carry the gsd- prefix in the source dir.
-      // #1575: copilot agents get .agent.md suffix (mirrors inline loop line ~9118).
-      destName = runtime === 'copilot'
-        ? entry.name.replace(/\.md$/, '.agent.md')
+      // #2099: descriptor-driven via hostBehaviors.agentFileExtension (was
+      // hardcoded `runtime === 'copilot'`). copilot declares '.agent.md';
+      // every other runtime's descriptor leaves this unset, so destName falls
+      // back to entry.name unchanged (byte-parity, #1575 origin comment).
+      const _agentExt = runtime ? _hostBehaviors(runtime).agentFileExtension : undefined;
+      destName = _agentExt
+        ? entry.name.replace(/\.md$/, _agentExt)
         : entry.name;
     } else if (namespacedByDir) {
       // Directory is the namespace; don't double-prefix the filename
@@ -711,6 +715,19 @@ function installRuntimeArtifacts(
     const nestedGsdDirForCleanup = path.join(configDir, 'skills', 'gsd');
     _removeHermesBareStemDirs(nestedGsdDirForCleanup);
   }
+
+  // Generic-branch nativePlugin staging (ADR-1239 / #2102 Stage 1): runtimes
+  // outside the OpenCode/Kilo combined-family install (e.g. pi, whose
+  // artifactLayout is empty and which never sets combinedFamilyInstall) still
+  // need their declared hostBehaviors.nativePlugin file copied into configDir.
+  // findInstallSourceRoot resolves the repo/package root independent of
+  // configDir contents (marker check, then a walk-up from __dirname), so this
+  // is safe even when configDir has no .gsd-source marker (artifactLayout: []).
+  if (behaviors.nativePlugin) {
+    const commandsGsdDir = runtimeArtifactLayout.findInstallSourceRoot(configDir);
+    const src = path.dirname(path.dirname(commandsGsdDir));
+    _installNativePluginIfDeclared(runtime, configDir, behaviors, src);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -876,6 +893,44 @@ function installOpencodeFamilyCommands(
 }
 
 // ---------------------------------------------------------------------------
+// _installNativePluginIfDeclared
+// ---------------------------------------------------------------------------
+
+/**
+ * Copy a runtime's declared native-extension/plugin file (hostBehaviors.nativePlugin)
+ * into its resolved config dir, when the runtime descriptor declares one.
+ *
+ * Extracted (ADR-1239 / #2102 Stage 1) from the body previously inlined in
+ * installOpencodeFamilyArtifacts so a runtime that is NOT part of the
+ * OpenCode/Kilo combined-family install (e.g. pi, whose artifactLayout is
+ * empty and which never sets combinedFamilyInstall) can still get its
+ * nativePlugin file staged via the generic installRuntimeArtifacts branch.
+ * Behavior for opencode/kilo is unchanged — same source resolution, same
+ * mkdir + copyFileSync call, same silent no-op when the source is missing.
+ *
+ * @param runtime  - canonical runtime id (only used for the assertDestWithinConfigHome guard)
+ * @param configDir - resolved runtime config directory
+ * @param behaviors - the runtime's hostBehaviors descriptor
+ * @param src       - repo/package root (two levels up from the commands/gsd source dir)
+ */
+function _installNativePluginIfDeclared(
+  runtime: string,
+  configDir: string,
+  behaviors: any,
+  src: string,
+): void {
+  const np = behaviors.nativePlugin;
+  if (np && np.source) {
+    const pluginSrc = path.join(src, np.source);
+    if (fs.existsSync(pluginSrc)) {
+      const destDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, np.dir);
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(pluginSrc, path.join(destDir, np.file));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // installOpencodeFamilyArtifacts
 // ---------------------------------------------------------------------------
 
@@ -923,15 +978,7 @@ function installOpencodeFamilyArtifacts(
   installOpencodeFamilyCommands(runtime, commandDir, rawCommandsDir, pathPrefix, resolveAttribution);
   installOpencodeFamilySkills(runtime, configDir, rawCommandsDir, pathPrefix, resolveAttribution);
 
-  const np = behaviors.nativePlugin;
-  if (np && np.source) {
-    const pluginSrc = path.join(src, np.source);
-    if (fs.existsSync(pluginSrc)) {
-      const destDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, np.dir);
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(pluginSrc, path.join(destDir, np.file));
-    }
-  }
+  _installNativePluginIfDeclared(runtime, configDir, behaviors, src);
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,6 +1047,7 @@ export = {
   installOpencodeFamilySkills,
   installOpencodeFamilyCommands,
   installOpencodeFamilyArtifacts,
+  _installNativePluginIfDeclared,
   _hostBehaviors,
   _copyStaged,
   hasExistingSymlinkBetween,

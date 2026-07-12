@@ -43,6 +43,12 @@ const MODULE_OWNED_HOOKS = new Set([
   'gsd-cursor-stop.js',
   'gsd-cursor-subagent-start.js',
   'gsd-cursor-subagent-stop.js',
+  // Windsurf/Cascade blocking hooks — registered by writeWindsurfHooksJson via the
+  // WINDSURF_EVENT_SCRIPT_MAP indirection (src/runtime-hooks-surface.cts), never a
+  // literal buildHookCommand(..., '<hook-name>', ...) call this source-scan matches.
+  // Validated behaviorally by tests/windsurf-hooks-bridge.test.cjs.
+  'gsd-windsurf-pre-write.js',
+  'gsd-windsurf-pre-command.js',
   // gsd-check-update-worker.js is an implementation detail of gsd-check-update.js
   // (spawned internally via child_process.spawn), never itself registered as a
   // hook entry point.

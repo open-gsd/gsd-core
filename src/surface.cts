@@ -521,10 +521,14 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
   const kindName = (typeof kind === 'string') ? kind : kind.kind;
   const kindPrefix = (typeof kind === 'object' && kind !== null) ? kind.prefix : 'gsd-';
 
-  // #1575: copilot agents are renamed .md -> .agent.md at copy time, mirroring
-  // the inline agent loop in bin/install.js (line ~9118). Other runtimes keep
-  // the staged filename verbatim.
-  const isCopilotAgents = runtime === 'copilot' && kindName === 'agents';
+  // #1575 / #2103: agent files are renamed .md -> <agentFileExtension> at copy
+  // time when the runtime's descriptor declares hostBehaviors.agentFileExtension
+  // (e.g. copilot's '.agent.md'), mirroring install-engine.cts's staged-copy
+  // loop (`_copyStaged`) — ONE descriptor read shared by both surfaces instead
+  // of a duplicated hardcoded `runtime === 'copilot'` literal. Other runtimes
+  // (no agentFileExtension declared) keep the staged filename verbatim.
+  const _agentExt = runtime ? runtimeArtifactConversion.agentFileExtensionFor(runtime) : undefined;
+  const isRenamedAgents = !!_agentExt && kindName === 'agents';
 
   if (kindName === 'skills') {
     // Skills kind: work with directories, not files.
@@ -564,8 +568,8 @@ function _syncGsdDir(stagedDir: string, destDir: string, kind: ArtifactKind | st
     const stagedFiles = fs.readdirSync(stagedDir).filter(f => f.endsWith('.md'));
     const stagedDestNames = new Set<string>();
     for (const file of stagedFiles) {
-      const destName = isCopilotAgents
-        ? file.replace(/\.md$/, '.agent.md')
+      const destName = isRenamedAgents
+        ? file.replace(/\.md$/, _agentExt)
         : (kindName === 'agents' || namespacedByDir)
           ? file
           : `${kindPrefix}${file.slice(0, -3)}.md`;

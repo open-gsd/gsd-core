@@ -1010,3 +1010,4 @@ To disable parallel execution entirely: `/gsd-settings` → set `parallelization
 - [Commands](COMMANDS.md)
 - [Configuration](CONFIGURATION.md)
 - [The phase loop](explanation/the-phase-loop.md)
+- [Community Capability Registry & EoS Registry](registries/README.md) — discover third-party Capabilities and EoS host integrations

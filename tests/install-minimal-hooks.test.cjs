@@ -674,12 +674,14 @@ describe('#1755: .sh hooks are copied and executable after install', () => {
 // ─── #1821: Kilo/ZCode (hooksSurface:none, no plugin) receive no dead hooks ────
 //
 // #1821 reported dead hook scripts staged for runtimes with hooksSurface:'none'.
-// OpenCode ALSO declares hooksSurface:'none', but its #1914 native plugin adapter
-// (plugins/gsd-core.js) spawns the staged hooks/*.js via OpenCode's event bus —
-// so for OpenCode the hooks are LIVE and must keep being copied. Kilo and ZCode
-// have no plugin surface, so their staged hooks are genuinely dead: this is the
-// case the fix removes. These tests assert the split: Kilo/ZCode get no hooks;
-// OpenCode (and Claude) still do.
+// OpenCode and pi ALSO declare hooksSurface:'none', but each has a native plugin
+// adapter that spawns the staged hooks/*.js scripts as subprocesses (OpenCode's
+// #1914 plugins/gsd-core.js via OpenCode's event bus; pi's #2102 Stage 2
+// pi/gsd.cjs → extensions/gsd.cjs via pi.on(...) bridges) — so for both, the
+// hooks are LIVE and must keep being copied. Kilo and ZCode have no plugin
+// surface at all, so their staged hooks are genuinely dead: this is the case
+// the fix removes. These tests assert the split: Kilo/ZCode get no hooks;
+// OpenCode/pi (and Claude) still do.
 
 describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep their hooks', () => {
   function gsdHookFilesUnder(configDir) {
@@ -691,7 +693,7 @@ describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep the
     });
   }
 
-  function installAndCollect(runtime) {
+  function installAndCollect(runtime, opts = {}) {
     const targetDir = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-1821-${runtime}-`));
     try {
       const result = spawnSync(
@@ -702,10 +704,12 @@ describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep the
       assert.strictEqual(result.status, 0,
         `installer exited with status ${result.status} for --${runtime} --global\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       // Collect results while targetDir still exists — cleanup() below removes it.
+      const pluginRelPath = opts.pluginRelPath || path.join('plugins', 'gsd-core.js');
       return {
         hookFiles: gsdHookFilesUnder(targetDir),
         hooksLibExists: fs.existsSync(path.join(targetDir, 'hooks', 'lib')),
-        pluginExists: fs.existsSync(path.join(targetDir, 'plugins', 'gsd-core.js')),
+        gitCmdExists: fs.existsSync(path.join(targetDir, 'hooks', 'lib', 'git-cmd.js')),
+        pluginExists: fs.existsSync(path.join(targetDir, pluginRelPath)),
       };
     } finally {
       cleanup(targetDir);
@@ -713,7 +717,8 @@ describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep the
   }
 
   // Kilo and ZCode both declare hooksSurface:'none' with no plugin surface, so
-  // their staged hooks are dead weight (#1821).
+  // their staged hooks are genuinely dead weight (#1821) — this is the case
+  // the fix removes.
   for (const runtime of ['kilo', 'zcode']) {
     test(`${runtime} --global install creates no gsd-*.js/.sh hook files or hooks/lib`, () => {
       const { hookFiles, hooksLibExists } = installAndCollect(runtime);
@@ -733,6 +738,31 @@ describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep the
       `opencode install must still copy gsd-*.js hooks (spawned by the #1914 plugin), found: ${basenames.join(', ')}`,
     );
     assert.ok(pluginExists, 'opencode install must install plugins/gsd-core.js (#1914 hook bridge)');
+  });
+
+  // pi ALSO declares hooksSurface:'none', but — like OpenCode — it is NOT a
+  // dead-weight case: pi's native extension (pi/gsd.cjs → extensions/gsd.cjs)
+  // spawns the staged hooks/*.js scripts as bounded subprocesses (session_start
+  // → gsd-ensure-canonical-path.js, before_agent_start → gsd-workflow-guard.js,
+  // session_before_compact → gsd-context-monitor.js — #2102 Stage 2), and its
+  // /gsd command handler tokenizes raw args via the shared hooks/lib/git-cmd.js
+  // tokenizer. hostBehaviors.skipSharedHooksInstall is therefore NOT set for
+  // pi (unlike Kilo/ZCode/Cursor/Cline/Trae/Copilot/Windsurf/Kimi) — pi is in
+  // the OpenCode group, not the Kilo/ZCode group.
+  test('pi --global install still copies hooks (spawned by the native extension) + hooks/lib/git-cmd.js + the extension itself', () => {
+    const { hookFiles, hooksLibExists, gitCmdExists, pluginExists } = installAndCollect('pi', {
+      pluginRelPath: path.join('extensions', 'gsd.cjs'),
+    });
+    const basenames = hookFiles.map((f) => path.basename(f));
+    for (const expected of ['gsd-ensure-canonical-path.js', 'gsd-workflow-guard.js', 'gsd-context-monitor.js']) {
+      assert.ok(
+        basenames.includes(expected),
+        `pi install must copy ${expected} (spawned by pi/gsd.cjs's event bridges), found: ${basenames.join(', ')}`,
+      );
+    }
+    assert.ok(hooksLibExists, 'pi install must create hooks/lib/');
+    assert.ok(gitCmdExists, 'pi install must copy hooks/lib/git-cmd.js (the /gsd command tokenizer)');
+    assert.ok(pluginExists, 'pi install must install extensions/gsd.cjs (the native-extension hook bridge)');
   });
 
   // Positive control: guards against over-exclusion breaking runtimes that

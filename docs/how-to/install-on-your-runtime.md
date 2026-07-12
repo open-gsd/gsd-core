@@ -457,6 +457,22 @@ npx @opengsd/gsd-core@latest --zcode --global
 
 ZCode's skill format is identical to Claude Code's, so no runtime-specific converter is required — GSD lands as a pure declarative descriptor with no hardcoded installer branches. ZCode also natively imports skills and MCP config from `~/.claude`; if you install GSD for **both** Claude and ZCode, you may see duplicate GSD skills inside ZCode, which is expected. To connect ZCode's MCP servers to GSD's companion server, see [how to connect the GSD MCP server](connect-gsd-mcp-server.md).
 
+GSD's hook-automation and native-MCP-registration integrations are not yet wired for ZCode — both are blocked on ZCode not yet publishing the on-disk config format for its plugin `Hook` component or the settings filename/schema for its MCP store. See the [`## zcode`](host-integration-capability-matrix.md#zcode) section of the host-integration capability matrix for the cited source URLs.
+
+---
+
+### pi
+
+```bash
+npx @opengsd/gsd-core@latest --pi --global
+```
+
+[pi](https://pi.dev) is a bun-runtime programmatic CLI whose extensions implement pi's own `ExtensionAPI` (`registerCommand`/`registerTool`/`registerProvider`/`pi.on`) rather than a settings-file or slash-markdown surface. GSD ships a single native-extension file:
+
+- **Extension** → `~/.pi/agent/extensions/gsd.cjs` (global) or `.pi/extensions/gsd.cjs` (local)
+
+The extension registers a `/gsd` command and a `gsd_invoke` tool that dispatch GSD commands via a bounded subprocess call to `gsd-core/bin/gsd-tools.cjs` (no fully-populated in-process command-routing hub exists — see the matrix's Stage 2 note). This is a **plugin-only install**: pi has no shared-settings hook surface (`hooksSurface: none`) and, unlike Claude/OpenCode/Kilo, no host-read markdown surface at all — pi's `/gsd` command is registered programmatically by the extension, not discovered from files, so GSD installs the extension plus its universal `gsd-core/` engine payload and the shared `hooks/`/`hooks/lib/` bundle (spawned by the extension itself, not by any config-file hook bus), and does **not** write any `commands/`, `agents/`, or `skills/` directory for pi. The extension bridges GSD's `session_start`/`before_agent_start`/`session_before_compact`/`tool_call` lifecycle events to those staged `hooks/` scripts as bounded, fail-open subprocesses, and steers pi's active model (`modelMode: active`) to a tier-resolved bare anthropic id via `pi.on('before_provider_request', ...)`. See the [`## pi`](host-integration-capability-matrix.md#pi) section of the host-integration capability matrix for the negotiated axes and citations.
+
 ---
 
 ## Local vs global install

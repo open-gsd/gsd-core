@@ -2084,6 +2084,30 @@ describe('Bug #3181: normalizeNodePath — Apple Silicon Homebrew Cellar paths �
   });
 });
 
+// #2185: Linuxbrew + any custom HOMEBREW_PREFIX — the Cellar prefix is derived
+// from the path itself, so one branch covers every Homebrew layout.
+describe('Bug #2185: normalizeNodePath — Linuxbrew + custom-prefix Cellar paths → <prefix>/bin/node', () => {
+  test('Linuxbrew Cellar path maps to the stable linuxbrew symlink', () => {
+    const result = normalizeNodePath('/home/linuxbrew/.linuxbrew/Cellar/node/26.0.0/bin/node');
+    assert.equal(result, '/home/linuxbrew/.linuxbrew/bin/node');
+  });
+
+  test('Linuxbrew Cellar path after a version bump (26.5.0) maps to stable symlink', () => {
+    const result = normalizeNodePath('/home/linuxbrew/.linuxbrew/Cellar/node/26.5.0/bin/node');
+    assert.equal(result, '/home/linuxbrew/.linuxbrew/bin/node');
+  });
+
+  test('Linuxbrew versioned formula Cellar path (node@22) maps to stable symlink', () => {
+    const result = normalizeNodePath('/home/linuxbrew/.linuxbrew/Cellar/node@22/22.11.0/bin/node');
+    assert.equal(result, '/home/linuxbrew/.linuxbrew/bin/node');
+  });
+
+  test('custom HOMEBREW_PREFIX Cellar path maps to its stable symlink', () => {
+    const result = normalizeNodePath('/custom/brew/Cellar/node/25.8.1/bin/node');
+    assert.equal(result, '/custom/brew/bin/node');
+  });
+});
+
 describe('Bug #3181: normalizeNodePath — non-Homebrew paths are returned unchanged', () => {
   test('NVM path is unchanged', () => {
     const nvm = '/Users/dev/.nvm/versions/node/v20.11.0/bin/node';
@@ -6072,6 +6096,30 @@ describe('Bug #3181: normalizeNodePath — Apple Silicon Homebrew Cellar paths �
   test('Apple Silicon versioned formula Cellar path (node@18) maps to stable symlink', () => {
     const result = normalizeNodePath('/opt/homebrew/Cellar/node@18/18.20.4/bin/node');
     assert.equal(result, '/opt/homebrew/bin/node');
+  });
+});
+
+// #2185: Linuxbrew + any custom HOMEBREW_PREFIX — the Cellar prefix is derived
+// from the path itself, so one branch covers every Homebrew layout.
+describe('Bug #2185: normalizeNodePath — Linuxbrew + custom-prefix Cellar paths → <prefix>/bin/node', () => {
+  test('Linuxbrew Cellar path maps to the stable linuxbrew symlink', () => {
+    const result = normalizeNodePath('/home/linuxbrew/.linuxbrew/Cellar/node/26.0.0/bin/node');
+    assert.equal(result, '/home/linuxbrew/.linuxbrew/bin/node');
+  });
+
+  test('Linuxbrew Cellar path after a version bump (26.5.0) maps to stable symlink', () => {
+    const result = normalizeNodePath('/home/linuxbrew/.linuxbrew/Cellar/node/26.5.0/bin/node');
+    assert.equal(result, '/home/linuxbrew/.linuxbrew/bin/node');
+  });
+
+  test('Linuxbrew versioned formula Cellar path (node@22) maps to stable symlink', () => {
+    const result = normalizeNodePath('/home/linuxbrew/.linuxbrew/Cellar/node@22/22.11.0/bin/node');
+    assert.equal(result, '/home/linuxbrew/.linuxbrew/bin/node');
+  });
+
+  test('custom HOMEBREW_PREFIX Cellar path maps to its stable symlink', () => {
+    const result = normalizeNodePath('/custom/brew/Cellar/node/25.8.1/bin/node');
+    assert.equal(result, '/custom/brew/bin/node');
   });
 });
 

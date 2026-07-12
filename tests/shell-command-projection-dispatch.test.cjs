@@ -14,6 +14,8 @@ const {
   platformWriteSync,
   platformReadSync,
   platformEnsureDir,
+  dispatchGsdCommand,
+  resolveGsdToolsPath,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
@@ -96,6 +98,78 @@ describe('execTool', () => {
     assert.strictEqual(result.exitCode, 127);
     assert.strictEqual(result.stdout, '');
     assert.strictEqual(typeof result.stderr, 'string');
+  });
+});
+
+// ─── dispatchGsdCommand (#2102 Stage 2 — subprocess-shim dispatch to gsd-tools.cjs) ──
+//
+// The command-routing hub (`createHub()`) has no fully-populated factory
+// anywhere in the tree — every caller builds a single-family hub — so the
+// only dispatch path covering the FULL family/subcommand surface is the
+// gsd-tools.cjs CLI itself. This is the shared helper pi/gsd.cjs and the
+// companion MCP server both dispatch through.
+
+describe('dispatchGsdCommand', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempDir(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('resolveGsdToolsPath resolves to the real gsd-tools.cjs on disk', () => {
+    const toolsPath = resolveGsdToolsPath();
+    assert.ok(fs.existsSync(toolsPath), `expected gsd-tools.cjs to exist at ${toolsPath}`);
+    assert.equal(path.basename(toolsPath), 'gsd-tools.cjs');
+  });
+
+  test('a valid read-only family/subcommand dispatches for real and returns ok:true + non-empty stdout', () => {
+    const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir });
+    assert.equal(result.ok, true, `expected ok:true, got: ${JSON.stringify(result)}`);
+    assert.equal(typeof result.stdout, 'string');
+    assert.ok(result.stdout.length > 0, 'stdout must be non-empty');
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(typeof parsed.percent, 'number', 'the real progress command ran (proves the engine was reached)');
+    assert.equal(result.code, 0);
+    assert.equal(result.timedOut, false);
+  });
+
+  test('an unknown family returns ok:false without throwing', () => {
+    assert.doesNotThrow(() => {
+      const result = dispatchGsdCommand({ family: 'no-such-family-8675309', cwd: tmpDir });
+      assert.equal(result.ok, false);
+      assert.notEqual(result.code, 0);
+      assert.equal(typeof result.stderr, 'string');
+      assert.ok(result.stderr.length > 0);
+      // --json-errors gives a structured, parseable error envelope.
+      const parsedErr = JSON.parse(result.stderr);
+      assert.equal(parsedErr.ok, false);
+    });
+  });
+
+  test('a missing/bogus gsd-tools.cjs path degrades to ok:false without throwing', () => {
+    assert.doesNotThrow(() => {
+      const result = dispatchGsdCommand({
+        family: 'progress',
+        cwd: tmpDir,
+        gsdToolsPath: path.join(tmpDir, 'definitely-not-a-real-gsd-tools-8675309.cjs'),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.timedOut, false);
+    });
+  });
+
+  test('a missing/empty "family" is rejected locally without spawning a subprocess', () => {
+    const result = dispatchGsdCommand({ cwd: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, null);
+    assert.match(result.stderr, /requires a non-empty string "family"/);
+  });
+
+  test('a wall-clock timeout is reported via timedOut:true, ok:false — never throws', () => {
+    assert.doesNotThrow(() => {
+      const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir, timeout: 1 });
+      assert.equal(result.ok, false);
+      assert.equal(result.timedOut, true);
+    });
   });
 });
 

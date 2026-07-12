@@ -584,7 +584,21 @@ const EXTENSION_EVENT_SURFACES: Readonly<Record<string, readonly string[]>> = Ob
     'pre_gateway_dispatch', 'pre_approval_request',
     'transform_tool_result',
   ]),
-  pi: Object.freeze(['tool_call']),
+  // #2102 Stage 2 — pi's real ExtensionAPI event vocabulary (~30 fine-grained
+  // extension events; documentation-sourced, ADR-1239 §research). Replaces the
+  // placeholder single-event ['tool_call'] surface — the Stage 1 value only
+  // covered the one event pi/gsd.cjs happened to bind at the time, not the
+  // full declared surface.
+  pi: Object.freeze([
+    'session_start', 'project_trust', 'resources_discover', 'input',
+    'before_agent_start', 'agent_start', 'message_start', 'message_update',
+    'message_end', 'turn_start', 'context', 'before_provider_request',
+    'after_provider_response', 'tool_execution_start', 'tool_execution_update',
+    'tool_execution_end', 'tool_call', 'tool_result', 'turn_end', 'agent_end',
+    'session_before_switch', 'session_shutdown', 'session_before_fork',
+    'session_info_changed', 'session_before_compact', 'session_compact',
+    'session_before_tree', 'session_tree', 'thinking_level_select', 'model_select',
+  ]),
   none: Object.freeze([]),
 });
 

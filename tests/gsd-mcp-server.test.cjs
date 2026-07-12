@@ -54,6 +54,36 @@ test('tools/call gsd_invoke_command: dispatches to the command hub (point 1); un
   assert.strictEqual(res.jsonrpc, '2.0');
   const payload = JSON.parse(res.result.content[0].text);
   assert.strictEqual(payload.ok, false, 'an unknown command dispatches to the hub and returns ok:false');
+  assert.strictEqual(res.result.isError, true, 'unknown family surfaces as isError:true (#2102)');
+});
+
+// REGRESSION #2102: gsd_invoke_command previously called
+// `commandRoutingHub.createHub()` with NO arguments, which always hits
+// `if (!_cjsRegistry) return makeUnknownCommand()` — every dispatch, valid
+// family or not, returned UnknownCommand. The test above (family:
+// 'no-such-family') could not catch this: an UnknownCommand result is
+// EXACTLY what an unknown family is supposed to return, whether or not
+// dispatch actually worked — it is vacuous by construction. This test proves
+// the fix: a VALID read-only family/subcommand must reach gsd-tools.cjs for
+// real and come back with actual data (not a crash, not UnknownCommand).
+test('tools/call gsd_invoke_command: REGRESSION #2102 — a valid read-only family dispatches for real (not the createHub()-with-no-args UnknownCommand bug)', () => {
+  const dir = createTempDir();
+  try {
+    const res = handleMessage(
+      { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'gsd_invoke_command', arguments: { family: 'progress', subcommand: 'json' } } },
+      { cwd: dir },
+    );
+    assert.strictEqual(res.jsonrpc, '2.0');
+    assert.notStrictEqual(res.result.isError, true, 'a valid family must not surface as an error');
+    const text = res.result.content[0].text;
+    const parsed = JSON.parse(text);
+    // Fail-first proof: under the bug, this would be
+    // { ok: false, kind: 'UnknownCommand', command: 'progress json' } instead
+    // of the real progress payload — `percent` would not exist.
+    assert.strictEqual(typeof parsed.percent, 'number', 'the real "progress json" command ran (the engine was reached)');
+  } finally {
+    cleanup(dir);
+  }
 });
 
 test('tools/call: unknown tool name surfaces a tool error (isError), not a JSON-RPC protocol error', () => {
