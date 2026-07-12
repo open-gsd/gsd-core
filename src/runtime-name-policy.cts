@@ -210,6 +210,7 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
   zcode: 'ZCode',
+  pi: 'pi',
 };
 
 /**
@@ -258,6 +259,12 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
   zcode:     "'.zcode'",
+  // pi's global config home is ~/.pi/agent (configHome: dot-home-nested,
+  // parent '.pi', name 'agent' — capabilities/pi/capability.json), matching
+  // resolveConfigHomeFromDescriptor's `path.join(home, parent, name)` for the
+  // no-probe dot-home-nested case (src/runtime-homes.cts). Two-segment
+  // path.join args, same shape as opencode/kilo/kimi above.
+  pi:        "'.pi', 'agent'",
 };
 
 /**
@@ -286,7 +293,7 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
 // folds the shared-hooks-install skip).
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'zcode',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'zcode', 'pi',
 ] as const);
 
 /**

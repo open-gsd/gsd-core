@@ -38,7 +38,7 @@ const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'sub
 const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
-// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, qwen, trae (9)
+// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, pi, qwen, trae (10)
 // declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
 // ide: 0
 const EXPECTED_PROFILES = {
@@ -49,6 +49,7 @@ const EXPECTED_PROFILES = {
   kilo:        'programmatic-cli',
   kimi:        'programmatic-cli',
   opencode:    'programmatic-cli',
+  pi:          'programmatic-cli',
   qwen:        'programmatic-cli',
   trae:        'programmatic-cli',
   antigravity: 'declarative-cli',
@@ -283,6 +284,9 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
     // dispatch.background/backgroundDispatch true → NOT force-flattened.
     opencode:    false,
+    // #2102: pi's dispatch.background/backgroundDispatch are both false
+    // (undocumented background-subagent primitive) → force-flattened.
+    pi:          true,
     qwen:        true,
     trae:        true,
     windsurf:    true,

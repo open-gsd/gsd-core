@@ -507,6 +507,7 @@ const {
   installRuntimeArtifacts,
   uninstallRuntimeArtifacts,
   installOpencodeFamilySkills,
+  _installNativePluginIfDeclared,
   _copyStaged,
   hasExistingSymlinkBetween,
   preserveUserArtifacts,
@@ -556,7 +557,7 @@ if (hasMinimal && _profileArgRaw) {
 
 function selectRuntimesFromArgs(runtimeArgs) {
   if (runtimeArgs.includes('--all')) {
-    return ['claude', 'kimi', 'kilo', 'opencode', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'zcode'];
+    return ['claude', 'kimi', 'kilo', 'opencode', 'pi', 'codex', 'copilot', 'antigravity', 'cursor', 'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'zcode'];
   }
   if (runtimeArgs.includes('--both')) {
     return ['claude', 'opencode'];
@@ -565,6 +566,7 @@ function selectRuntimesFromArgs(runtimeArgs) {
   const selected = [];
   if (runtimeArgs.includes('--claude')) selected.push('claude');
   if (runtimeArgs.includes('--opencode')) selected.push('opencode');
+  if (runtimeArgs.includes('--pi')) selected.push('pi');
   if (runtimeArgs.includes('--kilo')) selected.push('kilo');
   if (runtimeArgs.includes('--codex')) selected.push('codex');
   if (runtimeArgs.includes('--copilot')) selected.push('copilot');
@@ -710,7 +712,7 @@ const banner = '\n' +
   '  GSD Core ' + dim + 'v' + pkg.version + reset + '\n' +
   '  Git. Ship. Done.\n' +
   '  A meta-prompting, context engineering and spec-driven\n' +
-  '  development workflows for Claude Code, OpenCode, Kimi CLI, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline, CodeBuddy and ZCode.\n';
+  '  development workflows for Claude Code, OpenCode, Kimi CLI, Kilo, Codex, Copilot, Antigravity, Cursor, Windsurf, Augment, Trae, Qwen Code, Hermes Agent, Cline, CodeBuddy, ZCode and pi.\n';
 
 // Pure seam: parse --config-dir / -c from an arbitrary args array.
 // Returns the path string, '' for an empty equals-form value, or null when the
@@ -9494,6 +9496,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // Descriptor-driven (ADR-1239 / #2090): folded from `isCline` into
     // hostBehaviors.localCommandsViaRules.
     console.log(`  ${green}✓${reset} Cline: commands will be available via .clinerules`);
+  } else if (_hostBehaviors(runtime).pluginOnlyInstall) {
+    // pi (ADR-1239 / #2102 Stage 1): plugin-only install — pi's /gsd command is
+    // registered programmatically by the native extension (pi/gsd.cjs →
+    // extensions/gsd.cjs, staged separately below) and dispatches in-process
+    // through the embedded gsd-core command-routing hub. pi has no host-read
+    // markdown surface (unlike Claude/OpenCode/etc., which scan commands/ or
+    // command/ directories), so writing flat gsd-<cmd>.md files here would be
+    // dead weight the extension never reads. Skip the flat-commands fallback
+    // entirely for pluginOnlyInstall runtimes.
+    console.log(`  ${green}✓${reset} pi: /gsd registered via native extension (no declarative command files)`);
   } else {
     // Claude Code local: flat gsd-<cmd>.md layout — Claude Code registers
     // commands from .claude/commands/ using the filename stem as the command
@@ -9562,6 +9574,18 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         console.log(`  ${green}✓${reset} Removed ${staleGsd.length} stale GSD skill(s) from skills/`);
       }
     }
+  }
+
+  // Native-extension/plugin staging for runtimes OUTSIDE the layout-driven
+  // _isSkillsRuntime branch above (ADR-1239 / #2102 Stage 1: pi). OpenCode/Kilo
+  // already get their nativePlugin file from installOpencodeFamilyArtifacts
+  // (called inside the _isSkillsRuntime branch, since both declare a non-empty
+  // artifactLayout) — guard on `!_isSkillsRuntime` so this standalone call never
+  // double-stages their plugin file. A runtime like pi, whose artifactLayout is
+  // intentionally empty for both scopes (`_isSkillsRuntime` is false), still
+  // needs its declared hostBehaviors.nativePlugin file copied into targetDir.
+  if (!_isSkillsRuntime && _hostBehaviors(runtime).nativePlugin) {
+    _installNativePluginIfDeclared(runtime, targetDir, _hostBehaviors(runtime), src);
   }
 
   // Copy gsd-core skill with path replacement
@@ -9689,8 +9713,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // `--minimal` actually shrinks a previously-full install.
   // For Codex this also covers per-agent `.toml` files alongside the `.md`
   // sources so a full → minimal switch doesn't leave stale registrations.
-  // Skipped for descriptor-agent runtimes (installRuntimeArtifacts prunes).
-  if (!_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime) && fs.existsSync(agentsDest)) {
+  // Skipped for descriptor-agent runtimes (installRuntimeArtifacts prunes) and
+  // for pluginOnlyInstall runtimes (pi, ADR-1239 / #2102 Stage 1 — no agents/
+  // dir is ever written for them, see the leading branch below).
+  if (!_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime) && !_hostBehaviors(runtime).pluginOnlyInstall && fs.existsSync(agentsDest)) {
     for (const file of fs.readdirSync(agentsDest)) {
       if (
         file.startsWith('gsd-') &&
@@ -9701,7 +9727,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
   }
 
-  if (_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime)) {
+  if (_hostBehaviors(runtime).pluginOnlyInstall) {
+    // pi (ADR-1239 / #2102 Stage 1): programmatic dispatch has no named-dispatch
+    // subagent toolkit (dispatch.subagentToolkit: "undocumented", no Agent-tool
+    // equivalent) and no host-read markdown surface — skip writing agents/ entirely.
+    console.log(`  ${green}✓${reset} pi: no subagent files (programmatic dispatch, no named-dispatch toolkit)`);
+  } else if (_DESCRIPTOR_AGENTS_RUNTIMES.has(runtime)) {
     // installRuntimeArtifacts already wrote agents + handles stale-file cleanup
     // via its own prune pass. No further action needed.
     console.log(`  ${dim}↳${reset} Agents installed via descriptor-driven layout (${runtime})`);
@@ -11301,13 +11332,14 @@ const runtimeMap = {
   '10': 'kimi',
   '11': 'kilo',
   '12': 'opencode',
-  '13': 'qwen',
-  '14': 'trae',
-  '15': 'windsurf',
-  '16': 'zcode'
+  '13': 'pi',
+  '14': 'qwen',
+  '15': 'trae',
+  '16': 'windsurf',
+  '17': 'zcode'
 };
-const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kilo', 'opencode', 'qwen', 'trae', 'windsurf', 'zcode'];
-const ALL_RUNTIMES_OPTION = '17';
+const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kilo', 'opencode', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
+const ALL_RUNTIMES_OPTION = '18';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.
@@ -11327,11 +11359,12 @@ function buildRuntimePromptText() {
   ${cyan}10${reset}) Kimi         ${dim}(~/.config/agents, then ~/.agents if existing)${reset}
   ${cyan}11${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
   ${cyan}12${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
-  ${cyan}13${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
-  ${cyan}14${reset}) Trae         ${dim}(~/.trae)${reset}
-  ${cyan}15${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
-  ${cyan}16${reset}) ZCode        ${dim}(~/.zcode)${reset}
-  ${cyan}17${reset}) All
+  ${cyan}13${reset}) pi           ${dim}(~/.pi/agent)${reset}
+  ${cyan}14${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
+  ${cyan}15${reset}) Trae         ${dim}(~/.trae)${reset}
+  ${cyan}16${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
+  ${cyan}17${reset}) ZCode        ${dim}(~/.zcode)${reset}
+  ${cyan}18${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;

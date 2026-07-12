@@ -2079,6 +2079,66 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "pi": {
+    "id": "pi",
+    "role": "runtime",
+    "version": "1.7.0-rc.5",
+    "title": "pi",
+    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.cjs; no shared-settings hook surface; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "agent",
+        "parent": ".pi",
+        "env": []
+      },
+      "localConfigDir": ".pi",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "extensionEvents": "pi",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-programmatic",
+        "dispatch": {
+          "namedDispatch": false,
+          "nested": false,
+          "maxDepth": 0,
+          "background": false,
+          "backgroundDispatch": false,
+          "subagentToolkit": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "session-log-append",
+        "transport": "native-extension",
+        "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "nativePlugin": {
+          "dir": "extensions",
+          "file": "gsd.cjs",
+          "source": "pi/gsd.cjs"
+        },
+        "pluginOnlyInstall": true
+      }
+    }
+  },
   "profile-pipeline": {
     "id": "profile-pipeline",
     "role": "feature",
@@ -4975,6 +5035,66 @@ const runtimes = {
       }
     }
   },
+  "pi": {
+    "id": "pi",
+    "role": "runtime",
+    "version": "1.7.0-rc.5",
+    "title": "pi",
+    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.cjs; no shared-settings hook surface; tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "agent",
+        "parent": ".pi",
+        "env": []
+      },
+      "localConfigDir": ".pi",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "extensionEvents": "pi",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-programmatic",
+        "dispatch": {
+          "namedDispatch": false,
+          "nested": false,
+          "maxDepth": 0,
+          "background": false,
+          "backgroundDispatch": false,
+          "subagentToolkit": "undocumented"
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "session-log-append",
+        "transport": "native-extension",
+        "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "nativePlugin": {
+          "dir": "extensions",
+          "file": "gsd.cjs",
+          "source": "pi/gsd.cjs"
+        },
+        "pluginOnlyInstall": true
+      }
+    }
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -5538,6 +5658,7 @@ const _requiresGraph = {
   "pattern-mapper": [
     "research"
   ],
+  "pi": [],
   "profile-pipeline": [],
   "qwen": [],
   "research": [],

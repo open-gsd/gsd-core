@@ -47,6 +47,7 @@ const GOLDEN_FRAGMENT_MAP = {
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
   zcode:     "'.zcode'",
+  pi:        "'.pi', 'agent'",
 };
 
 // Runtimes intentionally NOT in the table: claude is the default; antigravity is

@@ -518,6 +518,143 @@ export function execTool(program: string, args: string[], opts: { cwd?: string; 
   return _spawnResult(result, program);
 }
 
+/**
+ * Result shape for {@link dispatchGsdCommand}. Modeled on the existing
+ * `{exitCode,stdout,stderr,signal,error}` seam above, but flattened to the
+ * fields callers actually need (never leaks a raw Error/signal — see
+ * `timedOut`), per the "Unbounded Subprocesses" contract (CLAUDE.md):
+ * degrade to a structured result on timeout/ENOENT, never throw.
+ */
+export interface DispatchGsdCommandResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  timedOut: boolean;
+}
+
+/**
+ * Resolve the absolute path to gsd-tools.cjs relative to THIS module.
+ *
+ * This file compiles to gsd-core/bin/lib/shell-command-projection.cjs — a
+ * sibling of gsd-core/bin/gsd-tools.cjs — so the relative walk-up is stable
+ * regardless of install location (global/local/dev-repo layouts all ship
+ * gsd-core/bin/ as a unit).
+ */
+export function resolveGsdToolsPath(): string {
+  return path.resolve(__dirname, '..', 'gsd-tools.cjs');
+}
+
+/**
+ * Subprocess-shim dispatch to gsd-tools.cjs (ADR-1239 #2102 Stage 2).
+ *
+ * No fully-populated in-process command-routing hub exists anywhere in the
+ * tree — every `createHub()` caller (cjs-command-router-adapter.cts,
+ * phase-command-router.cts, command-routing-hub.cts's own tests) builds a
+ * single-family hub for its own narrow purpose. The ONLY dispatch path that
+ * covers the FULL family/subcommand surface is the gsd-tools.cjs CLI itself.
+ * This mirrors the SUBPROCESS-REUSE precedent already established for the
+ * OpenCode/Kilo hook bridge (see .opencode/plugins/gsd-core.js header:
+ * "Architecture: SUBPROCESS REUSE ... spawns existing hook scripts as child
+ * processes") — the same pattern, applied to command dispatch instead of
+ * hook dispatch.
+ *
+ * Output-flag choice (verified by direct invocation — see #2102 dispatch
+ * notes for the sample invocations): always pass `--raw` (undecorated,
+ * programmatically-consumable stdout on success) and `--json-errors` (a
+ * structured `{ok:false,reason,message}` JSON object on stderr, with a
+ * non-zero exit, instead of a free-text "Error: ..." line). Both are global
+ * flags accepted by every gsd-tools.cjs family/subcommand, so passing them
+ * unconditionally is safe for the full command surface.
+ *
+ * `family` maps 1:1 onto gsd-tools.cjs's first positional argv token;
+ * `subcommand` (when present) onto the second — e.g.
+ * `{family:'phase', subcommand:'add'}` → `gsd-tools.cjs phase add`. An empty
+ * `subcommand` is omitted entirely (some families, e.g. `config-path`, take
+ * no subcommand).
+ *
+ * NEVER throws. Degrades to `{ ok:false, ... }` on:
+ *   - a missing/invalid "family" (validated locally, no subprocess spawned)
+ *   - ENOENT / a missing gsd-tools.cjs (via the injectable `gsdToolsPath`)
+ *   - a wall-clock timeout (`timedOut:true`, mirroring the
+ *     `signal === 'SIGTERM' && error.code === 'ETIMEDOUT'` idiom already used
+ *     by worktree-safety.cts)
+ *   - any other unanticipated throw from the underlying spawn (defensive
+ *     try/catch — execTool itself is spawnSync-based and does not throw).
+ */
+export function dispatchGsdCommand({
+  family,
+  subcommand,
+  args = [],
+  cwd,
+  timeout = 30_000,
+  gsdToolsPath,
+}: {
+  family?: string;
+  subcommand?: string;
+  args?: string[];
+  cwd?: string;
+  timeout?: number;
+  gsdToolsPath?: string;
+} = {}): DispatchGsdCommandResult {
+  if (typeof family !== 'string' || family.length === 0) {
+    return {
+      ok: false,
+      stdout: '',
+      stderr: 'dispatchGsdCommand requires a non-empty string "family".',
+      code: null,
+      timedOut: false,
+    };
+  }
+
+  const resolvedCwd = cwd || process.cwd();
+  const toolsPath = gsdToolsPath || resolveGsdToolsPath();
+  const argv = [
+    toolsPath,
+    family,
+    ...(subcommand ? [subcommand] : []),
+    ...(Array.isArray(args) ? args : []),
+    '--cwd', resolvedCwd,
+    '--raw',
+    '--json-errors',
+  ];
+
+  let result: SpawnResultOutput;
+  try {
+    result = execTool(process.execPath, argv, { cwd: resolvedCwd, timeout });
+  } catch (e) {
+    // Defensive belt-and-suspenders: execTool is spawnSync-based and does not
+    // throw today, but a degraded result here keeps this seam's no-throw
+    // contract true even under an unanticipated future failure mode.
+    return {
+      ok: false,
+      stdout: '',
+      stderr: e instanceof Error ? e.message : String(e),
+      code: null,
+      timedOut: false,
+    };
+  }
+
+  // Mirrors the established `result.error && (result.error as
+  // NodeJS.ErrnoException).code === ...` idiom (graphify.cts, worktree-safety.cts):
+  // narrow away null via `!== null` FIRST, then cast — asserting `Error | null`
+  // to `NodeJS.ErrnoException | null` directly (paired with optional chaining)
+  // trips a typescript-eslint no-unnecessary-type-assertion false positive for
+  // this exact narrowing shape (all of ErrnoException's extra fields over Error
+  // are optional).
+  const timedOut = result.signal === 'SIGTERM'
+    && result.error !== null
+    && (result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+
+  return {
+    ok: result.exitCode === 0 && !timedOut,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    code: result.exitCode,
+    timedOut,
+  };
+}
+
 export function probeTty(opts: { platform?: string } = {}): string | null {
   const platform = opts.platform ?? process.platform;
   if (platform === 'win32') return null;

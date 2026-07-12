@@ -39,6 +39,20 @@ const RUNTIME_INSTALL_CONTRACTS = {
   // dead hook scripts or the CommonJS package.json marker.
   kilo: { surface: 'flat-command', settings: false, packageJson: false },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
+  // #2102 Stage 1/2: pi is a PLUGIN-ONLY install (hostBehaviors.pluginOnlyInstall)
+  // for commands/agents/skills — NO commands/, agents/, or skills/ dir. pi's
+  // /gsd command is registered programmatically by the native extension
+  // (extensions/gsd.cjs) and dispatches via a bounded subprocess to
+  // gsd-tools.cjs; it has no host-read markdown surface. Stage 2 (adversarial-
+  // review fix): pi's native extension DOES spawn the shared hooks/*.js bundle
+  // as bounded subprocesses (session_start/before_agent_start/session_before_
+  // compact bridges) and its /gsd tokenizer requires hooks/lib/git-cmd.js, so
+  // `hostBehaviors.skipSharedHooksInstall` was removed — pi now receives
+  // hooks/ + hooks/lib/ + the {"type":"commonjs"} package.json marker, exactly
+  // like OpenCode (architecturally identical: hooksSurface:'none' + a native
+  // plugin that spawns the staged hooks), NOT like Kilo/ZCode (no plugin
+  // surface, where the same hooks are genuinely dead weight).
+  pi: { surface: 'plugin-only', settings: false, packageJson: true },
   qwen: { surface: 'flat-skills', settings: true, packageJson: true },
   trae: { surface: 'flat-skills', settings: false, packageJson: false },
   windsurf: { surface: 'global-artifacts-noop', settings: false, packageJson: false },
@@ -262,6 +276,43 @@ function assertFreshInstallContract(runtime, targetDir) {
       listDirNames(targetDir, 'command').some((name) => name.startsWith('gsd-') && name.endsWith('.md')),
       `${runtime} should install flattened command markdown files`
     );
+  } else if (contract.surface === 'plugin-only') {
+    // #2102 Stage 1/2: pi — PLUGIN-ONLY install for commands/agents/skills
+    // (hostBehaviors.pluginOnlyInstall). pi's /gsd command is registered
+    // programmatically by the native extension and dispatches via a bounded
+    // subprocess to gsd-tools.cjs — pi has no host-read markdown surface, so
+    // NO commands/, agents/, or skills/ dir is written. The extension DOES
+    // spawn the shared hooks/*.js bundle as bounded subprocesses (Stage 2
+    // adversarial-review fix — hooksSurface:'none' no longer implies
+    // skipSharedHooksInstall for pi, mirroring OpenCode), so hooks/ + the
+    // git-cmd.js tokenizer helper ARE part of the artifact surface now.
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'extensions', 'gsd.cjs')),
+      `${runtime} should install the native extension file at extensions/gsd.cjs`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'hooks', 'gsd-ensure-canonical-path.js')),
+      `${runtime} should install the shared hooks/ bundle (spawned by the native extension's event bridges)`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'hooks', 'lib', 'git-cmd.js')),
+      `${runtime} should install hooks/lib/git-cmd.js (the /gsd command tokenizer)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'commands')),
+      false,
+      `${runtime} should NOT install a commands/ dir (plugin-only, no host-read markdown surface)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'agents')),
+      false,
+      `${runtime} should NOT install an agents/ dir (plugin-only, no named-dispatch toolkit)`
+    );
+    assert.equal(
+      fs.existsSync(path.join(targetDir, 'skills')),
+      false,
+      `${runtime} should NOT install a skills/ dir (plugin-only)`
+    );
   } else if (contract.surface === 'commands-gsd') {
     assert.ok(
       listDirNames(targetDir, path.join('commands', 'gsd')).length > 0,
@@ -301,7 +352,7 @@ function assertFreshInstallContract(runtime, targetDir) {
     );
   }
 
-  if (contract.surface !== 'kimi-skills-agents' && contract.surface !== 'global-artifacts-noop') {
+  if (contract.surface !== 'kimi-skills-agents' && contract.surface !== 'global-artifacts-noop' && contract.surface !== 'plugin-only') {
     assert.ok(
       listDirNames(targetDir, 'agents').some((name) => name.startsWith('gsd-')),
       `${runtime} full install should install agents`
