@@ -80,4 +80,34 @@ describe('checkUiPresence', () => {
     assert.ok(result.tokens.includes('dashboard'));
     assert.ok(result.tokens.includes('form'));
   });
+
+  // ── #2150: the `**UI hint**: yes|no` metadata line must not false-positive ──
+
+  test('#2150 `**UI hint**: no` is authoritative non-frontend (no false positive)', () => {
+    const result = checkUiPresence('**UI hint**: no\n\nBackend-only spike for RBAC/Entra.\n');
+    assert.strictEqual(result.hasUI, false,
+      'a phase that explicitly declares UI hint: no must not be flagged as UI');
+    assert.deepStrictEqual(result.tokens, []);
+  });
+
+  test('#2150 `**UI hint**: yes` is authoritative frontend', () => {
+    const result = checkUiPresence('**UI hint**: yes\n\nRefactor the login screen layout.\n');
+    assert.strictEqual(result.hasUI, true,
+      'a phase that explicitly declares UI hint: yes must be flagged as UI');
+  });
+
+  test('#2150 a hint line without yes/no is stripped (bare UI token does not fire)', () => {
+    // A malformed hint (`UI hint: maybe`) must not false-positive on the bare
+    // `UI` token in the line itself; other UI tokens elsewhere still detect.
+    const result = checkUiPresence('**UI hint**: maybe\n\nBackend REST API only.\n');
+    assert.strictEqual(result.hasUI, false,
+      'the bare UI token in a UI hint line must not count as a UI indicator');
+  });
+
+  test('#2150 hint: no overrides even genuine UI language elsewhere', () => {
+    // The explicit declaration is authoritative — the author owns it.
+    const result = checkUiPresence('**UI hint**: no\n\nBuild a dashboard component.\n');
+    assert.strictEqual(result.hasUI, false,
+      'an explicit UI hint: no overrides token-sniffing');
+  });
 });
