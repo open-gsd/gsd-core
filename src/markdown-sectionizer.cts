@@ -62,6 +62,13 @@ export interface Section {
   bodyEnd: number;
 }
 
+/** Options shared by `collectSection` and `withSection` (see `collectSection`'s doc comment). */
+export interface CollectSectionOptions {
+  levelBounded?: boolean;
+  stopAtLevel?: number;
+  stripFences?: boolean;
+}
+
 /** Recognised bullet markers. */
 export type BulletMarker = 'dash' | 'checkbox-unchecked' | 'checkbox-checked' | 'numbered';
 
@@ -340,7 +347,7 @@ export function collectSections(
 export function collectSection(
   content: string,
   headingPredicate: (heading: HeadingToken) => boolean,
-  opts: { levelBounded?: boolean; stopAtLevel?: number; stripFences?: boolean } = {},
+  opts: CollectSectionOptions = {},
 ): Section | null {
   if (typeof content !== 'string' || content.length === 0) return null;
 
@@ -616,6 +623,48 @@ export function replaceSection(content: string, section: Section, newBody: strin
   if (typeof content !== 'string') return content;
   if (typeof newBody !== 'string') return content;
   return content.slice(0, section.bodyStart) + newBody + content.slice(section.bodyEnd);
+}
+
+// ─── withSection ──────────────────────────────────────────────────────────────
+
+/**
+ * Locate the section whose heading matches `target`, run `edit` against ONLY
+ * that section's body, and splice the result back into `content`.
+ *
+ * `target` is either an exact (trimmed) heading-text match or a predicate
+ * function over `HeadingToken`. `edit` receives ONLY the section body — so any
+ * regex it runs is physically confined to that section — an edit cannot cross
+ * a section boundary (ADR-2143 §4, structurally retires the #2130/#2067/#2080
+ * boundary-crossing class, where a hand-rolled regex escaped its intended
+ * section and mutated a sibling/shipped/backticked-literal occurrence instead).
+ *
+ * Bounded no-op behaviour (Phase 3 of ADR-2143 adds fail-loud diagnostics on
+ * top of this):
+ * - No heading matches `target` → `content` is returned unchanged.
+ * - `edit` returns a non-string, or returns the same string it was given →
+ *   `content` is returned unchanged (no-op splice avoided).
+ *
+ * `opts` is forwarded verbatim to `collectSection` (see its doc comment for
+ * `levelBounded` / `stopAtLevel` / `stripFences` semantics) — it lets a caller
+ * whose heading levels are non-uniform (e.g. a mix of `###`/`####` phase
+ * headings) choose the correct section-end rule instead of relying on the
+ * `levelBounded: true` default.
+ */
+export function withSection(
+  content: string,
+  target: string | ((h: HeadingToken) => boolean),
+  edit: (body: string) => string,
+  opts: CollectSectionOptions = {},
+): string {
+  if (typeof content !== 'string') return content;
+  const predicate = typeof target === 'function'
+    ? target
+    : (h: HeadingToken) => h.text.trim() === target.trim();
+  const section = collectSection(content, predicate, opts);
+  if (!section) return content;              // bounded no-op on miss (Phase 3 adds fail-loud)
+  const newBody = edit(section.body);
+  if (typeof newBody !== 'string' || newBody === section.body) return content;
+  return replaceSection(content, section, newBody);
 }
 
 // Consumers: require('../gsd-core/bin/lib/markdown-sectionizer.cjs')

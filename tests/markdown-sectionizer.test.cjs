@@ -5,7 +5,7 @@
  *
  * Module: gsd-core/bin/lib/markdown-sectionizer.cjs
  * Exports: stripFencedCode, tokenizeHeadings, collectSections, collectSection,
- *          iterateBullets, extractTaggedBlocks, replaceSection
+ *          iterateBullets, extractTaggedBlocks, replaceSection, withSection
  *
  * Covers the parser QA matrix from CONTRIBUTING.md §'Parser and project-file inputs':
  *   - LF vs CRLF line endings
@@ -16,7 +16,9 @@
  *   - All three bullet markers (dash/checkbox/numbered) + indented continuation lines
  *   - Empty/whitespace/non-string input
  *
- * Includes a fast-check property test (stripFencedCode idempotence invariant).
+ * Includes fast-check property tests: stripFencedCode idempotence invariant,
+ * and withSection's ADR-2143 §4 bounded-mutation guarantee (an edit confined to
+ * one section cannot alter any other section, even with a greedy regex).
  * The parity guard for the T0-era tracked duplication (stripFencedCode vs
  * uat-predicate _stripFencedBlocks) was removed in T5: uat-predicate now imports
  * the seam directly, so the guard would compare the seam to itself.
@@ -35,6 +37,7 @@ const {
   extractTaggedBlocks,
   stripTaggedBlocks,
   replaceSection,
+  withSection,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 // ─── stripFencedCode ──────────────────────────────────────────────────────────
@@ -1050,6 +1053,210 @@ describe('extractTaggedBlocks: nested same-name tag behavior (#2128 stop-at-next
     );
     assert.deepEqual(extractTaggedBlocks('<task type="auto">body</task>', 'task', true), ['body'], 'attributed task matched with allowAttributes=true');
     assert.deepEqual(extractTaggedBlocks('<task type="auto">body</task>', 'task'), [], 'attributed task NOT matched with allowAttributes=false');
+  });
+});
+
+// ─── withSection ───────────────────────────────────────────────────────────────
+
+describe('withSection', () => {
+  test('edits only the targeted section, leaving surrounding sections untouched', () => {
+    const content = '## Intro\nIntro body.\n## Name\nOld name body.\n## Footer\nFooter body.\n';
+    const result = withSection(content, 'Name', (body) => body.replace('Old name body.', 'New name body.'));
+    assert.ok(result.includes('## Intro\nIntro body.'), 'Intro section preserved verbatim');
+    assert.ok(result.includes('## Name\nNew name body.'), 'Name section updated');
+    assert.ok(!result.includes('Old name body.'), 'old body removed');
+    assert.ok(result.includes('## Footer\nFooter body.'), 'Footer section preserved verbatim');
+  });
+
+  test('a section not present in content leaves content unchanged (bounded no-op)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const result = withSection(content, 'Nonexistent', (body) => body + ' MUTATED');
+    assert.equal(result, content, 'no matching heading -> content returned unchanged');
+  });
+
+  test('predicate form: target may be a HeadingToken predicate function', () => {
+    const content = '## Alpha\nAlpha body\n## Beta\nBeta body\n';
+    const result = withSection(content, (h) => h.level === 2 && h.text === 'Beta', (body) => body.toUpperCase());
+    assert.ok(result.includes('## Beta\nBETA BODY'), 'predicate-matched section edited');
+    assert.ok(result.includes('## Alpha\nAlpha body'), 'non-matched section untouched');
+  });
+
+  test('edit returning the identical body is a no-op (no splice performed)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const result = withSection(content, 'A', (body) => body);
+    assert.equal(result, content, 'identical body -> no-op');
+  });
+
+  test('edit returning a non-string is a no-op (defensive)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    // Deliberately malformed edit callback (returns a number, not a string).
+    const result = withSection(content, 'A', () => 42);
+    assert.equal(result, content, 'non-string return -> no-op');
+  });
+
+  test('non-string content is returned unchanged', () => {
+    assert.equal(withSection(null, 'A', (b) => b + 'x'), null);
+    assert.equal(withSection(undefined, 'A', (b) => b + 'x'), undefined);
+  });
+
+  test('ADR-2143 §4: a greedy regex inside the edit callback cannot cross a section boundary', () => {
+    // Build a 3-section document; run a maximally-greedy regex (`[\s\S]*`) inside
+    // the edit callback for section 2. The callback only ever sees section 2's
+    // body, so sections 1 and 3 must remain byte-identical.
+    const content = [
+      '## Section One',
+      'alpha content line 1',
+      'alpha content line 2',
+      '## Section Two',
+      'beta content to be replaced',
+      '## Section Three',
+      'gamma content line 1',
+      'gamma content line 2',
+    ].join('\n') + '\n';
+
+    const before = collectSection(content, (h) => h.text === 'Section One');
+    const afterSectionThree = collectSection(content, (h) => h.text === 'Section Three');
+    assert.ok(before !== null && afterSectionThree !== null);
+
+    const result = withSection(content, 'Section Two', (body) => body.replace(/[\s\S]*/, 'REPLACED ENTIRELY'));
+
+    const resultOne = collectSection(result, (h) => h.text === 'Section One');
+    const resultThree = collectSection(result, (h) => h.text === 'Section Three');
+    assert.equal(resultOne.body, before.body, 'Section One byte-identical after greedy edit on Section Two');
+    assert.equal(resultThree.body, afterSectionThree.body, 'Section Three byte-identical after greedy edit on Section Two');
+    assert.ok(result.includes('## Section Two\nREPLACED ENTIRELY'), 'Section Two was replaced as intended');
+  });
+});
+
+describe('withSection: property-based tests', () => {
+  // Anchored phase-heading predicate mirroring roadmap-parser.cjs's
+  // withPhaseSection fix: the phase token must sit at the START of the
+  // heading text, so a section whose TITLE merely mentions another phase
+  // number is never matched by that other phase's query.
+  const anchoredPhasePredicate = (k) => {
+    const re = new RegExp(`^Phase\\s+${k}(?=[\\s:(]|$)`, 'i');
+    return (h) => re.test(h.text);
+  };
+
+  test('property (ADR-2143 §4): editing phase k never alters any sibling section j≠k', () => {
+    // Model a ROADMAP-like document with N `## Phase k` sections (k=1..N), each
+    // with a distinct, generated body. Pick a random k, run withSection to append
+    // ' EDITED' to that section's body, and assert every OTHER section (j≠k) is
+    // byte-identical in the output — the bounded-mutation guarantee this seam
+    // exists to provide (structurally retires the #2130/#2067/#2080 boundary-
+    // crossing class).
+    //
+    // Also exercises Blocker 1 (title-collision hijack): each section's heading
+    // TITLE may be decorated with a reference to a DIFFERENT phase number
+    // (e.g. `Phase 3: legacy Phase 1 notes`), and the predicate above (anchored
+    // to the start of the heading text) must still resolve to the section whose
+    // OWN number matches, never a differently-numbered section whose title
+    // happens to mention the queried number.
+    //
+    // Heading level is kept UNIFORM (`##`) across sections deliberately: mixing
+    // random heading levels would make "which section is k" ambiguous for this
+    // property (a shallower section can syntactically nest a deeper one) — see
+    // the separate explicit mixed-level test below instead.
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 2, max: 6 }).chain((n) =>
+          fc.record({
+            n: fc.constant(n),
+            bodies: fc.array(
+              fc.string({ minLength: 1, maxLength: 40 }).filter((s) => !/[\r\n]/.test(s) && s.trim().length > 0),
+              { minLength: n, maxLength: n },
+            ),
+            targetIdx: fc.integer({ min: 0, max: n - 1 }),
+            // For each section, optionally reference a DIFFERENT phase number in
+            // its own heading title (title-collision decoy). `undefined`/self
+            // means "no decoy for this section".
+            titleDecoys: fc.array(
+              fc.option(fc.integer({ min: 1, max: 6 }), { nil: undefined }),
+              { minLength: n, maxLength: n },
+            ),
+          }),
+        ),
+        ({ n, bodies, targetIdx, titleDecoys }) => {
+          const lines = [];
+          for (let k = 1; k <= n; k++) {
+            const decoy = titleDecoys[k - 1];
+            const heading = decoy !== undefined && decoy !== k
+              ? `Phase ${k}: legacy Phase ${decoy} notes`
+              : `Phase ${k}`;
+            lines.push(`## ${heading}`);
+            lines.push(`body-${k}: ${bodies[k - 1]}`);
+          }
+          const doc = lines.join('\n') + '\n';
+          const targetPhase = targetIdx + 1;
+
+          // Snapshot every section's body BEFORE the edit.
+          const before = [];
+          for (let k = 1; k <= n; k++) {
+            const s = collectSection(doc, anchoredPhasePredicate(k));
+            assert.ok(s !== null, `Phase ${k} section must be found before edit`);
+            before.push(s.body);
+          }
+
+          const result = withSection(
+            doc,
+            anchoredPhasePredicate(targetPhase),
+            (body) => body + ' EDITED',
+          );
+
+          for (let k = 1; k <= n; k++) {
+            const s = collectSection(result, anchoredPhasePredicate(k));
+            assert.ok(s !== null, `Phase ${k} section must still be found after edit`);
+            if (k === targetPhase) {
+              assert.equal(s.body, before[k - 1] + ' EDITED', `Phase ${targetPhase} (the target) must be edited`);
+            } else {
+              assert.equal(s.body, before[k - 1], `Phase ${k} (j≠k) must be byte-identical after editing Phase ${targetPhase}`);
+            }
+          }
+        },
+      ),
+    );
+  });
+
+  test('mixed heading levels + title collision: withSection({levelBounded:false}) does not fold a deeper heading into the target section, and the anchored predicate is not hijacked by a title mentioning another phase', () => {
+    // Phase 3 (appearing FIRST) has a title that mentions "Phase 1" — under the
+    // OLD unanchored regex this would be matched first (document order) by a
+    // query for phase 1 (Blocker 1). Phase 1 is followed by a DEEPER heading
+    // (`#### Phase 2`, level 4 vs Phase 1's level 3) — under the default
+    // `levelBounded: true` this would nest Phase 2 inside Phase 1's section
+    // and let an edit on Phase 1 reach into it (Blocker 2).
+    const content = [
+      '### Phase 3: Migrate off Phase 1 pipeline',
+      'gamma body line',
+      '### Phase 1: Foundation',
+      'alpha body line',
+      '#### Phase 2: API (deeper level, nested syntactically under Phase 1)',
+      '**Plans:** 1 plans',
+    ].join('\n') + '\n';
+
+    const before2 = collectSection(content, anchoredPhasePredicate(2));
+    assert.ok(before2 !== null, 'Phase 2 section must be found before edit');
+
+    const result = withSection(
+      content,
+      anchoredPhasePredicate(1),
+      (body) => body + ' EDITED',
+      { levelBounded: false },
+    );
+
+    assert.ok(
+      result.includes('### Phase 3: Migrate off Phase 1 pipeline\ngamma body line'),
+      'Phase 3 (title mentions "Phase 1") is byte-identical — not hijacked by the anchored Phase-1 query',
+    );
+    assert.ok(!result.includes('gamma body line EDITED'), 'the edit did not land in Phase 3');
+
+    const after2 = collectSection(result, anchoredPhasePredicate(2));
+    assert.equal(
+      after2.body,
+      before2.body,
+      'Phase 2 (deeper level than Phase 1) stays byte-identical — levelBounded:false stopped Phase 1 at the next heading of ANY level',
+    );
+
+    assert.ok(result.includes('alpha body line EDITED'), "Phase 1's own body was correctly edited");
   });
 });
 
