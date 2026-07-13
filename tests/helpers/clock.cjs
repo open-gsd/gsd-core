@@ -90,6 +90,20 @@ function makeFakeClock(startMs) {
       return new Date(_now).toISOString().split('T')[0];
     },
 
+    /**
+     * Return the virtual date as a YYYY-MM-DD string in the HOST-LOCAL calendar
+     * day. Mirrors realClock.localToday() so fake clocks are drop-in substitutes.
+     * (#2136: operator-facing date-only fields use the local calendar day.)
+     *
+     * @returns {string} e.g. "2020-06-14" (local), may differ from today() near UTC midnight
+     */
+    localToday() {
+      const d = new Date(_now);
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + mm + '-' + dd;
+    },
+
     /** Array of ms values passed to sleep() in call order. */
     get sleepCalls() {
       return _sleepCalls;

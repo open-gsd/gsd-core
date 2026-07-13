@@ -37,9 +37,9 @@ Parse the first token of $ARGUMENTS:
 ## list / status
 
 Load the capability registry and call `listSurface(runtimeConfigDir, manifest, CLUSTERS, registry)` from
-`gsd-core/bin/lib/surface.cjs`. The registry is loaded via:
+the engine module at `${runtimeConfigDir}/gsd-core/bin/lib/surface.cjs`. The registry is loaded via:
 ```js
-const registry = require('gsd-core/bin/lib/capability-registry.cjs');
+const registry = require(runtimeConfigDir + '/gsd-core/bin/lib/capability-registry.cjs');
 ```
 Display:
 
@@ -71,7 +71,7 @@ Install profile: standard  (from .gsd-profile)
 3. `writeSurface(runtimeConfigDir, surfaceState)`.
 4. Resolve and re-apply:
    ```js
-   const registry = require('gsd-core/bin/lib/capability-registry.cjs');
+   const registry = require(runtimeConfigDir + '/gsd-core/bin/lib/capability-registry.cjs');
    const layout = resolveRuntimeArtifactLayout(runtime, runtimeConfigDir, scope);
    applySurface(runtimeConfigDir, layout, manifest, CLUSTERS, registry);
    ```
@@ -89,7 +89,7 @@ Valid cluster names: `core_loop`, `audit_review`, `milestone`, `research_ideate`
 3. Add cluster to `surfaceState.disabledClusters` (deduplicate).
 4. `writeSurface` → resolve layout → `applySurface`:
    ```js
-   const registry = require('gsd-core/bin/lib/capability-registry.cjs');
+   const registry = require(runtimeConfigDir + '/gsd-core/bin/lib/capability-registry.cjs');
    const layout = resolveRuntimeArtifactLayout(runtime, runtimeConfigDir, scope);
    applySurface(runtimeConfigDir, layout, manifest, CLUSTERS, registry);
    ```
@@ -103,7 +103,7 @@ Valid cluster names: `core_loop`, `audit_review`, `milestone`, `research_ideate`
 2. Remove cluster from `surfaceState.disabledClusters`.
 3. `writeSurface` → resolve layout → `applySurface`:
    ```js
-   const registry = require('gsd-core/bin/lib/capability-registry.cjs');
+   const registry = require(runtimeConfigDir + '/gsd-core/bin/lib/capability-registry.cjs');
    const layout = resolveRuntimeArtifactLayout(runtime, runtimeConfigDir, scope);
    applySurface(runtimeConfigDir, layout, manifest, CLUSTERS, registry);
    ```
@@ -151,7 +151,7 @@ All paths can be overridden by reading the `CLAUDE_CONFIG_DIR` env var if set.
 
 - Unknown cluster name → list valid cluster names, exit without writing.
 - Unknown profile name → list known profiles (`core`, `standard`, `full`), exit.
-- Missing `surface.cjs` → prompt: "Run `npm i -g gsd-core` to reinstall GSD."
+- Missing `surface.cjs` → prompt: "Run `npm i -g @opengsd/gsd-core` to reinstall GSD."
 
 <execution_context>
 Surface state file: `~/.claude/.gsd-surface.json`

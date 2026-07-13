@@ -1139,9 +1139,10 @@ function writeSettings(settingsPath, settings) {
  * Used by Codex TOML and OpenCode agent file generators to embed per-agent
  * model assignments so that model_overrides is respected on non-Claude runtimes (#2256).
  */
-function readGsdGlobalModelOverrides() {
+function readGsdGlobalModelOverrides(options = {}) {
   try {
-    const defaultsPath = path.join(os.homedir(), '.gsd', 'defaults.json');
+    const home = options.homedir ? options.homedir() : os.homedir();
+    const defaultsPath = path.join(home, '.gsd', 'defaults.json');
     if (!fs.existsSync(defaultsPath)) return null;
     const raw = fs.readFileSync(defaultsPath, 'utf-8');
     const parsed = JSON.parse(raw);
@@ -1178,8 +1179,8 @@ function readGsdGlobalModelOverrides() {
  * Returns a plain `{ agentName: modelId }` object, or `null` when neither
  * source defines `model_overrides`.
  */
-function readGsdEffectiveModelOverrides(targetDir = null) {
-  const global = readGsdGlobalModelOverrides();
+function readGsdEffectiveModelOverrides(targetDir = null, options = {}) {
+  const global = readGsdGlobalModelOverrides(options);
 
   let projectOverrides = null;
   if (targetDir) {
