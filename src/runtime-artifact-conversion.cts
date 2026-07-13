@@ -24,6 +24,7 @@ const { readGsdCommandNames, transformContentToHyphen } = commandRoster;
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 const { getDirName } = runtimeNamePolicy;
 import capabilityRegistry = require('./capability-registry.cjs');
+import { posixNormalize } from './shell-command-projection.cjs';
 
 // #1383: resolve GSD's version WITHOUT a top-level
 // `require('../../../package.json')`. That require ran at module load on every
@@ -2349,8 +2350,8 @@ function computePathPrefix({ isGlobal, isOpencode, isWindowsHost: _isWindowsHost
   // Without this, path.join on Windows produces a backslash prefix that
   // leaks into markdown content and breaks cross-platform substring checks.
   // See DEFECT.WINDOWS-PATH-LEAK-IN-MARKDOWN-CONTENT in CONTEXT.md.
-  const posixTarget = String(resolvedTarget).replace(/\\/g, '/');
-  const posixHome = homeDir ? String(homeDir).replace(/\\/g, '/') : homeDir;
+  const posixTarget = posixNormalize(String(resolvedTarget));
+  const posixHome = homeDir ? posixNormalize(String(homeDir)) : homeDir;
   if (isGlobal && posixTarget.startsWith(posixHome) && !isOpencode) {
     return '$HOME' + posixTarget.slice(posixHome.length) + '/';
   }
@@ -2696,8 +2697,8 @@ function rewriteStagedSkillBodies(stagedDir, opts) {
   } = opts;
   if (!fs.existsSync(stagedDir)) return;
 
-  const resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
-  const homeDir = homedir().replace(/\\/g, '/');
+  const resolvedTarget = posixNormalize(path.resolve(configDir));
+  const homeDir = posixNormalize(homedir());
   const isGlobal = scope === 'global';
   const isOpencode = false;  // #2087: opencode installs via the combined-family engine path, never through the generic rewrite
   const isWindowsHost = platform === 'win32';
@@ -2734,8 +2735,8 @@ function rewriteStagedCommandBodies(stagedDir, opts) {
   } = opts;
   if (!fs.existsSync(stagedDir)) return stagedDir;
 
-  const resolvedTarget = path.resolve(configDir).replace(/\\/g, '/');
-  const homeDir = homedir().replace(/\\/g, '/');
+  const resolvedTarget = posixNormalize(path.resolve(configDir));
+  const homeDir = posixNormalize(homedir());
   const isGlobal = scope === 'global';
   const isOpencode = false;  // #2087: opencode installs via the combined-family engine path, never through the generic rewrite
   const isWindowsHost = platform === 'win32';

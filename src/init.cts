@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { execGit, platformWriteSync, platformReadSync } from './shell-command-projection.cjs';
+import { execGit, platformWriteSync, platformReadSync, toNativePath, posixNormalize } from './shell-command-projection.cjs';
 import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- io.cjs is an export= CommonJS module
 import io = require('./io.cjs');
@@ -282,7 +282,7 @@ function getInitGitState(cwd: string): GitState {
     }
     resolved = path.resolve(resolved);
     if (process.platform === 'win32') {
-      return resolved.replace(/\//g, '\\').toLowerCase();
+      return toNativePath(resolved).toLowerCase();
     }
     return resolved;
   };
@@ -293,7 +293,7 @@ function getInitGitState(cwd: string): GitState {
     try {
       const prefixResult = execGit(['rev-parse', '--show-prefix'], { cwd, timeout: 5000 }) as unknown as Record<string, unknown>;
       if (prefixResult['exitCode'] === 0) {
-        const prefix = (typeof prefixResult['stdout'] === 'string' ? prefixResult['stdout'] : '').trim().replace(/\\/g, '/');
+        const prefix = posixNormalize((typeof prefixResult['stdout'] === 'string' ? prefixResult['stdout'] : '').trim());
         inNestedSubdir = prefix.length > 0 && prefix !== '.' && prefix !== './';
         resolvedByGitPrefix = true;
       }
@@ -309,7 +309,7 @@ function getInitGitState(cwd: string): GitState {
           inNestedSubdir = false;
         } else {
           const rel = path.relative(rootNorm, cwdNorm);
-          const relNorm = process.platform === 'win32' ? rel.replace(/\//g, '\\') : rel;
+          const relNorm = toNativePath(rel);
           inNestedSubdir =
             relNorm !== '' &&
             relNorm !== '.' &&
@@ -323,7 +323,7 @@ function getInitGitState(cwd: string): GitState {
   }
 
   if (inNestedSubdir && typeof worktreeRoot === 'string') {
-    const toComparableRaw = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/g, '').toLowerCase();
+    const toComparableRaw = (p: string) => posixNormalize(p).replace(/\/+$/g, '').toLowerCase();
     if (toComparableRaw(worktreeRoot) === toComparableRaw(String(cwd))) {
       inNestedSubdir = false;
     }
@@ -2226,7 +2226,7 @@ function buildAgentSkillsBlock(
     if (entry.kind === 'directive') {
       return `- Load the \`${entry.name}\` skill via the Skill tool before proceeding (plugin-provided).`;
     }
-    return `- @${String(entry.ref).replace(/\\/g, '/')}`;
+    return `- @${posixNormalize(String(entry.ref))}`;
   }).join('\n');
   return `<agent_skills>\nRead these user-configured skills:\n${lines}\n</agent_skills>`;
 }

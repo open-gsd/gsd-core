@@ -310,7 +310,7 @@ function normalizeNodePath(execPath: string, opts?: NodeNormOpts): string {
   const env = (opts && opts.env) || process.env;
   const existsSync = (opts && opts.existsSync) || fs.existsSync;
 
-  const normalizedForMatch = execPath.replace(/\\/g, '/');
+  const normalizedForMatch = shellCmdProjection.posixNormalize(execPath);
   if (/\/fnm_multishells\/[0-9]+_[0-9]+\/node(\.exe)?$/i.test(normalizedForMatch)) {
     const candidates: string[] = [];
     if (env.FNM_DIR) {
@@ -363,7 +363,7 @@ function resolveNodeRunner(opts?: NodeNormOpts): string | null {
   const execPath = typeof process.execPath === 'string' ? process.execPath : '';
   if (!execPath) return null;
   const stablePath = normalizeNodePath(execPath, opts);
-  return JSON.stringify(stablePath.replace(/\\/g, '/'));
+  return JSON.stringify(shellCmdProjection.posixNormalize(stablePath));
 }
 
 interface BashRunnerOpts {
@@ -389,7 +389,7 @@ function resolveBashRunner(opts?: BashRunnerOpts): string | null {
 
   for (const candidate of candidates) {
     if (candidate && exists(candidate)) {
-      return JSON.stringify(candidate.replace(/\\/g, '/'));
+      return JSON.stringify(shellCmdProjection.posixNormalize(candidate));
     }
   }
   return null;
@@ -449,7 +449,7 @@ function rewriteLegacyManagedNodeHookCommands(settings: Settings, absoluteRunner
           scriptPath = m[2] || m[3] || m[4] || '';
         } else {
           _runnerToken = m[1];
-          const runnerPath = (m[2] || m[3] || m[4] || '').replace(/\\/g, '/');
+          const runnerPath = shellCmdProjection.posixNormalize(m[2] || m[3] || m[4] || '');
           const stableRunner = normalizeNodePath(runnerPath);
           if (stableRunner === runnerPath && platform !== 'win32') continue;
           scriptToken = m[5];
@@ -694,10 +694,10 @@ function buildCodexHookWindowsShimIR(scriptAbsPath: string, absoluteRunnerToken:
   } catch {
     interpreter = absoluteRunnerToken;
   }
-  const targetAbs = scriptAbsPath.replace(/\\/g, '/');
+  const targetAbs = shellCmdProjection.posixNormalize(scriptAbsPath);
   const scriptQuoted = JSON.stringify(targetAbs);
   const cmdPath = scriptAbsPath.replace(/\.js$/, '.cmd');
-  const hookCommand = JSON.stringify(cmdPath.replace(/\\/g, '/'));
+  const hookCommand = JSON.stringify(shellCmdProjection.posixNormalize(cmdPath));
   const runnerQuoted = JSON.stringify(interpreter);
   return {
     invocation: { interpreter, target: scriptAbsPath },
@@ -726,7 +726,7 @@ function ensureCodexHooksJsonSessionStart(targetDir: string, opts: EnsureCodexSe
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-check-update.js').replace(/\\/g, '/');
+  const scriptPath = shellCmdProjection.posixNormalize(path.resolve(targetDir, 'hooks', 'gsd-check-update.js'));
   const cmdShimPath = scriptPath.replace(/\.js$/, '.cmd');
 
   let managedCommand: string | undefined;
@@ -757,7 +757,7 @@ function ensureCodexHooksJsonSessionStart(targetDir: string, opts: EnsureCodexSe
   if (!managedCommand) return { changed: false, wrote: false, path: hooksJsonPath };
 
   const commandWindows = platform === 'win32'
-    ? JSON.stringify(cmdShimPath.replace(/\\/g, '/'))
+    ? JSON.stringify(shellCmdProjection.posixNormalize(cmdShimPath))
     : undefined;
 
   return reconcileCodexHooksJsonSessionStart(targetDir, { managedCommand, commandWindows });
@@ -778,7 +778,7 @@ function ensureCodexHooksJsonEvent(targetDir: string, eventName: string, opts: E
   const hooksJsonPath = path.join(targetDir, 'hooks.json');
   if (!absoluteRunner) return { changed: false, wrote: false, path: hooksJsonPath };
 
-  const scriptPath = path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js').replace(/\\/g, '/');
+  const scriptPath = shellCmdProjection.posixNormalize(path.resolve(targetDir, 'hooks', 'gsd-context-monitor.js'));
 
   let managedCommand: string | undefined;
   if (platform === 'win32') {
@@ -846,7 +846,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       });
       return JSON.stringify(`${portableBaseDir}/hooks/${hookName}`);
     }
-    return JSON.stringify(configDir.replace(/\\/g, '/') + '/hooks/' + hookName);
+    return JSON.stringify(shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName);
   }
 
   const nodeRunner = resolveNodeRunner();
@@ -866,7 +866,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     });
   }
 
-  const hooksPath = configDir.replace(/\\/g, '/') + '/hooks/' + hookName;
+  const hooksPath = shellCmdProjection.posixNormalize(configDir) + '/hooks/' + hookName;
   return projectManagedHookCommand({
     absoluteRunner: runner,
     scriptPath: hooksPath,
@@ -1027,7 +1027,7 @@ function writeClineArtifacts(targetDir: string, isGlobalInstall: boolean): strin
 function buildCursorHookEntry(scriptPath: string): Record<string, unknown> {
   return {
     type: 'command',
-    command: scriptPath.replace(/\\/g, '/'),
+    command: shellCmdProjection.posixNormalize(scriptPath),
     [GSD_CURSOR_HOOK_MARKER]: true,
   };
 }
