@@ -23,7 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { parseMarkdownTable, matchTableSchema, TABLE_SCHEMAS, appendQuickTaskRow, findTableBySchema } = require('../gsd-core/bin/lib/markdown-table.cjs');
+const { parseMarkdownTable, matchTableSchema, TABLE_SCHEMAS, appendQuickTaskRow, findTableBySchema, findTableWithColumns } = require('../gsd-core/bin/lib/markdown-table.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -522,6 +522,45 @@ describe('findTableBySchema', () => {
 
   test('returns null for non-string input', () => {
     assert.equal(findTableBySchema(undefined, 'RoadmapProgress'), null);
+  });
+});
+
+// ─── findTableWithColumns (#2242: column-order/count-invariant reader seam) ──
+
+describe('findTableWithColumns', () => {
+  test('finds a table whose header has the required columns in shuffled order, plus extra/injected columns', () => {
+    const doc = [
+      '## Progress',
+      '',
+      '| Status | Foo | Phase | Plans Complete | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| Complete | x | 1. Alpha | 2/2 | ✅ |',
+      '| In Progress | x | 2. Beta | 1/2 | |',
+    ].join('\n');
+
+    const table = findTableWithColumns(doc, ['Phase', 'Plans Complete', 'Status', 'Completed']);
+    assert.notEqual(table, null);
+    assert.deepEqual(table.columns, ['Status', 'Foo', 'Phase', 'Plans Complete', 'Completed']);
+    assert.equal(table.rows.length, 2);
+    assert.equal(table.rows[0]['Phase'], '1. Alpha');
+    assert.equal(table.rows[0]['Status'], 'Complete');
+    assert.equal(table.rows[1]['Plans Complete'], '1/2');
+  });
+
+  test('returns null when a required column is absent from every table header', () => {
+    const doc = [
+      '## Progress',
+      '',
+      '| Phase | Owner | Completed |',
+      '| --- | --- | --- |',
+      '| 1. Alpha | jo | ✅ |',
+    ].join('\n');
+
+    assert.equal(findTableWithColumns(doc, ['Phase', 'Plans Complete', 'Status', 'Completed']), null);
+  });
+
+  test('returns null for non-string input', () => {
+    assert.equal(findTableWithColumns(undefined, ['Phase']), null);
   });
 });
 

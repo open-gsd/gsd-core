@@ -221,6 +221,34 @@ export function findTableBySchema(text: string, schemaId: string): MarkdownTable
   return null;
 }
 
+/**
+ * Find the first GFM table in `text` whose header contains ALL of `required`
+ * column names (order-independent; extra/injected columns allowed). Returns
+ * the parsed `MarkdownTable`, or `null` when no table's header is a superset
+ * of `required`.
+ *
+ * Column-NAME/order/count-invariant counterpart to `findTableBySchema` (ADR-2143
+ * §3 "addressed by NAME, never ordinal"): where `findTableBySchema` requires an
+ * EXACT canonical column set+order registered in `TABLE_SCHEMAS`, this scans
+ * for any header that names the required columns, in any order, tolerating
+ * extra/unrelated injected columns. Cells remain addressable by column NAME
+ * via the returned `MarkdownTable`.
+ */
+export function findTableWithColumns(text: string, required: string[]): MarkdownTable | null {
+  if (typeof text !== 'string') return null;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t.startsWith('|') || t.indexOf('|', 1) === -1) continue;
+    const cols = splitTableRow(lines[i]);
+    if (required.every((rq) => cols.includes(rq))) {
+      const parsed = parseMarkdownTable(lines.slice(i).join('\n'));
+      if (parsed.ok) return parsed.value;
+    }
+  }
+  return null;
+}
+
 // ─── Quick Tasks row append (#2133) ────────────────────────────────────────────
 
 /**

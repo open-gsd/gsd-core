@@ -9728,9 +9728,13 @@ describe('#2137 regression: deriveProgressFromRoadmap parses the milestone-group
   });
 
   test('ragged rows (more/fewer cells than the header) are handled without throwing', () => {
-    // The reader indexes cells positionally by header name, so an EXTRA trailing
-    // column is ignored and a SHORT row simply has absent Status/Plans cells
-    // (`cells[idx] ?? ''`) — neither should throw or corrupt the well-formed row.
+    // (#2242 review Fix 5 / ADR-2143 §3): deriveProgressFromRoadmap now resolves
+    // the Progress table via the markdown-table seam's parseMarkdownTable, which
+    // is fail-loud on ragged data rows by design — "ragged rows are errors, not
+    // silent" (src/markdown-table.cts) — rather than the pre-ADR-2143 reader's
+    // graceful cell-count degradation this test used to assert. A ragged row
+    // anywhere in the table now makes the WHOLE table unparseable, so the reader
+    // falls through to its existing (null) values instead of throwing.
     const roadmap = [
       '## Progress',
       '',
@@ -9744,13 +9748,10 @@ describe('#2137 regression: deriveProgressFromRoadmap parses the milestone-group
     assert.doesNotThrow(() => {
       result = deriveProgressFromRoadmap(roadmap);
     }, 'ragged rows must not throw');
-    // Row 1: extra column ignored → counted, Complete, +2 plans.
-    // Row 2: short row → counted as a phase, but Status/Plans cells are absent so
-    // it is neither Complete nor plan-bearing.
     assert.deepEqual(
       result,
-      { completedPhases: 1, totalPhases: 2, totalPlans: 2 },
-      `ragged rows must degrade gracefully to {1,2,2}, got ${JSON.stringify(result)}`,
+      { completedPhases: null, totalPhases: null, totalPlans: null },
+      `a ragged-row table must fail loud to all-null (no throw), got ${JSON.stringify(result)}`,
     );
   });
 });
