@@ -235,25 +235,7 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSour
   );
   const headings = tokenizeHeadings(content);
   const headingIndex = headings.findIndex((heading) => headingPattern.test(heading.text));
-  if (headingIndex === -1) {
-    // #2199: no ATX heading matched — try a bullet/checkbox entry with an
-    // em-dash/en-dash/hyphen/colon separator (`- [ ] **Phase N — name**`), which
-    // the bundled roadmapper emits in bullet-house-style ROADMAPs. Without this
-    // fallback the phase resolves found:false and `Phase null` is written into
-    // STATE.md.
-    const bulletMatch = content.match(bulletPhaseLineFor(phaseNum, phaseSource));
-    if (bulletMatch) {
-      const phaseName = bulletMatch[2].trim();
-      return {
-        found: true,
-        phase_number: String(phaseNum),
-        phase_name: phaseName,
-        goal: null,
-        section: bulletMatch[0].trim(),
-      };
-    }
-    return null;
-  }
+  if (headingIndex === -1) return null;
 
   const heading = headings[headingIndex];
   const headerMatch = heading.text.match(headingPattern);
@@ -276,6 +258,22 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSour
   };
 }
 
+function findRoadmapBulletPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
+  // #2199: bullet/checkbox entry fallback (`- [ ] **Phase N — name**`). Returns
+  // the single bullet line as the section (no multi-line body) — used only as a
+  // last resort, AFTER heading lookup on scoped + full content has failed, so a
+  // heading with a Requirements/Goal section always wins.
+  const bulletMatch = content.match(bulletPhaseLineFor(phaseNum, phaseSource));
+  if (!bulletMatch) return null;
+  return {
+    found: true,
+    phase_number: String(phaseNum),
+    phase_name: bulletMatch[2].trim(),
+    goal: null,
+    section: bulletMatch[0].trim(),
+  };
+}
+
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
   if (!phaseNum) return null;
   const normalizedPhase = stripProjectCodePrefix(phaseNum);
@@ -295,6 +293,17 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
 
       const fullResult = findRoadmapPhaseInContent(fullContent, phaseNum, source);
       if (fullResult) return fullResult;
+    }
+
+    // #2199: no ATX heading matched on scoped or full content — fall back to a
+    // bullet/checkbox entry (em-dash/en-dash/hyphen/colon separator). Last resort
+    // so a bullet never pre-empts a heading that carries the Requirements section.
+    for (const source of roadmapPhaseLookupSources(phaseNum)) {
+      const scopedBullet = findRoadmapBulletPhaseInContent(content, phaseNum, source);
+      if (scopedBullet) return scopedBullet;
+
+      const fullBullet = findRoadmapBulletPhaseInContent(fullContent, phaseNum, source);
+      if (fullBullet) return fullBullet;
     }
 
     return null;

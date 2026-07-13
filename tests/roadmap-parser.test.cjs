@@ -1882,3 +1882,91 @@ describe('feat-3594: roadmap parser does not crash on ANY corpus fixture', () =>
 });
   });
 }
+
+// ─── #2199: bullet/em-dash ROADMAP phase resolution ───────────────────────────
+// Self-contained block: phase lookup + milestone filter must accept bullet/
+// checkbox entries with an em-dash/en-dash/hyphen/colon separator, not just the
+// ATX-heading + colon form. Previously such an entry resolved found:false and
+// `Phase null` was written into STATE.md; a bullet-only ROADMAP collapsed the
+// milestone filter to a zero-count pass-all.
+{
+  const { describe: d2, test: t2, beforeEach: be2, afterEach: ae2 } = require('node:test');
+  const a2 = require('node:assert/strict');
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const { createTempProject: ctp2, cleanup: cu2 } = require('./helpers.cjs');
+  const rp2 = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+  const writeRoadmap2 = (d, c) => fs2.writeFileSync(path2.join(d, '.planning', 'ROADMAP.md'), c);
+
+  d2('#2199 roadmap bullet/em-dash phase resolution', () => {
+    let tmpDir;
+    be2(() => { tmpDir = ctp2('fix-2199-'); });
+    ae2(() => { cu2(tmpDir); });
+
+    t2('an all-bullet em-dash ROADMAP resolves each phase (no Phase null)', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '- [ ] **Phase 1 — Authentication**: login flow',
+        '- [ ] **Phase 2 — Authorization**: RBAC',
+        '- [x] **Phase 3 — Audit Logging**: events',
+        '',
+      ].join('\n'));
+      const p1 = rp2.getRoadmapPhaseInternal(tmpDir, '1');
+      a2.ok(p1 && p1.found, 'Phase 1 must resolve on a bullet ROADMAP');
+      a2.strictEqual(p1.phase_name, 'Authentication');
+      const p2 = rp2.getRoadmapPhaseInternal(tmpDir, '2');
+      a2.ok(p2 && p2.found);
+      a2.strictEqual(p2.phase_name, 'Authorization');
+      const p3 = rp2.getRoadmapPhaseInternal(tmpDir, '3');
+      a2.ok(p3 && p3.found, 'a checked [x] bullet must also resolve');
+      a2.strictEqual(p3.phase_name, 'Audit Logging');
+      const absent = rp2.getRoadmapPhaseInternal(tmpDir, '99');
+      a2.ok(!absent || !absent.found, 'an absent phase must not resolve');
+    });
+
+    t2('bullet entries with colon / en-dash / hyphen separators all resolve', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '- [ ] **Phase 1: Colon Sep**: one',
+        '- [ ] **Phase 2 – En Dash**: two',
+        '- [ ] **Phase 3 - Hyphen Sep**: three',
+        '',
+      ].join('\n'));
+      a2.strictEqual(rp2.getRoadmapPhaseInternal(tmpDir, '1').phase_name, 'Colon Sep');
+      a2.strictEqual(rp2.getRoadmapPhaseInternal(tmpDir, '2').phase_name, 'En Dash');
+      a2.strictEqual(rp2.getRoadmapPhaseInternal(tmpDir, '3').phase_name, 'Hyphen Sep');
+    });
+
+    t2('mixed heading + bullet forms both resolve', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '### Phase 1: Heading Form',
+        'body',
+        '- [ ] **Phase 2 — Bullet Form**: two',
+        '',
+      ].join('\n'));
+      const p1 = rp2.getRoadmapPhaseInternal(tmpDir, '1');
+      a2.ok(p1 && p1.found, 'heading form still resolves (no regression)');
+      a2.ok(/Heading Form/.test(p1.phase_name));
+      const p2 = rp2.getRoadmapPhaseInternal(tmpDir, '2');
+      a2.ok(p2 && p2.found, 'bullet form resolves alongside heading form');
+      a2.strictEqual(p2.phase_name, 'Bullet Form');
+    });
+
+    t2('milestone phase-count counts bullet-form phases (not zero)', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '- [ ] **Phase 1 — One**: a',
+        '- [ ] **Phase 2 — Two**: b',
+        '- [ ] **Phase 3 — Three**: c',
+        '',
+      ].join('\n'));
+      const filter = rp2.getMilestonePhaseFilter(tmpDir);
+      a2.strictEqual(filter.phaseCount, 3,
+        'a bullet-only ROADMAP must populate the milestone phase set (was a zero-count pass-all before #2199)');
+      a2.ok(filter('1'), 'phase 1 dir is in the milestone set');
+      a2.ok(filter('2'), 'phase 2 dir is in the milestone set');
+      a2.ok(!filter('99'), 'a non-listed phase is excluded');
+    });
+  });
+}
