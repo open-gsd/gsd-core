@@ -1656,7 +1656,7 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   // preserve guards above) still win.
   for (const key of Object.keys(existingFm)) {
     if (!(key in derivedFm) && existingFm[key] !== undefined) {
-      (derivedFm as Record<string, unknown>)[key] = existingFm[key];
+      derivedFm[key] = existingFm[key];
     }
   }
 
