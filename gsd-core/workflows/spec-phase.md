@@ -456,7 +456,7 @@ Write to: `{phase_dir}/{padded_phase}-SPEC.md`
 
 ```bash
 git add "${phase_dir}/${padded_phase}-SPEC.md"
-git commit -m "spec(phase-${phase_number}): add SPEC.md for ${phase_name} — ${requirement_count} requirements (#2213)"
+git commit -m "spec(phase-${phase_number}): add SPEC.md for ${phase_name} — ${requirement_count} requirements (#2213)" -- "${phase_dir}/${padded_phase}-SPEC.md"
 ```
 
 If `commit_docs` is false: Skip commit. Note that SPEC.md was written but not committed.
