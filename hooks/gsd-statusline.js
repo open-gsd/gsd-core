@@ -342,7 +342,7 @@ function readGitStatus(dir) {
     // or untracked files; overflow still degrades safely to segment-absent via
     // the catch below.
     return childProcess.execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
-      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
   } catch (e) {
     return null;
   }
