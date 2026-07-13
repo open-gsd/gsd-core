@@ -67,9 +67,10 @@ function createRuntimeArtifactInstallPlan(args) {
     // to kind.stage() for agents kind entries with a converter (convertedAgentsKind).
     // NO _stampNonClaudeRuntimeDefaults — agents are NOT stamped in the inline loop.
     const os = _require('node:os');
+    const { posixNormalize } = _require('./shell-command-projection.cjs');
     const homedirFn = homedir ?? (() => os.homedir());
-    const resolvedTarget = path.resolve(layout.configDir).replace(/\\/g, '/');
-    const homeDir = homedirFn().replace(/\\/g, '/');
+    const resolvedTarget = posixNormalize(path.resolve(layout.configDir));
+    const homeDir = posixNormalize(homedirFn());
     const isGlobal = scope === 'global';
     const isOpencode = layout.runtime === 'opencode';
     const isWindowsHost = (platform ?? process.platform) === 'win32';
