@@ -118,7 +118,7 @@ Output: PostFeed and PostCard components wired to /api/feed.
 
 ### `<execution_context>`
 
-Lists workflow files the executor reads before starting. Always includes the execute-plan workflow; adds the checkpoints reference when the plan contains checkpoint tasks:
+Lists the workflow files associated with executing the plan. Always includes the execute-plan workflow; adds the checkpoints reference when the plan contains checkpoint tasks:
 
 ```xml
 <execution_context>
@@ -126,6 +126,8 @@ Lists workflow files the executor reads before starting. Always includes the exe
 @~/.claude/gsd-core/templates/summary.md
 </execution_context>
 ```
+
+These `@` paths point at the local GSD install, not at repository files. The prefix shown here (`~/.claude/gsd-core/…`) is the Claude global-install location; other runtimes and local installs resolve to their own install directory — for example `.cursor/gsd-core/…`, or an absolute project path for a `--local` install. Because the prefix is install-relative, this block is not clone-portable: a committed plan carries whichever prefix the authoring install had. Execution does not depend on it — `/gsd-execute-phase` loads the execute-plan workflow from its own installed copy — so the block records the execution context rather than resolvable repository references. Contrast `<context>` (below), whose repository-relative `@` paths resolve after a `git clone`.
 
 ### `<context>`
 
