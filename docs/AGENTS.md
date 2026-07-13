@@ -479,10 +479,10 @@ Communication style, decision patterns, debugging approach, UX preferences, vend
 |----------|-------|
 | **Spawned by** | `/gsd-secure-phase` |
 | **Parallelism** | Single instance |
-| **Tools** | Read, Write, Edit, Bash, Glob, Grep |
+| **Tools** | Read, Bash, Glob, Grep |
 | **Model (balanced)** | Sonnet |
 | **Color** | Red |
-| **Produces** | `{phase}-SECURITY.md` |
+| **Produces** | Structured verdict (SECURED / OPEN_THREATS / ESCALATE) — orchestrator writes `{phase}-SECURITY.md` (#2119) |
 
 **Key behaviors:**
 - Verifies each threat by its declared disposition (mitigate / accept / transfer)

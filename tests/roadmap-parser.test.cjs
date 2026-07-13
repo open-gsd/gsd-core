@@ -396,6 +396,88 @@ describe('roadmap-parser: getMilestoneInfo', () => {
   });
 });
 
+// ─── getMilestoneInfo — #2135 milestone_name clobber ──────────────────────────
+// The `##` heading regex was unanchored (no `^`/`m`), so it matched a `##`
+// quoted mid-line inside a Milestones bullet and captured a delimiter-led
+// fragment into `milestone_name`. The fix: consult the 🚧 name-bearing marker
+// FIRST, anchor the `##` regex to line start, and strip a leading delimiter.
+
+describe('roadmap-parser: getMilestoneInfo #2135 — milestone_name clobber', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('case A: 🚧 bullet quoting a nameless ## heading in backticks', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v1.8' });
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '',
+      '## Milestones',
+      '',
+      '- 🚧 **v1.8 user session cleanup** — Phases 36-41 — see `## v1.8 — Active Milestone` below',
+      '',
+      '## v1.8 — Active Milestone',
+      '',
+      '### Phase 36: Something',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v1.8');
+    assert.strictEqual(info.name, 'user session cleanup');
+  });
+
+  test('case B: nameless ## heading + 🚧 marker carries the real name', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v1.9' });
+    writeRoadmap(tmpDir, [
+      '## v1.9 — Active Milestone',
+      '',
+      '### 🚧 v1.9 — Falsifiability',
+      '',
+      '### Phase 1: Hypothesis',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v1.9');
+    assert.strictEqual(info.name, 'Falsifiability');
+  });
+
+  test('case C: canonical ## vX.Y: Name (no regression)', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v2.0' });
+    writeRoadmap(tmpDir, '## v2.0: The Big Launch\n### Phase 1: Setup\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v2.0');
+    assert.strictEqual(info.name, 'The Big Launch');
+  });
+
+  test('case D: canonical ## vX.Y — Name (em-dash delimiter stripped)', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v2.5' });
+    writeRoadmap(tmpDir, '## v2.5 — Galaxy Release\n### Phase 1: Start\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v2.5');
+    assert.strictEqual(info.name, 'Galaxy Release');
+  });
+
+  test('case E: 🚧 bullet only, no ## heading (no regression)', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v1.5' });
+    writeRoadmap(tmpDir, 'Some intro text.\n\n- 🚧 **v1.5 Quick Fix** — minor\n');
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.version, 'v1.5');
+    assert.strictEqual(info.name, 'Quick Fix');
+  });
+
+  test('anchored regex never matches a ## heading quoted inside backticks mid-line', () => {
+    writeState(tmpDir, { gsd_state_version: '1.0', milestone: 'v3.0' });
+    writeRoadmap(tmpDir, [
+      '# Roadmap',
+      '',
+      'See `## v3.0 — Active Milestone` referenced here.',
+      '',
+      '## v3.0: Real Name',
+    ].join('\n'));
+    const info = getMilestoneInfo(tmpDir);
+    assert.strictEqual(info.name, 'Real Name');
+  });
+});
+
 // ─── getMilestonePhaseFilter ──────────────────────────────────────────────────
 
 describe('roadmap-parser: getMilestonePhaseFilter', () => {
@@ -1880,5 +1962,169 @@ describe('feat-3594: roadmap parser does not crash on ANY corpus fixture', () =>
     });
   }
 });
+  });
+}
+
+// ─── #2200: currentMilestoneRawRanges scopes phase-complete writes ────────────
+// The phase-complete roadmap mutators (checkbox-flip + Plans writer) must mutate
+// only within the active milestone so they cannot touch a backticked prose
+// literal, a Backlog entry, or a same-numbered phase in a shipped milestone.
+// This tests the scoping helper the fix rests on (the mutators' command path is
+// covered by the existing phase-complete suite; gsd-test confirms no regression).
+{
+  const { describe: d3, test: t3 } = require('node:test');
+  const a3 = require('node:assert/strict');
+  const fs3 = require('node:fs');
+  const path3 = require('node:path');
+  const { createTempProject: ctp3, cleanup: cu3 } = require('./helpers.cjs');
+  const rp3 = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+
+  d3('#2200 currentMilestoneRawRanges — scopes writes to the active milestone', () => {
+    t3('the active window contains the active phase bullet, excludes Backlog + prose + shipped', () => {
+      const tmpDir = ctp3('fix-2200-');
+      try {
+        // Shipped milestone (in a <details> block) + Backlog + a backticked prose
+        // literal all come BEFORE the active milestone — the typical layout.
+        const roadmap = [
+          '# Roadmap', '',
+          '## Backlog', '- [ ] **Phase 1: Some Future Idea**', '',
+          '> See `- [ ] **Phase 1: Alpha**` in the active milestone.', '',
+          '<details><summary>✅ v0.9 Old</summary>',
+          '- [x] **Phase 1: Legacy**',
+          '### Phase 1: Legacy',
+          '**Plans:** 9/9 plans complete',
+          '</details>', '',
+          '## v1.0 — Active', '',
+          '- [ ] **Phase 1: Alpha**', '',
+          '### Phase 1: Alpha',
+          '**Plans:** 0/1 plans complete', '',
+        ].join('\n');
+        fs3.writeFileSync(path3.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+        fs3.writeFileSync(path3.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\ncurrent_phase: 1\n---\n');
+        const ranges = rp3.currentMilestoneRawRanges(roadmap, tmpDir);
+        a3.ok(ranges, 'a versioned active milestone must yield ranges');
+        const primary = roadmap.slice(ranges.primary.start, ranges.primary.end);
+        a3.ok(primary.includes('- [ ] **Phase 1: Alpha**'), 'active phase bullet is inside the window');
+        a3.ok(!primary.includes('Some Future Idea'), 'a Backlog entry is outside the active window');
+        a3.ok(!primary.includes('See `- [ ]'), 'a backticked prose literal is outside the active window');
+        a3.ok(!primary.includes('9/9 plans complete'), 'a shipped milestone plan-count line is outside the active window');
+      } finally {
+        cu3(tmpDir);
+      }
+    });
+
+    t3('returns null without a versioned active milestone (whole-content fallback)', () => {
+      a3.strictEqual(rp3.currentMilestoneRawRanges('# Roadmap\n- [ ] **Phase 1: X**\n', undefined), null);
+    });
+  });
+}
+// ─── #2199: bullet/em-dash ROADMAP phase resolution ───────────────────────────
+// Self-contained block: phase lookup + milestone filter must accept bullet/
+// checkbox entries with an em-dash/en-dash/hyphen/colon separator, not just the
+// ATX-heading + colon form. Previously such an entry resolved found:false and
+// `Phase null` was written into STATE.md; a bullet-only ROADMAP collapsed the
+// milestone filter to a zero-count pass-all.
+{
+  const { describe: d2, test: t2, beforeEach: be2, afterEach: ae2 } = require('node:test');
+  const a2 = require('node:assert/strict');
+  const fs2 = require('node:fs');
+  const path2 = require('node:path');
+  const { createTempProject: ctp2, cleanup: cu2 } = require('./helpers.cjs');
+  const rp2 = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+  const writeRoadmap2 = (d, c) => fs2.writeFileSync(path2.join(d, '.planning', 'ROADMAP.md'), c);
+
+  d2('#2199 roadmap bullet/em-dash phase resolution', () => {
+    let tmpDir;
+    be2(() => { tmpDir = ctp2('fix-2199-'); });
+    ae2(() => { cu2(tmpDir); });
+
+    t2('an all-bullet em-dash ROADMAP resolves each phase (no Phase null)', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '- [ ] **Phase 1 — Authentication**: login flow',
+        '- [ ] **Phase 2 — Authorization**: RBAC',
+        '- [x] **Phase 3 — Audit Logging**: events',
+        '',
+      ].join('\n'));
+      const p1 = rp2.getRoadmapPhaseInternal(tmpDir, '1');
+      a2.ok(p1 && p1.found, 'Phase 1 must resolve on a bullet ROADMAP');
+      a2.strictEqual(p1.phase_name, 'Authentication');
+      const p2 = rp2.getRoadmapPhaseInternal(tmpDir, '2');
+      a2.ok(p2 && p2.found);
+      a2.strictEqual(p2.phase_name, 'Authorization');
+      const p3 = rp2.getRoadmapPhaseInternal(tmpDir, '3');
+      a2.ok(p3 && p3.found, 'a checked [x] bullet must also resolve');
+      a2.strictEqual(p3.phase_name, 'Audit Logging');
+      const absent = rp2.getRoadmapPhaseInternal(tmpDir, '99');
+      a2.ok(!absent || !absent.found, 'an absent phase must not resolve');
+    });
+
+    t2('bullet entries with colon / en-dash / hyphen separators all resolve', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '- [ ] **Phase 1: Colon Sep**: one',
+        '- [ ] **Phase 2 – En Dash**: two',
+        '- [ ] **Phase 3 - Hyphen Sep**: three',
+        '',
+      ].join('\n'));
+      a2.strictEqual(rp2.getRoadmapPhaseInternal(tmpDir, '1').phase_name, 'Colon Sep');
+      a2.strictEqual(rp2.getRoadmapPhaseInternal(tmpDir, '2').phase_name, 'En Dash');
+      a2.strictEqual(rp2.getRoadmapPhaseInternal(tmpDir, '3').phase_name, 'Hyphen Sep');
+    });
+
+    t2('mixed heading + bullet forms both resolve', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '### Phase 1: Heading Form',
+        'body',
+        '- [ ] **Phase 2 — Bullet Form**: two',
+        '',
+      ].join('\n'));
+      const p1 = rp2.getRoadmapPhaseInternal(tmpDir, '1');
+      a2.ok(p1 && p1.found, 'heading form still resolves (no regression)');
+      a2.ok(/Heading Form/.test(p1.phase_name));
+      const p2 = rp2.getRoadmapPhaseInternal(tmpDir, '2');
+      a2.ok(p2 && p2.found, 'bullet form resolves alongside heading form');
+      a2.strictEqual(p2.phase_name, 'Bullet Form');
+    });
+
+    t2('milestone phase-count counts bullet-form phases (not zero)', () => {
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '', '## v1.0 Active', '',
+        '- [ ] **Phase 1 — One**: a',
+        '- [ ] **Phase 2 — Two**: b',
+        '- [ ] **Phase 3 — Three**: c',
+        '',
+      ].join('\n'));
+      const filter = rp2.getMilestonePhaseFilter(tmpDir);
+      a2.strictEqual(filter.phaseCount, 3,
+        'a bullet-only ROADMAP must populate the milestone phase set (was a zero-count pass-all before #2199)');
+      a2.ok(filter('1'), 'phase 1 dir is in the milestone set');
+      a2.ok(filter('2'), 'phase 2 dir is in the milestone set');
+      a2.ok(!filter('99'), 'a non-listed phase is excluded');
+    });
+
+    t2('#2199 heading in Phase Details (full content) beats a bullet in the active scope', () => {
+      // The exact first-attempt regression: a bullet for the phase exists in the
+      // active-milestone scope, but the heading (carrying Requirements) lives in a
+      // Phase Details section outside that scope (only in fullContent). The heading
+      // MUST win — otherwise the bullet's single-line section yields null req_ids.
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '',
+        '## Milestones', '',
+        '- 🚧 **v1.0 Active** - Phases 10-11', '',
+        '## v1.0 Active', '',
+        '- [ ] **Phase 11 — Second Active Phase**',
+        '',
+        '## Phase Details', '',
+        '### Phase 11: Second Active Phase',
+        '**Requirements**: REQ-02, REQ-03',
+        '',
+      ].join('\n'));
+      const p11 = rp2.getRoadmapPhaseInternal(tmpDir, '11');
+      a2.ok(p11 && p11.found, 'phase 11 resolves');
+      a2.ok(/REQ-02/.test(p11.section),
+        'the heading section (with Requirements) must win over the scoped bullet line');
+    });
   });
 }

@@ -57,15 +57,18 @@ describe('SECURE: gsd-security-auditor agent', () => {
     );
   });
 
-  test('tools include Read, Write, Bash, Glob, Grep', () => {
+  test('tools include Read, Bash, Glob, Grep but NOT Write or Edit (#2119)', () => {
     const content = fs.readFileSync(agentPath, 'utf-8');
-    const requiredTools = ['Read', 'Write', 'Bash', 'Glob', 'Grep'];
+    const requiredTools = ['Read', 'Bash', 'Glob', 'Grep'];
     for (const tool of requiredTools) {
       assert.ok(
         content.includes(`- ${tool}`),
         `tools must include ${tool}`
       );
     }
+    // #2119: auditor is return-only — orchestrator is the sole SECURITY.md writer
+    assert.ok(!content.includes('- Write'), 'tools must NOT include Write (#2119)');
+    assert.ok(!content.includes('- Edit'), 'tools must NOT include Edit (#2119)');
   });
 
   test('has <role> section', () => {

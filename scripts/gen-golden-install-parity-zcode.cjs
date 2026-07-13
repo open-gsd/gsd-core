@@ -69,12 +69,17 @@ function cleanup(root) {
 // With no args, regenerates ALL runtimes. With args, only the named runtimes.
 const targets = process.argv.slice(2).length > 0 ? process.argv.slice(2) : Object.keys(RUNTIME_META);
 fs.mkdirSync(FIXTURE_DIR, { recursive: true });
+
+// Track the claude root so we can reuse it for the local layout fixture below.
+let claudeRoot = null;
+
 for (const runtime of targets) {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_META, runtime)) {
     process.stderr.write(`[gen] unknown runtime '${runtime}' (not in RUNTIME_META) — skipping\n`);
     continue;
   }
   const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
+  if (runtime === 'claude') claudeRoot = root;
   let actual;
   try {
     actual = buildParityManifest(configDir, root);
@@ -85,3 +90,17 @@ for (const runtime of targets) {
   fs.writeFileSync(fixturePath, JSON.stringify(actual, null, 2) + '\n', 'utf8');
   process.stdout.write(`[gen] ${runtime}: wrote ${Object.keys(actual).length} file hashes -> ${fixturePath}\n`);
 }
+
+// Also regenerate the claude LOCAL legacy-layout fixture (claude-local.json).
+// This layout is distinct from the global install (commands/gsd-*.md +
+// agents/gsd-*.md) and has its own parity assertion in the test harness.
+const { configDir: localConfigDir, root: localRoot } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+let localActual;
+try {
+  localActual = buildParityManifest(localConfigDir, localRoot);
+} finally {
+  cleanup(localRoot);
+}
+const localFixturePath = path.join(FIXTURE_DIR, 'claude-local.json');
+fs.writeFileSync(localFixturePath, JSON.stringify(localActual, null, 2) + '\n', 'utf8');
+process.stdout.write(`[gen] claude-local: wrote ${Object.keys(localActual).length} file hashes -> ${localFixturePath}\n`);

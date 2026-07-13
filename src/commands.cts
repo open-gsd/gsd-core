@@ -42,6 +42,7 @@ const { extractFrontmatter } = frontmatter;
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { realClock } from './clock.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -693,6 +694,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
   // Stage files
   const explicitFiles = files && files.length > 0;
   const filesToStage = explicitFiles ? files : ['.planning/'];
+  const stagedPaths: string[] = [];
   for (const file of filesToStage) {
     const fullPath = path.join(cwd, file);
     if (!fs.existsSync(fullPath)) {
@@ -707,12 +709,32 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       execGit(['rm', '--cached', '--ignore-unmatch', file], { cwd });
     } else {
       execGit(['add', file], { cwd });
+      stagedPaths.push(file);
     }
   }
 
-  // Commit (--no-verify skips pre-commit hooks, used by parallel executor agents)
-  const commitArgs = amend ? ['commit', '--amend', '--no-edit'] : ['commit', '-m', sanitizedMessage as string];
+  // Commit — when the caller declared a scope (--files), append a pathspec so
+  // only the declared files land in the commit, not the entire index (#2112).
+  // The pathspec uses stagedPaths (not filesToStage) so skipped missing files
+  // are excluded — otherwise git would record them as deletions (#2014).
+  // During a merge, git refuses partial commits — fall back to a bare commit.
+  // --amend is left without a pathspec: amending with -- <paths> is a different
+  // operation that rewrites the tip with only those paths.
+  if (explicitFiles && stagedPaths.length === 0 && !amend) {
+    const result = { committed: false, hash: null, reason: 'nothing_to_commit' };
+    output(result, raw, 'nothing');
+    return;
+  }
+  const isMergeInProgress = execGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd }).exitCode === 0;
+  const canScope = explicitFiles && stagedPaths.length > 0 && !amend
+    && !isMergeInProgress;
+  const commitArgs = amend
+    ? ['commit', '--amend', '--no-edit']
+    : ['commit', '-m', sanitizedMessage as string];
   if (noVerify) commitArgs.push('--no-verify');
+  if (canScope) {
+    commitArgs.push('--', ...stagedPaths);
+  }
   const commitResult = execGit(commitArgs, { cwd });
   if (commitResult.exitCode !== 0) {
     if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
@@ -816,13 +838,22 @@ function cmdCommitToSubrepo(cwd: string, message: string | undefined, files: str
     const repoCwd = path.join(cwd, repo);
 
     // Stage files (strip sub-repo prefix for paths relative to that repo)
+    const stagedRelPaths: string[] = [];
     for (const file of repoFiles) {
       const relativePath = file.slice(repo.length + 1);
-      execGit(['add', relativePath], { cwd: repoCwd });
+      const addResult = execGit(['add', relativePath], { cwd: repoCwd });
+      if (addResult.exitCode === 0) {
+        stagedRelPaths.push(relativePath);
+      }
     }
 
-    // Commit
-    const commitResult = execGit(['commit', '-m', message as string], { cwd: repoCwd });
+    // Commit — pathspec limits the commit to the staged files only (#2112)
+    const isMergeInProgressSub = execGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoCwd }).exitCode === 0;
+    const canScopeSub = stagedRelPaths.length > 0 && !isMergeInProgressSub;
+    const commitArgs = canScopeSub
+      ? ['commit', '-m', message as string, '--', ...stagedRelPaths]
+      : ['commit', '-m', message as string];
+    const commitResult = execGit(commitArgs, { cwd: repoCwd });
     if (commitResult.exitCode !== 0) {
       if (commitResult.stdout.includes('nothing to commit') || commitResult.stderr.includes('nothing to commit')) {
         repos[repo] = { committed: false, hash: null, files: repoFiles, reason: 'nothing_to_commit' };
@@ -968,8 +999,16 @@ function cmdPrSubrepo(
     }
   }
 
-  // 5. Commit
-  const commitResult = execGit(['commit', '-m', commitMessage as string], { cwd: repoCwd });
+  // 5. Commit — pathspec limits the commit to the staged files only (#2112).
+  // changedFiles includes both old and new paths for renames so the full
+  // rename is captured atomically (pathspec on newPath alone would leave the
+  // deletion of oldPath stranded in the index).
+  const isMergeInProgressPr = execGit(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoCwd }).exitCode === 0;
+  const canScopePr = changedFiles.length > 0 && !isMergeInProgressPr;
+  const commitArgs = canScopePr
+    ? ['commit', '-m', commitMessage as string, '--', ...changedFiles]
+    : ['commit', '-m', commitMessage as string];
+  const commitResult = execGit(commitArgs, { cwd: repoCwd });
   if (commitResult.exitCode !== 0) {
     rollback();
     error(`Failed to commit in ${repo}: ${commitResult.stderr}`);
@@ -1418,7 +1457,7 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, raw: boolean
 
   // Read, add completion timestamp, move
   let content = fs.readFileSync(sourcePath, 'utf-8');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   content = `completed: ${today}\n` + content;
 
   platformWriteSync(path.join(completedDir, filename as string), content);
@@ -1430,7 +1469,10 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, raw: boolean
 function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: boolean): void {
   const { phase, name } = options;
   const padded = phase ? normalizePhaseName(phase) : '00';
-  const today = new Date().toISOString().split('T')[0];
+  // #2136 sibling site (deliberately deferred per the issue's scope): scaffold's
+  // date stays on the raw UTC slice for now; route through realClock.localToday()
+  // alongside workstream.cts/gsd2-import.cts/template.cts/verify.cts in a follow-up.
+  const today = realClock.localToday();
 
   // Find phase directory
   const phaseInfo = phase ? findPhaseInternal(cwd, phase) as Record<string, unknown> | null : null;

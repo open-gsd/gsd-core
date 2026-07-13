@@ -22,6 +22,7 @@ const { stateExtractField } = require('../gsd-core/bin/lib/state-document.cjs');
 
 const fixedClock = Object.freeze({
   today: () => '2026-06-27',
+  localToday: () => '2026-06-27',
   nowIso: () => '2026-06-27T12:00:00.000Z',
 });
 

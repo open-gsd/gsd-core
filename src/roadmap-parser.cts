@@ -202,6 +202,23 @@ function replaceInCurrentMilestone(content: string, pattern: RegExp, replacement
 
 // ─── Roadmap phase lookup ─────────────────────────────────────────────────────
 
+// #2199: a bullet/checkbox phase entry, e.g. `- [ ] **Phase 36 — Authentication**`
+// (the bundled roadmapper emits this in bullet-house-style ROADMAPs). The number
+// is captured in group 1, the name in group 2; the separator may be an em-dash,
+// en-dash, hyphen, or colon. Used as a fallback when no ATX heading matches, and
+// to count phases in a milestone that uses the bullet form.
+const BULLET_PHASE_LINE_PATTERN =
+  /^\s*[-*]\s+(?:\[[ xX]\]\s+)?\*\*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*[—–:\-]\s*(.+?)\*\*/im;
+
+/** Build a bullet-phase-line regex pinned to a specific phase number (#2199). */
+function bulletPhaseLineFor(phaseNum: unknown, phaseSource?: string): RegExp {
+  const num = phaseSource ?? phaseMarkdownRegexSource(phaseNum);
+  return new RegExp(
+    `^\\s*[-*]\\s+(?:\\[[ xX]\\]\\s+)?\\*\\*Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)\\*\\*`,
+    'im',
+  );
+}
+
 interface RoadmapPhaseResult {
   found: boolean;
   phase_number: string;
@@ -241,6 +258,22 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSour
   };
 }
 
+function findRoadmapBulletPhaseInContent(content: string, phaseNum: unknown, phaseSource?: string): RoadmapPhaseResult | null {
+  // #2199: bullet/checkbox entry fallback (`- [ ] **Phase N — name**`). Returns
+  // the single bullet line as the section (no multi-line body) — used only as a
+  // last resort, AFTER heading lookup on scoped + full content has failed, so a
+  // heading with a Requirements/Goal section always wins.
+  const bulletMatch = content.match(bulletPhaseLineFor(phaseNum, phaseSource));
+  if (!bulletMatch) return null;
+  return {
+    found: true,
+    phase_number: String(phaseNum),
+    phase_name: bulletMatch[2].trim(),
+    goal: null,
+    section: bulletMatch[0].trim(),
+  };
+}
+
 function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseResult | null {
   if (!phaseNum) return null;
   const normalizedPhase = stripProjectCodePrefix(phaseNum);
@@ -262,6 +295,17 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
       if (fullResult) return fullResult;
     }
 
+    // #2199: no ATX heading matched on scoped or full content — fall back to a
+    // bullet/checkbox entry (em-dash/en-dash/hyphen/colon separator). Last resort
+    // so a bullet never pre-empts a heading that carries the Requirements section.
+    for (const source of roadmapPhaseLookupSources(phaseNum)) {
+      const scopedBullet = findRoadmapBulletPhaseInContent(content, phaseNum, source);
+      if (scopedBullet) return scopedBullet;
+
+      const fullBullet = findRoadmapBulletPhaseInContent(fullContent, phaseNum, source);
+      if (fullBullet) return fullBullet;
+    }
+
     return null;
   } catch {
     return null;
@@ -273,6 +317,19 @@ function getRoadmapPhaseInternal(cwd: string, phaseNum: unknown): RoadmapPhaseRe
 interface MilestoneInfo {
   version: string;
   name: string;
+}
+
+/**
+ * Strip a leading delimiter run (whitespace, em/en-dash, colon, hyphen) from a
+ * milestone-name capture. Markdown headings commonly take the shape
+ * `## vX.Y — Name` or `## vX.Y: Name`; the raw capture includes the delimiter
+ * because `.trim()` only removes whitespace, not punctuation. A name beginning
+ * with punctuation is a delimiter-led fragment, not the curated name (#2135).
+ * NOTE: do not strip `#` — a name beginning with `#` is a heading-parse failure
+ * that should stay loud rather than be silently cleaned.
+ */
+function stripLeadingDelimiter(s: string): string {
+  return s.replace(/^[\s—–:-]+/, '').trim();
 }
 
 function getMilestoneInfo(cwd: string): MilestoneInfo {
@@ -294,22 +351,34 @@ function getMilestoneInfo(cwd: string): MilestoneInfo {
 
     if (stateVersion) {
       const escapedVer = escapeRegex(stateVersion);
-      const headingMatch = roadmap.match(
-        new RegExp(`##[^\\n]*${escapedVer}[:\\s]+([^\\n(]+)`, 'i')
+
+      // #2135: consult the 🚧 name-bearing marker FIRST. It is the only construct
+      // guaranteed to carry the milestone's curated name adjacent to its version
+      // (the active-milestone bullet). A `##` heading is often nameless
+      // ("## vX.Y — Active Milestone") and, when unanchored, was matched
+      // spuriously on a copy quoted inside backticks in this very bullet.
+      const listMatch = roadmap.match(
+        new RegExp(`🚧\\s*\\*?\\*?${escapedVer}\\s+([^*\\n]+)`, 'i')
       );
-      if (headingMatch) {
-        if (!headingMatch[0].includes('✅')) {
-          return { version: stateVersion, name: headingMatch[1].trim() };
-        }
-      } else {
-        const listMatch = roadmap.match(
-          new RegExp(`🚧\\s*\\*?\\*?${escapedVer}\\s+([^*\\n]+)`, 'i')
-        );
-        if (listMatch) {
-          return { version: stateVersion, name: listMatch[1].trim() };
-        }
-        return { version: stateVersion, name: 'milestone' };
+      if (listMatch) {
+        const name = stripLeadingDelimiter(listMatch[1]);
+        if (name) return { version: stateVersion, name };
       }
+
+      // Fall back to the `##` heading — ANCHORED to line start (`^` + `m` flag)
+      // so a heading quoted inside backticks or prose mid-line can no longer
+      // match. Skip shipped (✅) headings.
+      const headingMatch = roadmap.match(
+        new RegExp(`^##[^\\n]*${escapedVer}[:\\s]+([^\\n(]+)`, 'im')
+      );
+      if (headingMatch && !headingMatch[0].includes('✅')) {
+        // Strip a leading delimiter — `.trim()` removes whitespace, not the
+        // em-dash/colon that conventionally separates version from name.
+        const name = stripLeadingDelimiter(headingMatch[1]);
+        if (name) return { version: stateVersion, name };
+      }
+
+      return { version: stateVersion, name: 'milestone' };
     }
 
     const inProgressMatch = roadmap.match(/🚧\s*\*\*v(\d+(?:\.\d+)+)\s+([^*]+)\*\*/);
@@ -433,6 +502,16 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
       // Exclude 999.x backlog phases from milestone phase set. Mirrors init.cts filter.
       if (pm && !/^999\b/.test(pm[1])) milestonePhaseNums.add(pm[1]);
     }
+    // #2199: also count bullet/checkbox phase entries (`- [ ] **Phase N — name**`)
+    // so a bullet-house-style ROADMAP populates the milestone phase set instead of
+    // collapsing to a zero-count pass-all filter.
+    {
+      let bm: RegExpExecArray | null;
+      const scanner = new RegExp(BULLET_PHASE_LINE_PATTERN.source, 'gim');
+      while ((bm = scanner.exec(roadmap)) !== null) {
+        if (!/^999\b/.test(bm[1])) milestonePhaseNums.add(bm[1]);
+      }
+    }
   } catch { /* intentionally empty */ }
 
   if (milestonePhaseNums.size === 0) {
@@ -477,6 +556,92 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
   return isDirInMilestone as MilestonePhaseFilter;
 }
 
+/**
+ * #2200: raw [start,end) offsets of the current milestone's region(s) in ROADMAP
+ * content, for scoping write-path mutations (phase-checkbox flip, Plans-count
+ * writer) so they cannot touch a backticked prose literal, a Backlog entry, or a
+ * same-numbered phase in a shipped milestone.
+ *
+ * Mirrors the region selection in `extractCurrentMilestone` (version detection →
+ * active heading → next milestone boundary → optional Phase Details section).
+ * Returns null when there is no versioned active milestone; callers then fall
+ * back to whole-content mutation (the prior behaviour).
+ *
+ * NOTE: keep the region logic here in sync with extractCurrentMilestone.
+ */
+function currentMilestoneRawRanges(
+  content: string,
+  cwd?: string,
+): { primary: { start: number; end: number }; details: { start: number; end: number } | null } | null {
+  if (!cwd) return null;
+
+  let version: string | null = null;
+  try {
+    const statePath = path.join(planningDir(cwd), 'STATE.md');
+    const stateRaw = platformReadSync(statePath);
+    if (stateRaw !== null) {
+      const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
+      if (milestoneMatch) version = milestoneMatch[1].trim();
+    }
+  } catch { /* ignore */ }
+  if (!version) {
+    const inProgressMatch = content.match(/(?:🚧|🔄)\s*\*\*v(\d+\.\d+)\s/);
+    if (inProgressMatch) version = 'v' + inProgressMatch[1];
+  }
+  if (!version) return null;
+
+  const escapedVersion = escapeRegex(version);
+  const sectionPattern = new RegExp(
+    `(^#{1,3}\\s+(?!Phase\\s+\\S).*${escapedVersion}\\b[^\\n]*)`,
+    'gmi',
+  );
+  const headingMatches = [...content.matchAll(sectionPattern)];
+  if (headingMatches.length === 0) return null;
+
+  const closedMarkerPattern = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|✅|🗄/i;
+  const activeMarkerPattern = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|🚧|🔄/i;
+  const isClosed = (h: string) => closedMarkerPattern.test(h) && !activeMarkerPattern.test(h);
+  const firstMatch = headingMatches[0];
+  const selected = headingMatches.find((m) => !isClosed(m[1])) || firstMatch;
+  const sectionStart = selected.index ?? 0;
+
+  const computeSectionEnd = (headingText: string, headingStart: number): number => {
+    const level = (headingText.match(/^(#{1,3})\s/) ?? ['', '#'])[1].length;
+    const afterHeading = headingStart + headingText.length;
+    for (const h of tokenizeHeadings(content)) {
+      if (h.offset <= headingStart) continue;
+      if (h.offset < afterHeading) continue;
+      if (h.level > level) continue;
+      if (/^Phase\s+\S/i.test(h.text)) continue;
+      if (!/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) continue;
+      return h.offset;
+    }
+    return content.length;
+  };
+  const sectionEnd = computeSectionEnd(selected[0], sectionStart);
+
+  const selectedVersionToken = selected[1].match(
+    /v\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*/i,
+  )?.[0];
+  const detailsVersionBoundary = selectedVersionToken
+    ? new RegExp(`${escapeRegex(selectedVersionToken)}(?![\\w.-])`, 'i')
+    : null;
+  const detailsMatch = headingMatches.find(
+    (m) =>
+      /\(Phase\s+Details\)/i.test(m[1]) &&
+      !isClosed(m[1]) &&
+      (!detailsVersionBoundary || detailsVersionBoundary.test(m[1])) &&
+      (m.index ?? 0) >= sectionEnd,
+  );
+  let details: { start: number; end: number } | null = null;
+  if (detailsMatch) {
+    const detailsStart = detailsMatch.index ?? 0;
+    details = { start: detailsStart, end: computeSectionEnd(detailsMatch[0], detailsStart) };
+  }
+
+  return { primary: { start: sectionStart, end: sectionEnd }, details };
+}
+
 export = {
   stripShippedMilestones,
   extractCurrentMilestone,
@@ -484,4 +649,5 @@ export = {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
+  currentMilestoneRawRanges,
 };
