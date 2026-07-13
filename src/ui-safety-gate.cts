@@ -77,13 +77,38 @@ export function checkUiPresence(text: string): UiPresenceResult {
   // Normalise CRLF so the pattern sees consistent line boundaries.
   const normalised = text.replace(/\r\n/g, '\n');
 
+  // #2150: an explicit `**UI hint**: yes|no` metadata line is the author's
+  // authoritative declaration of whether the phase has a UI surface — progress.md
+  // and new-project.md already parse this line (`UI hint.*yes`). The bare token
+  // `UI` in the line itself must not count as a UI indicator, and the declaration
+  // overrides token-sniffing. Line-anchored (`m`) so a mid-line prose mention is
+  // not treated as the metadata line; word-boundary on the value so `nope`/`not`
+  // do not match `no`.
+  const hintMatch = normalised.match(/^\s*\*\*UI hint\*\*\s*:\s*(yes|no)\b/im);
+  const hint = hintMatch ? hintMatch[1].toLowerCase() : null;
+
+  // Strip ANY `**UI hint**:` line before token-sniffing so a hint without a
+  // recognised yes/no (or one we did not short-circuit on) cannot false-positive
+  // on the bare `UI` token.
+  const sniffable = normalised
+    .split('\n')
+    .filter((line) => !/^\s*\*\*UI hint\*\*\s*:/i.test(line))
+    .join('\n');
+
   const found = new Set<string>();
-  for (const line of normalised.split('\n')) {
+  for (const line of sniffable.split('\n')) {
     // Reset lastIndex before each line so the global pattern restarts from 0.
     UI_GATE_PATTERN_GLOBAL.lastIndex = 0;
     for (const m of line.matchAll(UI_GATE_PATTERN_GLOBAL)) {
       found.add(m[2].toLowerCase());
     }
+  }
+
+  if (hint === 'no') {
+    return { hasUI: false, tokens: [] };
+  }
+  if (hint === 'yes') {
+    return { hasUI: true, tokens: [...found] };
   }
 
   return { hasUI: found.size > 0, tokens: [...found] };
