@@ -1624,6 +1624,16 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
     derivedFm['progress'] = normalizeProgressNumbers(existingFm['progress']);
   }
 
+  // #2202: carry forward any existing frontmatter key that the schema does not
+  // own, so custom/unknown keys are not silently dropped on every mutating verb.
+  // Schema-owned keys (already in derivedFm from buildStateFrontmatter + the
+  // preserve guards above) still win.
+  for (const key of Object.keys(existingFm)) {
+    if (!(key in derivedFm) && existingFm[key] !== undefined) {
+      (derivedFm as Record<string, unknown>)[key] = existingFm[key];
+    }
+  }
+
   const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
   return `---\n${yamlStr}\n---\n\n${body}`;
 }
