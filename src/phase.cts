@@ -1672,7 +1672,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             ? reqContent.slice(traceabilityHeadingMatch.index)
             : '';
           const tableReqIds = new Set<string>();
-          const tableRowPat = /^\|\s*([A-Z][A-Z0-9]*-\d+)\s*\|/gm;
+          // #2203: match REQ-IDs in any pipe-delimited cell (not just the first
+          // column) so a traceability table that leads with a status column (e.g.
+          // | ☐ | REQ-01 | …) is parsed correctly instead of reporting every row
+          // as missing.
+          const tableRowPat = /\|\s*([A-Z][A-Z0-9]*-\d+)\s*\|/g;
           let tableMatch: RegExpExecArray | null;
           while ((tableMatch = tableRowPat.exec(traceabilitySection)) !== null) {
             tableReqIds.add(tableMatch[1]);
