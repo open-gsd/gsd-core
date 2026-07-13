@@ -369,7 +369,7 @@ fi
 # #2176: same absolute-root anchor as the Antigravity block — cursor-agent runs
 # in the repo cwd, but repo-relative references in the assembled prompt still
 # need an explicit root to resolve against. rev-parse (not bare pwd) so the
-# anchor is correct even when /gsd-review is invoked from a repo subdirectory.
+# anchor is correct even when /gsd:review is invoked from a repo subdirectory.
 _CURSOR_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $_CURSOR_ROOT — resolve every relative file path in the review request against that absolute root. Output only the resulting markdown review. Do not edit any files."
 cursor-agent -p --mode ask --trust --output-format text "$CURSOR_PROMPT_ARG" 2>/tmp/gsd-review-cursor-{phase}.err > /tmp/gsd-review-cursor-{phase}.md
