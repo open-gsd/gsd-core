@@ -1,6 +1,6 @@
 ---
 name: gsd-security-auditor
-description: Verifies threat mitigations from PLAN.md threat model exist in implemented code. Returns structured security verdict (SECURED / OPEN_THREATS / ESCALATE). Spawned by /gsd-secure-phase.
+description: Verifies threat mitigations from PLAN.md threat model exist in implemented code. Returns structured security verdict (SECURED / OPEN_THREATS / ESCALATE). Spawned by /gsd:secure-phase.
 tools:
   - Read
   - Bash
@@ -143,7 +143,7 @@ Return the structured result (SECURED / OPEN_THREATS / ESCALATE) with `threats_o
 
 *Only blocking-open threats count toward `threats_open` in SECURITY.md frontmatter.*
 
-Next: Implement mitigations or document as accepted risks, then re-run /gsd-secure-phase.
+Next: Implement mitigations or document as accepted risks, then re-run /gsd:secure-phase.
 
 **threats_open:** {count}
 ```
