@@ -5,6 +5,12 @@
  *
  * Verifies that the three agents (researcher, planner, executor) contain the
  * interlocking instruction text that forms the slopsquatting defence gate.
+ *
+ * The gate spans TWO layers. The executor stops at a `gate="blocking-human"`
+ * checkpoint and hands it up; the execute-phase orchestrator then decides
+ * whether the human ever sees it. Asserting only the executor half leaves the
+ * orchestrator free to auto-approve the checkpoint the executor just refused
+ * to auto-approve.
  */
 
 const { describe, test, before } = require('node:test');
@@ -16,6 +22,9 @@ const AGENTS = path.join(__dirname, '..', 'agents');
 const RESEARCHER = path.join(AGENTS, 'gsd-phase-researcher.md');
 const PLANNER = path.join(AGENTS, 'gsd-planner.md');
 const EXECUTOR = path.join(AGENTS, 'gsd-executor.md');
+
+const WORKFLOWS = path.join(__dirname, '..', 'gsd-core', 'workflows');
+const EXECUTE_PHASE = path.join(WORKFLOWS, 'execute-phase.md');
 
 function parseSections(md) {
   const lines = md.split(/\r?\n/);
@@ -474,5 +483,135 @@ describe('gsd-executor.md — package installs excluded from RULE 3 auto-fix', (
       hasExceptionRule,
       'executor auto mode must explicitly block auto-approval for package-legitimacy checkpoints'
     );
+  });
+
+  // #2107 harm, one checkpoint type over: the executor auto-resolves a decision
+  // checkpoint itself (auto-selects the first option and continues) without ever
+  // returning it, so a blocking-human decision must be carved out HERE — the
+  // orchestrator's carve-out never runs for a checkpoint the executor swallowed.
+  test('auto mode does not auto-select a blocking-human decision checkpoint', () => {
+    const autoModeLine = lineIndexes(model.lines, (line) => hasAllTokens(line, ['auto-mode', 'checkpoint', 'behavior']))[0];
+    assert.notEqual(autoModeLine, undefined, 'executor must define auto-mode checkpoint behavior');
+
+    const window = model.lines.slice(autoModeLine, autoModeLine + 25);
+
+    const decisionLines = window.filter((line) => hasAllTokens(line, ['checkpoint:decision']));
+    assert.ok(decisionLines.length > 0, 'executor auto-mode must document the checkpoint:decision branch');
+
+    const gatesDecision = decisionLines.some(
+      (line) =>
+        hasAllTokens(line, ['blocking-human']) &&
+        (hasAllTokens(line, ['stop']) || hasAllTokens(line, ['not', 'auto-select']))
+    );
+
+    assert.ok(
+      gatesDecision,
+      'checkpoint:decision must carve out gate="blocking-human" (STOP + return) instead of auto-selecting the first option'
+    );
+  });
+
+  test('checkpoint_return_format transports the gate across the executor→orchestrator boundary', () => {
+    const fmt = extractXmlElement(model.text, 'checkpoint_return_format');
+    assert.ok(fmt.length > 0, 'executor must define checkpoint_return_format');
+
+    const fmtLines = fmt.split(/\r?\n/);
+    const hasGateField = fmtLines.some((line) => hasAllTokens(line, ['gate:', 'blocking-human']));
+
+    assert.ok(
+      hasGateField,
+      'checkpoint_return_format must carry a **Gate:** field so blocking-human reaches the orchestrator carve-out'
+    );
+  });
+});
+
+describe('execute-phase.md — orchestrator honors the blocking-human gate', () => {
+  let model;
+
+  before(() => {
+    model = readModel(EXECUTE_PHASE);
+  });
+
+  // The executor refuses to auto-approve a gate="blocking-human" checkpoint and
+  // returns it via checkpoint_return_format. The orchestrator's auto-mode branch
+  // is what runs next. If that branch dispatches purely on checkpoint *type*, it
+  // auto-approves the checkpoint the executor just escalated — nullifying the
+  // slopsquatting gate in exactly the unattended mode where it matters.
+  test('auto-mode checkpoint handling excludes blocking-human checkpoints', () => {
+    // NB: normalizeTokens keeps ':' as a word character, so the heading
+    // "**Auto-mode checkpoint handling:**" yields the token `handling:`, not
+    // `handling`. Anchor on the two tokens that survive intact.
+    const autoModeLine = lineIndexes(model.lines, (line) =>
+      hasAllTokens(line, ['auto-mode', 'checkpoint'])
+    )[0];
+
+    assert.notEqual(
+      autoModeLine,
+      undefined,
+      'execute-phase.md must define auto-mode checkpoint handling'
+    );
+
+    const window = model.lines.slice(autoModeLine, autoModeLine + 20);
+
+    const honorsGate =
+      anyLineHasAll(window, ['blocking-human']) ||
+      anyLineHasAll(window, ['except', 'package-legitimacy']);
+
+    assert.ok(
+      honorsGate,
+      'execute-phase auto-mode must not auto-approve gate="blocking-human" checkpoints — ' +
+        'the executor escalates them precisely so a human sees them'
+    );
+  });
+
+  test('auto-approve rule for human-verify is conditional, not unconditional', () => {
+    const autoApproveLines = lineIndexes(model.lines, (line) =>
+      hasAllTokens(line, ['human-verify', 'auto-spawn', 'approved'])
+    );
+
+    assert.ok(
+      autoApproveLines.length > 0,
+      'anchor drift: no human-verify auto-approve line matched — the conditional carve-out would pass vacuously'
+    );
+
+    for (const idx of autoApproveLines) {
+      const line = model.lines[idx];
+      const isConditional =
+        hasAllTokens(line, ['unless']) ||
+        hasAllTokens(line, ['except']) ||
+        hasAllTokens(line, ['blocking-human']) ||
+        hasAllTokens(line, ['if', 'not']);
+
+      assert.ok(
+        isConditional,
+        `execute-phase.md:${idx + 1} auto-approves human-verify unconditionally; ` +
+          'it must carve out gate="blocking-human"'
+      );
+    }
+  });
+
+  test('auto-select rule for decision is conditional, not unconditional', () => {
+    const autoSelectLines = lineIndexes(model.lines, (line) =>
+      hasAllTokens(line, ['decision', 'auto-spawn', 'first', 'option'])
+    );
+
+    assert.ok(
+      autoSelectLines.length > 0,
+      'anchor drift: no decision auto-select line matched — the conditional carve-out would pass vacuously'
+    );
+
+    for (const idx of autoSelectLines) {
+      const line = model.lines[idx];
+      const isConditional =
+        hasAllTokens(line, ['unless']) ||
+        hasAllTokens(line, ['except']) ||
+        hasAllTokens(line, ['blocking-human']) ||
+        hasAllTokens(line, ['if', 'not']);
+
+      assert.ok(
+        isConditional,
+        `execute-phase.md:${idx + 1} auto-selects a decision unconditionally; ` +
+          'it must carve out gate="blocking-human"'
+      );
+    }
   });
 });
