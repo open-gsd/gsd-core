@@ -1968,5 +1968,28 @@ describe('feat-3594: roadmap parser does not crash on ANY corpus fixture', () =>
       a2.ok(filter('2'), 'phase 2 dir is in the milestone set');
       a2.ok(!filter('99'), 'a non-listed phase is excluded');
     });
+
+    t2('#2199 heading in Phase Details (full content) beats a bullet in the active scope', () => {
+      // The exact first-attempt regression: a bullet for the phase exists in the
+      // active-milestone scope, but the heading (carrying Requirements) lives in a
+      // Phase Details section outside that scope (only in fullContent). The heading
+      // MUST win — otherwise the bullet's single-line section yields null req_ids.
+      writeRoadmap2(tmpDir, [
+        '# Roadmap', '',
+        '## Milestones', '',
+        '- 🚧 **v1.0 Active** - Phases 10-11', '',
+        '## v1.0 Active', '',
+        '- [ ] **Phase 11 — Second Active Phase**',
+        '',
+        '## Phase Details', '',
+        '### Phase 11: Second Active Phase',
+        '**Requirements**: REQ-02, REQ-03',
+        '',
+      ].join('\n'));
+      const p11 = rp2.getRoadmapPhaseInternal(tmpDir, '11');
+      a2.ok(p11 && p11.found, 'phase 11 resolves');
+      a2.ok(/REQ-02/.test(p11.section),
+        'the heading section (with Requirements) must win over the scoped bullet line');
+    });
   });
 }
