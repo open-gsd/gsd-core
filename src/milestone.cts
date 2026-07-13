@@ -38,6 +38,7 @@ interface MilestoneCompleteOptions {
   name?: string;
   force?: boolean;
   archivePhases?: boolean;
+  dryRun?: boolean;
 }
 
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
@@ -67,41 +68,60 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   const updated: string[] = [];
   const alreadyComplete: string[] = [];
   const notFound: string[] = [];
+  // #2140: IDs reconciled on the checkbox surface only — a traceability table
+  // exists but has no row for the ID. Without this bucket the payload for a
+  // partial reconcile is byte-identical to a full one, and audit-milestone (which
+  // reads the table) still sees Pending while the CLI reported success.
+  const tableUnmatched: string[] = [];
+
+  // A traceability table is present if the file has a "| Requirement | … |"
+  // header. A REQUIREMENTS.md with no such table is legitimate (mid-roadmap), so
+  // a missing row only counts as drift when a table actually exists.
+  const hasTable = /^\|\s*Requirement\s*\|/im.test(reqContent);
 
   for (const reqId of reqIds) {
-    let found = false;
     const reqEscaped = escapeRegex(reqId);
 
-    // Update checkbox: - [ ] **REQ-ID** → - [x] **REQ-ID**
-    // Use replace() directly and compare — avoids test()+replace() global regex
+    // Surface 1 — the checkbox: - [ ] **REQ-ID** → - [x] **REQ-ID**
+    // Use replace() + compare to avoid the test()+replace() global regex
     // lastIndex bug where test() advances state and replace() misses matches.
     const checkboxPattern = new RegExp(`(-\\s*\\[)[ ](\\]\\s*\\*\\*${reqEscaped}\\*\\*)`, 'gi');
     const afterCheckbox = reqContent.replace(checkboxPattern, '$1x$2');
-    if (afterCheckbox !== reqContent) {
-      reqContent = afterCheckbox;
-      found = true;
-    }
+    const checkboxHit = afterCheckbox !== reqContent;
+    if (checkboxHit) reqContent = afterCheckbox;
 
-    // Update traceability table: | REQ-ID | Phase N | Pending | → | REQ-ID | Phase N | Complete |
+    // Surface 2 — the traceability row: | REQ-ID | Phase N | Pending | → ... Complete |
     const tablePattern = new RegExp(`(\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|)\\s*Pending\\s*(\\|)`, 'gi');
     const afterTable = reqContent.replace(tablePattern, '$1 Complete $2');
-    if (afterTable !== reqContent) {
-      reqContent = afterTable;
-      found = true;
-    }
+    const tableHit = afterTable !== reqContent;
+    if (tableHit) reqContent = afterTable;
 
-    if (found) {
+    // Coverage of the traceability surface for this ID (computed after any flip).
+    // hasRow keys on the ID + a second cell (`| ID | <phase> |`) so a bare mention
+    // of the ID in a non-traceability table does not masquerade as a real row.
+    const hasRow = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|`, 'i').test(reqContent);
+    const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
+    const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i').test(reqContent);
+
+    if (checkboxHit || tableHit) {
       updated.push(reqId);
-    } else {
-      // Check if already complete before declaring not_found.
-      // Non-global flag is fine here — we only need to know if a match exists.
-      const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i');
-      const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i');
-      if (doneCheckbox.test(reqContent) || doneTable.test(reqContent)) {
-        alreadyComplete.push(reqId);
-      } else {
-        notFound.push(reqId);
-      }
+    } else if (doneTable || (doneCheckbox && !hasTable)) {
+      // Fully reconciled: the table row is Complete, OR the checkbox is done and
+      // there is no table to reconcile against. (A [x] checkbox with a Pending or
+      // absent row is NOT fully reconciled when a table exists — #2140.)
+      alreadyComplete.push(reqId);
+    } else if (!doneCheckbox && !doneTable) {
+      notFound.push(reqId);
+    }
+    // else: doneCheckbox && hasTable && !doneTable — partially reconciled. It is
+    // neither updated, already_complete, nor not_found; the table_unmatched bucket
+    // below carries the truthful partial-reconcile signal.
+
+    // Surface traceability drift: checkbox reconciled (this run or before) but the
+    // table has no row for this ID. This is what makes a partial reconcile
+    // distinguishable from a full one (#2140).
+    if (hasTable && doneCheckbox && !hasRow) {
+      tableUnmatched.push(reqId);
     }
   }
 
@@ -115,6 +135,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       marked_complete: updated,
       already_complete: alreadyComplete,
       not_found: notFound,
+      table_unmatched: tableUnmatched,
       total: reqIds.length,
     },
     raw,
@@ -138,11 +159,13 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   const milestonesPath = path.join(planningBase, 'MILESTONES.md');
   const archiveDir = path.join(planningBase, 'milestones');
   const phasesDir = planningPaths(cwd).phases;
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   const milestoneName = options.name || version;
 
-  // Ensure archive directory exists
-  platformEnsureDir(archiveDir);
+  // Ensure archive directory exists (skipped in dry-run — no mutations)
+  if (!options.dryRun) {
+    platformEnsureDir(archiveDir);
+  }
 
   // Scope stats and accomplishments to only the phases belonging to the
   // current milestone's ROADMAP.  Uses the shared filter from roadmap-parser.cjs
@@ -273,6 +296,47 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     }
   } catch {
     /* intentionally empty */
+  }
+
+  // #2118: --dry-run preview — compute what WOULD happen without mutating.
+  // The stats above are read-only; all mutations start at the archive section below.
+  if (options.dryRun) {
+    const phaseDirsToArchive: string[] = [];
+    if (options.archivePhases !== false) {
+      try {
+        const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory() && isDirInMilestone(e.name)) {
+            phaseDirsToArchive.push(e.name);
+          }
+        }
+      } catch { /* phasesDir missing — nothing to archive */ }
+    }
+    const dryRunResult = {
+      dry_run: true,
+      version,
+      name: milestoneName,
+      stats: { phases: phaseCount, plans: totalPlans, tasks: totalTasks },
+      accomplishments,
+      would_archive: {
+        roadmap: fs.existsSync(roadmapPath)
+          ? { source: path.relative(cwd, roadmapPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-ROADMAP.md`)).split(path.sep).join('/') }
+          : null,
+        requirements: fs.existsSync(reqPath)
+          ? { source: path.relative(cwd, reqPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-REQUIREMENTS.md`)).split(path.sep).join('/') }
+          : null,
+        audit: fs.existsSync(path.join(planningBase, `${version}-MILESTONE-AUDIT.md`))
+          ? { source: path.relative(cwd, path.join(planningBase, `${version}-MILESTONE-AUDIT.md`)).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`)).split(path.sep).join('/') }
+          : null,
+        phases: phaseDirsToArchive,
+      },
+      would_update: {
+        milestones_md: path.relative(cwd, milestonesPath).split(path.sep).join('/'),
+        state_md: fs.existsSync(statePath) ? path.relative(cwd, statePath).split(path.sep).join('/') : null,
+      },
+    };
+    output(dryRunResult, raw);
+    return;
   }
 
   // Archive ROADMAP.md

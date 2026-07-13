@@ -394,9 +394,15 @@ gsd_run query state.update "Last Activity" "$(date +%Y-%m-%d)"
 gsd_run query state.update "Status" "Phase ${PHASE_NUMBER} shipped — PR #${PR_NUMBER}"
 ```
 
-If `commit_docs` is true:
+If `commit_docs` is true, commit the ship-note AND push it onto the PR branch so
+it reaches the default branch when the PR merges. Without this push the ship-note
+commit stays local-only and is silently discarded when the branch is deleted on
+merge (#2138). The `[ci skip]` trailer suppresses the redundant pipeline the push
+would otherwise trigger (GitHub honors `[ci skip]` / `[skip ci]`):
+
 ```bash
-gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER}" --files .planning/STATE.md
+gsd_run query commit "docs(${padded_phase}): ship phase ${PHASE_NUMBER} — PR #${PR_NUMBER} [ci skip]" --files .planning/STATE.md
+git push origin ${CURRENT_BRANCH} 2>&1 || echo "⚠ track_shipping: ship-note push failed — it is local-only; rerun: git push origin ${CURRENT_BRANCH}"
 ```
 </step>
 

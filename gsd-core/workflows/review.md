@@ -255,6 +255,8 @@ shell-interpolated). Exact invocation in `gsd-core/references/reviewer-instances
 
 For each selected CLI, invoke in sequence (not parallel — avoid rate limits):
 
+**Timeout guidance (#2194):** prompt-fed source-grounded reviews are slow — measured ~570s for Codex at `xhigh` effort and ~525s for headless Claude on a large plan set. Each of the Gemini / Claude / Codex blocks below MUST be invoked with a high Bash `timeout:` — at least `900000` (15 min), and `1200000` (20 min) for Codex `xhigh` or headless Claude — so a lane is not killed mid-review. On Claude Code, raise the host cap via `BASH_MAX_TIMEOUT_MS` if a review can exceed it. A silent empty output after a long run is a **timeout kill, not a crash** — the Codex `0xc0000142` misdiagnosis persisted because the empty-output branches below cannot distinguish the two; treat an empty result on a slow lane as a dropped lane and re-run with more time rather than diagnosing a CLI/sandbox failure. A cross-AI review that silently drops a lane is blind in one eye.
+
 **Gemini:**
 ```bash
 if [ -n "$GEMINI_MODEL" ] && [ "$GEMINI_MODEL" != "null" ]; then
