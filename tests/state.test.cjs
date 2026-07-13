@@ -611,6 +611,37 @@ milestone: v1.0
     assert.ok(!content.includes('status: unknown'), 'should not contain unknown status');
   });
 
+  test('#2202: preserves unknown frontmatter keys the schema does not own', () => {
+    // Regression: a mutating verb rewrites STATE.md via syncStateFrontmatter,
+    // which rebuilds frontmatter from the body + schema. Before #2202 it dropped
+    // any frontmatter key the schema does not own; custom/tooling keys must
+    // survive every write.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `---
+status: executing
+milestone: v1.0
+custom_tracking_id: ABC-123
+team: platform
+---
+
+# Project State
+
+**Current Phase:** 03
+**Current Plan:** 03-02
+`
+    );
+
+    // Any writeStateMd triggers syncStateFrontmatter.
+    runGsdTools('state update "Current Plan" "03-03"', tmpDir);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.match(content, /custom_tracking_id: ABC-123/, 'unknown key custom_tracking_id must be preserved');
+    assert.match(content, /team: platform/, 'unknown key team must be preserved');
+    // Schema-owned keys still win / survive alongside the carried-forward keys.
+    assert.ok(content.includes('status: executing'), 'schema-owned status still preserved');
+  });
+
   test('round-trip: write then read via state json', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'),
