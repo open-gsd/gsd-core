@@ -31,7 +31,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { platformWriteSync } from './shell-command-projection.cjs';
+import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import installProfiles = require('./install-profiles.cjs');
 const {
@@ -354,8 +354,8 @@ function applySurface(runtimeConfigDir: string, layout: Layout, manifest: Map<st
   // surface-path agents lack path-prefix rewrites and Co-Authored-By trailers,
   // diverging from a fresh install.
   const _homedirFn: () => string = opts?.homedir ?? (() => os.homedir());
-  const _resolvedTarget = path.resolve(layout.configDir).replace(/\\/g, '/');
-  const _homeDir = _homedirFn().replace(/\\/g, '/');
+  const _resolvedTarget = posixNormalize(path.resolve(layout.configDir));
+  const _homeDir = posixNormalize(_homedirFn());
   const _isGlobal = (layout.scope ?? 'global') === 'global';
   const _isOpencode = layout.runtime === 'opencode';
   const _isWindowsHost = (opts?.platform ?? process.platform) === 'win32';

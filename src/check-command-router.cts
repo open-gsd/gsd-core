@@ -38,7 +38,7 @@ const { evaluatePredicate } = gatePredicateEval;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import apiCoverageMod = require('./api-coverage.cjs');
 const { detectApiIntegration, validateCoverageMatrix } = apiCoverageMod;
-import { execTool } from './shell-command-projection.cjs';
+import { execTool, posixNormalize } from './shell-command-projection.cjs';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1035,7 +1035,7 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
   // .planning/phases/ (or a milestone archive). The raw arg is never used as a
   // path, so `..`, absolute paths, and arbitrary directories cannot reach a
   // file read. Mirrors cmdVerifySchemaDrift's token-match approach.
-  let token = phaseArg.replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  let token = posixNormalize(phaseArg).split('/').filter(Boolean).pop() || '';
   // A token like ".." or "." carries no phase identity → unresolvable.
   if (token === '.' || token === '..') token = '';
 
