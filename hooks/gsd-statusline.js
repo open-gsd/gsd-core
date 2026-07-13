@@ -368,9 +368,10 @@ function formatGsdStateCompact(s) {
   }
 
   // Scene exclusivity mirrors formatGsdState's if/else chain: an in-flight
-  // phase (Scene 1) always wins over the milestone-complete state (Scene 3),
-  // even if a non-atomic STATE.md edit leaves percent=100 alongside a phase id.
-  const done = !phaseId && (Number(s.percent) === 100 ||
+  // phase (Scene 1, gated on activePhase ONLY — the legacy phaseNum shape
+  // still completes) wins over milestone-complete (Scene 3), even if a
+  // non-atomic STATE.md edit leaves percent=100 alongside a lifecycle phase.
+  const done = !s.activePhase && (Number(s.percent) === 100 ||
     (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases));
 
   if (done) {

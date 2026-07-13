@@ -1481,10 +1481,31 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       const full = formatGsdState(state);
       assert.ok(!/(complete)/.test(full) || !/4\.5/.test(full),
         `full format must not co-render phase and complete either; got: ${full}`);
-      // Body phase number (no lifecycle field) gets the same guard.
-      assert.equal(
-        formatGsdStateCompact({ milestone: 'v2.0', phaseNum: '5', phaseTotal: '5', percent: '100', status: 'verifying' }),
-        'v2.0 · P5/5 · verifying');
+      // The legacy body-phase shape (phaseNum, no activePhase) does NOT hold
+      // completion back — formatGsdState reaches Scene 3 on percent=100
+      // regardless of phaseNum, and compact must agree (#2175 re-review Major).
+      const legacyDone = { milestone: 'v2.0', phaseNum: '5', phaseTotal: '5', percent: '100', status: 'verifying' };
+      assert.equal(formatGsdStateCompact(legacyDone), 'v2.0 · P5/5 · complete');
+      assert.ok(formatGsdState(legacyDone).includes('milestone complete'),
+        'parity: full format must render Scene 3 for the same input');
+    });
+    test('parity: both renderers agree on completion for the same input', () => {
+      // Feed identical state objects to both renderers and require they agree
+      // on whether the milestone reads as complete — the drift guard for the
+      // parallel rendering surfaces.
+      const cases = [
+        { milestone: 'v2.0', percent: '100' },
+        { milestone: 'v2.0', phaseNum: '5', phaseTotal: '5', percent: '100', status: 'verifying' },
+        { milestone: 'v2.0', completedPhases: '5', totalPhases: '5' },
+        { milestone: 'v2.0', activePhase: '4.5', percent: '100', status: 'executing' },
+        { milestone: 'v1.9', percent: '40', status: 'executing', phaseNum: '2', phaseTotal: '5' },
+      ];
+      for (const s of cases) {
+        const fullDone = formatGsdState(s).includes('milestone complete');
+        const compactDone = / complete$|^complete$/.test(formatGsdStateCompact(s));
+        assert.equal(compactDone, fullDone,
+          `completion parity diverged for ${JSON.stringify(s)}`);
+      }
     });
     test('idle with queued next action renders "next <action> <phases>"', () => {
       const out = formatGsdStateCompact({
