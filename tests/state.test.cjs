@@ -9487,13 +9487,20 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { deriveProgressFromRoadmap } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
 
 // ─── Scenario A: deriveProgressFromRoadmap unit test ────────────────────────
+//
+// ADR-2143 (epic #2143) migrated deriveProgressFromRoadmap from position-based
+// regexes to the markdown-table schema registry (TABLE_SCHEMAS.RoadmapProgress),
+// which resolves the Progress table by exact column-name match. These fixtures'
+// second column is renamed "Plans" -> "Plans Complete" to match the canonical
+// header (gsd-core/templates/roadmap.md) the schema now requires; the assertions
+// (999.x exclusion, Complete-row counting) are unchanged.
 
 describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
   test('3 real phases + 1 999.x backlog row → total_phases: 3, not 4', () => {
     const roadmap = [
       '## Milestone v1.0: Test',
       '',
-      '| Phase | Plans | Status | Completed |',
+      '| Phase | Plans Complete | Status | Completed |',
       '| --- | --- | --- | --- |',
       '| 1. Alpha | 2/2 | Complete | ✅ |',
       '| 2. Beta | 1/2 | In Progress | |',
@@ -9518,7 +9525,7 @@ describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
     const roadmap = [
       '## Milestone v1.0: Test',
       '',
-      '| Phase | Plans | Status | Completed |',
+      '| Phase | Plans Complete | Status | Completed |',
       '| --- | --- | --- | --- |',
       '| 1. Alpha | 1/1 | Complete | ✅ |',
       '| 2. Beta | 1/1 | Complete | ✅ |',
@@ -9542,7 +9549,7 @@ describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
     const roadmap = [
       '## Milestone v1.0: Test',
       '',
-      '| Phase | Plans | Status | Completed |',
+      '| Phase | Plans Complete | Status | Completed |',
       '| --- | --- | --- | --- |',
       '| 999.1 Future A | 0/0 | Backlog | |',
       '| 999.2 Future B | 0/0 | Backlog | |',

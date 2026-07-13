@@ -371,6 +371,7 @@
       "loop-host-contract.cjs",
       "loop-resolver.cjs",
       "markdown-sectionizer.cjs",
+      "markdown-table.cjs",
       "mcp-server.cjs",
       "milestone.cjs",
       "model-adapter.cjs",

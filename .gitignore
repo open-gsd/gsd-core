@@ -91,6 +91,7 @@ build/
 /gsd-core/bin/lib/capability-consent.cjs
 /gsd-core/bin/lib/capability-lock.cjs
 /gsd-core/bin/lib/markdown-sectionizer.cjs
+/gsd-core/bin/lib/markdown-table.cjs
 /gsd-core/bin/lib/resolution.cjs
 /gsd-core/bin/lib/research-store.cjs
 /gsd-core/bin/lib/research-provider.cjs

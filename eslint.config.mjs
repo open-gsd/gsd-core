@@ -213,6 +213,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/teams-status.cjs',
       // ADR-1372: tsc-generated runtime artifact — lint the src/markdown-sectionizer.cts source.
       'gsd-core/bin/lib/markdown-sectionizer.cjs',
+      // ADR-2143: tsc-generated runtime artifact — lint the src/markdown-table.cts source.
+      'gsd-core/bin/lib/markdown-table.cjs',
       // ADR-1239 Phase C-1 (#1680): tsc-generated — lint src/embedding-adapter.cts + src/adapter-declarative.cts.
       'gsd-core/bin/lib/embedding-adapter.cjs',
       'gsd-core/bin/lib/adapter-declarative.cjs',
