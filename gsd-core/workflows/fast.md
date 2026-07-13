@@ -72,22 +72,30 @@ malformed row.
 # Detect whether STATE.md has a Quick Tasks Completed table
 if grep -q "Quick Tasks Completed" .planning/STATE.md 2>/dev/null; then
   # Read the table header line to determine the column schema.
-  # quick.md Step 7 creates a 5-column table:
-  #   | # | Description | Date | Commit | Directory |
-  # Count pipe characters in the header to determine column count.
+  # quick.md Step 7b writes two shapes:
+  #   5-column (non-validate): | # | Description | Date | Commit | Directory |
+  #   6-column (validate):     | # | Description | Date | Commit | Status | Directory |
   HEADER_LINE=$(grep -A2 "Quick Tasks Completed" .planning/STATE.md 2>/dev/null | grep "^|" | head -1)
-  # Count columns: number of | separators minus 1 gives column count
-  COL_COUNT=$(echo "$HEADER_LINE" | awk -F'|' '{print NF-1}')
+  # Count REAL columns: a markdown header has a leading and a trailing pipe, so
+  # awk's NF counts (real columns + 2). NF-2 yields the real column count.
+  # (NF-1 was the off-by-one root cause of #2133: it returned the pipe count,
+  #  making the `-eq 5` test unsatisfiable for the very header quick.md writes.)
+  COL_COUNT=$(echo "$HEADER_LINE" | awk -F'|' '{print NF-2}')
 
+  # Next row number + latest commit hash are schema-independent.
+  NEXT_NUM=$(awk '/Quick Tasks Completed/{found=1} found && /^\|/ && !/^[|][-: |]*[|]$/ && !/Description/{count++} END{print count+1}' .planning/STATE.md 2>/dev/null || echo "1")
+  COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "—")
+
+  # Select the appended row's template by the detected column count so its cell
+  # count always matches the header (prevents the malformed-row symptom of #27).
   if [ "$COL_COUNT" -eq 5 ] && echo "$HEADER_LINE" | grep -qi "Description" && echo "$HEADER_LINE" | grep -qi "Commit" && echo "$HEADER_LINE" | grep -qi "Directory"; then
-    # 5-column schema from quick.md Step 7: | # | Description | Date | Commit | Directory |
-    # Determine the next row number by counting existing data rows (non-separator, non-header).
-    NEXT_NUM=$(awk '/Quick Tasks Completed/{found=1} found && /^\|/ && !/^[|][-: |]*[|]$/ && !/Description/{count++} END{print count+1}' .planning/STATE.md 2>/dev/null || echo "1")
-    # Get the latest commit hash (short)
-    COMMIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "—")
+    # 5-column schema from quick.md Step 7b (non-validate).
     echo "| $NEXT_NUM | $TASK | $(date +%Y-%m-%d) | $COMMIT_HASH | — |" >> .planning/STATE.md
+  elif [ "$COL_COUNT" -eq 6 ] && echo "$HEADER_LINE" | grep -qi "Status" && echo "$HEADER_LINE" | grep -qi "Directory"; then
+    # 6-column schema from quick.md Step 7b (validate, with Status).
+    echo "| $NEXT_NUM | $TASK | $(date +%Y-%m-%d) | $COMMIT_HASH | — | — |" >> .planning/STATE.md
   else
-    # Unrecognized table schema — skip to avoid appending a malformed row.
+    # Unrecognized table schema — skip to avoid appending a malformed row (#27).
     echo "⚠ fast.md log_to_state: Quick Tasks Completed table has unrecognized schema (${COL_COUNT} columns); skipping STATE.md update."
   fi
 fi

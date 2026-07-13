@@ -1190,5 +1190,176 @@ test('config-set rejects invalid statusline.context_position', () => {
     cleanup(tmpDir);
   }
 });
+
+// Same write-path enforcement for the boolean statusline.show_context_tokens
+// key (#2161) — mirrors the workflow.post_planning_gaps precedent the issue's
+// scope names (tests/post-planning-gaps-2493.test.cjs).
+test('config-set statusline.show_context_tokens true → persisted as boolean', () => {
+  const tmpDir = createTempProject();
+  try {
+    const r = runGsdTools(['config-set', 'statusline.show_context_tokens', 'true'], tmpDir);
+    assert.ok(r.success, r.error);
+    const config = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'config.json'), 'utf-8'));
+    assert.strictEqual(config.statusline.show_context_tokens, true);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+
+test('config-set statusline.show_context_tokens yes → rejected', () => {
+  const tmpDir = createTempProject();
+  try {
+    const r = runGsdTools(['config-set', 'statusline.show_context_tokens', 'yes'], tmpDir);
+    assert.equal(r.success, false, 'non-boolean value must be rejected');
+    assert.match(r.error || r.output, /boolean|true|false/i);
+  } finally {
+    cleanup(tmpDir);
+  }
+});
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Context meter token count (statusline.show_context_tokens)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+  const { cleanup } = require('./helpers.cjs');
+  const { formatTokens, contextTokenSuffix } = require('../hooks/gsd-statusline.js');
+  const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
+
+  const hookPath = path.join(__dirname, '..', 'hooks', 'gsd-statusline.js');
+
+  describe('config schema: statusline.show_context_tokens', () => {
+    test('registers statusline.show_context_tokens', () => {
+      assert.ok(
+        VALID_CONFIG_KEYS.has('statusline.show_context_tokens'),
+        'statusline.show_context_tokens must be in VALID_CONFIG_KEYS',
+      );
+    });
+  });
+
+  describe('formatTokens', () => {
+    test('passes small counts through', () => {
+      assert.equal(formatTokens(0), '0');
+      assert.equal(formatTokens(999), '999');
+    });
+    test('rounds thousands to k', () => {
+      assert.equal(formatTokens(1000), '1k');
+      assert.equal(formatTokens(156342), '156k');
+      assert.equal(formatTokens(156700), '157k');
+    });
+    test('formats millions with one decimal', () => {
+      assert.equal(formatTokens(1000000), '1.0M');
+      assert.equal(formatTokens(1234567), '1.2M');
+    });
+    test('k-to-M threshold boundary: limit-1 / limit / limit+1', () => {
+      // 999,999 k-rounds to 1000 — must promote to the M branch, never "1000k"
+      assert.equal(formatTokens(999999), '1.0M');
+      assert.equal(formatTokens(1000000), '1.0M');
+      assert.equal(formatTokens(1000001), '1.0M');
+      // 999,499 is the last value that still k-rounds below 1000
+      assert.equal(formatTokens(999499), '999k');
+      assert.equal(formatTokens(999500), '1.0M');
+    });
+  });
+
+  describe('contextTokenSuffix', () => {
+    test('returns empty string for absent/malformed usage', () => {
+      assert.equal(contextTokenSuffix(null), '');
+      assert.equal(contextTokenSuffix(undefined), '');
+      assert.equal(contextTokenSuffix('nope'), '');
+      assert.equal(contextTokenSuffix({}), '');
+    });
+    test('sums all four token dimensions', () => {
+      const suffix = contextTokenSuffix({
+        input_tokens: 1000,
+        cache_creation_input_tokens: 2000,
+        cache_read_input_tokens: 150000,
+        output_tokens: 3000,
+      });
+      assert.equal(suffix, ' (156k)');
+    });
+    test('tolerates missing dimensions', () => {
+      assert.equal(contextTokenSuffix({ input_tokens: 500 }), ' (500)');
+    });
+  });
+
+  describe('statusline output token suffix (e2e)', () => {
+    function makeProject(flag) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctx-tokens-'));
+      fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+      if (flag !== undefined) {
+        fs.writeFileSync(
+          path.join(dir, '.planning', 'config.json'),
+          JSON.stringify({ statusline: { show_context_tokens: flag } }),
+        );
+      }
+      return dir;
+    }
+
+    function runHook(dir) {
+      const payload = JSON.stringify({
+        model: { display_name: 'Claude' },
+        workspace: { current_dir: dir },
+        session_id: `test-tokens-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        context_window: {
+          remaining_percentage: 70,
+          total_tokens: 200000,
+          current_usage: {
+            input_tokens: 1000,
+            cache_read_input_tokens: 150000,
+            output_tokens: 5000,
+          },
+        },
+      });
+      let stdout = '';
+      try {
+        stdout = execFileSync(process.execPath, [hookPath], {
+          input: payload, encoding: 'utf8', timeout: 4000,
+        });
+      } catch (e) {
+        stdout = e.stdout || '';
+      }
+      // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences from captured CLI output
+      return stdout.replace(/\x1b\[[0-9;]*m/g, '');
+    }
+
+    test('flag=true appends the token count after the percentage', () => {
+      const dir = makeProject(true);
+      try {
+        const out = runHook(dir);
+        assert.match(out, /% \(156k\)/, `expected "(156k)" after the meter %; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('default (flag absent) meter is unchanged — no token count', () => {
+      const dir = makeProject(undefined);
+      try {
+        const out = runHook(dir);
+        assert.doesNotMatch(out, /\(\d+(?:\.\d+)?[kM]?\)/, `expected no token suffix; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('flag=false meter is unchanged — no token count', () => {
+      const dir = makeProject(false);
+      try {
+        const out = runHook(dir);
+        assert.doesNotMatch(out, /\(\d+(?:\.\d+)?[kM]?\)/, `expected no token suffix; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
   });
 }

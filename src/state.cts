@@ -613,17 +613,33 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
   const _totalSummaries = totalSummaries;
 
   readModifyWriteStateMd(statePath, (content) => {
-    // Try **Progress:** bold format first, then plain Progress: format
-    const boldProgressPattern = /(\*\*Progress:\*\*\s*).*/i;
-    const plainProgressPattern = /^(Progress:\s*).*/im;
-    if (boldProgressPattern.test(content)) {
-      updated = true;
-      return content.replace(boldProgressPattern, (_match, prefix: string) => `${prefix}${progressStr}`);
-    } else if (plainProgressPattern.test(content)) {
-      updated = true;
-      return content.replace(plainProgressPattern, (_match, prefix: string) => `${prefix}${progressStr}`);
-    }
-    return content;
+    // #2177: match against the BODY only. With /i the patterns below would
+    // otherwise hit the YAML frontmatter `progress:` key first (and `\s*` would
+    // eat its newline, mangling the nested block), while the body Progress: line
+    // — which frontmatter `percent` is re-derived from on every write — stays
+    // stale and silently reverts the update.
+    const body = stripFrontmatter(content);
+    const fmPrefix = content.slice(0, content.length - body.length);
+
+    // Swap only the machine segment ("[bar] NN%" or bare "NN%"), preserving any
+    // descriptive suffix an agent authored, e.g. "(2/4 plans done; blocked on…)".
+    const machineSegment = /(?:\[[^\]\r\n]*\][ \t]*)?\d{1,3}%/;
+    const replaceValue = (value: string) => machineSegment.test(value)
+      ? value.replace(machineSegment, progressStr)
+      : progressStr;
+
+    // Try **Progress:** bold format first, then plain Progress: format.
+    const boldProgressPattern = /(\*\*Progress:\*\*[ \t]*)([^\r\n]*)/i;
+    const plainProgressPattern = /^(Progress:[ \t]*)([^\r\n]*)/im;
+    const pattern = boldProgressPattern.test(body)
+      ? boldProgressPattern
+      : plainProgressPattern.test(body)
+        ? plainProgressPattern
+        : null;
+    if (!pattern) return content;
+
+    updated = true;
+    return fmPrefix + body.replace(pattern, (_match, prefix: string, value: string) => `${prefix}${replaceValue(value)}`);
   }, cwd);
 
   if (updated) {
@@ -1573,8 +1589,18 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   // existing frontmatter already holds; only an empty derived value falls through
   // to this guard (the primary #905 preserve path below handles that).
   const MILESTONE_NAME_PLACEHOLDER = 'milestone';
+  // #2135: widen the preserve guard. A bad derive is not always the literal
+  // placeholder — getMilestoneInfo can return a delimiter-led fragment
+  // ("— Active Milestone") when the roadmap regex mis-binds. Preserve the
+  // existing curated name unless the derived value actually looks like a name:
+  // non-empty, not the placeholder, and not punctuation-led.
+  const derivedName = derivedFm['milestone_name'];
+  const derivedLooksLikeName = typeof derivedName === 'string'
+    && derivedName.length > 0
+    && derivedName !== MILESTONE_NAME_PLACEHOLDER
+    && !/^[\s—–:-]/.test(derivedName);
   if (
-    derivedFm['milestone_name'] === MILESTONE_NAME_PLACEHOLDER &&
+    !derivedLooksLikeName &&
     existingFm['milestone_name'] &&
     existingFm['milestone_name'] !== MILESTONE_NAME_PLACEHOLDER
   ) {
@@ -1622,6 +1648,16 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   // cmdStateJson on the read path where it is appropriate.
   if (!derivedFm['progress'] && existingFm['progress']) {
     derivedFm['progress'] = normalizeProgressNumbers(existingFm['progress']);
+  }
+
+  // #2202: carry forward any existing frontmatter key that the schema does not
+  // own, so custom/unknown keys are not silently dropped on every mutating verb.
+  // Schema-owned keys (already in derivedFm from buildStateFrontmatter + the
+  // preserve guards above) still win.
+  for (const key of Object.keys(existingFm)) {
+    if (!(key in derivedFm) && existingFm[key] !== undefined) {
+      derivedFm[key] = existingFm[key];
+    }
   }
 
   const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
@@ -2572,7 +2608,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
 
   // Write archived entries to STATE-ARCHIVE.md
   if (archived.length > 0) {
-    const timestamp = realClock.today();
+    const timestamp = realClock.localToday();
     let archiveContent = platformReadSync(archivePath);
     if (archiveContent === null) {
       archiveContent = '# STATE Archive\n\nPruned entries from STATE.md. Recoverable but no longer loaded into agent context.\n\n';
@@ -2759,7 +2795,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     return;
   }
 
-  const today = realClock.today();
+  const today = realClock.localToday();
   const updated: string[] = [];
 
   readModifyWriteStateMd(statePath, (content) => {

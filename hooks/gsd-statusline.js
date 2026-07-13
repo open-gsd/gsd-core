@@ -286,6 +286,36 @@ function formatGsdState(s) {
   return parts.join(' · ');
 }
 
+// --- Context token count (opt-in) ---------------------------------------------
+
+/**
+ * Format a token count compactly: 156342 → '156k', 1234567 → '1.2M'.
+ */
+function formatTokens(tokens) {
+  // Promote to the M branch when k-rounding would reach 1000 (999,500-999,999
+  // must render "1.0M", never "1000k").
+  if (tokens >= 1000000 || Math.round(tokens / 1000) >= 1000) {
+    return (tokens / 1000000).toFixed(1) + 'M';
+  }
+  if (tokens >= 1000) return Math.round(tokens / 1000) + 'k';
+  return String(tokens);
+}
+
+/**
+ * Pure function: build the token-count suffix for the context meter from the
+ * hook input's context_window.current_usage block. Sums input, cache-creation,
+ * cache-read, and output tokens (the same total Claude Code's /context shows).
+ * Returns ' (156k)' or '' when usage is absent/empty.
+ */
+function contextTokenSuffix(currentUsage) {
+  if (!currentUsage || typeof currentUsage !== 'object') return '';
+  const total = (Number(currentUsage.input_tokens) || 0) +
+    (Number(currentUsage.cache_creation_input_tokens) || 0) +
+    (Number(currentUsage.cache_read_input_tokens) || 0) +
+    (Number(currentUsage.output_tokens) || 0);
+  return total > 0 ? ` (${formatTokens(total)})` : '';
+}
+
 // --- stdin ------------------------------------------------------------------
 
 function runStatusline() {
@@ -303,6 +333,11 @@ function runStatusline() {
     const dir = data.workspace?.current_dir || process.cwd();
     const session = data.session_id || '';
     const remaining = data.context_window?.remaining_percentage;
+
+    // Read .planning config once — used by the context meter (token suffix)
+    // and the last-command/position block below. Fail-soft to {}.
+    let cfg = {};
+    try { cfg = readGsdConfig(dir); } catch (e) {}
 
     // Context window display (shows USED percentage scaled to usable context)
     // Claude Code reserves a buffer for autocompact. By default this is ~16.5%
@@ -349,15 +384,21 @@ function runStatusline() {
       const filled = Math.floor(used / 10);
       const bar = '█'.repeat(filled) + '░'.repeat(10 - filled);
 
+      // Opt-in absolute token count after the percentage (statusline.show_context_tokens)
+      let tokenSuffix = '';
+      if (getConfigValue(cfg, 'statusline.show_context_tokens') === true) {
+        tokenSuffix = contextTokenSuffix(data.context_window?.current_usage);
+      }
+
       // Color based on usable context thresholds
       if (used < 50) {
-        ctx = ` \x1b[32m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[32m${bar} ${used}%${tokenSuffix}\x1b[0m`;
       } else if (used < 65) {
-        ctx = ` \x1b[33m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[33m${bar} ${used}%${tokenSuffix}\x1b[0m`;
       } else if (used < 80) {
-        ctx = ` \x1b[38;5;208m${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[38;5;208m${bar} ${used}%${tokenSuffix}\x1b[0m`;
       } else {
-        ctx = ` \x1b[5;31m💀 ${bar} ${used}%\x1b[0m`;
+        ctx = ` \x1b[5;31m💀 ${bar} ${used}%${tokenSuffix}\x1b[0m`;
       }
     }
 
@@ -422,7 +463,6 @@ function runStatusline() {
     let lastCmdSuffix = '';
     let position = 'end';
     try {
-      const cfg = readGsdConfig(dir);
       if (getConfigValue(cfg, 'statusline.show_last_command') === true) {
         const transcriptPath = data.transcript_path;
         const lastCmd = readLastSlashCommand(transcriptPath);
@@ -531,6 +571,8 @@ module.exports = {
   composeStatusline,
   isInstalledAheadOfLatest,
   evaluateUpdateCache,
+  formatTokens,
+  contextTokenSuffix,
 };
 
 /**
