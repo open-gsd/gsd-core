@@ -554,7 +554,7 @@ fi
 # weight. (Temp file + mv, no in-place sed — BSD/GNU safe.)
 if [ -s /tmp/gsd-review-antigravity-{phase}.md ] && \
    { head -5 /tmp/gsd-review-antigravity-{phase}.md | grep -q 'REVIEWED-WITHOUT-REPO-ACCESS' || \
-     grep -qiE '(workspace|working) (directory|dir)[^.]{0,40}antigravity-cli/scratch' /tmp/gsd-review-antigravity-{phase}.md; }; then
+     grep -qiE '(workspace|working) (directory|dir).{0,40}antigravity-cli/scratch' /tmp/gsd-review-antigravity-{phase}.md; }; then
   {
     echo "> [reviewed-without-repo-access] This reviewer ran without visibility into the repo under review — down-weight its verdict in the Consensus Summary."
     echo ""

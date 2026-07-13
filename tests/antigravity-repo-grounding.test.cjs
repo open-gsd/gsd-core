@@ -91,8 +91,8 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
       'the self-report tell must be anchored to the head of the output, not a whole-body substring',
     );
     assert.ok(
-      /grep -qiE '\(workspace\|working\) \(directory\|dir\)[^']*antigravity-cli\/scratch'/.test(block),
-      'the scratch tell must be anchored to a workspace-declaration phrasing so a grounded review quoting the path is not mis-stamped',
+      /grep -qiE '\(workspace\|working\) \(directory\|dir\)\.\{0,40\}antigravity-cli\/scratch'/.test(block),
+      'the scratch tell must be anchored to a workspace-declaration phrasing whose bridge (.{0,40}) can span the dotted ~/.gemini/ path prefix',
     );
     assert.ok(
       /\[reviewed-without-repo-access\]/.test(block),
@@ -126,6 +126,51 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
       /not count its verdict at full consensus weight/.test(consensus),
       'marked reviews must be down-weighted, not counted at full weight',
     );
+  });
+
+  test('blind-review detection behaves correctly on synthetic transcripts', () => {
+    // Behavioral, not string-on-string: extract the actual detection compound
+    // from the fence, point it at a temp file, and run it through bash for
+    // ungrounded and grounded transcript shapes.
+    const os = require('os');
+    const { execFileSync } = require('node:child_process');
+    const block = agyBashBlock();
+    const m = block.match(/\{ head -5[\s\S]*?\}; then/);
+    assert.ok(m, 'detection compound not found in the agy block');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-detect-'));
+    const out = path.join(tmp, 'review-out.md');
+    const detect = m[0]
+      .replace(/\}; then$/, '}')
+      .replaceAll('/tmp/gsd-review-antigravity-{phase}.md', out);
+    const runDetect = (content) => {
+      fs.writeFileSync(out, content);
+      try {
+        execFileSync('bash', ['-c', detect], { stdio: 'ignore' });
+        return true; // exit 0 → blind review detected
+      } catch {
+        return false;
+      }
+    };
+    try {
+      // Ungrounded tells — must be stamped
+      assert.equal(runDetect('REVIEWED-WITHOUT-REPO-ACCESS\n\n## Review\nPlan-only review.\n'), true,
+        'self-report line in the head must be detected');
+      assert.equal(runDetect('## Review\nMy working directory is ~/.gemini/antigravity-cli/scratch.\nPlan-only review.\n'), true,
+        'full dotted scratch path in a workspace declaration must be detected (#2184 re-review Major)');
+      assert.equal(runDetect('Workspace directory: /home/me/.gemini/antigravity-cli/scratch\n'), true,
+        'colon-style workspace declaration must be detected');
+      // Grounded shapes — must NOT be stamped
+      assert.equal(runDetect('## Review\nVerified hooks/gsd-statusline.js against the plan. Solid.\n'), false,
+        'ordinary grounded review must not be stamped');
+      assert.equal(runDetect('## Review\nThe workflow mentions antigravity-cli/scratch as the agy scratch dir; the guard there is correct.\n'), false,
+        'grounded review merely quoting the scratch path must not be stamped');
+      assert.equal(
+        runDetect('## Review\n\nGrounded findings below.\n\n### Details\nLine 20 of the workflow mentions REVIEWED-WITHOUT-REPO-ACCESS as the self-report marker; fine.\n'),
+        false,
+        'self-report string quoted beyond the first 5 lines must not be stamped');
+    } finally {
+      require('./helpers.cjs').cleanup(tmp);
+    }
   });
 
   test('cursor-agent prompt carries the same absolute-root anchor (identical gap, #2176 AC5)', () => {
