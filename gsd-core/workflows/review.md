@@ -366,7 +366,12 @@ fi
 # prompt as an ARGUMENT, not stdin. A full review prompt can exceed the OS argument limit, so
 # reference the prompt file by path rather than inlining it. Capture stderr so a failure is
 # diagnosable instead of a silent empty result.
-CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. Output only the resulting markdown review. Do not edit any files."
+# #2176: same absolute-root anchor as the Antigravity block — cursor-agent runs
+# in the repo cwd, but repo-relative references in the assembled prompt still
+# need an explicit root to resolve against. rev-parse (not bare pwd) so the
+# anchor is correct even when /gsd:review is invoked from a repo subdirectory.
+_CURSOR_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $_CURSOR_ROOT — resolve every relative file path in the review request against that absolute root. Output only the resulting markdown review. Do not edit any files."
 cursor-agent -p --mode ask --trust --output-format text "$CURSOR_PROMPT_ARG" 2>/tmp/gsd-review-cursor-{phase}.err > /tmp/gsd-review-cursor-{phase}.md
 if [ ! -s /tmp/gsd-review-cursor-{phase}.md ]; then
   echo "Cursor review failed or returned empty output. stderr:" > /tmp/gsd-review-cursor-{phase}.md
@@ -458,7 +463,19 @@ if [ -n "$AGY_MODEL" ] && [ "$AGY_MODEL" != "null" ]; then
 else
   set --
 fi
-_AGY_PROMPT="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. Output only the resulting markdown review. Do not edit any files."
+# #2176: grant the reviewer the repo under review. Without --add-dir, agy's
+# permission context never receives the cwd repo — the agent anchors on its own
+# ~/.gemini/antigravity-cli/scratch dir and reviews the plan text in isolation
+# (the exact failure the Review Instructions forbid). Capability-probed like the
+# Codex bypass flag so an older agy without --add-dir still runs; the prompt
+# anchor below keeps absolute-path reads possible on that fallback.
+if agy --help 2>/dev/null | grep -q -- '--add-dir'; then
+  set -- "$@" --add-dir "$_AGY_WS"
+fi
+# #2176: anchor the prompt to the absolute repo root so repo-relative references
+# in the assembled review prompt resolve even on the no---add-dir fallback, and
+# require an explicit self-report if the reviewer still cannot read the repo.
+_AGY_PROMPT="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $_AGY_WS — resolve every relative file path in the review request against that absolute root and verify claims against those files. If you cannot read files under $_AGY_WS, begin your output with the exact line REVIEWED-WITHOUT-REPO-ACCESS before the review. Output only the resulting markdown review. Do not edit any files."
 # Capability-probe an external wall-clock killer (GNU coreutils `timeout` or the
 # macOS Homebrew `gtimeout`). Stock macOS ships NEITHER — a bare `timeout …` would
 # fail with rc 127 ("command not found") and silently lose the reviewer, so fall
@@ -524,6 +541,26 @@ if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
     # #2073 mode 3: pre-session stall tell — no new conversation dir appeared.
     echo "If no agy run started, that is the pre-session-stall case: check whether a new ~/.gemini/antigravity-cli/brain/<conv-id>/ dir appeared within ~30s of launch."
   } > /tmp/gsd-review-antigravity-{phase}.md
+fi
+
+# #2176: blind-review marker. Two tells that the reviewer ran without repo
+# access: the prompt's mandated REVIEWED-WITHOUT-REPO-ACCESS self-report in the
+# first lines of output, or the agent DECLARING the scratch dir as its
+# workspace. Both patterns are anchored — the self-report to the head of the
+# file, the scratch tell to a workspace-declaration phrasing — so a grounded
+# review that merely QUOTES these strings (e.g. reviewing this very file) is
+# never mis-stamped. Stamp a machine-readable marker so the Consensus Summary
+# down-weights the review instead of counting an ungrounded verdict at full
+# weight. (Temp file + mv, no in-place sed — BSD/GNU safe.)
+if [ -s /tmp/gsd-review-antigravity-{phase}.md ] && \
+   { head -5 /tmp/gsd-review-antigravity-{phase}.md | grep -q 'REVIEWED-WITHOUT-REPO-ACCESS' || \
+     grep -qiE '(workspace|working) (directory|dir).{0,40}antigravity-cli/scratch' /tmp/gsd-review-antigravity-{phase}.md; }; then
+  {
+    echo "> [reviewed-without-repo-access] This reviewer ran without visibility into the repo under review — down-weight its verdict in the Consensus Summary."
+    echo ""
+    cat /tmp/gsd-review-antigravity-{phase}.md
+  } > /tmp/gsd-review-antigravity-{phase}.md.tmp && \
+  mv /tmp/gsd-review-antigravity-{phase}.md.tmp /tmp/gsd-review-antigravity-{phase}.md
 fi
 ```
 
@@ -837,7 +874,7 @@ trimmed_reviewers:        # only present if at least one reviewer was trimmed
 
 ## Consensus Summary
 
-{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers.}
+{synthesize common concerns across all reviewers. CodeRabbit is a diff-only reviewer (it never received the source-grounding prompt), so do not weight its verdict as a grounded plan review — fold in its diff findings, but base plan-level consensus on the prompt-fed reviewers. A reviewer output carrying the `[reviewed-without-repo-access]` marker (or beginning with `REVIEWED-WITHOUT-REPO-ACCESS`) ran without repo access (#2176) — treat it the same way: note its concerns, but do not count its verdict at full consensus weight.}
 
 ### Agreed Strengths
 {strengths mentioned by 2+ reviewers}
