@@ -202,6 +202,23 @@ function replaceInCurrentMilestone(content: string, pattern: RegExp, replacement
 
 // ─── Roadmap phase lookup ─────────────────────────────────────────────────────
 
+// #2199: a bullet/checkbox phase entry, e.g. `- [ ] **Phase 36 — Authentication**`
+// (the bundled roadmapper emits this in bullet-house-style ROADMAPs). The number
+// is captured in group 1, the name in group 2; the separator may be an em-dash,
+// en-dash, hyphen, or colon. Used as a fallback when no ATX heading matches, and
+// to count phases in a milestone that uses the bullet form.
+const BULLET_PHASE_LINE_PATTERN =
+  /^\s*[-*]\s+(?:\[[ xX]\]\s+)?\*\*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*[—–:\-]\s*(.+?)\*\*/im;
+
+/** Build a bullet-phase-line regex pinned to a specific phase number (#2199). */
+function bulletPhaseLineFor(phaseNum: unknown, phaseSource?: string): RegExp {
+  const num = phaseSource ?? phaseMarkdownRegexSource(phaseNum);
+  return new RegExp(
+    `^\\s*[-*]\\s+(?:\\[[ xX]\\]\\s+)?\\*\\*Phase\\s+(${num})${OPTIONAL_PHASE_TAG_SOURCE}\\s*[—–:\\-]\\s*(.+?)\\*\\*`,
+    'im',
+  );
+}
+
 interface RoadmapPhaseResult {
   found: boolean;
   phase_number: string;
@@ -218,7 +235,25 @@ function findRoadmapPhaseInContent(content: string, phaseNum: unknown, phaseSour
   );
   const headings = tokenizeHeadings(content);
   const headingIndex = headings.findIndex((heading) => headingPattern.test(heading.text));
-  if (headingIndex === -1) return null;
+  if (headingIndex === -1) {
+    // #2199: no ATX heading matched — try a bullet/checkbox entry with an
+    // em-dash/en-dash/hyphen/colon separator (`- [ ] **Phase N — name**`), which
+    // the bundled roadmapper emits in bullet-house-style ROADMAPs. Without this
+    // fallback the phase resolves found:false and `Phase null` is written into
+    // STATE.md.
+    const bulletMatch = content.match(bulletPhaseLineFor(phaseNum, phaseSource));
+    if (bulletMatch) {
+      const phaseName = bulletMatch[2].trim();
+      return {
+        found: true,
+        phase_number: String(phaseNum),
+        phase_name: phaseName,
+        goal: null,
+        section: bulletMatch[0].trim(),
+      };
+    }
+    return null;
+  }
 
   const heading = headings[headingIndex];
   const headerMatch = heading.text.match(headingPattern);
@@ -432,6 +467,16 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
       const pm = phaseHeadingPattern.exec(h.text);
       // Exclude 999.x backlog phases from milestone phase set. Mirrors init.cts filter.
       if (pm && !/^999\b/.test(pm[1])) milestonePhaseNums.add(pm[1]);
+    }
+    // #2199: also count bullet/checkbox phase entries (`- [ ] **Phase N — name**`)
+    // so a bullet-house-style ROADMAP populates the milestone phase set instead of
+    // collapsing to a zero-count pass-all filter.
+    {
+      let bm: RegExpExecArray | null;
+      const scanner = new RegExp(BULLET_PHASE_LINE_PATTERN.source, 'gim');
+      while ((bm = scanner.exec(roadmap)) !== null) {
+        if (!/^999\b/.test(bm[1])) milestonePhaseNums.add(bm[1]);
+      }
     }
   } catch { /* intentionally empty */ }
 
