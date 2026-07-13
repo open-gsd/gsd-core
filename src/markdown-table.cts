@@ -105,13 +105,15 @@ export function matchTableSchema(columns: string[]): { id: string; label: string
 /**
  * Split one GFM table row line into trimmed cell strings.
  * Strips one leading and one trailing `|`, splits on unescaped `|`, trims
- * each cell, and unescapes `\|` back to `|`.
+ * each cell, and unescapes `\\` back to `\` and `\|` back to `|` (the exact
+ * reverse of `escapeCell`'s `\`->`\\` then `|`->`\|` order below), so cell
+ * values round-trip exactly — including literal backslashes.
  */
 function splitTableRow(line: string): string[] {
   let stripped = line.trim();
   if (stripped.startsWith('|')) stripped = stripped.slice(1);
   if (stripped.endsWith('|')) stripped = stripped.slice(0, -1);
-  return stripped.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
+  return stripped.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\([\\|])/g, '$1'));
 }
 
 /** True when every delimiter cell matches GFM's `:?-{1,}:?` shape (spaces removed). */
@@ -224,15 +226,23 @@ export function findTableBySchema(text: string, schemaId: string): MarkdownTable
 /**
  * Escape one dynamic cell value for insertion into a GFM pipe-table row.
  *
- * `splitTableRow` unescapes `\|` back to `|` on read (line 114 above), so
- * escaping `|` -> `\|` here round-trips exactly. Newlines are collapsed to a
+ * Escapes `\` -> `\\` FIRST, then `|` -> `\|` (in that order, so a literal
+ * backslash already in the value is never mistaken for part of an escape
+ * sequence introduced by this function — CodeQL js/incomplete-sanitization).
+ * `splitTableRow` reverses both in the opposite order (`\\` -> `\` then
+ * `\|` -> `|`, see line ~114 above), so escaping/unescaping round-trips
+ * exactly, including literal backslashes. Newlines are collapsed to a
  * single space — a raw `|` or embedded newline in a cell value (e.g. a task
  * `description`) would otherwise corrupt the table (extra column / a fake
  * extra row) and get rejected by the now-fail-loud `parseMarkdownTable` as a
  * ragged row.
  */
 function escapeCell(value: string): string {
-  return String(value).replace(/\r?\n+/g, ' ').replace(/\|/g, '\\|').trim();
+  return String(value)
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\\/g, '\\\\') // escape the escape char FIRST (CodeQL js/incomplete-sanitization)
+    .replace(/\|/g, '\\|')
+    .trim();
 }
 
 /** Fields needed to render one "Quick Tasks Completed" row (schema-driven). */

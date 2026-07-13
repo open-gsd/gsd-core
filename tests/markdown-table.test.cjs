@@ -385,6 +385,42 @@ describe('appendQuickTaskRow (#2133)', () => {
     assert.equal(reparsed.value.rows[1]['Description'], 'fix a | b bug');
   });
 
+  // ─── Regression: backslash escaping (CodeQL js/incomplete-sanitization) ────
+  // escapeCell used to escape `|` -> `\|` without first escaping a literal `\`,
+  // so a description with a raw backslash (e.g. a Windows path) could produce
+  // an escape sequence that splitTableRow misreads on unescape. escapeCell now
+  // escapes `\` -> `\\` before `|` -> `\|`, and splitTableRow reverses both.
+
+  test('description containing a literal backslash round-trips byte-for-byte', () => {
+    const result = appendQuickTaskRow(noStatusState, {
+      description: 'fix C:\\path bug',
+      date: '2026-07-13',
+      commit: 'a574966',
+    });
+    assert.equal(result.ok, true);
+
+    const section = result.value.content.split('### Blockers/Concerns')[0];
+    const reparsed = parseMarkdownTable(section);
+    assert.equal(reparsed.ok, true, `expected ok:true (not a ragged-row error), got ${JSON.stringify(reparsed)}`);
+    assert.equal(reparsed.value.rows.length, 2);
+    assert.equal(reparsed.value.rows[1]['Description'], 'fix C:\\path bug');
+  });
+
+  test('description containing backslash-pipe ("a\\|b") round-trips to exactly "a\\|b"', () => {
+    const result = appendQuickTaskRow(noStatusState, {
+      description: 'a\\|b',
+      date: '2026-07-13',
+      commit: 'a574966',
+    });
+    assert.equal(result.ok, true);
+
+    const section = result.value.content.split('### Blockers/Concerns')[0];
+    const reparsed = parseMarkdownTable(section);
+    assert.equal(reparsed.ok, true, `expected ok:true (not a ragged-row error), got ${JSON.stringify(reparsed)}`);
+    assert.equal(reparsed.value.rows.length, 2);
+    assert.equal(reparsed.value.rows[1]['Description'], 'a\\|b');
+  });
+
   test('description containing a newline collapses to a single-line cell and round-trips', () => {
     const result = appendQuickTaskRow(noStatusState, {
       description: 'line one\nline two',
