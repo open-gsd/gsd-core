@@ -38,6 +38,7 @@ interface MilestoneCompleteOptions {
   name?: string;
   force?: boolean;
   archivePhases?: boolean;
+  dryRun?: boolean;
 }
 
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
@@ -161,8 +162,10 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   const today = realClock.localToday();
   const milestoneName = options.name || version;
 
-  // Ensure archive directory exists
-  platformEnsureDir(archiveDir);
+  // Ensure archive directory exists (skipped in dry-run — no mutations)
+  if (!options.dryRun) {
+    platformEnsureDir(archiveDir);
+  }
 
   // Scope stats and accomplishments to only the phases belonging to the
   // current milestone's ROADMAP.  Uses the shared filter from roadmap-parser.cjs
@@ -293,6 +296,47 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     }
   } catch {
     /* intentionally empty */
+  }
+
+  // #2118: --dry-run preview — compute what WOULD happen without mutating.
+  // The stats above are read-only; all mutations start at the archive section below.
+  if (options.dryRun) {
+    const phaseDirsToArchive: string[] = [];
+    if (options.archivePhases !== false) {
+      try {
+        const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory() && isDirInMilestone(e.name)) {
+            phaseDirsToArchive.push(e.name);
+          }
+        }
+      } catch { /* phasesDir missing — nothing to archive */ }
+    }
+    const dryRunResult = {
+      dry_run: true,
+      version,
+      name: milestoneName,
+      stats: { phases: phaseCount, plans: totalPlans, tasks: totalTasks },
+      accomplishments,
+      would_archive: {
+        roadmap: fs.existsSync(roadmapPath)
+          ? { source: path.relative(cwd, roadmapPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-ROADMAP.md`)).split(path.sep).join('/') }
+          : null,
+        requirements: fs.existsSync(reqPath)
+          ? { source: path.relative(cwd, reqPath).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-REQUIREMENTS.md`)).split(path.sep).join('/') }
+          : null,
+        audit: fs.existsSync(path.join(planningBase, `${version}-MILESTONE-AUDIT.md`))
+          ? { source: path.relative(cwd, path.join(planningBase, `${version}-MILESTONE-AUDIT.md`)).split(path.sep).join('/'), target: path.relative(cwd, path.join(archiveDir, `${version}-MILESTONE-AUDIT.md`)).split(path.sep).join('/') }
+          : null,
+        phases: phaseDirsToArchive,
+      },
+      would_update: {
+        milestones_md: path.relative(cwd, milestonesPath).split(path.sep).join('/'),
+        state_md: fs.existsSync(statePath) ? path.relative(cwd, statePath).split(path.sep).join('/') : null,
+      },
+    };
+    output(dryRunResult, raw);
+    return;
   }
 
   // Archive ROADMAP.md
