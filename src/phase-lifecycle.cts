@@ -62,43 +62,49 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
   let totalPhases: number | null = null;
   let totalPlans: number | null = null;
 
-  try {
-    // ADR-2143 §3: read the Progress table by column NAME (order/injection-invariant),
-    // via the markdown-table seam. Scope to the `## Progress` section when present
-    // (#2012 decoy avoidance); a headingless milestone slice (#1445) falls back to the
-    // whole input. Requires the canonical Phase/Plans Complete/Status/Completed columns
-    // in any order (extra columns ignored) — supersedes findTableBySchema's exact-schema lookup.
-    const progressMatch = roadmapContent.match(/^##[ \t]+Progress\b/im);
-    let scoped = roadmapContent;
-    if (progressMatch && progressMatch.index !== undefined) {
-      const afterHeading = roadmapContent.slice(progressMatch.index);
-      const nextHeading = afterHeading.search(/\n#{1,2}[ \t]/);
-      scoped = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
+  // ADR-2143 §5 (fail-loud, no null-swallow): this used to be wrapped in a
+  // try/catch that silently fell through to the existing (null) values on any
+  // thrown error. `findTableWithColumns`/`parseMarkdownTable` never throw —
+  // an unparseable or absent table resolves to `null` /
+  // `{ ok: false, reason }`, not an exception — so the catch was masking
+  // nothing but dead code paths. Removed per ADR-2143 §5; the public
+  // `RoadmapProgress` contract (nulls = absent) is unchanged.
+  //
+  // ADR-2143 §3: read the Progress table by column NAME (order/injection-invariant),
+  // via the markdown-table seam. Scope to the `## Progress` section when present
+  // (#2012 decoy avoidance); a headingless milestone slice (#1445) falls back to the
+  // whole input. Requires the canonical Phase/Plans Complete/Status/Completed columns
+  // in any order (extra columns ignored) — supersedes findTableBySchema's exact-schema lookup.
+  const progressMatch = roadmapContent.match(/^##[ \t]+Progress\b/im);
+  let scoped = roadmapContent;
+  if (progressMatch && progressMatch.index !== undefined) {
+    const afterHeading = roadmapContent.slice(progressMatch.index);
+    const nextHeading = afterHeading.search(/\n#{1,2}[ \t]/);
+    scoped = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
+  }
+  const table = findTableWithColumns(scoped, ['Phase', 'Plans Complete', 'Status', 'Completed']);
+
+  if (table) {
+    const allRows = table.rows;
+
+    const completed = allRows.filter((r) => /^complete$/i.test((r['Status'] ?? '').trim())).length;
+    completedPhases = completed > 0 ? completed : null;
+
+    // Data rows only (exclude 999.x backlog phases). Mirrors init.cts /^999(?:\.|$)/ filter.
+    const dataRows = allRows.filter((r) => {
+      const phase = (r['Phase'] ?? '').trim();
+      return /^\d/.test(phase) && !/^999\b/.test(phase);
+    });
+    totalPhases = dataRows.length > 0 ? dataRows.length : null;
+
+    let totalPlansSum = 0;
+    for (const r of allRows) {
+      const cell = (r['Plans Complete'] ?? '').trim();
+      const m = /(\d+)\s*\/\s*(\d+)/.exec(cell);
+      if (m) totalPlansSum += parseInt(m[2], 10);
     }
-    const table = findTableWithColumns(scoped, ['Phase', 'Plans Complete', 'Status', 'Completed']);
-
-    if (table) {
-      const allRows = table.rows;
-
-      const completed = allRows.filter((r) => /^complete$/i.test((r['Status'] ?? '').trim())).length;
-      completedPhases = completed > 0 ? completed : null;
-
-      // Data rows only (exclude 999.x backlog phases). Mirrors init.cts /^999(?:\.|$)/ filter.
-      const dataRows = allRows.filter((r) => {
-        const phase = (r['Phase'] ?? '').trim();
-        return /^\d/.test(phase) && !/^999\b/.test(phase);
-      });
-      totalPhases = dataRows.length > 0 ? dataRows.length : null;
-
-      let totalPlansSum = 0;
-      for (const r of allRows) {
-        const cell = (r['Plans Complete'] ?? '').trim();
-        const m = /(\d+)\s*\/\s*(\d+)/.exec(cell);
-        if (m) totalPlansSum += parseInt(m[2], 10);
-      }
-      totalPlans = totalPlansSum > 0 ? totalPlansSum : null;
-    }
-  } catch { /* intentionally empty — fall through to existing values */ }
+    totalPlans = totalPlansSum > 0 ? totalPlansSum : null;
+  }
 
   return { completedPhases, totalPhases, totalPlans };
 }

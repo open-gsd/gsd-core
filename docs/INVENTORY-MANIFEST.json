@@ -447,7 +447,8 @@
       "workstream-name-policy.cjs",
       "workstream.cjs",
       "worktree-base-ref.cjs",
-      "worktree-safety.cjs"
+      "worktree-safety.cjs",
+      "write-set.cjs"
     ],
     "hooks": [
       "gsd-check-update-worker.js",

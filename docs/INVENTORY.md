@@ -533,6 +533,7 @@ Full listing: `gsd-core/bin/lib/*.cjs`.
 | `workstream.cjs` | Workstream CRUD, migration, session-scoped active pointer |
 | `worktree-base-ref.cjs` | Worktree base-ref drift detection and degrade decision (`evaluateWorktreeBaseDegrade`) plus no-clobber `worktree.baseRef` settings management for the `base-check`/`set-baseref` subcommands (#683) |
 | `worktree-safety.cjs` | Worktree-root resolution and non-destructive prune policy decisions; owns W017 health-check logic |
+| `write-set.cjs` | Shared fail-loud `Result<T>` (`{ok:true,value}\|{ok:false,reason}`) and per-surface write-set contracts (ADR-2143, epic #2143) — `WriteOutcome` (`{surface,applied}`), `WriteSet` (`WriteOutcome[]`), and `writeSetComplete(ws)` (true only when the set is non-empty AND every surface applied, never an OR-into-one-flag); `markdown-table.cjs` re-exports `Result` from here so existing importers are unaffected; consumed by `milestone.cts`'s `requirements mark-complete` handler to report a structured per-surface (`checkbox`/`traceability`) write-set alongside its existing fields (fixes the structural half of #2140) |
 
 [`docs/CLI-TOOLS.md`](CLI-TOOLS.md) may describe a subset of these modules; when it disagrees with the filesystem, this table and the directory listing are authoritative.
 

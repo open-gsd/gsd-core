@@ -3,16 +3,18 @@
  * (ADR-2143, epic #2143). Pure functions, Node built-ins only, string-in/value-out,
  * no I/O. Compiled by tsc to gsd-core/bin/lib/markdown-table.cjs.
  *
- * NOTE: the `Result<T>` here is the ADR-2143 parse-result shape {ok,value|reason} —
- * deliberately distinct from command-routing-hub's dispatch `Result` {ok,data|kind};
- * the two never mix (different modules).
+ * NOTE: the `Result<T>` here is the ADR-2143 §5 parse-result shape {ok,value|reason},
+ * now defined once in `./write-set.cjs` (the shared fail-loud + write-set seam) and
+ * re-exported here so existing importers of `Result` from this module keep working
+ * unchanged — deliberately distinct from command-routing-hub's dispatch `Result`
+ * {ok,data|kind}; the two never mix (different modules).
  */
 
 import { collectSection, replaceSection } from './markdown-sectionizer.cjs';
+import type { Result } from './write-set.cjs';
+export type { Result } from './write-set.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-export type Result<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 /** A parsed GFM pipe table: header column names + rows addressed by column name. */
 export interface MarkdownTable {
