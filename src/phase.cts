@@ -44,7 +44,7 @@ import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter } = roadmapParserMod;
+const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter, currentMilestoneRawRanges } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -1475,13 +1475,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // so completing an already-checked phase (idempotent re-run) checked the
         // wrong phase's box. Mirrors the tight pattern used by phase-insert
         // (`]\\s*(?:\\*\\*)?Phase`).
+        // #2067/#2200: line-anchored (^ + m flag, optional leading indent) so an
+        // inline / backticked prose literal cannot match. Milestone-scoped below
+        // (mutateMilestonePhase) so a Backlog entry or a same-numbered shipped-
+        // milestone phase cannot be flipped either.
         const checkboxPattern = new RegExp(
-          `(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-          'i',
-        );
-        roadmapContent = roadmapContent.replace(
-          checkboxPattern,
-          `$1x$2 (completed ${today})`,
+          `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
+          'im',
         );
 
         const tableRowPattern = new RegExp(
@@ -1522,21 +1522,47 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           `(#{2,4}\\s*Phase\\s+${phaseEscaped}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
           'i',
         );
-        roadmapContent = roadmapContent.replace(
-          planCountPattern,
-          `$1${summaryCount}/${planCount} plans complete`,
-        );
 
         const phaseInfoSummaries = phaseInfo['summaries'] as string[];
-        for (const summaryFile of phaseInfoSummaries) {
-          const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
-          if (!planId) continue;
-          const planEscaped = escapeRegex(planId);
-          const planCheckboxPattern = new RegExp(
-            `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
-            'i',
-          );
-          roadmapContent = (roadmapContent).replace(planCheckboxPattern, '$1x$2');
+
+        // #2200: apply the phase-checkbox flip, the plan-count write, and the
+        // per-plan checkbox flips ONLY within the current milestone's region(s)
+        // (primary section + optional Phase Details section). A bullet/heading in
+        // a shipped milestone, a Backlog section, or a backticked prose literal is
+        // outside the window and stays untouched. With no versioned active
+        // milestone, fall back to whole-content mutation (prior behaviour).
+        const mutateMilestonePhase = (slice: string): string => {
+          let s = slice;
+          s = s.replace(checkboxPattern, `$1x$2 (completed ${today})`);
+          s = s.replace(planCountPattern, `$1${summaryCount}/${planCount} plans complete`);
+          for (const summaryFile of phaseInfoSummaries) {
+            const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
+            if (!planId) continue;
+            const planEscaped = escapeRegex(planId);
+            const planCheckboxPattern = new RegExp(
+              `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
+              'i',
+            );
+            s = s.replace(planCheckboxPattern, '$1x$2');
+          }
+          return s;
+        };
+
+        const milestoneRanges = currentMilestoneRawRanges(roadmapContent, cwd);
+        if (milestoneRanges) {
+          // Splice later windows first so an earlier window's offsets are not
+          // shifted by a length-changing mutation in a later window.
+          const windows = [milestoneRanges.details, milestoneRanges.primary]
+            .filter((w): w is { start: number; end: number } => w !== null)
+            .sort((a, b) => b.start - a.start);
+          for (const w of windows) {
+            roadmapContent =
+              roadmapContent.slice(0, w.start)
+              + mutateMilestonePhase(roadmapContent.slice(w.start, w.end))
+              + roadmapContent.slice(w.end);
+          }
+        } else {
+          roadmapContent = mutateMilestonePhase(roadmapContent);
         }
 
         writes.push({

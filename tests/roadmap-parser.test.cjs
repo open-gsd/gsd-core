@@ -1965,6 +1965,59 @@ describe('feat-3594: roadmap parser does not crash on ANY corpus fixture', () =>
   });
 }
 
+// ─── #2200: currentMilestoneRawRanges scopes phase-complete writes ────────────
+// The phase-complete roadmap mutators (checkbox-flip + Plans writer) must mutate
+// only within the active milestone so they cannot touch a backticked prose
+// literal, a Backlog entry, or a same-numbered phase in a shipped milestone.
+// This tests the scoping helper the fix rests on (the mutators' command path is
+// covered by the existing phase-complete suite; gsd-test confirms no regression).
+{
+  const { describe: d3, test: t3 } = require('node:test');
+  const a3 = require('node:assert/strict');
+  const fs3 = require('node:fs');
+  const path3 = require('node:path');
+  const { createTempProject: ctp3, cleanup: cu3 } = require('./helpers.cjs');
+  const rp3 = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+
+  d3('#2200 currentMilestoneRawRanges — scopes writes to the active milestone', () => {
+    t3('the active window contains the active phase bullet, excludes Backlog + prose + shipped', () => {
+      const tmpDir = ctp3('fix-2200-');
+      try {
+        // Shipped milestone (in a <details> block) + Backlog + a backticked prose
+        // literal all come BEFORE the active milestone — the typical layout.
+        const roadmap = [
+          '# Roadmap', '',
+          '## Backlog', '- [ ] **Phase 1: Some Future Idea**', '',
+          '> See `- [ ] **Phase 1: Alpha**` in the active milestone.', '',
+          '<details><summary>✅ v0.9 Old</summary>',
+          '- [x] **Phase 1: Legacy**',
+          '### Phase 1: Legacy',
+          '**Plans:** 9/9 plans complete',
+          '</details>', '',
+          '## v1.0 — Active', '',
+          '- [ ] **Phase 1: Alpha**', '',
+          '### Phase 1: Alpha',
+          '**Plans:** 0/1 plans complete', '',
+        ].join('\n');
+        fs3.writeFileSync(path3.join(tmpDir, '.planning', 'ROADMAP.md'), roadmap);
+        fs3.writeFileSync(path3.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\ncurrent_phase: 1\n---\n');
+        const ranges = rp3.currentMilestoneRawRanges(roadmap, tmpDir);
+        a3.ok(ranges, 'a versioned active milestone must yield ranges');
+        const primary = roadmap.slice(ranges.primary.start, ranges.primary.end);
+        a3.ok(primary.includes('- [ ] **Phase 1: Alpha**'), 'active phase bullet is inside the window');
+        a3.ok(!primary.includes('Some Future Idea'), 'a Backlog entry is outside the active window');
+        a3.ok(!primary.includes('See `- [ ]'), 'a backticked prose literal is outside the active window');
+        a3.ok(!primary.includes('9/9 plans complete'), 'a shipped milestone plan-count line is outside the active window');
+      } finally {
+        cu3(tmpDir);
+      }
+    });
+
+    t3('returns null without a versioned active milestone (whole-content fallback)', () => {
+      a3.strictEqual(rp3.currentMilestoneRawRanges('# Roadmap\n- [ ] **Phase 1: X**\n', undefined), null);
+    });
+  });
+}
 // ─── #2199: bullet/em-dash ROADMAP phase resolution ───────────────────────────
 // Self-contained block: phase lookup + milestone filter must accept bullet/
 // checkbox entries with an em-dash/en-dash/hyphen/colon separator, not just the
