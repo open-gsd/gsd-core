@@ -134,6 +134,7 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
     // ungrounded and grounded transcript shapes.
     const os = require('os');
     const { execFileSync } = require('node:child_process');
+    const { toPosixPath } = require('../gsd-core/bin/lib/shell-command-projection.cjs');
     const block = agyBashBlock();
     const m = block.match(/\{ head -5[\s\S]*?\}; then/);
     assert.ok(m, 'detection compound not found in the agy block');
@@ -143,7 +144,7 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
       .replace(/\}; then$/, '}')
       // Convert the native path to POSIX form so it survives bash on Windows
       // runners (Git Bash accepts D:/... but eats backslashes).
-      .replaceAll('/tmp/gsd-review-antigravity-{phase}.md', out.split(path.sep).join(path.posix.sep));
+      .replaceAll('/tmp/gsd-review-antigravity-{phase}.md', toPosixPath(out));
     const runDetect = (content) => {
       fs.writeFileSync(out, content);
       try {
