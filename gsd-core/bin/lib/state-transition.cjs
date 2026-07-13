@@ -226,7 +226,7 @@ function beginPhaseCore(content, intent, deps) {
     const reassemble = (b) => hasFrontmatter
         ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
         : b;
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     // Consult the field-classification table for the frontmatter keys this
     // transition touches (codex Phase 1 review: "table not consulted by
     // transitionCore"). The table tracks FRONTMATTER keys (lowercase: `status`,
@@ -502,7 +502,7 @@ function mutateCurrentPositionForAdvance(content, fields, statusDefaults, lastAc
  * adapter to construct CLI output.
  */
 function advancePlanCore(content, deps) {
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     // #1255: body-field replacements operate on body only (frontmatter stripped),
     // not on the full content. The YAML `status:` key matches `^Status:\s*`
     // before the body field if full content is passed (codex Phase 2 review:
@@ -608,7 +608,7 @@ function advancePlanCore(content, deps) {
  */
 function completePhaseCore(content, intent, deps) {
     const updated = [];
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     // Consult the field-classification table for the frontmatter keys this
     // transition touches (same guard beginPhaseCore applies). A missing row is a
     // substrate defect — fail loudly rather than silently re-encoding policy.
@@ -762,7 +762,7 @@ function completePhaseCore(content, intent, deps) {
  */
 function plannedPhaseCore(content, intent, deps) {
     const updated = [];
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
         const cls = getFieldClassification(fmKey);
         if (cls === null) {
@@ -840,7 +840,7 @@ function plannedPhaseCore(content, intent, deps) {
  * directly and must not run the steady-state `syncStateFrontmatter` post-sync.
  */
 function milestoneSwitchCore(content, intent, deps) {
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     const updated = [
         'milestone',
         'milestone_name',
@@ -927,7 +927,7 @@ function milestoneSwitchCore(content, intent, deps) {
  */
 function milestoneCompleteCore(content, intent, deps) {
     const updated = [];
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     const version = intent.version;
     for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
         const cls = getFieldClassification(fmKey);
@@ -1175,7 +1175,7 @@ function pruneCore(content, intent) {
  * (rather than silently writing fallback-derived wrong values).
  */
 function syncCore(content, intent, deps) {
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     const changes = [];
     let modified = content;
     const updated = [];

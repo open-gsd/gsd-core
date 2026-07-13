@@ -326,11 +326,18 @@ function normalizeNodePath(execPath: string, opts?: NodeNormOpts): string {
     return execPath;
   }
 
-  if (/^\/usr\/local\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
-    return '/usr/local/bin/node';
-  }
-  if (/^\/opt\/homebrew\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/.test(execPath)) {
-    return '/opt/homebrew/bin/node';
+  // Homebrew (macOS Intel /usr/local, Apple Silicon /opt/homebrew, Linuxbrew
+  // /home/linuxbrew/.linuxbrew, and any custom HOMEBREW_PREFIX) pins node at
+  // <prefix>/Cellar/node(<@ver>)?/<ver>/bin/node, then deletes prior versions on
+  // `brew upgrade node`. Rewrite to the stable <prefix>/bin/node symlink, which
+  // survives the upgrade. Derive <prefix> from the path itself (more reliable
+  // than HOMEBREW_PREFIX env — the path IS the install location) so every layout
+  // is covered by one branch instead of one per known prefix (#2185).
+  const homebrewMatch = normalizedForMatch.match(
+    /^(.+)\/Cellar\/node(@\d+)?\/[^/]+\/bin\/node(\.exe)?$/i,
+  );
+  if (homebrewMatch) {
+    return `${homebrewMatch[1]}/bin/node${homebrewMatch[3] || ''}`;
   }
 
   // mise pins a concrete node version at <data>/installs/node/<ver>/bin/node
