@@ -59,6 +59,11 @@ export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgre
     // an h3 `### Progress` (the `## Progress` substring starts at the 2nd hash),
     // letting a decoy subheading hijack the slice.
     // Case-insensitive to match the case-insensitive header-cell comparison below.
+    //
+    // allow-adhoc-markdown: line-based Progress-table scan (header lookup +
+    // positional cell indexing); table parsing is out of the markdown-sectionizer
+    // seam's scope. Superseded by the ADR-2143 parseMarkdownTable/TABLE_SCHEMAS
+    // seam; pending #2143.
     const progressMatch = roadmapContent.match(/^##[ \t]+Progress\b/im);
     let scoped = roadmapContent;
     if (progressMatch && progressMatch.index !== undefined) {

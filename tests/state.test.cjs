@@ -9650,6 +9650,71 @@ describe('#2137 regression: deriveProgressFromRoadmap parses the milestone-group
     assert.equal(result.totalPhases, 2, `h2 ## Progress table must be found past the h3 decoy. Got ${result.totalPhases}`);
     assert.equal(result.completedPhases, 2, `completedPhases must be 2. Got ${result.completedPhases}`);
   });
+
+  // ── Boundary conditions (#2137 review) ──────────────────────────────────────
+  // The header-driven walk terminates at the first non-`|` line and skips the
+  // separator row, so these edges must not throw and must honour the "0 → null"
+  // contract that lets the consumer leave the existing STATE value untouched.
+
+  test('header + separator only (0 data rows) derives all-null', () => {
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.deepEqual(
+      result,
+      { completedPhases: null, totalPhases: null, totalPlans: null },
+      `an empty table must report all-null (0 counts → null), got ${JSON.stringify(result)}`,
+    );
+  });
+
+  test('exactly one data row derives that single row', () => {
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Foundation | v1.0 | 4/4 | Complete | 2026-01-01 |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.deepEqual(
+      result,
+      { completedPhases: 1, totalPhases: 1, totalPlans: 4 },
+      `a single Complete row must derive {1,1,4}, got ${JSON.stringify(result)}`,
+    );
+  });
+
+  test('ragged rows (more/fewer cells than the header) are handled without throwing', () => {
+    // The reader indexes cells positionally by header name, so an EXTRA trailing
+    // column is ignored and a SHORT row simply has absent Status/Plans cells
+    // (`cells[idx] ?? ''`) — neither should throw or corrupt the well-formed row.
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Alpha | v1.0 | 2/2 | Complete | 2026-01-01 | stray-extra-column |', // 6 cells (extra)
+      '| 2. Beta | v1.0 |', // 2 cells (short: Plans/Status/Completed absent)
+    ].join('\n');
+
+    let result;
+    assert.doesNotThrow(() => {
+      result = deriveProgressFromRoadmap(roadmap);
+    }, 'ragged rows must not throw');
+    // Row 1: extra column ignored → counted, Complete, +2 plans.
+    // Row 2: short row → counted as a phase, but Status/Plans cells are absent so
+    // it is neither Complete nor plan-bearing.
+    assert.deepEqual(
+      result,
+      { completedPhases: 1, totalPhases: 2, totalPlans: 2 },
+      `ragged rows must degrade gracefully to {1,2,2}, got ${JSON.stringify(result)}`,
+    );
+  });
 });
 
 // ─── Scenario B: state json total_phases via roadmapPhaseCount ───────────────
