@@ -477,6 +477,92 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
   return isDirInMilestone as MilestonePhaseFilter;
 }
 
+/**
+ * #2200: raw [start,end) offsets of the current milestone's region(s) in ROADMAP
+ * content, for scoping write-path mutations (phase-checkbox flip, Plans-count
+ * writer) so they cannot touch a backticked prose literal, a Backlog entry, or a
+ * same-numbered phase in a shipped milestone.
+ *
+ * Mirrors the region selection in `extractCurrentMilestone` (version detection →
+ * active heading → next milestone boundary → optional Phase Details section).
+ * Returns null when there is no versioned active milestone; callers then fall
+ * back to whole-content mutation (the prior behaviour).
+ *
+ * NOTE: keep the region logic here in sync with extractCurrentMilestone.
+ */
+function currentMilestoneRawRanges(
+  content: string,
+  cwd?: string,
+): { primary: { start: number; end: number }; details: { start: number; end: number } | null } | null {
+  if (!cwd) return null;
+
+  let version: string | null = null;
+  try {
+    const statePath = path.join(planningDir(cwd), 'STATE.md');
+    const stateRaw = platformReadSync(statePath);
+    if (stateRaw !== null) {
+      const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
+      if (milestoneMatch) version = milestoneMatch[1].trim();
+    }
+  } catch { /* ignore */ }
+  if (!version) {
+    const inProgressMatch = content.match(/(?:🚧|🔄)\s*\*\*v(\d+\.\d+)\s/);
+    if (inProgressMatch) version = 'v' + inProgressMatch[1];
+  }
+  if (!version) return null;
+
+  const escapedVersion = escapeRegex(version);
+  const sectionPattern = new RegExp(
+    `(^#{1,3}\\s+(?!Phase\\s+\\S).*${escapedVersion}\\b[^\\n]*)`,
+    'gmi',
+  );
+  const headingMatches = [...content.matchAll(sectionPattern)];
+  if (headingMatches.length === 0) return null;
+
+  const closedMarkerPattern = /\b(?:CLOSED|ARCHIVED|ABANDONED|SHIPPED|FAILED)\b|✅|🗄/i;
+  const activeMarkerPattern = /\b(?:STARTED|ACTIVE|WIP)\b|in\s+progress|🚧|🔄/i;
+  const isClosed = (h: string) => closedMarkerPattern.test(h) && !activeMarkerPattern.test(h);
+  const firstMatch = headingMatches[0];
+  const selected = headingMatches.find((m) => !isClosed(m[1])) || firstMatch;
+  const sectionStart = selected.index ?? 0;
+
+  const computeSectionEnd = (headingText: string, headingStart: number): number => {
+    const level = (headingText.match(/^(#{1,3})\s/) ?? ['', '#'])[1].length;
+    const afterHeading = headingStart + headingText.length;
+    for (const h of tokenizeHeadings(content)) {
+      if (h.offset <= headingStart) continue;
+      if (h.offset < afterHeading) continue;
+      if (h.level > level) continue;
+      if (/^Phase\s+\S/i.test(h.text)) continue;
+      if (!/v\d+\.\d+|✅|📋|🚧/i.test(h.text)) continue;
+      return h.offset;
+    }
+    return content.length;
+  };
+  const sectionEnd = computeSectionEnd(selected[0], sectionStart);
+
+  const selectedVersionToken = selected[1].match(
+    /v\d+(?:\.\d+)+(?:[-.][A-Za-z0-9]+)*/i,
+  )?.[0];
+  const detailsVersionBoundary = selectedVersionToken
+    ? new RegExp(`${escapeRegex(selectedVersionToken)}(?![\\w.-])`, 'i')
+    : null;
+  const detailsMatch = headingMatches.find(
+    (m) =>
+      /\(Phase\s+Details\)/i.test(m[1]) &&
+      !isClosed(m[1]) &&
+      (!detailsVersionBoundary || detailsVersionBoundary.test(m[1])) &&
+      (m.index ?? 0) >= sectionEnd,
+  );
+  let details: { start: number; end: number } | null = null;
+  if (detailsMatch) {
+    const detailsStart = detailsMatch.index ?? 0;
+    details = { start: detailsStart, end: computeSectionEnd(detailsMatch[0], detailsStart) };
+  }
+
+  return { primary: { start: sectionStart, end: sectionEnd }, details };
+}
+
 export = {
   stripShippedMilestones,
   extractCurrentMilestone,
@@ -484,4 +570,5 @@ export = {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
+  currentMilestoneRawRanges,
 };
