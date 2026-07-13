@@ -42,6 +42,7 @@ const { extractFrontmatter } = frontmatter;
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, VALID_PHASE_TYPES } = modelProfiles;
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
+import { realClock } from './clock.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1456,7 +1457,7 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, raw: boolean
 
   // Read, add completion timestamp, move
   let content = fs.readFileSync(sourcePath, 'utf-8');
-  const today = new Date().toISOString().split('T')[0];
+  const today = realClock.localToday();
   content = `completed: ${today}\n` + content;
 
   platformWriteSync(path.join(completedDir, filename as string), content);
@@ -1468,7 +1469,10 @@ function cmdTodoComplete(cwd: string, filename: string | undefined, raw: boolean
 function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: boolean): void {
   const { phase, name } = options;
   const padded = phase ? normalizePhaseName(phase) : '00';
-  const today = new Date().toISOString().split('T')[0];
+  // #2136 sibling site (deliberately deferred per the issue's scope): scaffold's
+  // date stays on the raw UTC slice for now; route through realClock.localToday()
+  // alongside workstream.cts/gsd2-import.cts/template.cts/verify.cts in a follow-up.
+  const today = realClock.localToday();
 
   // Find phase directory
   const phaseInfo = phase ? findPhaseInternal(cwd, phase) as Record<string, unknown> | null : null;

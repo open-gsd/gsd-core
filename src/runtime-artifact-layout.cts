@@ -77,6 +77,12 @@ interface ArtifactKind {
    *  specifies one (e.g. codex skills → $HOME/.agents). Undefined means the
    *  kind installs under the runtime's normal configDir. */
   home?: string;
+  /** Name of the converter function in Runtime Artifact Conversion exports, as
+   *  declared on the descriptor's `converter` field. Only populated for the
+   *  `skills` kind today — lets bespoke callers (e.g. the OpenCode-family
+   *  combined installer, ADR-1239 / #2093) look up the descriptor-declared
+   *  converter by name instead of re-deriving it from a runtime === check. */
+  converter?: string;
 }
 
 interface Layout {
@@ -193,19 +199,27 @@ function agentsKind(destSubpath: string, prefix: string, configDir: string): Art
  * Agent filenames are preserved verbatim (the prefix is already embedded in the
  * agent stem — e.g. `gsd-planner.md`).
  *
- * #1173 SCOPE — plumbing only (declarations deferred): this provides the
- * converter dispatch + `isGlobal` scope threading for the descriptor's `agents`
- * kind, but NO runtime currently declares a converted `agents` kind in its
- * `capability.json`. The descriptor declarations for the 8 non-Claude runtimes
- * (copilot/antigravity/cursor/windsurf/augment/trae/codebuddy/cline) are
- * DEFERRED to a follow-up that first ships the ADR-1235 §0 byte-for-byte parity
- * harness, because the second `layout.kinds` consumer — `applySurface` /
- * `/gsd:surface` / `--materialize` (`src/surface.cts`) — does not yet mirror the
- * legacy agent pipeline (Copilot's `.agent.md` filename rename, the cross-cutting
- * path-prefix rewrite + attribution, stale-file cleanup, config-reading steps),
- * so declaring the kind now would regress the surface path. Until then the legacy
- * `bin/install.js` agent loop remains authoritative for the real install, and
- * this `convertedAgentsKind` is exercised only by synthetic-descriptor seam tests.
+ * #1173 SCOPE — plumbing only (real install still elsewhere): this provides
+ * the converter dispatch + `isGlobal` scope threading for the descriptor's
+ * `agents` kind. As of #2092, 8 non-Claude runtimes DO declare a converted
+ * `agents` kind in their `capability.json` — qwen (`convertClaudeAgentToQwenAgent`)
+ * plus the 7 that already declared one before it (antigravity, augment,
+ * codebuddy, copilot, cursor, trae, windsurf) — so the descriptor-level
+ * declaration is no longer deferred. What IS still deferred is wiring
+ * `resolveRuntimeArtifactLayout`'s `agents` kind into the REAL install:
+ * `bin/install.js`'s agent-staging loop does not consume this module's
+ * `convertedAgentsKind` resolution at all — it dispatches the very same
+ * converter functions directly via `_hostBehaviors(runtime)` checks
+ * (`frontmatterDialect`, `brandingRewrites`, `isCopilot`/`isAntigravity`/…),
+ * duplicating the mapping declared here. That duplication is deliberate until
+ * the second `layout.kinds` consumer — `applySurface` / `/gsd:surface` /
+ * `--materialize` (`src/surface.cts`) — mirrors the legacy agent pipeline
+ * (Copilot's `.agent.md` filename rename, the cross-cutting path-prefix
+ * rewrite + attribution, stale-file cleanup, config-reading steps); declaring
+ * `bin/install.js` itself against this resolver before then would risk
+ * regressing the surface path. Until that follow-up lands, `bin/install.js`
+ * remains authoritative for the real install, and this `convertedAgentsKind`
+ * is exercised only by `/gsd:surface` and synthetic-descriptor seam tests.
  *
  * Mirrors the `convertedCommandsKind` pattern (#785).
  *
@@ -315,6 +329,7 @@ function skillsKind(
     kind: 'skills',
     destSubpath,
     prefix,
+    converter: converterName,
     stage: (resolved) => {
       const realConverter = conversionExports[converterName] as (content: string, skillName: string, runtime: string, cmdNames: string[], isGlobal: boolean) => string;
       // Compute cmdNames once per stage call for performance (#3583).

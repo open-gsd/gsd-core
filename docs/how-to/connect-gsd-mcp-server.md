@@ -1,7 +1,8 @@
 # How to connect a host to the GSD companion MCP server
 
 This guide shows you how to make a MCP-capable host (Claude Code, Codex,
-OpenCode, VS Code, Antigravity CLI, Cursor, Cline, Hermes) drive GSD — run GSD
+OpenCode, VS Code, Antigravity CLI, Cursor, Cline, Hermes, Augment Code) drive
+GSD — run GSD
 commands and read/write `.planning/` state — through the companion MCP server,
 with no bespoke plugin.
 
@@ -26,13 +27,47 @@ host.
 }
 ```
 
-- **Claude Code / Codex / OpenCode / Cursor / Cline / Hermes** — under the
-  host's `mcpServers` object (project or user config).
+- **Claude Code / Codex / Cursor / Cline / Hermes** — under the host's
+  `mcpServers` object (project or user config).
+- **Augment Code** — under the `mcpServers` block of its own
+  `settings.json` (not a standalone MCP config file, unlike Antigravity)
+  — global at `~/.augment/settings.json`, project-local at
+  `.augment/settings.json`. GSD's installer configures this entry
+  automatically (`--augment` installs).
 - **VS Code** — in the workspace MCP servers list.
-- **Antigravity CLI** — under its `mcpServers` block.
+- **Antigravity** — under the `mcpServers` block of its standalone
+  `mcp_config.json` profile (not embedded in `settings.json`) — global at
+  `~/.gemini/antigravity/mcp_config.json` (or the sibling
+  `antigravity-ide`/`antigravity-cli` dir GSD resolved into), project-local at
+  `.agents/mcp_config.json`. GSD's installer configures this entry
+  automatically (`--antigravity` installs).
+- **OpenCode** — under the `mcp` key (**not** `mcpServers`), in
+  `~/.config/opencode/opencode.jsonc` (global) or `./opencode.json`
+  (project). The entry shape also differs — see below.
+- **Kilo Code** — an OpenCode fork; also under the `mcp` key (**not**
+  `mcpServers`), in `~/.config/kilo/opencode.jsonc` (global) or
+  `./opencode.json` (project). Same entry shape as OpenCode.
 
 Set `cwd` to the project whose `.planning/` you want GSD to manage — the server
 resolves state paths against it.
+
+### OpenCode / Kilo entry shape
+
+OpenCode (and Kilo, which shares OpenCode's config schema) use a
+`type`/`command`/`timeout` entry under the `mcp` key instead of the generic
+`command`/`args`/`cwd` form above:
+
+```jsonc
+{
+  "mcp": {
+    "gsd": {
+      "type": "local",
+      "command": ["npx", "-y", "@opengsd/gsd-core", "gsd-mcp-server"],
+      "timeout": 10000
+    }
+  }
+}
+```
 
 ## 2. Restart the host
 

@@ -1500,7 +1500,9 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         // new-milestone never inherits un-archived dirs. --no-archive-phases opts out.
         const archivePhases = !args.includes('--no-archive-phases');
         const force = args.includes('--force');
-        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force }, raw);
+        // #2118: --dry-run prints a preview plan without mutating.
+        const dryRun = args.includes('--dry-run');
+        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun }, raw);
       } else {
         error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }

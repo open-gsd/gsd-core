@@ -21,7 +21,6 @@ const {
   validateFieldName,
   validateShellArg,
   validatePromptStructure,
-  scanEntropyAnomalies,
 } = require('../gsd-core/bin/lib/security.cjs');
 
 // ─── Path Traversal Prevention ──────────────────────────────────────────────
@@ -765,79 +764,8 @@ describe('validatePromptStructure', () => {
   });
 });
 
-// ─── Layer 4: Paragraph-Level Entropy Anomaly Detection ─────────────────────
-
-describe('scanEntropyAnomalies', () => {
-  test('is exported from security.cjs', () => {
-    assert.equal(typeof scanEntropyAnomalies, 'function');
-  });
-
-  test('returns { clean, findings } shape', () => {
-    const result = scanEntropyAnomalies('Normal text here.');
-    assert.ok(typeof result.clean === 'boolean');
-    assert.ok(Array.isArray(result.findings));
-  });
-
-  test('clean natural language text passes', () => {
-    const text = [
-      'Build an authentication system with JWT tokens.',
-      '',
-      'The system should support login, logout, and token refresh.',
-    ].join('\n');
-    const result = scanEntropyAnomalies(text);
-    assert.ok(result.clean, `Expected clean but got: ${result.findings.join(', ')}`);
-  });
-
-  test('detects high-entropy paragraph (random-character content)', () => {
-    // A string cycling through 90 distinct chars has entropy ~6.4 bits/char, well above 5.5 threshold
-    const highEntropyPara = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=!@#$%^&*()_-[]{}|;:,.<>?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr';
-    const result = scanEntropyAnomalies(highEntropyPara);
-    assert.ok(!result.clean, 'should detect high-entropy paragraph');
-    assert.ok(
-      result.findings.some(f => f.includes('High-entropy paragraph')),
-      'finding should mention high-entropy paragraph'
-    );
-  });
-
-  test('finding includes entropy value in bits/char', () => {
-    const highEntropyPara = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=!@#$%^&*()_-[]{}|;:,.<>?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr';
-    const result = scanEntropyAnomalies(highEntropyPara);
-    assert.ok(result.findings.some(f => f.includes('bits/char')));
-  });
-
-  test('skips paragraphs shorter than or equal to 50 chars', () => {
-    // Even a high-entropy short paragraph should not be flagged
-    const shortPara = 'SGVsbG8gV29ybGQ='; // 16 chars — under 50
-    const result = scanEntropyAnomalies(shortPara);
-    assert.ok(result.clean, 'short paragraphs should be skipped');
-  });
-
-  test('handles empty text gracefully', () => {
-    const result = scanEntropyAnomalies('');
-    assert.ok(result.clean);
-    assert.equal(result.findings.length, 0);
-  });
-
-  test('handles null gracefully', () => {
-    const result = scanEntropyAnomalies(null);
-    assert.ok(result.clean);
-    assert.equal(result.findings.length, 0);
-  });
-
-  test('multiple paragraphs — flags only high-entropy ones', () => {
-    const highEntropyPara = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=!@#$%^&*()_-[]{}|;:,.<>?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr';
-    const text = [
-      'This is a perfectly normal English sentence describing a feature.',
-      '',
-      highEntropyPara,
-      '',
-      'Another clean sentence about the authentication requirements.',
-    ].join('\n');
-    const result = scanEntropyAnomalies(text);
-    assert.ok(!result.clean);
-    assert.equal(result.findings.length, 1, 'only 1 high-entropy paragraph should be flagged');
-  });
-});
+// NOTE (#2198): scanEntropyAnomalies test block removed — the function was a
+// dead export (zero production callers) and has been deleted from security.cts.
 
 
 // ────────────────────────────────────────────────────────────────────────

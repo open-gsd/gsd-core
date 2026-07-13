@@ -1,79 +1,354 @@
 'use strict';
 
 /**
- * GSD extension for pi (pi.dev) — ADR-1239 Phase D / #1944.
+ * GSD extension for pi (pi.dev) — ADR-1239 Phase D / #1944, upgraded #2102 Stage 2.
  *
  * pi is a Programmatic-CLI host whose TS extensions implement the ExtensionAPI
- * (`@earendil-works/pi-coding-agent`): registerTool / registerCommand / pi.on.
+ * (`@earendil-works/pi-coding-agent`): registerCommand({handler(args, ctx)}) /
+ * registerTool({execute(toolCallId, params, signal, onUpdate, ctx)}) / pi.on(event, handler).
  * This extension binds GSD's command surface to pi via the imperative adapter
  * path — the programmatic-CLI peer of the OpenCode worked binding.
  *
  * Installation: copy this file to ~/.pi/agent/extensions/gsd.cjs (pi loads
  * extensions via jiti from that dir). The engine is resolved from the installed
- * GSD tree (walk-up like the OpenCode plugin).
+ * GSD tree (walk-up like the OpenCode plugin). pi's shared hooks/ bundle
+ * (hooks/*.js + hooks/lib/git-cmd.js) is installed alongside the extension —
+ * capabilities/pi/capability.json does NOT set
+ * `hostBehaviors.skipSharedHooksInstall` (#2102 Stage 2 fix; pi is
+ * architecturally identical to OpenCode here: `hooksSurface: 'none'` +  a
+ * native extension that spawns the staged hooks — not Kilo/ZCode's
+ * no-plugin-surface case, where the same hooks would be genuine dead weight).
+ * This is what makes the event bridges below (and the tokenizer require)
+ * resolve for real in an installed tree, not just in this dev repo.
  *
- * Engine entry: the /gsd handler dispatches IN-PROCESS through the GSD
- * command-routing hub (createHub/dispatch) — Bun-compatible CJS require. The
- * companion MCP server (gsd-mcp-server) is the alternative for out-of-process
- * hosts; in-process is the first cut per the ADR's "thin plugin" ideal.
+ * Engine entry: dispatch is SUBPROCESS-REUSE to gsd-tools.cjs (bounded,
+ * no-throw — dispatchGsdCommand in shell-command-projection.cjs), NOT an
+ * in-process command-routing hub. No fully-populated hub factory exists
+ * anywhere in gsd-core — every createHub() caller in the tree builds a
+ * single-family hub for its own narrow purpose — so the "in-process createHub"
+ * framing of the original #1944 cut was aspirational and is not achievable
+ * without a hub factory that doesn't exist. This mirrors the precedent already
+ * established for the OpenCode/Kilo hook bridge (.opencode/plugins/gsd-core.js
+ * header: "Architecture: SUBPROCESS REUSE ... spawns existing hook scripts as
+ * child processes") — the same pattern, applied to command dispatch. The
+ * companion MCP server (gsd-mcp-server) dispatches through the SAME shared
+ * helper for out-of-process hosts.
  *
  * @param {object} pi  pi ExtensionAPI (registerTool/registerCommand/on/…)
  */
+
+const fs = require('fs');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+// Resolve the GSD engine tree (the dir holding gsd-core/ + hooks/).
+// Works across dev (<root>/pi/gsd.cjs → <root>) and installed layouts.
+function resolveEngineRoot(startDir) {
+  let dir = startDir;
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(dir, 'gsd-core'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(startDir, '..');
+}
+
+const ENGINE_ROOT = resolveEngineRoot(__dirname);
+const GSD_CORE = path.join(ENGINE_ROOT, 'gsd-core');
+
+// ── curated top-level command families (gsd-tools.cjs TOP_LEVEL_USAGE) ──────
+// readCmdNames() (scripts/fix-slash-commands.cjs) reads commands/, which pi
+// does NOT install (it ships a single native-extension file, no shared
+// commands/ dir) — it would always return []. This is a self-contained,
+// hand-curated subset of the STABLE top-level families documented by
+// `node gsd-core/bin/gsd-tools.cjs --help` (gsd-tools.cjs:689-705). Named +
+// exported (via _internals) so a test can assert against it directly.
+const PI_COMMAND_FAMILIES = Object.freeze([
+  'agent', 'capability', 'check', 'commit', 'config-get', 'config-path',
+  'config-set', 'effort', 'git', 'graphify', 'init', 'intel', 'learnings',
+  'list-todos', 'loop', 'milestone', 'phase', 'phases', 'progress',
+  'requirements', 'research-plan', 'research-store', 'resolve-granularity',
+  'resolve-model', 'roadmap', 'scaffold', 'smart-entry', 'state', 'task',
+  'template', 'user-story', 'validate', 'verify', 'workstream', 'worktree',
+]);
+
+/**
+ * Filter PI_COMMAND_FAMILIES by prefix (startsWith). Returns null when there
+ * are no matches, per pi's `AutocompleteItem[]|null` contract.
+ * @param {string} prefix
+ * @returns {{value: string, label: string}[] | null}
+ */
+function getArgumentCompletions(prefix) {
+  const p = typeof prefix === 'string' ? prefix : '';
+  const matches = PI_COMMAND_FAMILIES.filter((name) => name.startsWith(p));
+  if (matches.length === 0) return null;
+  return matches.map((value) => ({ value, label: value }));
+}
+
+/**
+ * Tokenize the raw `/gsd <args>` string into { family, subcommand, args }.
+ * Reuses the quote-aware whitespace tokenizer already shipped for hooks
+ * (hooks/lib/git-cmd.js's `tokenize`) rather than re-implementing shell-word
+ * splitting a second time. #2102 Stage 2: pi's capability descriptor no
+ * longer sets `hostBehaviors.skipSharedHooksInstall` (adversarial-review
+ * finding #1/#2 — pi ships NO hooks/ with that flag set, so this require was
+ * dead in a real install), so the shared hooks/ bundle — including
+ * hooks/lib/git-cmd.js — is installed alongside the extension for real
+ * (mirrors OpenCode, whose native plugin also spawns the staged hooks/*.js
+ * bundle). The require below is therefore the PRIMARY, live path in an
+ * installed pi tree; the whitespace-split fallback stays as defense-in-depth
+ * for a corrupted/partial install (e.g. a user who deleted hooks/lib/ by
+ * hand) rather than the only-ever-taken path.
+ * @param {string} rawArgs
+ * @returns {{ family: string, subcommand?: string, args: string[] }}
+ */
+function parseGsdCommandArgs(rawArgs) {
+  let tokenize;
+  try {
+    ({ tokenize } = require(path.join(ENGINE_ROOT, 'hooks', 'lib', 'git-cmd.js')));
+  } catch {
+    tokenize = (s) => String(s || '').split(/\s+/).filter(Boolean);
+  }
+  const tokens = tokenize(typeof rawArgs === 'string' ? rawArgs : '');
+  return {
+    // Empty args → dispatch gsd-tools.cjs's own --help surface (a real,
+    // working, ok:true default — NOT the 'query'/'help' pairing the original
+    // #1944 cut used, which is not a valid gsd-tools.cjs command).
+    family: tokens[0] || '--help',
+    subcommand: tokens[1],
+    args: tokens.slice(2),
+  };
+}
+
+/**
+ * Best-effort TypeBox schema for gsd_invoke's `parameters`, falling back to a
+ * plain JSON-Schema object when the `typebox` package is unavailable (it is
+ * NOT a gsd-core dependency — pi's own ExtensionAPI contract expects TypeBox,
+ * but nothing in this repo installs it). TypeBox schemas ARE JSON Schema, so
+ * the fallback object is structurally equivalent for hosts that accept plain
+ * JSON Schema; this is a best-effort shim for the flat-file extension case.
+ * @returns {object}
+ */
+function buildGsdInvokeParameters() {
+  try {
+    const typebox = require('typebox');
+    const Type = typebox && typebox.Type;
+    if (Type) {
+      return Type.Object({
+        family: Type.String(),
+        subcommand: Type.Optional(Type.String()),
+        args: Type.Optional(Type.Array(Type.String())),
+      });
+    }
+  } catch {
+    // typebox is not installed in this environment — fall through.
+  }
+  process.stderr.write(
+    'gsd: typebox unavailable — gsd_invoke "parameters" falling back to a plain JSON-schema object.\n',
+  );
+  return {
+    type: 'object',
+    properties: {
+      family: { type: 'string' },
+      subcommand: { type: 'string' },
+      args: { type: 'array', items: { type: 'string' } },
+    },
+    required: ['family'],
+  };
+}
+
+/**
+ * Build the `before_provider_request` handler that steers pi's model
+ * selection to GSD's tier-resolved id (modelMode: 'active' per
+ * capabilities/pi/capability.json). GSD does NOT call `pi.registerProvider` —
+ * that registers a NEW model provider; GSD's job here is only to pick a
+ * tier-appropriate id AMONG pi's EXISTING built-in anthropic models, so
+ * registerProvider would be the wrong primitive (it would wrongly add a fake
+ * provider instead of steering the real one).
+ *
+ * v1 tier policy: GSD does not yet expose a per-turn/per-agent tier signal to
+ * this event, so a conservative fixed default tier is used (parameterized —
+ * default 'sonnet' — so a future richer signal, or a test, can override it).
+ *
+ * ASSUMPTION (flagged — verify against a live pi host): the event payload's
+ * model field is named `model`, matching the anthropic-messages payload shape
+ * (Context7-confirmed for the wire protocol; pi's own before_provider_request
+ * event schema was not independently verifiable in this environment). If pi's
+ * actual field name differs, this returns the WRONG key and pi's fail-open
+ * default takes over only because bare-model-id mismatches degrade to
+ * provider-level errors, not GSD-level ones — a discrepancy here needs a
+ * live-host smoke test before shipping past this stage.
+ *
+ * Fail-open: any resolution failure (or a null/falsy resolved model — e.g. an
+ * unrecognized tier) returns `undefined`, leaving pi's model choice untouched.
+ * NEVER returns a payload with a missing/empty model id.
+ *
+ * @param {{ tier?: string }} [opts]
+ * @returns {(event: object, ctx: object) => Promise<object|undefined>}
+ */
+function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
+  return async function onBeforeProviderRequest(event, ctx) {
+    try {
+      const effectiveCwd = (ctx && ctx.cwd) || process.cwd();
+      const { resolveTierEntry } = require(path.join(GSD_CORE, 'bin', 'lib', 'model-resolver.cjs'));
+      const { loadConfig } = require(path.join(GSD_CORE, 'bin', 'lib', 'config-loader.cjs'));
+      const config = loadConfig(effectiveCwd);
+      const overrides = (config && config.model_profile_overrides) || undefined;
+      const entry = resolveTierEntry({ runtime: 'pi', tier, overrides });
+      const modelId = entry && typeof entry.model === 'string' && entry.model.length > 0 ? entry.model : null;
+      if (!modelId) return undefined; // fail-open — leave pi's model untouched
+      const basePayload = (event && typeof event === 'object' && event.payload && typeof event.payload === 'object')
+        ? event.payload
+        : {};
+      return { ...basePayload, model: modelId };
+    } catch {
+      return undefined; // fail-open on any resolution error
+    }
+  };
+}
+
+/**
+ * Bounded subprocess bridge to GSD's Claude Code hook scripts. Mirrors
+ * .opencode/plugins/gsd-core.js's `runHook` (SUBPROCESS-REUSE): spawns
+ * `node <hooks/hookFile>` with the payload piped to stdin, on a bounded
+ * timeout. NEVER throws — a missing hook file, a spawn error, or a timeout
+ * all degrade to a silent-allow result so a hook problem can never block pi.
+ * @param {string} hookFile  filename under hooks/, e.g. "gsd-context-monitor.js"
+ * @param {object} payload
+ * @param {{ timeout?: number, cwd?: string }} [opts]
+ * @returns {{ stdout: string, exitCode: number, timedOut: boolean }}
+ */
+function runHook(hookFile, payload, opts = {}) {
+  const hookPath = path.join(ENGINE_ROOT, 'hooks', hookFile);
+  if (!fs.existsSync(hookPath)) return { stdout: '', exitCode: 0, timedOut: false };
+  const timeout = opts.timeout || 8000;
+  let result;
+  try {
+    result = spawnSync(process.execPath, [hookPath], {
+      input: JSON.stringify(payload || {}),
+      encoding: 'utf8',
+      timeout,
+      cwd: opts.cwd || process.cwd(),
+      windowsHide: true,
+    });
+  } catch {
+    return { stdout: '', exitCode: 0, timedOut: false };
+  }
+  const stdout = (result && typeof result.stdout === 'string') ? result.stdout.trim() : '';
+  const exitCode = (result && result.status != null) ? result.status : 0;
+  return { stdout, exitCode, timedOut: !!(result && result.signal === 'SIGTERM') };
+}
+
 module.exports = function gsdPiExtension(pi) {
   if (!pi || typeof pi !== 'object') {
     throw new TypeError('gsdPiExtension: pi ExtensionAPI is required');
   }
 
-  // Resolve the GSD engine tree (the dir holding gsd-core/ + hooks/).
-  // Works across dev (<root>/pi/gsd.cjs → <root>) and installed layouts.
-  const fs = require('fs');
-  const path = require('path');
-  function resolveEngineRoot(startDir) {
-    let dir = startDir;
-    for (let i = 0; i < 6; i++) {
-      if (fs.existsSync(path.join(dir, 'gsd-core'))) return dir;
-      const parent = path.dirname(dir);
-      if (parent === dir) break;
-      dir = parent;
-    }
-    return path.resolve(startDir, '..');
-  }
-  const ENGINE_ROOT = resolveEngineRoot(__dirname);
-  const GSD_CORE = path.join(ENGINE_ROOT, 'gsd-core');
-
-  // ── /gsd command: dispatch through the GSD command-routing hub ──────────
+  // ── /gsd command: dispatch through gsd-tools.cjs (subprocess-reuse) ──────
   pi.registerCommand('gsd', {
-    description: 'Invoke a GSD command via the embedded engine (imperative adapter).',
-    execute: async function (ctx) {
-      const { createHub } = require(path.join(GSD_CORE, 'bin', 'lib', 'command-routing-hub.cjs'));
-      const hub = createHub();
-      const res = hub.dispatch({
-        family: (ctx && ctx.family) || 'query',
-        subcommand: (ctx && ctx.subcommand) || 'help',
-        args: (ctx && Array.isArray(ctx.args)) ? ctx.args : [],
-        cwd: (ctx && ctx.cwd) || process.cwd(),
-      });
-      return JSON.stringify(res);
+    description: 'Invoke a GSD command via the embedded engine (subprocess-reuse adapter).',
+    getArgumentCompletions,
+    handler: async (args, ctx) => {
+      const cwd = (ctx && ctx.cwd) || process.cwd();
+      const { family, subcommand, args: rest } = parseGsdCommandArgs(args);
+      let dispatchGsdCommand;
+      try {
+        ({ dispatchGsdCommand } = require(path.join(GSD_CORE, 'bin', 'lib', 'shell-command-projection.cjs')));
+      } catch (e) {
+        return `GSD engine unavailable: ${e && e.message ? e.message : String(e)}`;
+      }
+      const result = dispatchGsdCommand({ family, subcommand, args: rest, cwd });
+      if (result.ok) return result.stdout;
+      return `GSD error: ${result.stderr || result.stdout || `dispatch failed (exit ${result.code})`}`;
     },
   });
 
   // ── gsd_invoke tool: programmatic command invocation ────────────────────
   pi.registerTool({
     name: 'gsd_invoke',
+    label: 'GSD Invoke',
     description: 'Invoke a GSD command family/subcommand through the engine.',
-    execute: async function () {
-      const { createHub } = require(path.join(GSD_CORE, 'bin', 'lib', 'command-routing-hub.cjs'));
-      const hub = createHub();
-      const res = hub.dispatch({ family: 'query', subcommand: 'help', args: [], cwd: process.cwd() });
-      return JSON.stringify(res);
+    parameters: buildGsdInvokeParameters(),
+    execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      const p = (params && typeof params === 'object') ? params : {};
+      const family = typeof p.family === 'string' ? p.family : '';
+      if (!family) {
+        return { content: [{ type: 'text', text: 'gsd_invoke requires a non-empty string "family".' }] };
+      }
+      const subcommand = typeof p.subcommand === 'string' ? p.subcommand : undefined;
+      const invokeArgs = Array.isArray(p.args) ? p.args : [];
+      const cwd = (ctx && ctx.cwd) || process.cwd();
+      let dispatchGsdCommand;
+      try {
+        ({ dispatchGsdCommand } = require(path.join(GSD_CORE, 'bin', 'lib', 'shell-command-projection.cjs')));
+      } catch (e) {
+        return { content: [{ type: 'text', text: `GSD engine unavailable: ${e && e.message ? e.message : String(e)}` }] };
+      }
+      const result = dispatchGsdCommand({ family, subcommand, args: invokeArgs, cwd });
+      const text = result.ok ? result.stdout : (result.stderr || result.stdout || `dispatch failed (exit ${result.code})`);
+      return { content: [{ type: 'text', text }] };
     },
   });
 
-  // ── tool_call event: lifecycle hook bridge (extensionEvents: pi) ────────
+  // ── before_provider_request: active-model steering (modelMode: 'active') ──
+  // GSD steers pi's EXISTING built-in anthropic models; it does NOT call
+  // pi.registerProvider (that would wrongly register a NEW fake provider —
+  // see buildBeforeProviderRequestHandler's doc comment).
+  pi.on('before_provider_request', buildBeforeProviderRequestHandler());
+
+  // ── Event bindings: bounded subprocess bridge to GSD's hook scripts ──────
+  // Each binding fails open — a hook error/timeout/missing-file never blocks
+  // pi (mirrors .opencode/plugins/gsd-core.js's runHook SUBPROCESS-REUSE
+  // pattern, applied to pi's ExtensionAPI event names).
+
+  // session_start → SessionStart-equivalent bootstrap.
+  pi.on('session_start', async (event, ctx) => {
+    try {
+      const cwd = (ctx && ctx.cwd) || process.cwd();
+      runHook('gsd-ensure-canonical-path.js', { hook_event_name: 'SessionStart', cwd }, { cwd });
+    } catch { /* fail-open */ }
+  });
+
+  // before_agent_start → workflow-guard bridge. Forward-compatible binding:
+  // gsd-workflow-guard.js's current triggers are tool-scoped (Write/Edit/
+  // Bash via tool_name/tool_input), so with no tool_name in the payload it
+  // fires as a safe no-op today — wired so a future agent-start-scoped check
+  // can attach without a plugin change (mirrors the OpenCode session.idle
+  // recognized-but-unused sentinel pattern).
+  pi.on('before_agent_start', async (event, ctx) => {
+    try {
+      const cwd = (ctx && ctx.cwd) || process.cwd();
+      runHook('gsd-workflow-guard.js', { hook_event_name: 'before_agent_start', cwd }, { cwd });
+    } catch { /* fail-open */ }
+  });
+
+  // session_before_compact → PreCompact-equivalent (context-usage bridge).
+  pi.on('session_before_compact', async (event, ctx) => {
+    try {
+      const cwd = (ctx && ctx.cwd) || process.cwd();
+      runHook('gsd-context-monitor.js', { hook_event_name: 'PreCompact', cwd }, { cwd });
+    } catch { /* fail-open */ }
+  });
+
+  // tool_call event: lifecycle hook bridge attachment point (kept from the
+  // original cut — the PreToolUse/PostToolUse tool_name/tool_input mapping
+  // is a follow-up once pi's tool_call payload shape is verified against a
+  // live host).
   pi.on('tool_call', async function () {
     /* GSD hook bridge attachment point (PreToolUse/PostToolUse mapping). */
   });
 };
 
-// Test-only internals (mirrors the OpenCode plugin pattern).
-module.exports._internals = { resolveEngineRoot: null };
+// Test-only internals (mirrors the OpenCode plugin pattern) — wired to the
+// real functions (not stubs) so tests can exercise parsing/completions/model
+// resolution WITHOUT a live pi runtime.
+module.exports._internals = {
+  resolveEngineRoot,
+  parseGsdCommandArgs,
+  getArgumentCompletions,
+  PI_COMMAND_FAMILIES,
+  buildBeforeProviderRequestHandler,
+  buildGsdInvokeParameters,
+  runHook,
+};

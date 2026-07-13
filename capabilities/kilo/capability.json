@@ -1,7 +1,7 @@
 {
   "id": "kilo",
   "role": "runtime",
-  "version": "1.7.0-rc.4",
+  "version": "1.7.0-rc.6",
   "title": "Kilo Code",
   "description": "Kilo Code — XDG-based config dir; global skills at ~/.kilo/skills (separate from XDG config); flat command/ + skills artifact layout; no lifecycle hook registration; tier-2 support.",
   "tier": "core",
@@ -66,6 +66,7 @@
     },
     "commandStyle": "slash-hyphen",
     "hooksSurface": "none",
+    "extensionEvents": "kilo",
     "sandboxTier": "none",
     "supportTier": 2,
     "installSurface": "settings-json",
@@ -95,7 +96,13 @@
       "flatCommandDir": "command",
       "combinedFamilyInstall": true,
       "frontmatterDialect": "kilo",
-      "skipUpdateBannerCommand": true
+      "nativePlugin": {
+        "dir": "plugins",
+        "file": "gsd-core.js",
+        "source": ".kilo/plugins/gsd-core.js"
+      },
+      "skipUpdateBannerCommand": true,
+      "skipSharedHooksInstall": true
     }
   }
 }

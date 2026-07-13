@@ -113,6 +113,131 @@ describe('milestone complete command', () => {
     assert.ok(milestones.includes('Set up project infrastructure'));
   });
 
+  test('#2118 — --dry-run does NOT mutate: no archive, no STATE.md rewrite, no phase move', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      `# Requirements\n\n- [x] User auth\n`,
+    );
+    writeState(tmpDir);
+    const phasePath = mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+
+    // Capture pre-state
+    const stateBefore = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    const result = runGsdTools('milestone complete v1.0 --name Test --dry-run', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true, 'dry_run must be true');
+    assert.strictEqual(output.version, 'v1.0');
+    assert.ok(output.stats.phases >= 1, 'should count at least 1 phase');
+    assert.ok(output.would_archive.roadmap, 'should list roadmap archive plan');
+    assert.ok(output.would_archive.requirements, 'should list requirements archive plan');
+    assert.ok(
+      output.would_archive.phases.includes('01-foundation'),
+      'should list phase dir for archive',
+    );
+    assert.ok(
+      Array.isArray(output.accomplishments) && output.accomplishments.includes('Set up project infrastructure'),
+      'dry-run preview should surface accomplishments from phase SUMMARY one-liners (#2118)',
+    );
+
+    // CRITICAL: no mutations occurred
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'ROADMAP.md')),
+      'ROADMAP.md must NOT be archived (dry-run)',
+    );
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md')),
+      'REQUIREMENTS.md must NOT be archived (dry-run)',
+    );
+    assert.ok(
+      fs.existsSync(phasePath),
+      'phase directory must NOT be moved (dry-run)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
+      'MILESTONES.md must NOT be created (dry-run)',
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'),
+      stateBefore,
+      'STATE.md must be unchanged (dry-run)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'archive dir must NOT be created (dry-run) — platformEnsureDir must be gated',
+    );
+  });
+
+  test('#2118 — --dry-run --no-archive-phases omits phase list from preview', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation');
+
+    const result = runGsdTools('milestone complete v1.0 --dry-run --no-archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true);
+    assert.deepStrictEqual(output.would_archive.phases, [], 'phases list must be empty with --no-archive-phases');
+  });
+
+  test('#2118 — --dry-run --force bypasses the unstarted-phases guard', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir, 'milestone: v1.0\n');
+    // No phase directory for Phase 1 — guard would block without --force
+
+    // Capture pre-state
+    const stateBefore = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    const result = runGsdTools('milestone complete v1.0 --dry-run --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true, 'preview should run past the guard with --force');
+
+    // CRITICAL: --force must still be a zero-mutation dry-run preview
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'archive dir must NOT be created (dry-run --force) — platformEnsureDir must be gated',
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'),
+      stateBefore,
+      'STATE.md must be unchanged (dry-run --force)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
+      'MILESTONES.md must NOT be created (dry-run --force)',
+    );
+  });
+
+  test('#2118 — --dry-run --raw emits structured preview JSON, not the literal "dry-run" string', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+
+    const result = runGsdTools(['milestone', 'complete', 'v1.0', '--name', 'Test', '--dry-run', '--raw'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    // Before the fix, output(dryRunResult, raw, 'dry-run') meant --raw discarded
+    // the structured payload and printed only the literal string "dry-run",
+    // which is not parseable JSON.
+    let output;
+    assert.doesNotThrow(
+      () => { output = JSON.parse(result.output); },
+      `--dry-run --raw output must be parseable JSON, not the literal "dry-run" string; got ${JSON.stringify(result.output)}`,
+    );
+    assert.strictEqual(output.dry_run, true, 'dry_run must be true, not the literal string "dry-run"');
+    assert.strictEqual(output.version, 'v1.0');
+    assert.ok(
+      Array.isArray(output.accomplishments) && output.accomplishments.includes('Set up project infrastructure'),
+      'structured preview surviving --raw should include accomplishments',
+    );
+  });
+
   test('prepends to existing MILESTONES.md (reverse chronological)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'MILESTONES.md'),
@@ -487,6 +612,71 @@ describe('requirements mark-complete command', () => {
 | REG-01 | Phase 1 | Pending |
 | INFRA-01 | Phase 6 | Pending |
 `;
+
+  // #2140: a traceability table EXISTS but has no row for the ID being completed.
+  // Only the checkbox can reconcile; the table surface is unsynced. The CLI must
+  // not report this as a payload indistinguishable from a full reconcile.
+  const TABLE_WITHOUT_FOO = `# Requirements
+
+## Coverage
+- [ ] **FOO-01**: feature one
+- [ ] **BAR-01**: feature two
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| BAR-01 | Phase 1 | Pending |
+`;
+
+  test('#2140 checkbox-only reconcile surfaces table_unmatched (not silent success)', () => {
+    writeRequirements(tmpDir, TABLE_WITHOUT_FOO);
+
+    const result = runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    assert.ok(result.success);
+
+    const out = JSON.parse(result.output);
+    // The checkbox WAS written, so it is in marked_complete...
+    assert.ok(out.marked_complete.includes('FOO-01'), 'checkbox reconcile is reported');
+    // ...but the traceability table had no FOO-01 row, which must be surfaced.
+    assert.ok(Array.isArray(out.table_unmatched), 'table_unmatched bucket must exist');
+    assert.ok(out.table_unmatched.includes('FOO-01'),
+      'an ID with a checkbox but no table row must be surfaced as table_unmatched');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **FOO-01**'), 'checkbox should be checked');
+    // The table is untouched (no FOO-01 row synthesized).
+    assert.ok(!content.includes('FOO-01 | Phase'), 'no FOO-01 row should be invented');
+  });
+
+  test('#2140 re-run on the half-written file does NOT mask the drift as already_complete', () => {
+    writeRequirements(tmpDir, TABLE_WITHOUT_FOO);
+    // First run: flips the checkbox, surfaces table_unmatched.
+    runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    // Second run on the now-[x]-checkbox-with-no-row file.
+    const result = runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.ok(!out.already_complete.includes('FOO-01'),
+      'a [x] checkbox with no table row is PARTIALLY reconciled, not already_complete');
+    assert.ok(!out.marked_complete.includes('FOO-01'),
+      'nothing flipped on re-run, so not marked_complete');
+    assert.ok(out.table_unmatched.includes('FOO-01'),
+      'the drift must still be surfaced as table_unmatched on re-run');
+  });
+
+  test('#2140 no traceability table at all → still a clean success (no table_unmatched)', () => {
+    // A REQUIREMENTS.md with no traceability table is legitimate; a checkbox-only
+    // reconcile must remain an unqualified success with no table_unmatched entry.
+    writeRequirements(tmpDir, '# Requirements\n\n- [ ] **NO-TABLE-01**: thing\n');
+    const result = runGsdTools('requirements mark-complete NO-TABLE-01', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+    assert.ok(out.marked_complete.includes('NO-TABLE-01'));
+    assert.ok(!out.table_unmatched || !out.table_unmatched.includes('NO-TABLE-01'),
+      'no table_unmatched when there is no traceability table');
+  });
 
   test('marks single requirement complete (checkbox + table)', () => {
     writeRequirements(tmpDir, STANDARD_REQUIREMENTS);

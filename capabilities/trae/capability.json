@@ -1,7 +1,7 @@
 {
   "id": "trae",
   "role": "runtime",
-  "version": "1.7.0-rc.4",
+  "version": "1.7.0-rc.6",
   "title": "Trae IDE",
   "description": "Trae IDE — nested-skill artifact layout; no hook surface (profile-marker-only config); tier-2 support.",
   "tier": "core",
@@ -81,6 +81,10 @@
       "stateIO": "filesystem",
       "transport": "mcp",
       "runtime": "node"
+    },
+    "hostBehaviors": {
+      "skipSharedHooksInstall": true,
+      "soloStageMetadata": "workflow"
     }
   }
 }

@@ -14,6 +14,8 @@ const {
   platformWriteSync,
   platformReadSync,
   platformEnsureDir,
+  dispatchGsdCommand,
+  resolveGsdToolsPath,
 } = require(path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'shell-command-projection.cjs'));
 
 const { createTempGitProject, createTempDir, cleanup } = require('./helpers.cjs');
@@ -96,6 +98,78 @@ describe('execTool', () => {
     assert.strictEqual(result.exitCode, 127);
     assert.strictEqual(result.stdout, '');
     assert.strictEqual(typeof result.stderr, 'string');
+  });
+});
+
+// ─── dispatchGsdCommand (#2102 Stage 2 — subprocess-shim dispatch to gsd-tools.cjs) ──
+//
+// The command-routing hub (`createHub()`) has no fully-populated factory
+// anywhere in the tree — every caller builds a single-family hub — so the
+// only dispatch path covering the FULL family/subcommand surface is the
+// gsd-tools.cjs CLI itself. This is the shared helper pi/gsd.cjs and the
+// companion MCP server both dispatch through.
+
+describe('dispatchGsdCommand', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempDir(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('resolveGsdToolsPath resolves to the real gsd-tools.cjs on disk', () => {
+    const toolsPath = resolveGsdToolsPath();
+    assert.ok(fs.existsSync(toolsPath), `expected gsd-tools.cjs to exist at ${toolsPath}`);
+    assert.equal(path.basename(toolsPath), 'gsd-tools.cjs');
+  });
+
+  test('a valid read-only family/subcommand dispatches for real and returns ok:true + non-empty stdout', () => {
+    const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir });
+    assert.equal(result.ok, true, `expected ok:true, got: ${JSON.stringify(result)}`);
+    assert.equal(typeof result.stdout, 'string');
+    assert.ok(result.stdout.length > 0, 'stdout must be non-empty');
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(typeof parsed.percent, 'number', 'the real progress command ran (proves the engine was reached)');
+    assert.equal(result.code, 0);
+    assert.equal(result.timedOut, false);
+  });
+
+  test('an unknown family returns ok:false without throwing', () => {
+    assert.doesNotThrow(() => {
+      const result = dispatchGsdCommand({ family: 'no-such-family-8675309', cwd: tmpDir });
+      assert.equal(result.ok, false);
+      assert.notEqual(result.code, 0);
+      assert.equal(typeof result.stderr, 'string');
+      assert.ok(result.stderr.length > 0);
+      // --json-errors gives a structured, parseable error envelope.
+      const parsedErr = JSON.parse(result.stderr);
+      assert.equal(parsedErr.ok, false);
+    });
+  });
+
+  test('a missing/bogus gsd-tools.cjs path degrades to ok:false without throwing', () => {
+    assert.doesNotThrow(() => {
+      const result = dispatchGsdCommand({
+        family: 'progress',
+        cwd: tmpDir,
+        gsdToolsPath: path.join(tmpDir, 'definitely-not-a-real-gsd-tools-8675309.cjs'),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.timedOut, false);
+    });
+  });
+
+  test('a missing/empty "family" is rejected locally without spawning a subprocess', () => {
+    const result = dispatchGsdCommand({ cwd: tmpDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, null);
+    assert.match(result.stderr, /requires a non-empty string "family"/);
+  });
+
+  test('a wall-clock timeout is reported via timedOut:true, ok:false — never throws', () => {
+    assert.doesNotThrow(() => {
+      const result = dispatchGsdCommand({ family: 'progress', subcommand: 'json', cwd: tmpDir, timeout: 1 });
+      assert.equal(result.ok, false);
+      assert.equal(result.timedOut, true);
+    });
   });
 });
 
@@ -343,9 +417,14 @@ describe('bug #1906: local hook commands use $CLAUDE_PROJECT_DIR', () => {
  * dir as cwd. Claude Code and others still use "$CLAUDE_PROJECT_DIR"/ (#1906).
  *
  * #1928: Google sunset Gemini CLI (2026-06-18) and the `gemini` runtime was
- * removed from GSD entirely. `projectLocalHookPrefix` now special-cases only
- * `antigravity` — an unrecognized runtime string like the former `'gemini'`
- * falls through to the default $CLAUDE_PROJECT_DIR-anchored prefix.
+ * removed from GSD entirely.
+ *
+ * #2096: `projectLocalHookPrefix` no longer special-cases `antigravity` by
+ * name — it branches on the caller-supplied `hookPathStyle` (sourced from
+ * the runtime's `hostBehaviors.hookPathStyle` descriptor field). An
+ * unrecognized runtime string like the former `'gemini'`, or any runtime
+ * that doesn't declare `hookPathStyle: 'raw'`, falls through to the default
+ * $CLAUDE_PROJECT_DIR-anchored prefix.
  */
 
 const { describe, test } = require('node:test');
@@ -357,7 +436,13 @@ const { projectLocalHookPrefix, projectShellCommandText } = projection;
 
 describe('bug #2557: Antigravity local hooks use relative paths (not $CLAUDE_PROJECT_DIR); gemini runtime removed (#1928)', () => {
   test('Antigravity local prefix is bare dirName', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
+    // #2096: hookPathStyle is now the caller-supplied descriptor value
+    // (bin/install.js resolves it from hostBehaviors.hookPathStyle); the
+    // function itself no longer knows the runtime name 'antigravity'.
+    assert.equal(
+      projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents', hookPathStyle: 'raw' }),
+      '.agents',
+    );
   });
 
   test('non-Antigravity local prefix remains $CLAUDE_PROJECT_DIR anchored', () => {
@@ -512,7 +597,13 @@ describe('bug #3439: shell projection module owns managed-hook policy and legacy
   });
 
   test('projectLocalHookPrefix centralizes runtime-specific project-dir interpolation policy', () => {
-    assert.equal(projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents' }), '.agents');
+    // #2096: 'raw' hookPathStyle (descriptor-driven) is what produces the
+    // bare-dirName behavior now — the function no longer branches on the
+    // 'antigravity' runtime name itself.
+    assert.equal(
+      projectLocalHookPrefix({ runtime: 'antigravity', dirName: '.agents', hookPathStyle: 'raw' }),
+      '.agents',
+    );
     assert.equal(
       projectLocalHookPrefix({ runtime: 'claude', dirName: '.claude' }),
       '"$CLAUDE_PROJECT_DIR"/.claude',

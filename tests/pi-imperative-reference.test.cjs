@@ -10,8 +10,10 @@
  *   2. pi's axes (imperative + bun) classify as 'programmatic-cli' (the reference profile).
  *   3. the reference pi host-plugin binds GSD via ExtensionAPI (registers command + tool + event).
  *
- * Full `--pi` installable-runtime integration is a larger follow-up (descriptor
- * + installer + golden parity 16→17); this slice proves the imperative binding.
+ * Full `--pi` installable-runtime integration shipped in #2102 Stage 1
+ * (capabilities/pi/capability.json + bin/install.js wiring + golden parity
+ * 16→17, see tests/fixtures/golden-install-parity/pi.json); this slice
+ * continues to prove the imperative ExtensionAPI binding in isolation.
  */
 
 const { test } = require('node:test');
@@ -22,12 +24,13 @@ const { profileOf } = require('../gsd-core/bin/lib/host-integration.cjs');
 const gsdPiPlugin = require('./fixtures/pi-host-plugin.cjs');
 
 // Mock pi ExtensionAPI: records registrations so the plugin is testable without
-// a live pi runtime.
+// a live pi runtime. Records the full command/tool definitions (not just
+// names) so #2102's handler/execute SHAPE can be asserted, not just presence.
 function mockPi() {
-  const recorded = { commands: [], tools: [], events: [] };
+  const recorded = { commands: [], tools: [], events: [], commandDefs: {}, toolDefs: {} };
   return {
-    registerCommand(name) { recorded.commands.push(name); },
-    registerTool(def) { if (def && def.name) recorded.tools.push(def.name); },
+    registerCommand(name, def) { recorded.commands.push(name); recorded.commandDefs[name] = def; },
+    registerTool(def) { if (def && def.name) { recorded.tools.push(def.name); recorded.toolDefs[def.name] = def; } },
     registerShortcut() {},
     registerFlag() {},
     on(event) { recorded.events.push(event); },
@@ -56,6 +59,27 @@ test('the pi reference host-plugin binds GSD via the ExtensionAPI (command + too
   assert.ok(pi._recorded.commands.includes('gsd'), 'registers the /gsd command');
   assert.ok(pi._recorded.tools.includes('gsd_invoke'), 'registers the gsd_invoke tool');
   assert.ok(pi._recorded.events.includes('tool_call'), 'subscribes to the tool_call event');
+});
+
+// #2102 Stage 2: pi's REAL ExtensionAPI shape is `handler(args, ctx)` for
+// registerCommand (NOT `execute(ctx)`, which the original #1682 cut used) and
+// a 5-arg `execute(toolCallId, params, signal, onUpdate, ctx)` for
+// registerTool. Locks the shape so a future drift back to the wrong contract
+// is a visible test failure.
+test('the /gsd command registers a handler(args, ctx) — not execute(ctx)', () => {
+  const pi = mockPi();
+  gsdPiPlugin(pi);
+  const def = pi._recorded.commandDefs['gsd'];
+  assert.equal(typeof def.handler, 'function', 'registerCommand takes handler(args, ctx), pi\'s real ExtensionAPI shape');
+  assert.equal(def.execute, undefined, 'must not use the wrong execute(ctx) shape');
+});
+
+test('the gsd_invoke tool registers a 5-arg execute(toolCallId, params, signal, onUpdate, ctx)', () => {
+  const pi = mockPi();
+  gsdPiPlugin(pi);
+  const def = pi._recorded.toolDefs['gsd_invoke'];
+  assert.equal(typeof def.execute, 'function');
+  assert.equal(def.execute.length, 5, 'gsd_invoke.execute must declare pi\'s real 5-arg tool-execute signature');
 });
 
 test('gsdPiPlugin throws if the pi ExtensionAPI is not provided (fail-closed)', () => {
