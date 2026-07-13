@@ -8,6 +8,7 @@
  */
 
 import path from 'node:path';
+import { posixNormalize } from './shell-command-projection.cjs';
 
 /** An unvalidated migration record supplied by the caller. */
 export type MigrationRecord = Record<string, unknown>;
@@ -64,7 +65,7 @@ function requireActionEvidence(action: MigrationAction, field: string, migration
 
 function validateSafeRelPath(relPath: string, migration: MigrationRecord, actionType: string): void {
   const source = actionSource(migration, { relPath });
-  const normalized = relPath.replace(/\\/g, '/');
+  const normalized = posixNormalize(relPath);
   if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
     throw new Error(`migration action ${actionType} relPath must stay inside configDir: ${source}`);
   }

@@ -30,6 +30,7 @@ import runtimeArtifactConversion = require('./runtime-artifact-conversion.cjs');
 const conversionExports = runtimeArtifactConversion as Record<string, unknown> & {
   readGsdCommandNames?: () => string[];
 };
+import { posixNormalize } from './shell-command-projection.cjs';
 
 // In .cts (CommonJS output) files, `require` is available as a global.
 const _require: NodeRequire = require;
@@ -279,7 +280,7 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
           if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
           const agentPath = path.join(stagedAgents, entry.name);
           subagents.push({
-            path: path.join('agents', entry.name).replace(/\\/g, '/'),
+            path: posixNormalize(path.join('agents', entry.name)),
             content: fs.readFileSync(agentPath, 'utf8'),
           });
         }
