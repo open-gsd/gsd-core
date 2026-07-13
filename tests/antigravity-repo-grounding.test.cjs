@@ -141,7 +141,9 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
     const out = path.join(tmp, 'review-out.md');
     const detect = m[0]
       .replace(/\}; then$/, '}')
-      .replaceAll('/tmp/gsd-review-antigravity-{phase}.md', out);
+      // Forward slashes so the path survives bash on Windows runners
+      // (Git Bash accepts D:/... but eats backslashes).
+      .replaceAll('/tmp/gsd-review-antigravity-{phase}.md', out.replaceAll('\\', '/'));
     const runDetect = (content) => {
       fs.writeFileSync(out, content);
       try {
