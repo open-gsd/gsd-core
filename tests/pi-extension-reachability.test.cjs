@@ -1260,7 +1260,10 @@ test('running native tasks suppress stale recovery UI and block next routing', a
       },
     }, ctx);
     await pi._recorded.events.turn_end({}, ctx);
-    assert.deepEqual(widgets.at(-1), []);
+    assert.deepEqual(widgets.at(-1), [
+      'GSD · Tasks running',
+      '└─ ● 1 native task running',
+    ]);
 
     await pi._recorded.commands['gsd-status'].handler('', { cwd });
     assert.match(pi._recorded.messages.at(-1).message.content, /Native GSD tasks running in OMP: 1/);
@@ -1465,7 +1468,6 @@ test('status and next surface native task recovery until completion', async () =
   assert.match(pi._recorded.messages.at(-1).message.content, /Recovery command: \/gsd-execute-phase 05/);
 
   const selections = [];
-  let editorText;
   await pi._recorded.commands['gsd-next'].handler('', {
     cwd,
     hasUI: true,
@@ -1474,11 +1476,11 @@ test('status and next surface native task recovery until completion', async () =
         selections.push(choices);
         return choices[0].label;
       },
-      setEditorText: (text) => { editorText = text; },
     },
   });
-  assert.match(selections[0][0].label, /Recover native task for Phase 05/);
-  assert.equal(editorText, '/gsd-execute-phase 05');
+  assert.match(selections[0][0].label, /Recover native tasks for Phase 05 now/);
+  assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
+  assert.match(pi._recorded.messages.at(-1).message.content, /GSD action: `gsd-execute-phase`/);
 
   fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([{ ...failed, status: 'completed' }]));
   await pi._recorded.commands['gsd-status'].handler('', { cwd });
@@ -1807,7 +1809,6 @@ test('the GSD next action prepares project initialization only in a new workspac
     const pi = mockPi();
     gsdPiExtension(pi);
     const menus = [];
-    const editor = [];
     await pi._recorded.commands['gsd-next'].handler('', {
       cwd,
       hasUI: true,
@@ -1816,16 +1817,16 @@ test('the GSD next action prepares project initialization only in a new workspac
           menus.push(choices.map(({ label }) => label));
           return choices[0];
         },
-        setEditorText: (text) => editor.push(text),
       },
     });
-    assert.deepEqual(menus, [['Start a GSD project', 'Later']]);
-    assert.deepEqual(editor, ['/gsd-new-project']);
+    assert.deepEqual(menus, [['Start a GSD project now', 'Later']]);
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
+    assert.match(pi._recorded.messages.at(-1).message.content, /GSD action: `gsd-new-project`/);
 
     await pi._recorded.commands['gsd-next'].handler('', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-start-project');
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
-    assert.match(pi._recorded.messages.at(-1).message.content, /Start with \/gsd-new-project/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Choose initialization to inspect this directory/);
 
     fs.mkdirSync(path.join(cwd, '.planning'));
     fs.writeFileSync(path.join(cwd, '.planning', 'PROJECT.md'), '# Existing project\n');
@@ -1845,7 +1846,6 @@ test('the GSD next action prepares shipping only after UAT completion', async ()
     const pi = mockPi();
     gsdPiExtension(pi);
     const menus = [];
-    const editor = [];
     const ctx = {
       cwd,
       hasUI: true,
@@ -1854,12 +1854,12 @@ test('the GSD next action prepares shipping only after UAT completion', async ()
           menus.push(choices.map(({ label }) => label));
           return choices[0];
         },
-        setEditorText: (text) => editor.push(text),
       },
     };
     await pi._recorded.commands['gsd-next'].handler('', ctx);
-    assert.deepEqual(menus, [['Prepare shipping for Phase 05', 'View project overview', 'Later']]);
-    assert.deepEqual(editor, ['/gsd-ship 05']);
+    assert.deepEqual(menus, [['Start shipping preflight for Phase 05', 'View project overview', 'Later']]);
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
+    assert.match(pi._recorded.messages.at(-1).message.content, /GSD action: `gsd-ship`/);
 
     await pi._recorded.commands['gsd-next'].handler('', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ship-ready');
@@ -1885,7 +1885,6 @@ test('the GSD next action prepares checkpoint recovery only for active matching 
     const pi = mockPi();
     gsdPiExtension(pi);
     const menus = [];
-    const editor = [];
     const ctx = {
       cwd,
       hasUI: true,
@@ -1894,12 +1893,12 @@ test('the GSD next action prepares checkpoint recovery only for active matching 
           menus.push(choices.map(({ label }) => label));
           return choices[0];
         },
-        setEditorText: (text) => editor.push(text),
       },
     };
     await pi._recorded.commands['gsd-next'].handler('', ctx);
-    assert.deepEqual(menus, [['Resume Phase 05 execution context', 'View project overview', 'Later']]);
-    assert.deepEqual(editor, ['/gsd-resume-work']);
+    assert.deepEqual(menus, [['Resume Phase 05 execution now', 'View project overview', 'Later']]);
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
+    assert.match(pi._recorded.messages.at(-1).message.content, /GSD action: `gsd-resume-work`/);
 
     await pi._recorded.commands['gsd-next'].handler('', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-resume-ready');
@@ -2031,6 +2030,63 @@ test('native assistant completion captures Next Up and routes the selected actio
     });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('Next Up preview, deferral, and dismissal keep pending work explicit', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-next-up-controls-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'English' }));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "05"\nstatus: executing\n---\n');
+    const action = { label: 'Review acceptance evidence', command: '/gsd-verify-work 05', requiresFreshContext: false };
+    fs.writeFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), JSON.stringify(action));
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-next'].handler('', { cwd, hasUI: true, ui: { select: async (_title, choices) => choices[1] } });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-continuation-preview');
+    assert.match(pi._recorded.messages.at(-1).message.content, /Execution: Runs immediately in this session/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), 'utf8')), action);
+
+    await pi._recorded.commands['gsd-next'].handler('', { cwd, hasUI: true, ui: { select: async () => { throw new Error('dismissed'); } } });
+    const deferred = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), 'utf8'));
+    assert.match(deferred.deferredAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-continuation-deferred');
+
+    await pi._recorded.commands['gsd-next'].handler('', { cwd, hasUI: true, ui: { select: async (_title, choices) => choices.at(-1) } });
+    assert.equal(fs.existsSync(path.join(cwd, '.planning', '.omp-next-action.json')), false);
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-continuation-dismissed');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('incomplete phase commands guide selection, remember it, and localize fallback', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-phase-guidance-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'English' }));
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '- [ ] **Phase 1: Foundation**\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+    await pi._recorded.commands['gsd-plan-phase'].handler('--unknown', {
+      cwd,
+      hasUI: true,
+      ui: { select: async (_title, choices) => choices[0] },
+    });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-plan-phase');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(cwd, '.planning', '.omp-ui-state.json'), 'utf8')).recentPhases.plan, '01');
+
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'Simplified Chinese' }));
+    await pi._recorded.commands['gsd-execute-phase'].handler('--bad', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-execute-input-error');
+    assert.match(pi._recorded.messages.at(-1).message.content, /无法解析 \/gsd-execute-phase 的参数/);
+    await pi._recorded.commands['gsd-settings'].handler('--invalid', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-settings-input-error');
+    assert.match(pi._recorded.messages.at(-1).message.content, /用法：\/gsd-settings/);
   } finally {
     cleanup(cwd);
   }
