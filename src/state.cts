@@ -27,7 +27,7 @@ const { planningDir, planningPaths } = planningWorkspace;
 import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
+const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1659,20 +1659,6 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   if (Object.keys(progress).length > 0) fm['progress'] = progress;
 
   return fm;
-}
-
-function stripFrontmatter(content: string): string {
-  // Strip ALL frontmatter blocks at the start of the file.
-  // Handles CRLF line endings and multiple stacked blocks (corruption recovery).
-  // Greedy: keeps stripping ---...--- blocks separated by optional whitespace.
-  let result = content;
-
-  while (true) {
-    const stripped = result.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\s*/, '');
-    if (stripped === result) break;
-    result = stripped;
-  }
-  return result;
 }
 
 function syncStateFrontmatter(content: string, cwd: string | undefined): string {

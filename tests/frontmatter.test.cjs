@@ -15,6 +15,7 @@ const {
   extractFrontmatter,
   reconstructFrontmatter,
   spliceFrontmatter,
+  stripFrontmatter,
   parseMustHavesBlock,
 } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
@@ -604,6 +605,37 @@ must_haves:
   });
 });
 
+// ─── stripFrontmatter ───────────────────────────────────────────────────────
+// #2143 audit dedup: stripFrontmatter was byte-identically duplicated in both
+// state.cts and state-transition.cts. Both call sites now import this single
+// canonical implementation from frontmatter.cts.
+
+describe('stripFrontmatter', () => {
+  test('strips a single frontmatter block, leaving the body', () => {
+    const content = '---\nname: foo\ntype: execute\n---\nBody text.\n';
+    assert.strictEqual(stripFrontmatter(content), 'Body text.\n');
+  });
+
+  test('returns content unchanged when no frontmatter is present', () => {
+    const content = '# Just a heading\n\nSome body text.\n';
+    assert.strictEqual(stripFrontmatter(content), content);
+  });
+
+  test('handles CRLF line endings', () => {
+    const content = '---\r\nname: foo\r\n---\r\nBody text.\r\n';
+    assert.strictEqual(stripFrontmatter(content), 'Body text.\r\n');
+  });
+
+  test('greedily strips multiple stacked frontmatter blocks (corruption recovery)', () => {
+    const content = '---\nname: foo\n---\n---\nname: bar\n---\nBody text.\n';
+    assert.strictEqual(stripFrontmatter(content), 'Body text.\n');
+  });
+
+  test('leaves a body-only "---" horizontal rule (not at byte 0) untouched', () => {
+    const content = 'Body text.\n\n---\n\nMore text.\n';
+    assert.strictEqual(stripFrontmatter(content), content);
+  });
+});
 
 
 // ────────────────────────────────────────────────────────────────────────
