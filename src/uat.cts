@@ -18,6 +18,9 @@ const { output, error } = io;
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { collectSection, tokenizeHeadings } = markdownSectionizer;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import markdownTable = require('./markdown-table.cjs');
+const { splitTableRow } = markdownTable;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter } = roadmapParser;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -389,24 +392,43 @@ function parseVerificationItems(content: string, status: string): UatItem[] {
       // table rows AND numbered items AND bullet items as a UNION (whichever
       // pattern a given line matches), exactly like OLD, and reads
       // `| N | desc |` rows even without a valid table header/delimiter.
+      //
+      // #2245 audit: the table-row branch's CELL SPLIT is name/position-
+      // addressed via `splitTableRow` (escape-aware, canonical) instead of a
+      // hand-rolled pipe regex — candidacy itself is decided WITHOUT a table
+      // regex (a leading `|` plus a purely-numeric first cell), so this no
+      // longer needs an allow-adhoc-markdown suppression at all.
       const lines = hvSection.body.split('\n');
       for (const line of lines) {
-        // Match table rows: | N | description | ... |
-        const tableMatch = line.match(/\|\s*(\d+)\s*\|\s*([^|]+)/); // allow-adhoc-markdown: loose human-verification section mixes table+numbered+bullet, not a strict GFM table #2245
+        const trimmedLine = line.trim();
+        // Match table rows: | N | description | ... — candidacy requires a
+        // leading pipe and a purely-numeric first cell (mirrors what the old
+        // regex effectively required: a "|digit|" cell immediately followed
+        // by more content), with at least 2 physical cells so a bare "| N |"
+        // with nothing after it is NOT treated as a row (same as OLD, whose
+        // `([^|]+)` required at least one further character to match).
+        let tableCells: string[] | null = null;
+        if (trimmedLine.startsWith('|')) {
+          const candidateCells = splitTableRow(trimmedLine);
+          if (candidateCells.length >= 2 && /^\d+$/.test(candidateCells[0])) {
+            tableCells = candidateCells;
+          }
+        }
         // Match bullet items: - description
         const bulletMatch = line.match(/^[-*]\s+(.+)/);
         // Match numbered items: 1. description
         const numberedMatch = line.match(/^(\d+)\.\s+(.+)/);
 
-        if (tableMatch) {
+        if (tableCells) {
           // Skip rows that already have a passing result (PASS, pass, resolved, etc.)
-          const rowRemainder = line.slice(tableMatch.index! + tableMatch[0].length);
-          const cellValues = rowRemainder.split('|').map(c => c.trim());
-          const hasPassResult = cellValues.some(c => /^pass$/i.test(c) || /^resolved$/i.test(c));
+          // — checked over every cell AFTER the description column, mirroring
+          // OLD's rowRemainder scan (which only ever saw cells past the
+          // description, the description itself having already been consumed).
+          const hasPassResult = tableCells.slice(2).some(c => /^pass$/i.test(c) || /^resolved$/i.test(c));
           if (hasPassResult) continue;
           items.push({
-            test: parseInt(tableMatch[1], 10),
-            name: tableMatch[2].trim(),
+            test: parseInt(tableCells[0], 10),
+            name: tableCells[1] ?? '',
             result: 'human_needed',
             category: 'human_uat',
           });

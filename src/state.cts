@@ -1476,11 +1476,13 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   let milestone: string | null = null;
   let milestoneName: string | null = null;
   if (cwd) {
-    try {
-      const info = getMilestoneInfo(cwd);
-      milestone = info.version;
-      milestoneName = info.name;
-    } catch { /* intentionally empty */ }
+    // DEAD catch removed (#2245 audit): getMilestoneInfo has its own outer
+    // try/catch (roadmap-parser.cts) that already swallows every internal
+    // failure and always returns a MilestoneInfo — it never throws, so this
+    // wrapper could never be triggered.
+    const info = getMilestoneInfo(cwd);
+    milestone = info.version;
+    milestoneName = info.name;
   }
 
   let totalPhases: number | null = totalPhasesRaw ? parseInt(totalPhasesRaw, 10) : null;
@@ -1617,6 +1619,13 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
         completedPlans = cached.completedPlans;
         milestoneUnbounded = cached.milestoneBounded === false;
       }
+      /* best-effort (#2245 audit): this is a READ path building STATE.md's
+       * display frontmatter. The real throw source is fs.readdirSync(phasesDir)
+       * a few lines up — an inaccessible/racily-removed phases dir must not
+       * crash `state show`; on failure this simply keeps whatever
+       * frontmatter-derived totals/completedPhases/etc. were already set
+       * above, a graceful degrade rather than a corrupted write (nothing is
+       * persisted from this block). */
     } catch { /* intentionally empty */ }
   }
 
@@ -2365,23 +2374,36 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
   // to the true sum on the next completion). When the By-Phase table is absent, leave the
   // velocity total unchanged rather than guess. (#1582)
   //
-  // Ragged-tolerant (#2245 Blocker 2): summed POSITIONALLY (the row's second
-  // cell) rather than by column NAME via findTableWithColumns, which requires
-  // the WHOLE table to parse — a hand-edited/ragged row for one phase must
-  // not blank out the derived total for every phase (mirrors OLD's
-  // byPhaseTablePattern-based sum, which was never gated on full-table
-  // validity either). Still scoped via findTableStartOffset so the RIGHT
+  // Ragged-tolerant AND name-addressed (#2245 audit): each data row is split via
+  // `splitTableRow` and its "Plans" cell located by the HEADER's own column
+  // order (not a fixed ordinal), so a reordered/superset By-Phase header is
+  // summed correctly instead of silently reading the wrong cell. A row that's
+  // too short to physically contain the "Plans" column is skipped, not
+  // treated as an error — mirrors updateTableCell's ragged-row tolerance
+  // (a hand-edited/ragged row for one phase must not blank out the derived
+  // total for every phase). Still scoped via findTableStartOffset so the RIGHT
   // table is summed when an earlier unrelated table also has a "Phase"
   // column (#2012).
   if (/Total plans completed:\s*(\d+|\[N\])/.test(content)) {
     const sumTableStart = findTableStartOffset(content, byPhaseCols);
     if (sumTableStart !== null) {
-      const tableLines = content.slice(sumTableStart).split(/\r?\n/).slice(2);
+      const tableLines = content.slice(sumTableStart).split(/\r?\n/);
+      const headerCells = splitTableRow(tableLines[0] ?? '');
+      const plansIdx = headerCells.indexOf('Plans');
       let sum = 0;
-      for (const row of tableLines) {
-        if (!row.trim().startsWith('|')) break;
-        const cellMatch = row.match(/^\s*\|\s*[^|]+\s*\|\s*(\d+)\s*\|/); // allow-adhoc-markdown: ragged-tolerant positional By-Phase sum, mirrors OLD's byPhaseTablePattern regex — must not require every row to parse as a well-formed table (#2245)
-        if (cellMatch) sum += parseInt(cellMatch[1], 10);
+      if (plansIdx !== -1) {
+        // The delimiter row is skipped by NAME (isDelimiterRow), not by a
+        // hardcoded "always line index 1" assumption, so this stays
+        // self-consistent with the ragged-tolerant read below.
+        const delimiterCells = splitTableRow(tableLines[1] ?? '');
+        const dataStart = isDelimiterRow(delimiterCells) ? 2 : 1;
+        for (const row of tableLines.slice(dataStart)) {
+          if (!row.trim().startsWith('|')) break;
+          const cells = splitTableRow(row);
+          if (plansIdx < cells.length && /^\d+$/.test(cells[plansIdx])) {
+            sum += parseInt(cells[plansIdx], 10);
+          }
+        }
       }
       content = content.replace(
         /Total plans completed:\s*(\d+|\[N\])/,
@@ -2518,7 +2540,10 @@ function cmdStateValidate(cwd: string, raw: boolean): void {
               warnings.push(`Status drift: STATE.md says "${status}" but ${vf} shows verification passed — phase may be complete`);
               drift['verification_status'] = { state_status: status, verification: 'passed' };
             }
-          } catch { /* intentionally empty */ }
+          } catch { /* best-effort (#2245 audit): cmdStateValidate is a diagnostic
+             * warnings scan across N VERIFICATION.md files — one unreadable file
+             * (permission/race) must not abort the scan of the rest; it's simply
+             * excluded from drift detection. */ }
         }
 
         // Check if all plans have summaries but status still says executing
@@ -2529,7 +2554,13 @@ function cmdStateValidate(cwd: string, raw: boolean): void {
           }
         }
       }
-    } catch { /* intentionally empty */ }
+    } catch { /* best-effort (#2245 audit): cmdStateValidate is a read-only
+       * diagnostic scan of the current phase's directory (readdirSync +
+       * scanPhasePlans). A disk-scan failure here means drift detection for
+       * this phase is skipped for this run, degrading to "no warnings from
+       * that scan" rather than crashing the validate command — the same
+       * degrade-on-scan-failure pattern buildStateFrontmatter's own disk scan
+       * already uses. */ }
   }
 
   const valid = warnings.length === 0;
@@ -2625,29 +2656,30 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 
   // Determine total phases from ROADMAP (may be larger than realized disk dirs).
   // Mirrors the logic in buildStateFrontmatter so both report consistent percents (#3242 Bug B).
+  // DEAD catch removed (#2245 audit): every operation in this block is a regex
+  // exec/test over an already-read string plus pure Set/Math ops — none of
+  // which can throw — so the try/catch could never be triggered.
   let syncTotalPhases: number | null = null;
-  try {
-    let roadmapPhaseCount = 0;
-    if (syncRoadmapScope !== null) {
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
-      let m: RegExpExecArray | null;
-      while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
-        // Only count tokens that contain at least one digit — excludes
-        // pure-word section headings (Overview, Details) while keeping
-        // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-        if (!/\d/.test(m[1])) continue;
-        // #1514: retired/folded phases are struck through; exclude from total.
-        if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
-        roadmapPhaseCount++;
-      }
+  let roadmapPhaseCount = 0;
+  if (syncRoadmapScope !== null) {
+    // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
+    let m: RegExpExecArray | null;
+    while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
+      // Only count tokens that contain at least one digit — excludes
+      // pure-word section headings (Overview, Details) while keeping
+      // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
+      if (!/\d/.test(m[1])) continue;
+      // #1514: retired/folded phases are struck through; exclude from total.
+      if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
+      roadmapPhaseCount++;
     }
-    if (roadmapPhaseCount > 0) {
-      syncTotalPhases = Math.max(entries.length, roadmapPhaseCount);
-    } else {
-      syncTotalPhases = entries.length;
-    }
-  } catch { /* intentionally empty */ }
+  }
+  if (roadmapPhaseCount > 0) {
+    syncTotalPhases = Math.max(entries.length, roadmapPhaseCount);
+  } else {
+    syncTotalPhases = entries.length;
+  }
 
   // ADR-1769 Phase 7: the body writes (Total Plans in Phase, Progress bar, Last
   // Activity) are the pure `syncCore` in src/state-transition.cts.

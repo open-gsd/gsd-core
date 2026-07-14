@@ -363,12 +363,20 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
             totalTasks += xmlTaskMatches.length || mdTaskMatches.length;
           }
         } catch {
-          /* intentionally empty */
+          /* best-effort (#2245 audit): one unreadable/malformed SUMMARY.md
+           * must not abort the accomplishments/task-count roll-up for every
+           * OTHER summary across every OTHER phase — it's simply excluded
+           * from the milestone's shipped-summary text. */
         }
       }
     }
   } catch {
-    /* intentionally empty */
+    /* best-effort (#2245 audit): mirrors the phaseDirEntries IIFE a few
+     * lines below this function (same phasesDir, same "try readdirSync,
+     * tolerate ENOENT" pattern) — phasesDir may legitimately not exist yet
+     * (e.g. milestone being force-completed before any phase directories
+     * were created). Degrades stats to phaseCount/totalPlans/totalTasks=0,
+     * accomplishments=[] rather than crash `milestone complete`. */
   }
 
   // #2118: --dry-run preview — compute what WOULD happen without mutating.
@@ -487,21 +495,31 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   let phasesArchived = false;
   // #1871: archive phase dirs by default on milestone complete (opt out via --no-archive-phases).
   if (options.archivePhases !== false) {
+    // #2245 audit (was ERROR-HIDING): retryRenameSync moves one phase dir at a
+    // time — a mid-loop failure (e.g. the Nth rename) used to leave
+    // `phasesArchived` at its `false` default even though the first N-1 dirs
+    // had ALREADY been moved to phaseArchiveDir on disk, silently
+    // under-reporting a real partial archive in the JSON result. archivedCount
+    // is now computed in a `finally` so it reflects whatever succeeded before
+    // any failure, instead of being lost with the swallowed exception.
+    let archivedCount = 0;
     try {
       const phaseArchiveDir = path.join(archiveDir, `${version}-phases`);
       platformEnsureDir(phaseArchiveDir);
 
       const phaseEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const phaseDirNames = phaseEntries.filter((e) => e.isDirectory()).map((e) => e.name);
-      let archivedCount = 0;
       for (const dir of phaseDirNames) {
         if (!isDirInMilestone(dir)) continue;
         retryRenameSync(path.join(phasesDir, dir), path.join(phaseArchiveDir, dir));
         archivedCount++;
       }
-      phasesArchived = archivedCount > 0;
     } catch {
-      /* intentionally empty */
+      /* best-effort: phasesDir may not exist yet, or the archive rename loop
+       * failed partway — phasesArchived below still reflects whatever
+       * archivedCount succeeded before the failure. */
+    } finally {
+      phasesArchived = archivedCount > 0;
     }
   }
 

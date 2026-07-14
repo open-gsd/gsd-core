@@ -924,8 +924,26 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
     const normalizedBase = normalizePhaseName(afterPhase);
     const decimalSet = new Set<number>();
 
-    try {
-      const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+    // #2245 audit: existsSync-guarded, mirroring cmdPhaseNextDecimal's identical
+    // scan above — a missing phasesDir (no decimal sub-phases yet) is the
+    // expected, silent case (empty decimalSet). A readdirSync failure once the
+    // dir is confirmed to EXIST is a genuine anomaly; swallowing it used to let
+    // `phase insert` proceed with an incomplete decimalSet and risk writing a
+    // decimal phase number that collides with an existing on-disk directory
+    // the scan simply never saw — surfaced loud instead, like the sibling.
+    if (fs.existsSync(phasesDir)) {
+      // Initialized (not just declared) so TS's definite-assignment check is
+      // satisfied without relying on control-flow narrowing through error()'s
+      // `never` return, which TS does not propagate through a destructured
+      // module-property function reference — error() still halts the process
+      // before `dirs` below is ever computed from this placeholder value.
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(phasesDir, { withFileTypes: true });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        error(`Failed to scan phase directories for existing decimal phases: ${msg}`);
+      }
       const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
       const decimalPattern = new RegExp(
         `^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}${escapeRegex(normalizedBase)}\\.(\\d+)`,
@@ -934,8 +952,6 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
         const dm = dir.match(decimalPattern);
         if (dm) decimalSet.add(parseInt(dm[1], 10));
       }
-    } catch {
-      /* intentionally empty */
     }
 
     const rmPhasePattern = new RegExp(
@@ -1328,8 +1344,18 @@ function cmdPhaseRemove(
       : renameIntegerPhases(phasesDir, parseInt(normalized, 10));
     renamedDirs = renamed.renamedDirs;
     renamedFiles = renamed.renamedFiles;
-  } catch {
-    /* intentionally empty */
+  } catch (e) {
+    // #2245 audit (was ERROR-HIDING): renameDecimalPhases/renameIntegerPhases
+    // rename subsequent phase directories ON DISK one at a time — a mid-loop
+    // failure leaves SOME directories already renumbered and others not, with
+    // no way to recover which (the callee's own renamedDirs/renamedFiles never
+    // reach this scope when it throws). Silently swallowing this and falling
+    // through to updateRoadmapAfterPhaseRemoval below used to rewrite
+    // ROADMAP.md's phase numbers assuming the ENTIRE renumbering succeeded,
+    // permanently desyncing ROADMAP.md from the actual (partially-renamed)
+    // on-disk directory names. Surface loud instead of compounding it.
+    const msg = e instanceof Error ? e.message : String(e);
+    error(`Failed to renumber phase directories after removing phase ${targetPhase}: ${msg}`);
   }
 
   updateRoadmapAfterPhaseRemoval(
@@ -1497,7 +1523,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       if (verStatus === 'gaps_found') warnings.push(`${file}: has unresolved gaps`);
     }
   } catch {
-    /* intentionally empty */
+    /* best-effort (#2245 audit): this is an ADVISORY pre-scan of UAT/
+     * VERIFICATION files for `warnings` in the phase-complete output — the
+     * actual completion GATE is readVerificationStatus below (a separate
+     * mechanism). A readdirSync/readFileSync failure here just means fewer
+     * warnings are surfaced this run, not a blocked or corrupted completion. */
   }
 
   let nextPhaseNum: string | null = null;
@@ -1826,7 +1856,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           }
         }
       } catch {
-        /* intentionally empty */
+        /* best-effort (#2245 audit): stage 1 of a deliberate 3-stage
+         * cascading fallback for locating the next phase (disk dirs → roadmap
+         * headings/checkboxes → lowest-outstanding-checkbox override, #2028
+         * below). A disk-scan failure here is indistinguishable from "found
+         * nothing on disk" and correctly falls through to stage 2, which
+         * derives the same information independently from ROADMAP.md content
+         * — not a silent data-loss path. */
       }
 
       if (isLastPhase && roadmapContent !== null) {
@@ -1865,7 +1901,10 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             }
           }
         } catch {
-          /* intentionally empty */
+          /* best-effort (#2245 audit): stage 2 of the next-phase cascade
+           * (see stage 1's comment above) — a failure here just leaves
+           * isLastPhase as stage 1 left it; stage 3 (#2028) below runs next
+           * regardless and provides a further, independent override. */
         }
       }
 
@@ -1909,7 +1948,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             nextPhaseName = lowestOutstanding.name;
           }
         } catch {
-          /* intentionally empty */
+          /* best-effort (#2245 audit): stage 3 (#2028) of the next-phase
+           * cascade — a failure here simply leaves isLastPhase/nextPhaseNum
+           * as stages 1-2 already determined them; this stage only ever
+           * overrides toward "not last" when it finds a genuinely lower
+           * outstanding phase, never the reverse. */
         }
       }
 

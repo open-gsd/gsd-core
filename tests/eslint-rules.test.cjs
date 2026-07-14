@@ -1123,6 +1123,59 @@ describe('no-adhoc-markdown-parsing rule', () => {
     });
   });
 
+  // ── new RegExp(identifier) resolved via resolveVariableInit scope walk (#2245 recall-hole fix) ─
+
+  test('invalid: new RegExp(identifier) resolves a const-declared identifier whose pattern matches the table fingerprint', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [],
+      invalid: [
+        {
+          // const tablePattern = '\|[^|]*\|' (doubled backslashes cook to a literal \|),
+          // then new RegExp(tablePattern) — the pattern is built one hop away via a
+          // const-declared identifier instead of inline, which used to escape the
+          // fingerprint check entirely (the recall hole this fix closes).
+          code: String.raw`
+            const tablePattern = '\\|[^|]*\\|';
+            const rowRe = new RegExp(tablePattern);
+          `,
+          filename: 'src/some-module.cts',
+          errors: [{ messageId: 'tableRegex' }],
+        },
+      ],
+    });
+  });
+
+  test('valid: new RegExp(identifier) resolves a const-declared identifier whose pattern is NOT table-shaped', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: `
+            const headingPattern = '## Phase';
+            const headingRe = new RegExp(headingPattern);
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
+  test('valid: new RegExp(identifier) does NOT resolve a function-parameter identifier (documented boundary)', () => {
+    ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
+      valid: [
+        {
+          code: String.raw`
+            function buildRowRegex(tablePattern) {
+              return new RegExp(tablePattern);
+            }
+          `,
+          filename: 'src/some-module.cts',
+        },
+      ],
+      invalid: [],
+    });
+  });
+
   test('valid: annotated new RegExp(...) table-regex with allow-adhoc-markdown is NOT flagged', () => {
     ruleTester.run('no-adhoc-markdown-parsing', noAdhocMarkdownParsing, {
       valid: [

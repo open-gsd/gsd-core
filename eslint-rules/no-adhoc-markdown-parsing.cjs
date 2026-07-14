@@ -44,9 +44,15 @@
  *                          and any `${...}` expression contributes nothing —
  *                          conservative by design, so a dynamic segment can
  *                          never manufacture or hide the fingerprint. A `new
- *                          RegExp(someIdentifier)` (the pattern built elsewhere
- *                          and referenced by variable) is NOT inspected here —
- *                          out of scope for this literal/template check.
+ *                          RegExp(someIdentifier)` IS ALSO inspected (#2245
+ *                          audit) when `someIdentifier` resolves to a same-
+ *                          scope `const` declaration whose initializer is
+ *                          itself a regex Literal, a string Literal, or a
+ *                          TemplateLiteral — mirroring the ADHOC-REPLACE-
+ *                          MUTATION resolver below. A `let`/`var` binding, a
+ *                          function parameter, a call result, or string
+ *                          concatenation is deliberately NOT resolved — a real,
+ *                          documented boundary, not a recall hole.
  *
  *   4. ADHOC-REPLACE-MUTATION — a `.replace(` call whose receiver identifier
  *                          name matches /roadmap|state|reqContent|content/i AND
@@ -186,7 +192,41 @@ const rule = {
     // escapes already resolved, matching what `node.regex.pattern` gives for a
     // literal) are concatenated; every `${...}` expression contributes nothing,
     // so a dynamic segment can neither manufacture nor hide the fingerprint.
-    function getNewRegExpSource(node) {
+    /**
+     * Same scope walk as `resolveVariableInit` below (~line 224), but
+     * additionally requires the binding be a `const` declaration (#2245
+     * audit). Used ONLY by `getNewRegExpSource`'s Identifier-resolution
+     * branch: a `let`/`var` regex identifier can be reassigned elsewhere in
+     * its scope, so trusting its FIRST initializer would be unsound in a way
+     * a `const` binding's initializer never is. A function parameter or a
+     * call-result initializer already fails the VariableDeclarator/`init`
+     * shape check and returns `null` regardless.
+     */
+    function resolveConstVariableInit(identifierName, scope) {
+      let s = scope;
+      while (s) {
+        const variable = s.variables.find((v) => v.name === identifierName);
+        if (variable) {
+          const def = variable.defs && variable.defs[0];
+          if (
+            def
+            && def.node
+            && def.node.type === 'VariableDeclarator'
+            && def.node.init
+            && def.parent
+            && def.parent.type === 'VariableDeclaration'
+            && def.parent.kind === 'const'
+          ) {
+            return def.node.init;
+          }
+          return null;
+        }
+        s = s.upper;
+      }
+      return null;
+    }
+
+    function getNewRegExpSource(node, scope) {
       if (node.type !== 'NewExpression') return null;
       if (!node.callee || node.callee.type !== 'Identifier' || node.callee.name !== 'RegExp') return null;
       const arg = node.arguments && node.arguments[0];
@@ -197,11 +237,27 @@ const rule = {
       if (arg.type === 'TemplateLiteral') {
         return arg.quasis.map((q) => (q.value && q.value.cooked) || '').join('');
       }
+      // Identifier resolution (#2245 audit — recall-hole fix): `new
+      // RegExp(tableRe)` where `const tableRe = /.../` (or a string/template
+      // literal) escaped the fingerprint entirely before this. Conservative
+      // by design: only a const-declared literal/template initializer is
+      // followed; anything else (param, call, `let`/`var`, concatenation)
+      // resolves to `null` and is silently out of scope, same as before.
+      if (arg.type === 'Identifier' && scope) {
+        const init = resolveConstVariableInit(arg.name, scope);
+        if (init) {
+          if (init.type === 'Literal' && init.regex) return init.regex.pattern || '';
+          if (init.type === 'Literal' && typeof init.value === 'string') return init.value;
+          if (init.type === 'TemplateLiteral') {
+            return init.quasis.map((q) => (q.value && q.value.cooked) || '').join('');
+          }
+        }
+      }
       return null;
     }
 
-    function isNewRegExpTableRegex(node) {
-      const src = getNewRegExpSource(node);
+    function isNewRegExpTableRegex(node, scope) {
+      const src = getNewRegExpSource(node, scope);
       return src !== null && isTableRegexSource(src);
     }
 
@@ -288,9 +344,11 @@ const rule = {
         }
       },
 
-      // 3b. Table-regex built via new RegExp(<Literal-string | TemplateLiteral>)
+      // 3b. Table-regex built via new RegExp(<Literal-string | TemplateLiteral
+      //     | const-declared identifier resolving to either>)
       NewExpression(node) {
-        if (isNewRegExpTableRegex(node)) {
+        const scope = context.getScope ? context.getScope() : sourceCode.getScope(node);
+        if (isNewRegExpTableRegex(node, scope)) {
           if (!isAllowed(node)) {
             context.report({ node, messageId: 'tableRegex' });
           }
