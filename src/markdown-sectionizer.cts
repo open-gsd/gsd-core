@@ -624,6 +624,143 @@ export function iterateBullets(sectionText: string): BulletItem[] {
   return items;
 }
 
+// ─── updateBullet ─────────────────────────────────────────────────────────────
+
+/**
+ * Locate the FIRST top-level bullet-opening line — checkbox (`- [ ]`/`- [x]`),
+ * dash/asterisk/plus (`- `/`* `/`+ `), or numbered (`1. `) — whose bullet text
+ * satisfies `match(bulletText, rawLine)`, replace that ONE physical line with
+ * `transform(rawLine)`, and return the resulting full content string. Every
+ * other byte in `content` — surrounding bullets, indentation, EOL style — is
+ * left untouched: this is a pure single-line splice, not a document-wide
+ * regex `.replace()`.
+ *
+ * Unlike `iterateBullets` (read-only, no offsets, and not itself fence-aware
+ * — callers pre-strip fences when that matters), `updateBullet` tracks
+ * character offsets itself so it can splice the transformed line back into
+ * the ORIGINAL `content`, and is fence-aware on its own: a bullet-shaped line
+ * inside a fenced code block (``` / ~~~, same CommonMark delimiter rules as
+ * `stripFencedCode`) is never offered to `match`/`transform`. (Tracked
+ * duplication of the fence state machine — same status as `tokenizeHeadings`'s
+ * copy, see its doc comment — pending a T-tier consolidation.)
+ *
+ * `rawLine` (second argument to both `match` and `transform`) is the
+ * UNMODIFIED physical line exactly as it appears between `\n` separators — so
+ * on a CRLF document its trailing `\r` is included, matching what a
+ * hand-rolled `^...[^\n]*`-shaped, `m`-flagged regex applied to the whole
+ * document would have seen. `bulletText` (first argument to `match`) is the
+ * bullet's own text with marker/checkbox stripped and any trailing `\r`
+ * removed — the same extraction `iterateBullets` uses for `BulletItem.text`.
+ *
+ * Only the OPENING line of a (possibly multi-line) bullet is ever matched or
+ * replaced — indented continuation lines are never presented to `match` or
+ * `transform`.
+ *
+ * The gap between the marker and its content tolerates 1 or more spaces — not
+ * only exactly one — mirroring CommonMark/GFM's 1–4-space allowance for
+ * list-marker spacing (`checkboxRe`/`numberedRe`/`dashRe`'s own dedicated
+ * quantifier caps at 4 per GFM; a wider run still recognises the line as a
+ * bullet opener via the uncapped `dashRe` fallback catching the excess as
+ * ordinary bullet text). So `-  [ ] text` (two spaces), `1.   text` (three
+ * spaces), and even a pathologically wide run are all recognised bullet
+ * openers, just as the canonical single-space `- [ ] text` / `1. text` are.
+ *
+ * Bounded no-op: if no bullet-opening line satisfies `match`, or `transform`
+ * returns a non-string, `content` is returned completely unchanged.
+ */
+export function updateBullet(
+  content: string,
+  match: (bulletText: string, rawLine: string) => boolean,
+  transform: (rawLine: string) => string,
+): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+
+  const lines = content.split('\n');
+
+  // Marker-to-content gap: CommonMark/GFM tolerates 1–4 spaces between a list
+  // marker and its content (5+ pushes the content into indented-code-block
+  // territory) — so `-  [ ] Phase 1: Foo` (two spaces) is still a valid
+  // bullet opener, not just the single-space `- [ ] …` shape. A hand-rolled
+  // single-space-only regex (e.g. the OLD `mutateMilestonePhase` checkbox
+  // regex before its `updateBullet` migration, which used `-\s*\[` — no cap,
+  // but at least 0+) would flip such a line; matching that requires this
+  // primitive's own bullet-opening recognition to tolerate the same gap,
+  // otherwise a wider-spaced bullet is silently never offered to `match`.
+  // Checkbox bullet: `<indent>- [ ] text` or `<indent>- [x] text`
+  const checkboxRe = /^(\s*)-[ ]{1,4}\[([xX ])\] (.*)$/;
+  // Plain dash/asterisk/plus bullet: `<indent>- text`, `<indent>* text`, `<indent>+ text`
+  const dashRe = /^(\s*)[-*+][ ]{1,4}(.*)$/;
+  // Numbered bullet: `<indent>1. text`
+  const numberedRe = /^(\s*)\d+\.[ ]{1,4}(.*)$/;
+
+  // Fence tracking — same CommonMark delimiter rules as stripFencedCode
+  // (tracked duplication, see doc comment above).
+  const delimRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+  let openFence: FenceState | null = null;
+
+  let offset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const line = rawLine.replace(/\r$/, '');
+
+    const dm = delimRe.exec(line);
+    if (dm) {
+      const char = dm[2][0] as '`' | '~';
+      const len = dm[2].length;
+      const trailing = dm[3];
+      if (openFence === null) {
+        // CommonMark §4.5: backtick fence info string must not contain a backtick.
+        if (!(char === '`' && trailing.includes('`'))) {
+          // Valid opener — record fence state; this delimiter line is not a bullet.
+          openFence = { char, len };
+          offset += rawLine.length + 1;
+          continue;
+        }
+        // else: not a valid opener — falls through to the bullet check below.
+      } else if (char === openFence.char && len >= openFence.len && /^\s*$/.test(trailing)) {
+        // Closing delimiter — close the fence; this line is not a bullet.
+        openFence = null;
+        offset += rawLine.length + 1;
+        continue;
+      } else {
+        // Mismatched/insufficient delimiter while a fence is open — fence content.
+        offset += rawLine.length + 1;
+        continue;
+      }
+    }
+
+    if (openFence !== null) {
+      // Inside a fence — never a bullet candidate.
+      offset += rawLine.length + 1;
+      continue;
+    }
+
+    let bulletText: string | null = null;
+    const cbm = checkboxRe.exec(line);
+    if (cbm) {
+      bulletText = cbm[3];
+    } else {
+      const dm2 = dashRe.exec(line);
+      if (dm2) {
+        bulletText = dm2[2];
+      } else {
+        const nm = numberedRe.exec(line);
+        if (nm) bulletText = nm[2];
+      }
+    }
+
+    if (bulletText !== null && match(bulletText, rawLine)) {
+      const newLine = transform(rawLine);
+      if (typeof newLine !== 'string') return content;
+      return content.slice(0, offset) + newLine + content.slice(offset + rawLine.length);
+    }
+
+    offset += rawLine.length + 1;
+  }
+
+  return content;
+}
+
 // ─── extractTaggedBlocks ──────────────────────────────────────────────────────
 
 /**

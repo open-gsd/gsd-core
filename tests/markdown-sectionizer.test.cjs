@@ -5,8 +5,8 @@
  *
  * Module: gsd-core/bin/lib/markdown-sectionizer.cjs
  * Exports: stripFencedCode, extractFencedBlock, tokenizeHeadings, collectSections,
- *          collectSection, iterateBullets, extractTaggedBlocks, stripTaggedBlocks,
- *          replaceSection, withSection, deleteSection
+ *          collectSection, iterateBullets, updateBullet, extractTaggedBlocks,
+ *          stripTaggedBlocks, replaceSection, withSection, deleteSection
  *
  * Covers the parser QA matrix from CONTRIBUTING.md §'Parser and project-file inputs':
  *   - LF vs CRLF line endings
@@ -36,6 +36,7 @@ const {
   collectSections,
   collectSection,
   iterateBullets,
+  updateBullet,
   extractTaggedBlocks,
   stripTaggedBlocks,
   replaceSection,
@@ -656,6 +657,233 @@ describe('iterateBullets', () => {
     const items = iterateBullets(src);
     assert.equal(items.length, 1);
     assert.equal(items[0].text, 'Bullet');
+  });
+});
+
+// ─── updateBullet ─────────────────────────────────────────────────────────────
+
+describe('updateBullet', () => {
+  test('non-string / empty content is returned unchanged', () => {
+    assert.equal(updateBullet(null, () => true, (l) => l), null);
+    assert.equal(updateBullet(undefined, () => true, (l) => l), undefined);
+    assert.equal(updateBullet('', () => true, (l) => l), '');
+  });
+
+  test('no-match is a no-op — content is returned unchanged', () => {
+    const content = '- [ ] Phase 1: Foo\n- [ ] Phase 2: Bar\n';
+    const result = updateBullet(content, (text) => text.includes('Phase 9'), (l) => `${l} EDITED`);
+    assert.equal(result, content);
+  });
+
+  test('flips only the matched bullet; every other bullet/line is byte-identical', () => {
+    const content = [
+      '# Roadmap',
+      '',
+      '- [ ] Phase 1: Foundation',
+      '- [ ] Phase 2: API',
+      '- [ ] Phase 3: Polish',
+      '',
+    ].join('\n');
+
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 2'),
+      (rawLine) => `${rawLine.replace('[ ]', '[x]')} (completed 2026-01-01)`,
+    );
+
+    assert.equal(
+      result,
+      [
+        '# Roadmap',
+        '',
+        '- [ ] Phase 1: Foundation',
+        '- [x] Phase 2: API (completed 2026-01-01)',
+        '- [ ] Phase 3: Polish',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('bulletText passed to match has the marker/checkbox stripped; rawLine is the untouched physical line', () => {
+    const content = '- [ ] Phase 1: Foo\n';
+    let seenText;
+    let seenRaw;
+    updateBullet(
+      content,
+      (bulletText, rawLine) => {
+        seenText = bulletText;
+        seenRaw = rawLine;
+        return true;
+      },
+      (rawLine) => rawLine,
+    );
+    assert.equal(seenText, 'Phase 1: Foo');
+    assert.equal(seenRaw, '- [ ] Phase 1: Foo');
+  });
+
+  test('recognises dash and numbered bullets too, not only checkboxes', () => {
+    const dashContent = '- Alpha\n- Beta\n';
+    const dashResult = updateBullet(dashContent, (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(dashResult, '- Alpha\n- Beta!\n');
+
+    const numberedContent = '1. Alpha\n2. Beta\n';
+    const numberedResult = updateBullet(numberedContent, (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(numberedResult, '1. Alpha\n2. Beta!\n');
+  });
+
+  test('ignores a matching bullet inside a fenced code block — the real bullet outside the fence is flipped', () => {
+    const content = [
+      '- [ ] Phase 1: Foo',
+      '```md',
+      '- [ ] Phase 1: Foo (inside fence, must not match)',
+      '```',
+      '- [ ] Phase 2: Bar',
+      '',
+    ].join('\n');
+
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 1'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+
+    assert.equal(
+      result,
+      [
+        '- [x] Phase 1: Foo',
+        '```md',
+        '- [ ] Phase 1: Foo (inside fence, must not match)',
+        '```',
+        '- [ ] Phase 2: Bar',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('a matching bullet that exists ONLY inside a fenced code block is a genuine no-op', () => {
+    const content = [
+      '```md',
+      '- [ ] Phase 9: OnlyInFence',
+      '```',
+      '- [ ] Phase 1: Foo',
+      '',
+    ].join('\n');
+
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 9'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+
+    assert.equal(result, content, 'the only matching bullet lives inside the fence — no-op');
+  });
+
+  test('CRLF line endings are preserved — only the matched line changes; others keep \\r\\n untouched', () => {
+    const content = '- [ ] Phase 1: Foo\r\n- [ ] Phase 2: Bar\r\n';
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 2'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+    assert.equal(result, '- [ ] Phase 1: Foo\r\n- [x] Phase 2: Bar\r\n');
+  });
+
+  test('transform returning a non-string is a bounded no-op', () => {
+    const content = '- [ ] Phase 1: Foo\n';
+    const result = updateBullet(content, () => true, () => undefined);
+    assert.equal(result, content);
+  });
+
+  test('only the FIRST matching bullet is replaced, even when a later bullet also matches', () => {
+    const content = '- [ ] Phase 1: Foo\n- [ ] Phase 1: Foo (duplicate)\n';
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.startsWith('Phase 1'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+    assert.equal(result, '- [x] Phase 1: Foo\n- [ ] Phase 1: Foo (duplicate)\n');
+  });
+
+  test('preserves the indentation of the matched bullet line', () => {
+    const content = '  - [ ] Nested: Item\n';
+    const result = updateBullet(content, (t) => t.includes('Nested'), (l) => l.replace('[ ]', '[x]'));
+    assert.equal(result, '  - [x] Nested: Item\n');
+  });
+
+  // GFM/CommonMark tolerates more than one space between a list marker and
+  // its content — a checkboxRe pinned to exactly one space fails to recognise
+  // `-  [ ] …` (two spaces) as a CHECKBOX at all; it instead falls through to
+  // the generic dash-bullet shape, leaking the literal `[ ] ` marker into
+  // bulletText (` [ ] Phase 1: Foo` instead of the clean `Phase 1: Foo`) —
+  // silently wrong for any caller whose `match`/`transform` assumes bulletText
+  // has the checkbox marker stripped.
+  test('recognises a multi-space marker (`-  [ ]`, two spaces) as a proper checkbox bullet — bulletText has the marker cleanly stripped', () => {
+    const content = '-  [ ] Phase 1: Foo\n';
+    let seenBulletText;
+    const result = updateBullet(
+      content,
+      (bulletText) => {
+        seenBulletText = bulletText;
+        return bulletText.includes('Phase 1');
+      },
+      (rawLine) => `${rawLine.replace('[ ]', '[x]')} (completed 2026-01-01)`,
+    );
+    assert.equal(seenBulletText, 'Phase 1: Foo', 'bulletText must be cleanly stripped of the checkbox marker, not leak it in as dash-bullet text');
+    assert.equal(result, '-  [x] Phase 1: Foo (completed 2026-01-01)\n');
+  });
+
+  test('recognises a multi-space dash/numbered marker too (not only checkboxes)', () => {
+    const dashResult = updateBullet('-   Alpha\n-   Beta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(dashResult, '-   Alpha\n-   Beta!\n');
+
+    const numberedResult = updateBullet('1.   Alpha\n2.   Beta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(numberedResult, '1.   Alpha\n2.   Beta!\n');
+  });
+
+  test('property: flip/unflip round-trip restores the original document byte-for-byte, and every non-target line stays untouched', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 8 }).chain((n) =>
+          fc.record({
+            n: fc.constant(n),
+            labels: fc.array(
+              fc.string({ minLength: 1, maxLength: 20 }).filter(
+                (s) => !/[\r\n]/.test(s) && s.trim().length > 0 && !s.includes('EDITED'),
+              ),
+              { minLength: n, maxLength: n },
+            ),
+            targetIdx: fc.integer({ min: 0, max: n - 1 }),
+          }),
+        ),
+        ({ n, labels, targetIdx }) => {
+          const lines = [];
+          for (let k = 0; k < n; k++) {
+            lines.push(`- [ ] Item ${k}: ${labels[k]}`);
+          }
+          const content = `${lines.join('\n')}\n`;
+
+          const flipped = updateBullet(
+            content,
+            (bulletText) => bulletText.includes(`Item ${targetIdx}:`),
+            (rawLine) => `${rawLine.replace('[ ]', '[x]')} EDITED`,
+          );
+
+          const flippedLines = flipped.split('\n');
+          for (let k = 0; k < n; k++) {
+            if (k === targetIdx) continue;
+            assert.equal(flippedLines[k], lines[k], `line ${k} must stay byte-identical`);
+          }
+          assert.equal(flippedLines[targetIdx], `- [x] Item ${targetIdx}: ${labels[targetIdx]} EDITED`);
+
+          const restored = updateBullet(
+            flipped,
+            (bulletText) => bulletText.includes(`Item ${targetIdx}:`),
+            (rawLine) => rawLine.replace('[x]', '[ ]').replace(' EDITED', ''),
+          );
+          assert.equal(restored, content, 'round-trip must restore the original document byte-for-byte');
+        },
+      ),
+    );
   });
 });
 

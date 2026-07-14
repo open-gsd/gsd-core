@@ -56,7 +56,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow } from './markdown-table.cjs';
-import { deleteSection } from './markdown-sectionizer.cjs';
+import { deleteSection, updateBullet } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -1555,19 +1555,24 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // so completing an already-checked phase (idempotent re-run) checked the
         // wrong phase's box. Mirrors the tight pattern used by phase-insert
         // (`]\\s*(?:\\*\\*)?Phase`).
-        // #2067/#2200: line-anchored (^ + m flag, optional leading indent) so an
+        // #2067/#2200: line-anchored (^, optional leading indent) so an
         // inline / backticked prose literal cannot match. Milestone-scoped below
         // (mutateMilestonePhase) so a Backlog entry or a same-numbered shipped-
         // milestone phase cannot be flipped either.
-        // ADR-2143 §4 note: this is the phase-LIST checkbox — it lives in the
-        // milestone's `- [ ] Phase N: …` checklist, OUTSIDE any `### Phase N`
-        // detail section, so there is no section for withPhaseSection to bind
-        // to. Left as a milestone-slice-scoped regex (not migrated to the
-        // sectionizer seam); see planCountBodyPattern below for the sites that
-        // WERE migrated.
+        // ADR-2143 §4 note / #2245 audit: this is the phase-LIST checkbox — it
+        // lives in the milestone's `- [ ] Phase N: …` checklist, OUTSIDE any
+        // `### Phase N` detail section, so there is no section for
+        // withPhaseSection to bind to. Migrated onto the sectionizer's
+        // `updateBullet` bullet-write seam (behaviour-preserving, no live bug):
+        // the pattern itself is unchanged, only the "find the right line, splice
+        // it back" plumbing moved off a whole-slice `.replace()` onto the seam.
+        // Applied per single physical line by updateBullet, so the pattern no
+        // longer needs the `m` flag (it never sees more than one line at a
+        // time); see planCountBodyPattern below for the sites that were
+        // migrated onto withPhaseSection instead.
         const checkboxPattern = new RegExp(
           `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
-          'im',
+          'i',
         );
 
         // Progress table row: update Plans Complete/Status/Completed columns BY
@@ -1628,7 +1633,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // milestone, fall back to whole-content mutation (prior behaviour).
         const mutateMilestonePhase = (slice: string): string => {
           let s = slice;
-          s = s.replace(checkboxPattern, `$1x$2 (completed ${today})`);
+          s = updateBullet(
+            s,
+            (_bulletText, rawLine) => checkboxPattern.test(rawLine),
+            (rawLine) => rawLine.replace(checkboxPattern, `$1x$2 (completed ${today})`),
+          );
 
           s = editProgressHeadingSlice(s, (scoped) => {
             let text = scoped;
