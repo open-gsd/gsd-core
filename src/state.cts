@@ -47,6 +47,7 @@ import {
   stateReplaceFieldIfTemplate,
 } from './state-document.cjs';
 import { tokenizeHeadings, collectSection, replaceSection } from './markdown-sectionizer.cjs';
+import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { parseMarkdownTable, updateTableCell, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1221,15 +1222,22 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
  * Match the session section body from a STATE.md body. #1101: recognise the
  * bootstrap `## Session Continuity` heading but PREFER the normalized `## Session`
  * block when both exist (legacy duplicate files), so the reader agrees with the
- * writer (which updates `## Session` first). `(?:^|\n)` line-anchors (kept out of
- * `/m` so `$` stays end-of-string for the `(?=\n##|$)` section boundary), which
- * excludes an h3 `### Session Continuity`; the trailing-` Archive` boundary still
- * excludes `## Session Continuity Archive` (preserving the #2444 scoping).
- * Returns the match whose group 1 is the section body, or null.
+ * writer (which updates `## Session` first). Level-2-exact heading match
+ * (excludes an h3 `### Session Continuity`); the exact `'session continuity'`
+ * text match still excludes `## Session Continuity Archive` (preserving the
+ * #2444 scoping). Migrated onto the `collectSection` seam (#2143 audit,
+ * epic #2143): CRLF-safe — the prior hand-rolled `[ \t]*\n` regex silently
+ * failed to match a CRLF `## Session\r\n` heading line (the `\r` broke the
+ * `[ \t]*\n` boundary); `tokenizeHeadings` strips the trailing `\r` before
+ * heading-text extraction, so this now matches CRLF headings too.
+ * Returns the section body, or null.
  */
-function matchSessionSection(body: string): RegExpMatchArray | null {
-  return body.match(/(?:^|\n)##[ \t]*Session[ \t]*\n([\s\S]*?)(?=\n##|$)/i) // allow-adhoc-markdown: read-only session-section extract in state.cts; pending collectSection migration #1372
-    || body.match(/(?:^|\n)##[ \t]*Session Continuity[ \t]*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only session-continuity section extract in state.cts; pending collectSection migration #1372
+function matchSessionSection(body: string): string | null {
+  const isSession = (h: HeadingToken): boolean => h.level === 2 && h.text.trim().toLowerCase() === 'session';
+  const isSessionContinuity = (h: HeadingToken): boolean => h.level === 2 && h.text.trim().toLowerCase() === 'session continuity';
+  const section = collectSection(body, isSession, { levelBounded: true })
+    ?? collectSection(body, isSessionContinuity, { levelBounded: true });
+  return section ? section.body : null;
 }
 
 function parseProsePhaseField(value: string | null): { phase: string | null; name: string | null } {
@@ -1322,10 +1330,9 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
 
   // Extract blockers list
   const blockers: string[] = [];
-  const blockersMatch = body.match(/##\s*Blockers\s*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only blockers section-collect in state.cts; pending collectSection migration #1372
-  if (blockersMatch) {
-    const blockersSection = blockersMatch[1];
-    const items = blockersSection.match(/^-\s+(.+)$/gm) || [];
+  const blockersSection = collectSection(body, (h) => h.level === 2 && h.text.trim().toLowerCase() === 'blockers', { levelBounded: true });
+  if (blockersSection) {
+    const items = blockersSection.body.match(/^-\s+(.+)$/gm) || [];
     for (const item of items) {
       blockers.push(item.replace(/^-\s+/, '').trim());
     }
@@ -1341,8 +1348,8 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
   // `## Session Continuity` heading. See matchSessionSection for the anchoring.
   const sessionMatch = matchSessionSection(body);
-  if (sessionMatch) {
-    const sessionSection = sessionMatch[1];
+  if (sessionMatch !== null) {
+    const sessionSection = sessionMatch;
     // Accept both `**Last Date:**` (canonical template form) and `**Last session:**`
     // (the form written by the DWIM auto-create / normalize path added for #944).
     const lastDateMatch = sessionSection.match(/\*\*Last Date:\*\*\s*(.+)/i)
@@ -1462,7 +1469,7 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
   // `## Session Continuity` heading. See matchSessionSection for the anchoring.
   const sessionSectionMatch = matchSessionSection(bodyContent);
-  const sessionBodyScope = sessionSectionMatch ? sessionSectionMatch[1] : bodyContent;
+  const sessionBodyScope = sessionSectionMatch ?? bodyContent;
   const stoppedAt = stateExtractField(sessionBodyScope, 'Stopped At') || stateExtractField(sessionBodyScope, 'Stopped at');
   const pausedAt = stateExtractField(bodyContent, 'Paused At');
 
@@ -2056,7 +2063,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // A stale "Stopped at:" in a non-Session section (e.g. Session Continuity
     // Archive prose) must not interfere with the delta comparison.
     const preSessionMatch = matchSessionSection(preBody);
-    const preSessionScope = preSessionMatch ? preSessionMatch[1] : preBody;
+    const preSessionScope = preSessionMatch ?? preBody;
     const preBodyStoppedAt = stateExtractField(preSessionScope, 'Stopped At') || stateExtractField(preSessionScope, 'Stopped at');
 
     // ADR-1769 Phase 6 / #1743 / #1695: snapshot the body source for the curated
@@ -2090,7 +2097,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // Bug #1230 / Change B: scope stopped_at delta to the ## Session section,
     // consistent with the pre-transform snapshot above and buildStateFrontmatter.
     const postSessionMatch = matchSessionSection(postBody);
-    const postSessionScope = postSessionMatch ? postSessionMatch[1] : postBody;
+    const postSessionScope = postSessionMatch ?? postBody;
     const postBodyStoppedAt = stateExtractField(postSessionScope, 'Stopped At') || stateExtractField(postSessionScope, 'Stopped at');
     // ADR-1769 Phase 6 / #1695: post-transform body Phase source for the
     // current_phase_name delta comparison.
