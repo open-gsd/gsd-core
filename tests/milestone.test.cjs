@@ -12,7 +12,7 @@
 
 'use strict';
 
-const { test, describe, before, beforeEach, afterEach } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -923,64 +923,191 @@ describe('requirements mark-complete command', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// milestone.cjs regex global-state fix (structural regression guard)
+// requirements mark-complete: traceability write (regression, ADR-2143 §7)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('milestone.cjs regex global state fix', () => {
-  // allow-test-rule: structural-regression-guard
-  // milestone.cjs must use replace()+compare, not test()+replace(), to avoid
-  // regex lastIndex corruption with global flags.
-  const MILESTONE_SRC = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'milestone.cjs');
-  let src;
+describe('requirements mark-complete: traceability write (regression, ADR-2143 §7)', () => {
+  let tmpDir;
 
-  before(() => { src = fs.readFileSync(MILESTONE_SRC, 'utf-8'); });
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
 
-  test('checkbox update uses replace() + compare, not test() + replace()', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
+  function writeRequirements(tmpDir, content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), content, 'utf-8');
+  }
+
+  function readRequirements(tmpDir) {
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+  }
+
+  test('multi-ID batch: both rows flip, no regex lastIndex/global-state leak', () => {
+    // Behavioural replacement for the retired structural guard: the old
+    // test()+replace() idiom on a global regex would advance lastIndex on the
+    // first ID's probe and silently miss the second ID's row. Two Pending
+    // rows in one table, both IDs in a single invocation, both must flip.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+- [ ] **REQ-002**: feature two
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | Phase 1 | Pending |
+| REQ-002 | Phase 1 | Pending |
+`,
     );
-    assert.ok(!funcBody.includes('checkboxPattern.test(reqContent)'));
+
+    const result = runGsdTools('requirements mark-complete REQ-001,REQ-002', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.marked_complete.sort(), ['REQ-001', 'REQ-002']);
+
+    const content = readRequirements(tmpDir);
     assert.ok(
-      funcBody.includes('afterCheckbox !== reqContent') ||
-      funcBody.includes('afterCheckbox!==reqContent'),
+      content.includes('| REQ-001 | Phase 1 | Complete |'),
+      'REQ-001 row should flip to Complete',
     );
-  });
-
-  test('table update uses replace() + compare, not test() + replace()', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
-    );
-    assert.ok(!funcBody.includes('tablePattern.test(reqContent)'));
     assert.ok(
-      funcBody.includes('afterTable !== reqContent') ||
-      funcBody.includes('afterTable!==reqContent'),
+      content.includes('| REQ-002 | Phase 1 | Complete |'),
+      'REQ-002 row should flip to Complete — a global-regex lastIndex leak would miss this row',
     );
   });
 
-  test('done-check regexes use non-global flag (only need existence check)', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
+  for (const header of ['REQ-ID', 'Requirement']) {
+    test(`traceability row matched regardless of ID-column header name ('${header}') (#2769/#2203)`, () => {
+      // Real tables head the requirement-ID column 'REQ-ID'; some head it
+      // 'Requirement'. The row must be matched by its FIRST cell's value,
+      // independent of what that column is named in the header.
+      writeRequirements(
+        tmpDir,
+        `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+
+## Traceability
+
+| ${header} | Phase | Status |
+|${'-'.repeat(header.length + 2)}|-------|--------|
+| REQ-001 | Phase 1 | Pending |
+`,
+      );
+
+      const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const out = JSON.parse(result.output);
+      assert.ok(
+        out.marked_complete.includes('REQ-001'),
+        `REQ-001 should be marked complete under '${header}' header`,
+      );
+
+      const content = readRequirements(tmpDir);
+      assert.ok(
+        content.includes('| REQ-001 | Phase 1 | Complete |'),
+        `REQ-001 row should flip to Complete under '${header}' header`,
+      );
+    });
+  }
+
+  test('REQ-ID-headed table participates in write_set (#2769/#2203)', () => {
+    // hasTable must recognize a REQ-ID header (not just 'Requirement') so the
+    // traceability surface is tracked in write_set, not silently omitted
+    // despite the row actually flipping.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | Phase 1 | Pending |
+`,
     );
-    const doneCheckboxMatch = funcBody.match(/doneCheckbox\s*=\s*new RegExp\([^)]+,\s*'([^']+)'\)/);
-    const doneTableMatch = funcBody.match(/doneTable\s*=\s*new RegExp\([^)]+,\s*'([^']+)'\)/);
-    assert.ok(doneCheckboxMatch, 'doneCheckbox regex should exist');
-    assert.ok(doneTableMatch, 'doneTable regex should exist');
-    assert.ok(!doneCheckboxMatch[1].includes('g'));
-    assert.ok(!doneTableMatch[1].includes('g'));
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-001', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-001', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true);
   });
 
-  test('no duplicate regex construction for the same pattern', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
+  test('REQ-ID-headed table trips #2140 table_unmatched drift check on a missing row', () => {
+    // Checkbox flips, but there is no REQ-001 row in the REQ-ID-headed table.
+    // Before the hasTable fix this was silently treated as "no table
+    // required" (hasTable false for REQ-ID headers) and table_unmatched never
+    // fired — masking the exact #2140 partial-reconcile class for the
+    // real-world table format.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one (no traceability row)
+- [ ] **REQ-002**: feature two (has traceability row)
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-002 | Phase 1 | Pending |
+`,
     );
-    const tableConstructions = funcBody.split('\n').filter(
-      line => line.includes('tablePattern') && line.includes('new RegExp'),
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.table_unmatched, ['REQ-001']);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **REQ-001**'), 'REQ-001 checkbox should be checked');
+    assert.ok(!content.includes('REQ-001 | Phase'), 'no REQ-001 row should be invented');
+  });
+
+  test('idempotent: already-Complete row reports already_complete, no double-write/corruption', () => {
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [x] **REQ-001**: feature one
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | Phase 1 | Complete |
+`,
     );
-    assert.ok(tableConstructions.length <= 1, `Expected ≤1 tablePattern construction, got ${tableConstructions.length}`);
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.already_complete, ['REQ-001']);
+    assert.deepStrictEqual(out.marked_complete, []);
+
+    const content = readRequirements(tmpDir);
+    const rowMatches = content.match(/\|\s*REQ-001\s*\|\s*Phase 1\s*\|\s*Complete\s*\|/g) || [];
+    assert.strictEqual(
+      rowMatches.length, 1,
+      `expected exactly one unchanged REQ-001 row, got ${rowMatches.length} (no double-write/corruption)`,
+    );
   });
 });
 
