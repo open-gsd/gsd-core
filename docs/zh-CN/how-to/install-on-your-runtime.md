@@ -100,7 +100,7 @@ PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
 
 OMP 仅支持全局安装。由于 OMP 默认不会发现项目本地的 agent 根目录，`--local` 会被拒绝。
 重启后，OMP 会提供 `/gsd`、`/gsd-status`、`/gsd-progress` 等原生 GSD slash command；阶段执行会使用 OMP 原生的 `task` 与 job 控制。
-
+在普通项目状态下，`/gsd-next` 会立即启动该受控推进流程；workflow 必需的决策仍保持交互式。
 
 #### 更新 OMP
 

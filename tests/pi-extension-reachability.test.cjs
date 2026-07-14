@@ -1272,7 +1272,7 @@ test('an unresolved language dialog never blocks the session-start handler', asy
   assert.equal(JSON.parse(fs.readFileSync(configPath, 'utf8')).response_language, 'English');
 });
 
-test('the GSD next menu delegates in-project advancement to canonical progress', async () => {
+test('the GSD next command immediately delegates normal advancement to canonical progress', async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-console-'));
   try {
     fs.mkdirSync(path.join(cwd, '.planning'));
@@ -1293,23 +1293,14 @@ Status: Review 02-03-PLAN.md
 `);
     const pi = mockPi();
     gsdPiExtension(pi);
-    const editor = [];
-    const menus = [];
-    const ctx = { cwd, hasUI: true, ui: {
-      select: async (_title, options) => {
-        menus.push(options.map(({ label }) => label));
-        return options[0];
-      },
-      setEditorText: (text) => editor.push(text),
-    } };
-    await pi._recorded.commands['gsd-next'].handler('', ctx);
-    assert.deepEqual(editor, ['/gsd-progress --next']);
-    assert.deepEqual(menus[0], ['Advance safely through GSD progress', 'View project overview', 'Later']);
-
-    await pi._recorded.commands['gsd-next'].handler('', { cwd });
-    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-progress-next');
-    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
-    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-progress --next/);
+    await pi._recorded.commands['gsd-next'].handler('', {
+      cwd,
+      hasUI: true,
+      ui: { select: () => { throw new Error('normal advancement must not require a menu selection'); } },
+    });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-progress');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-progress workflow --next/);
   } finally {
     cleanup(cwd);
   }
@@ -1382,7 +1373,9 @@ test('the GSD next action prepares shipping only after UAT completion', async ()
 
     fs.writeFileSync(path.join(cwd, '.planning', 'phases', '05-release', '05-UAT.md'), '---\nstatus: in progress\n---\n');
     await pi._recorded.commands['gsd-next'].handler('', ctx);
-    assert.ok(!menus.at(-1).some((label) => label.includes('shipping')));
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-progress');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-progress workflow --next/);
   } finally {
     cleanup(cwd);
   }

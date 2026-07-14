@@ -1240,36 +1240,8 @@ module.exports = function gsdPiExtension(pi) {
     else if (label === choices[1].label) await emitNextStep(ctx, stateSnapshot(ctx.cwd));
   }
 
-  async function chooseCanonicalProgress(ctx, state) {
-    const chinese = usesChinese(ctx.cwd);
-    const command = '/gsd-progress --next';
-    const summary = chinese
-      ? `使用 GSD 的受控推进流程检查并进入下一步。命令：${command}`
-      : `Use GSD's gated advancement workflow to determine and take the next step. Command: ${command}`;
-    if (!ctx.hasUI || !ctx.ui?.select) {
-      await pi.sendMessage({ customType: 'gsd-progress-next', content: summary, display: true }, { triggerTurn: false });
-      return;
-    }
-    const choices = chinese
-      ? [
-        { label: '通过 GSD 进度安全推进', description: '将受控推进命令放入编辑器；不会自动执行。' },
-        { label: '查看项目概览', description: '显示当前状态、风险和建议。' },
-        { label: '稍后处理', description: '不修改项目状态。' },
-      ]
-      : [
-        { label: 'Advance safely through GSD progress', description: 'Put the gated advancement command in the editor; do not run it automatically.' },
-        { label: 'View project overview', description: 'Show current state, risks, and recommendation.' },
-        { label: 'Later', description: 'Leave the project state unchanged.' },
-      ];
-    let choice;
-    try {
-      choice = await ctx.ui.select(chinese ? 'GSD 下一步' : 'GSD next step', choices);
-    } catch {
-      return;
-    }
-    const label = typeof choice === 'string' ? choice : choice?.label || choice?.value;
-    if (label === choices[0].label) ctx.ui.setEditorText?.(command);
-    else if (label === choices[1].label) await emitNextStep(ctx, state);
+  async function chooseCanonicalProgress(ctx) {
+    return launchNativeProgress(ctx, '--next');
   }
 
   async function chooseNextAction(ctx, state) {
