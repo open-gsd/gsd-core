@@ -98,6 +98,19 @@ When an orchestrator command is in flight, the convention (issue #2833) is to wr
 | `/gsd-execute-phase` | `executing` |
 | `/gsd-verify-work` | `verifying` |
 
+### Status lifecycle (ADR-2207)
+
+The `Status` field follows a strict lifecycle across phase and milestone boundaries:
+
+| Value | Written by | Meaning |
+|---|---|---|
+| `Ready to plan` | `completePhaseCore` (non-last phase) | Next phase is ready for planning |
+| `All phases complete` | `completePhaseCore` (last phase) | All phases done; milestone awaiting formal close |
+| `<version> milestone complete` | `milestoneCompleteCore` | Milestone formally closed and archived |
+| `Awaiting next milestone` | `milestoneCompleteCore` | Terminal/archived state |
+
+Phase-completion verbs never write `Milestone complete` (the overloaded bare value was removed in #2204 per ADR-2207 to decouple phase-level writes from milestone termination).
+
 ---
 
 ## Status-line rendering scenes

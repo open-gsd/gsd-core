@@ -600,7 +600,7 @@ describe('getOtherActiveWorkstreams', () => {
     fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'beta', 'STATE.md'),
       '# State\n**Status:** In progress\n**Current Phase:** 5\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'workstreams', 'gamma', 'STATE.md'),
-      '# State\n**Status:** Milestone complete\n');
+      '# State\n**Status:** 1.0 milestone complete\n');
   });
 
   after(() => cleanup(tmpDir));
