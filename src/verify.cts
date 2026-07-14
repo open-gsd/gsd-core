@@ -22,7 +22,7 @@ import stateMod = require('./state.cjs');
 import modelProfilesMod = require('./model-profiles.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- plan-scan.cjs is an export= CommonJS module
 import planScanMod = require('./plan-scan.cjs');
-import { execGit, platformReadSync as safeReadFile, platformWriteSync } from './shell-command-projection.cjs';
+import { execGit, platformReadSync as safeReadFile, platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { PACKAGE_NAME } from './package-identity.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
@@ -1157,7 +1157,7 @@ function cmdValidateConsistency(cwd: string, raw: boolean): void {
 
       for (const dir of dirs) {
         const phasePath = path.join(phaseRoot, dir);
-        const phaseLabel = path.relative(planBase, phasePath).replace(/\\/g, '/');
+        const phaseLabel = posixNormalize(path.relative(planBase, phasePath));
         const phaseFiles = fs.readdirSync(phasePath);
         const plans = phaseFiles.filter((f) => f.endsWith('-PLAN.md')).sort();
 

@@ -541,10 +541,15 @@ function completePhaseBody() {
 
 // A roadmap with a progress table: 3 of 5 phases Complete → deriveProgressFromRoadmap
 // returns { completedPhases: 3, totalPhases: 5 }.
+// ADR-2143 (epic #2143): deriveProgressFromRoadmap now resolves this table via the
+// markdown-table schema registry (TABLE_SCHEMAS.RoadmapProgress), which requires the
+// exact canonical header (gsd-core/templates/roadmap.md); the 2nd column is named
+// "Plans Complete" to match (its cell values here are unused free text, not M/N
+// counts — no test in this file asserts totalPlans).
 const ROADMAP_3_OF_5 = [
   '## Roadmap',
   '',
-  '| Phase | Title | Status | Completed |',
+  '| Phase | Plans Complete | Status | Completed |',
   '| --- | --- | --- | --- |',
   '| 1 | A | Complete | 2026-01-01 |',
   '| 2 | B | Complete | 2026-02-01 |',
@@ -980,6 +985,21 @@ describe('ADR-1769 Phase 5: milestoneComplete transition — closure write', () 
     // The stale prior instruction must be gone.
     assert.ok(!/Re-run \/gsd:complete-milestone/.test(result.content),
       'stale Operator Next Steps tail must be replaced');
+  });
+
+  test('#2245 F7: CRLF blank line after a reset heading is preserved (byte-parity with LF)', () => {
+    // resetSectionVerbatim's post-heading blank-swallow loop recognised only
+    // a bare `\n` — on a CRLF document, a `\r\n` blank line right after the
+    // heading fell into the DISCARDED span instead of the kept prefix,
+    // silently dropping one blank line relative to the LF-equivalent output.
+    const lfResult = transitionCore(preCloseBody(), intent, deps);
+    const crlfResult = transitionCore(preCloseBody().replace(/\n/g, '\r\n'), intent, deps);
+
+    assert.strictEqual(
+      crlfResult.content.replace(/\r\n/g, '\n'),
+      lfResult.content,
+      'CRLF output, normalized back to LF, must match the LF output byte-for-byte',
+    );
   });
 
   test('Operator Next Steps section is inserted when absent', () => {

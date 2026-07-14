@@ -611,6 +611,37 @@ milestone: v1.0
     assert.ok(!content.includes('status: unknown'), 'should not contain unknown status');
   });
 
+  test('#2202: preserves unknown frontmatter keys the schema does not own', () => {
+    // Regression: a mutating verb rewrites STATE.md via syncStateFrontmatter,
+    // which rebuilds frontmatter from the body + schema. Before #2202 it dropped
+    // any frontmatter key the schema does not own; custom/tooling keys must
+    // survive every write.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `---
+status: executing
+milestone: v1.0
+custom_tracking_id: ABC-123
+team: platform
+---
+
+# Project State
+
+**Current Phase:** 03
+**Current Plan:** 03-02
+`
+    );
+
+    // Any writeStateMd triggers syncStateFrontmatter.
+    runGsdTools('state update "Current Plan" "03-03"', tmpDir);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.match(content, /custom_tracking_id: ABC-123/, 'unknown key custom_tracking_id must be preserved');
+    assert.match(content, /team: platform/, 'unknown key team must be preserved');
+    // Schema-owned keys still win / survive alongside the carried-forward keys.
+    assert.ok(content.includes('status: executing'), 'schema-owned status still preserved');
+  });
+
   test('round-trip: write then read via state json', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'),
@@ -1179,6 +1210,115 @@ describe('cmdStateRecordMetric (state record-metric)', () => {
     const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(updated.includes('| Phase 2 P1 | 5min | 3 tasks | 4 files |'), 'new row should be present');
     assert.ok(updated.includes('| Phase 1 P1 | 3min | 2 tasks | 3 files |'), 'existing row should still be present');
+  });
+
+  // #2245 Blocker 2: a RAGGED sibling data row (a hand-edited stray/extra
+  // pipe) in the existing Performance Metrics table used to fail the
+  // whole-table `parseMarkdownTable` gate, which fell through to the
+  // "section absent (or malformed)" scaffold branch and appended a SECOND
+  // "## Performance Metrics" heading — compounding on every per-plan
+  // record-metric call. The append must be ragged-tolerant: it locates the
+  // table's last existing row and splices the new row after it WITHOUT
+  // requiring every sibling row to parse cleanly, and must never introduce a
+  // duplicate heading when a (possibly ragged) table already exists.
+  test('#2245 appends into a RAGGED existing table without duplicating the heading', () => {
+    const raggedFixture = [
+      '# Project State',
+      '',
+      '## Performance Metrics',
+      '',
+      '| Plan | Duration | Tasks | Files |',
+      '|------|----------|-------|-------|',
+      '| Phase 1 P1 | 3min | 2 tasks | 3 files |',
+      '| Phase 1 P2 | 4min | 3 tasks | 5 files | extra |',
+      '',
+      '## Session Continuity',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), raggedFixture);
+
+    const result = runGsdTools('state record-metric --phase 2 --plan 1 --duration 5min --tasks 3 --files 4', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(!output.created, 'created must be absent/false — an existing (ragged) section must not be treated as auto-created');
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const headingMatches = updated.match(/^## Performance Metrics\s*$/gim) || [];
+    assert.strictEqual(headingMatches.length, 1, `exactly ONE "## Performance Metrics" heading expected, got ${headingMatches.length}:\n${updated}`);
+    assert.ok(updated.includes('| Phase 1 P2 | 4min | 3 tasks | 5 files | extra |'), 'existing ragged row must be preserved verbatim');
+    assert.ok(updated.includes('| Phase 1 P1 | 3min | 2 tasks | 3 files |'), 'existing clean row should still be present');
+    assert.ok(updated.includes('| Phase 2 P1 | 5min | 3 tasks | 4 files |'), 'new row should be appended into the existing table');
+  });
+
+  // #2245/#2143: a live STATE.md's "## Performance Metrics" section also
+  // carries the "By Phase" velocity table (gsd-core/templates/state.md:48,
+  // `| Phase | Plans | Total | Avg/Plan |`), which the prior "first table in
+  // the section" targeting polluted with a mismatched per-plan row on EVERY
+  // plan completion (execute-plan.md:414 calls record-metric per-plan). The
+  // command must target ITS OWN `| Plan | Duration | Tasks | Files |` table
+  // specifically, self-creating one when the section exists but doesn't
+  // carry it yet.
+  test('#2245/#2143: record-metric does not pollute the By-Phase velocity table (targets its own metrics table)', () => {
+    const byPhaseFixture = [
+      '# Project State',
+      '',
+      '## Performance Metrics',
+      '',
+      '**Velocity:**',
+      '- Total plans completed: 0',
+      '- Average duration: 0 min',
+      '- Total execution time: 0.0 hours',
+      '',
+      '**By Phase:**',
+      '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| - | - | - | - |',
+      '',
+      '**Recent Trend:**',
+      '- Last 5 plans: none',
+      '- Trend: Stable',
+      '',
+      '*Updated after each plan completion*',
+      '',
+      '## Session Continuity',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), byPhaseFixture);
+
+    const result = runGsdTools('state record-metric --phase 1 --plan 1 --duration 5min --tasks 3 --files 4', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(!output.created, 'created must be absent/false — the section already existed');
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // (a) By-Phase table unchanged — header + placeholder row intact, and no
+    // metric row spliced in between the delimiter and the next blank line.
+    const byPhaseIdx = updated.indexOf('| Phase | Plans | Total | Avg/Plan |');
+    assert.ok(byPhaseIdx !== -1, 'By-Phase table header must still exist');
+    const afterHeader = updated.slice(byPhaseIdx);
+    const byPhaseBlock = afterHeader.slice(0, afterHeader.indexOf('\n\n'));
+    assert.ok(byPhaseBlock.includes('|-------|-------|-------|----------|'), 'By-Phase delimiter must be intact');
+    assert.ok(byPhaseBlock.includes('| - | - | - | - |'), 'By-Phase placeholder row must be intact');
+    assert.ok(!byPhaseBlock.includes('Phase 1 P1'), 'the per-plan row must NOT be spliced into the By-Phase table block');
+    assert.ok(!byPhaseBlock.includes('5min'), 'the per-plan duration must NOT appear in the By-Phase table block');
+
+    // (b) A dedicated `| Plan | Duration | Tasks | Files |` table now exists,
+    // containing the new row.
+    const metricsIdx = updated.indexOf('| Plan | Duration | Tasks | Files |');
+    assert.ok(metricsIdx !== -1, 'a Per-Plan Metrics table must now exist');
+    assert.ok(updated.includes('| Phase 1 P1 | 5min | 3 tasks | 4 files |'), 'the new metric row must be present in the Per-Plan Metrics table');
+
+    // (c) exactly ONE "## Performance Metrics" heading.
+    const headingMatches = updated.match(/^## Performance Metrics\s*$/gim) || [];
+    assert.strictEqual(headingMatches.length, 1, `exactly ONE "## Performance Metrics" heading expected, got ${headingMatches.length}:\n${updated}`);
+
+    // (d) Recent Trend block + footer preserved.
+    assert.ok(updated.includes('**Recent Trend:**'), 'Recent Trend block must be preserved');
+    assert.ok(updated.includes('*Updated after each plan completion*'), 'footer must be preserved');
   });
 
   test('replaces None yet placeholder with first metric', () => {
@@ -1774,6 +1914,45 @@ Progress: [..........] 0%
       'Last activity field must be preserved in Current Position');
     assert.ok(/^Progress:/m.test(posSection),
       'Progress field must be preserved in Current Position');
+  });
+
+  test('#2245 F2: begin-phase does not clobber an H3 subsection nested under Current Position', () => {
+    // A prior revision swapped `locateCurrentPosition` (stops at ANY heading
+    // level >= 2) for `collectSection` with its default `levelBounded: true`
+    // (stops only at H1/H2), so a `### Notes` subsection under
+    // `## Current Position` was folded into the section body and the
+    // field-write regexes (which use the `m` flag and match ANY line start)
+    // clobbered a same-named line inside that subsection.
+    const stateMd = `# Project State
+
+## Current Position
+
+Phase: 1 (Setup) — EXECUTING
+Status: Executing Phase 1
+
+### Notes
+
+Plan: DO-NOT-TOUCH
+
+## Next Steps
+
+Do the thing.
+`;
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateMd);
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '2', '--name', 'Foo', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes('Plan: DO-NOT-TOUCH'),
+      `the ### Notes subsection must not be rewritten by the Current Position field regexes:\n${content}`,
+    );
+    assert.ok(/^## Next Steps/m.test(content), 'the ## Next Steps section must remain untouched');
+    assert.ok(/^Phase:.*EXECUTING/m.test(content), 'Phase line in Current Position should still update');
   });
 
   test('advance-plan can update Status after begin-phase', () => {
@@ -9456,13 +9635,20 @@ const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { deriveProgressFromRoadmap } = require('../gsd-core/bin/lib/phase-lifecycle.cjs');
 
 // ─── Scenario A: deriveProgressFromRoadmap unit test ────────────────────────
+//
+// ADR-2143 (epic #2143) migrated deriveProgressFromRoadmap from position-based
+// regexes to the markdown-table schema registry (TABLE_SCHEMAS.RoadmapProgress),
+// which resolves the Progress table by exact column-name match. These fixtures'
+// second column is renamed "Plans" -> "Plans Complete" to match the canonical
+// header (gsd-core/templates/roadmap.md) the schema now requires; the assertions
+// (999.x exclusion, Complete-row counting) are unchanged.
 
 describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
   test('3 real phases + 1 999.x backlog row → total_phases: 3, not 4', () => {
     const roadmap = [
       '## Milestone v1.0: Test',
       '',
-      '| Phase | Plans | Status | Completed |',
+      '| Phase | Plans Complete | Status | Completed |',
       '| --- | --- | --- | --- |',
       '| 1. Alpha | 2/2 | Complete | ✅ |',
       '| 2. Beta | 1/2 | In Progress | |',
@@ -9487,7 +9673,7 @@ describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
     const roadmap = [
       '## Milestone v1.0: Test',
       '',
-      '| Phase | Plans | Status | Completed |',
+      '| Phase | Plans Complete | Status | Completed |',
       '| --- | --- | --- | --- |',
       '| 1. Alpha | 1/1 | Complete | ✅ |',
       '| 2. Beta | 1/1 | Complete | ✅ |',
@@ -9511,7 +9697,7 @@ describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
     const roadmap = [
       '## Milestone v1.0: Test',
       '',
-      '| Phase | Plans | Status | Completed |',
+      '| Phase | Plans Complete | Status | Completed |',
       '| --- | --- | --- | --- |',
       '| 999.1 Future A | 0/0 | Backlog | |',
       '| 999.2 Future B | 0/0 | Backlog | |',
@@ -9522,6 +9708,198 @@ describe('bug #1445 — deriveProgressFromRoadmap excludes 999.x rows', () => {
       result.totalPhases,
       null,
       `total_phases must be null when the only rows are 999.x backlog. Got ${result.totalPhases}`,
+    );
+  });
+});
+
+// ─── #2137: header-driven parse handles the milestone-grouped (5-col) table ──
+//
+// Regression for #2137: deriveProgressFromRoadmap read the `## Progress` table
+// with two 4-column-only regexes. Every project past its v1.0 milestone uses the
+// 5-column milestone-grouped shape the same template ships, so the reader (which
+// only understood 4 columns) returned { null, null, null } while the writer
+// (cmdPhaseComplete, with its explicit `cells.length === 5` branch) happily wrote
+// it — and phase.complete then silently skipped the STATE progress update. The
+// fix reads columns by NAME, so both shapes parse identically. These tests would
+// fail against the pre-fix 4-column regexes (which returned all-null for 5-col).
+
+describe('#2137 regression: deriveProgressFromRoadmap parses the milestone-grouped 5-column table', () => {
+  test("the template's own 5-column milestone-grouped Progress block parses non-null", () => {
+    // Byte-identical to gsd-core/templates/roadmap.md's "Milestone-Grouped
+    // Roadmap" Progress block — the exact shape that silently returned all-null.
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '|-------|-----------|----------------|--------|-----------|',
+      '| 1. Foundation | v1.0 | 3/3 | Complete | YYYY-MM-DD |',
+      '| 2. Features | v1.0 | 2/2 | Complete | YYYY-MM-DD |',
+      '| 5. Security | v1.1 | 0/2 | Not started | - |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.totalPhases, 3, `totalPhases must be 3 (5-col table must parse). Got ${result.totalPhases}`);
+    assert.equal(result.completedPhases, 2, `completedPhases must be 2 (Status is column 4 in the 5-col shape). Got ${result.completedPhases}`);
+    assert.equal(result.totalPlans, 7, `totalPlans must be 3+2+2=7 (Plans is column 3 in the 5-col shape). Got ${result.totalPlans}`);
+  });
+
+  test('the 4-column greenfield and 5-column milestone-grouped shapes derive the same progress', () => {
+    // The reader must agree with the writer on both shapes the template ships.
+    const fiveCol = [
+      '## Progress',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Foundation | v1.0 | 3/3 | Complete | 2026-01-01 |',
+      '| 2. Features | v1.0 | 2/2 | Complete | 2026-01-02 |',
+    ].join('\n');
+    const fourCol = [
+      '## Progress',
+      '| Phase | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 1. Foundation | 3/3 | Complete | 2026-01-01 |',
+      '| 2. Features | 2/2 | Complete | 2026-01-02 |',
+    ].join('\n');
+
+    assert.deepEqual(
+      deriveProgressFromRoadmap(fiveCol),
+      deriveProgressFromRoadmap(fourCol),
+      'the milestone-grouped and greenfield shapes must derive identical progress',
+    );
+    assert.deepEqual(deriveProgressFromRoadmap(fiveCol), {
+      completedPhases: 2,
+      totalPhases: 2,
+      totalPlans: 5,
+    });
+  });
+
+  test('999.x backlog rows stay excluded in the 5-column shape', () => {
+    const roadmap = [
+      '## Progress',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Alpha | v1.0 | 2/2 | Complete | 2026-01-01 |',
+      '| 2. Beta | v1.0 | 1/1 | Complete | 2026-01-02 |',
+      '| 999.1 Future | v2.0 | 0/0 | Backlog | - |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.totalPhases, 2, `999.1 backlog row must be excluded in the 5-col shape too. Got ${result.totalPhases}`);
+    assert.equal(result.completedPhases, 2, `completedPhases must be 2. Got ${result.completedPhases}`);
+  });
+
+  test('binds to the ## Progress table, not an earlier Phase/Status/Completed-shaped table', () => {
+    // A decoy table under a different heading shares the Phase/Status/Completed
+    // header shape. The reader must scope to ## Progress (mirroring the writer's
+    // #2012 scoping) rather than binding to the first matching table it sees.
+    const roadmap = [
+      '## Retrospective',
+      '',
+      '| Phase | Owner | Status | Completed |',
+      '| --- | --- | --- | --- |',
+      '| 1. Old | jo | Complete | 2025-01-01 |',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Foundation | v1.0 | 3/3 | Complete | 2026-01-01 |',
+      '| 2. Features | v1.0 | 2/2 | Complete | 2026-01-02 |',
+      '| 3. Security | v1.1 | 0/2 | Not started | - |',
+      '',
+      '## Next',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.totalPhases, 3, `must count the 3 rows of the ## Progress table, not the 1-row decoy. Got ${result.totalPhases}`);
+    assert.equal(result.completedPhases, 2, `must count Complete rows in ## Progress (2), not the decoy's 1. Got ${result.completedPhases}`);
+    assert.equal(result.totalPlans, 7, `must sum the ## Progress plans (3+2+2=7). Got ${result.totalPlans}`);
+  });
+
+  test('an h3 ### Progress decoy does not hijack the h2 ## Progress scope', () => {
+    // Heading detection must be line-anchored to h2: "### Progress".indexOf("## Progress")
+    // is 1, so a substring scan would start the slice inside the h3 subheading and
+    // miss the real table below.
+    const roadmap = [
+      '### Progress notes',
+      '',
+      'Some prose about progress, no table here.',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Foundation | v1.0 | 3/3 | Complete | 2026-01-01 |',
+      '| 2. Features | v1.0 | 2/2 | Complete | 2026-01-02 |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.equal(result.totalPhases, 2, `h2 ## Progress table must be found past the h3 decoy. Got ${result.totalPhases}`);
+    assert.equal(result.completedPhases, 2, `completedPhases must be 2. Got ${result.completedPhases}`);
+  });
+
+  // ── Boundary conditions (#2137 review) ──────────────────────────────────────
+  // The header-driven walk terminates at the first non-`|` line and skips the
+  // separator row, so these edges must not throw and must honour the "0 → null"
+  // contract that lets the consumer leave the existing STATE value untouched.
+
+  test('header + separator only (0 data rows) derives all-null', () => {
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.deepEqual(
+      result,
+      { completedPhases: null, totalPhases: null, totalPlans: null },
+      `an empty table must report all-null (0 counts → null), got ${JSON.stringify(result)}`,
+    );
+  });
+
+  test('exactly one data row derives that single row', () => {
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Foundation | v1.0 | 4/4 | Complete | 2026-01-01 |',
+    ].join('\n');
+
+    const result = deriveProgressFromRoadmap(roadmap);
+    assert.deepEqual(
+      result,
+      { completedPhases: 1, totalPhases: 1, totalPlans: 4 },
+      `a single Complete row must derive {1,1,4}, got ${JSON.stringify(result)}`,
+    );
+  });
+
+  test('ragged rows (more/fewer cells than the header) are handled without throwing', () => {
+    // (#2242 review Fix 5 / ADR-2143 §3): deriveProgressFromRoadmap now resolves
+    // the Progress table via the markdown-table seam's parseMarkdownTable, which
+    // is fail-loud on ragged data rows by design — "ragged rows are errors, not
+    // silent" (src/markdown-table.cts) — rather than the pre-ADR-2143 reader's
+    // graceful cell-count degradation this test used to assert. A ragged row
+    // anywhere in the table now makes the WHOLE table unparseable, so the reader
+    // falls through to its existing (null) values instead of throwing.
+    const roadmap = [
+      '## Progress',
+      '',
+      '| Phase | Milestone | Plans Complete | Status | Completed |',
+      '| --- | --- | --- | --- | --- |',
+      '| 1. Alpha | v1.0 | 2/2 | Complete | 2026-01-01 | stray-extra-column |', // 6 cells (extra)
+      '| 2. Beta | v1.0 |', // 2 cells (short: Plans/Status/Completed absent)
+    ].join('\n');
+
+    let result;
+    assert.doesNotThrow(() => {
+      result = deriveProgressFromRoadmap(roadmap);
+    }, 'ragged rows must not throw');
+    assert.deepEqual(
+      result,
+      { completedPhases: null, totalPhases: null, totalPlans: null },
+      `a ragged-row table must fail loud to all-null (no throw), got ${JSON.stringify(result)}`,
     );
   });
 });

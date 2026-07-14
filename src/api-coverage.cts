@@ -47,7 +47,7 @@
  *     exit 0 = integration detected, 1 = none, 2 = startup error
  */
 
-import { stripFencedCode } from './markdown-sectionizer.cjs';
+import { stripFencedCode, extractFencedBlock } from './markdown-sectionizer.cjs';
 
 // ─── Integration-signal vocabulary ────────────────────────────────────────────
 
@@ -311,13 +311,12 @@ export function parseCoverageMatrix(text: unknown): CoverageParseResult {
 
   // (1) fenced ```coverage JSON block takes precedence if present.
   // Case-insensitive info string (```coverage and ```Coverage are both legal CommonMark).
-  // allow-adhoc-markdown: extracting a NAMED ```coverage fence (extraction of one tagged block), not stripping all fences — stripFencedCode/extractTaggedBlocks do not cover named-fence extraction.
-  const fenceMatch = src.match(/```coverage\s*\n([\s\S]*?)\n```/i);
-  if (fenceMatch && fenceMatch[1]) {
+  const fenceBody = extractFencedBlock(src, 'coverage');
+  if (fenceBody) {
     out.format = 'json';
     let parsed: unknown;
     try {
-      parsed = JSON.parse(fenceMatch[1]);
+      parsed = JSON.parse(fenceBody);
     } catch {
       out.errors.push('fenced ```coverage block is not valid JSON');
       return out;

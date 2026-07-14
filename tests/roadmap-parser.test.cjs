@@ -32,6 +32,7 @@ const {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
   getMilestonePhaseFilter,
+  withPhaseSection,
 } = roadmapParser;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -732,6 +733,157 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
   });
 });
 
+// ─── withPhaseSection (ADR-2143 §4 — bounded mutation) ────────────────────────
+
+describe('roadmap-parser: withPhaseSection', () => {
+  test('mutating phase k leaves phase j (j≠k) byte-identical', () => {
+    const content = [
+      '# Roadmap',
+      '',
+      '### Phase 1: Foundation',
+      '**Goal:** Setup',
+      '**Plans:** 1 plans',
+      '',
+      '### Phase 2: API',
+      '**Goal:** Build API',
+      '**Plans:** 1 plans',
+      '',
+      '### Phase 3: Polish',
+      '**Goal:** Harden',
+      '**Plans:** 1 plans',
+      '',
+    ].join('\n');
+
+    const result = withPhaseSection(content, '2', (body) =>
+      body.replace(/(\*\*Plans:\*\*\s*)[^\n]+/i, '$11/1 plans complete'),
+    );
+
+    assert.ok(
+      result.includes('### Phase 2: API\n**Goal:** Build API\n**Plans:** 1/1 plans complete'),
+      'phase 2 (the target) is updated',
+    );
+    assert.ok(
+      result.includes('### Phase 1: Foundation\n**Goal:** Setup\n**Plans:** 1 plans'),
+      'phase 1 (j≠k) is byte-identical',
+    );
+    assert.ok(
+      result.includes('### Phase 3: Polish\n**Goal:** Harden\n**Plans:** 1 plans'),
+      'phase 3 (j≠k) is byte-identical',
+    );
+  });
+
+  test('a greedy edit callback cannot escape phase N\'s own section', () => {
+    const content = [
+      '### Phase 1: Alpha',
+      'alpha body',
+      '### Phase 2: Beta',
+      'beta body',
+      '### Phase 3: Gamma',
+      'gamma body',
+    ].join('\n') + '\n';
+
+    const result = withPhaseSection(content, '2', (body) => body.replace(/[\s\S]*/, 'REPLACED'));
+    assert.ok(result.includes('### Phase 1: Alpha\nalpha body'), 'Phase 1 untouched by a greedy regex targeting Phase 2');
+    assert.ok(result.includes('### Phase 3: Gamma\ngamma body'), 'Phase 3 untouched by a greedy regex targeting Phase 2');
+    assert.ok(result.includes('### Phase 2: Beta\nREPLACED'), 'Phase 2 was the intended target');
+  });
+
+  test('no matching phase heading -> content unchanged (bounded no-op)', () => {
+    const content = '### Phase 1: Foundation\n**Plans:** 1 plans\n';
+    const result = withPhaseSection(content, '99', (body) => body + ' MUTATED');
+    assert.equal(result, content, 'no Phase 99 heading -> unchanged');
+  });
+
+  test('resolves the phase heading via the #2121 phase-id source (zero-padding tolerant)', () => {
+    const content = [
+      '### Phase 02: Padded',
+      '**Plans:** 1 plans',
+      '### Phase 3: Next',
+      '**Plans:** 1 plans',
+    ].join('\n') + '\n';
+
+    // Query with the un-padded form ("2") — must still resolve "Phase 02".
+    const result = withPhaseSection(content, '2', (body) => body.replace('1 plans', '1/1 plans complete'));
+    assert.ok(result.includes('### Phase 02: Padded\n**Plans:** 1/1 plans complete'), 'un-padded query resolves padded heading');
+    assert.ok(result.includes('### Phase 3: Next\n**Plans:** 1 plans'), 'Phase 3 untouched');
+  });
+
+  test('a query for phase "1" does not prefix-match a decimal sub-phase heading "Phase 1.1"', () => {
+    // Sub-phase appears BEFORE the parent phase in the document, so a bare
+    // `\b`-terminated regex (which would match "1" as a prefix of "1.1")
+    // could resolve the wrong (first-encountered) section.
+    const content = [
+      '### Phase 1.1: Sub',
+      'sub body',
+      '### Phase 1: Base',
+      'base body',
+    ].join('\n') + '\n';
+
+    const result = withPhaseSection(content, '1', (body) => body + ' EDITED');
+    assert.ok(result.includes('### Phase 1.1: Sub\nsub body\n'), 'Phase 1.1 body is byte-identical (untouched)');
+    assert.ok(!result.includes('sub body EDITED'), 'the edit did not land in Phase 1.1');
+    assert.ok(result.includes('### Phase 1: Base\nbase body EDITED'), "Phase 1's own body received the edit");
+
+    const subResult = withPhaseSection(content, '1.1', (body) => body + ' EDITED');
+    assert.ok(subResult.includes('### Phase 1.1: Sub\nsub body EDITED'), "Phase 1.1's own body received the edit");
+    assert.ok(subResult.includes('### Phase 1: Base\nbase body\n'), 'Phase 1 body is byte-identical (untouched)');
+  });
+
+  test('Blocker 1 regression: a query for phase "1" is not hijacked by a sibling phase whose TITLE mentions "Phase 1"', () => {
+    // Phase 3's own title mentions "Phase 1" ("Migrate off Phase 1 pipeline")
+    // and appears BEFORE the real Phase 1 heading in document order. Under the
+    // OLD unanchored regex (`(?:^|\s)Phase\s+1(?=[\s:(]|$)`), that substring
+    // inside Phase 3's heading text would match first — and because
+    // `collectSection` picks the FIRST matching heading, `withPhaseSection`
+    // would edit Phase 3's section instead of Phase 1's.
+    const content = [
+      '### Phase 3: Migrate off Phase 1 pipeline',
+      '**Plans:** 1 plans',
+      '### Phase 1: Foundation',
+      '**Plans:** 1 plans',
+    ].join('\n') + '\n';
+
+    const result = withPhaseSection(content, '1', (body) =>
+      body.replace(/(\*\*Plans:\*\*\s*)[^\n]+/, '$1DONE'),
+    );
+
+    assert.ok(
+      result.includes('### Phase 1: Foundation\n**Plans:** DONE'),
+      "Phase 1's own Plans line is edited",
+    );
+    assert.ok(
+      result.includes('### Phase 3: Migrate off Phase 1 pipeline\n**Plans:** 1 plans'),
+      'Phase 3 (title mentions "Phase 1") is byte-identical — not hijacked',
+    );
+  });
+
+  test('Blocker 2 regression: a following DEEPER heading is not folded into phase 1\'s section body', () => {
+    // Phase 1 is `###` (level 3); the very next heading, `#### Phase 2: API`
+    // (level 4), is DEEPER than Phase 1. Under the default `levelBounded: true`
+    // stop rule, a deeper heading does not terminate the section (it only stops
+    // at a heading whose level <= the target's own level), so Phase 2's whole
+    // section — including its `**Plans:**` line — would be folded into Phase
+    // 1's body and reachable by `edit`.
+    const content = [
+      '### Phase 1: Foundation',
+      '#### Phase 2: API',
+      '**Plans:** 1 plans',
+      '### Phase 3: Polish',
+      '**Plans:** 1 plans',
+    ].join('\n') + '\n';
+
+    const phase2Snippet = '#### Phase 2: API\n**Plans:** 1 plans';
+    assert.ok(content.includes(phase2Snippet), 'sanity: fixture contains the expected Phase 2 snippet');
+
+    const result = withPhaseSection(content, '1', (body) => `${body}[EDITED]`);
+
+    assert.ok(
+      result.includes(phase2Snippet),
+      "Phase 2's heading + Plans line stay contiguous and byte-identical — Phase 1's edit did not reach into it",
+    );
+    assert.ok(!result.includes('1 plans[EDITED]'), "the edit did not land inside Phase 2's Plans line");
+  });
+});
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-2554-decimal-phase-filter.test.cjs — consolidation epic #1969 (B3 #1972)

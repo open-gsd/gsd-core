@@ -18,6 +18,9 @@ const { output, error } = io;
 import markdownSectionizer = require('./markdown-sectionizer.cjs');
 const { collectSection, tokenizeHeadings } = markdownSectionizer;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import markdownTable = require('./markdown-table.cjs');
+const { splitTableRow } = markdownTable;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParser = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter } = roadmapParser;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -377,24 +380,67 @@ function parseVerificationItems(content: string, status: string): UatItem[] {
       { levelBounded: true },
     );
     if (hvSection) {
+      // #2245 review Fix 3: reverted to the pre-Phase-4 (HEAD 2cbf18642)
+      // implementation. The live Human Verification section is NOT a strict
+      // GFM table — the planner/verifier templates mix table rows, numbered
+      // items, and bullet items in the same section (and a `### N.` heading
+      // format is common too), so a table-XOR-list read (parse a table, and
+      // if it parses, suppress numbered/bullet items entirely) silently
+      // dropped items on any mixed or malformed section: a malformed
+      // `| N | … |` table with no valid header/delimiter yielded ZERO items
+      // instead of reading the rows positionally. This per-line scan reads
+      // table rows AND numbered items AND bullet items as a UNION (whichever
+      // pattern a given line matches), exactly like OLD, and reads
+      // `| N | desc |` rows even without a valid table header/delimiter.
+      //
+      // #2245 audit: the table-row branch's CELL SPLIT is name/position-
+      // addressed via `splitTableRow` (escape-aware, canonical) instead of a
+      // hand-rolled pipe regex — candidacy itself is decided WITHOUT a table
+      // regex (a leading `|` plus a purely-numeric first cell), so this no
+      // longer needs an allow-adhoc-markdown suppression at all.
       const lines = hvSection.body.split('\n');
       for (const line of lines) {
-        // Match table rows: | N | description | ... |
-        const tableMatch = line.match(/\|\s*(\d+)\s*\|\s*([^|]+)/);
+        const trimmedLine = line.trim();
+        // Match table rows: | N | description | ... — candidacy requires a
+        // leading pipe and a purely-numeric first cell (mirrors what the old
+        // regex effectively required: a "|digit|" cell immediately followed
+        // by more content), with at least 2 physical cells so a bare "| N |"
+        // with nothing after it is NOT treated as a row.
+        //
+        // #2245 review Fix 9: this is NOT the same as OLD for a row whose
+        // ONLY content past the digit cell is trailing whitespace (e.g.
+        // "| N | ", no second delimiting `|`). OLD's `([^|]+)` regex ran
+        // against the RAW (untrimmed) line and its `\s*` would backtrack to
+        // let `[^|]+` swallow that trailing whitespace, so OLD matched and
+        // pushed an item with an EMPTY (`.trim()`-collapsed) name. Here,
+        // `trimmedLine = line.trim()` strips that trailing whitespace BEFORE
+        // `splitTableRow` ever sees it, collapsing the line to a single cell
+        // (`candidateCells.length === 1`), which fails the `>= 2` check —
+        // the item is silently dropped instead. A real, acceptable behaviour
+        // change (an empty-named UAT item is not useful either way), but the
+        // two implementations are NOT equivalent on this input.
+        let tableCells: string[] | null = null;
+        if (trimmedLine.startsWith('|')) {
+          const candidateCells = splitTableRow(trimmedLine);
+          if (candidateCells.length >= 2 && /^\d+$/.test(candidateCells[0])) {
+            tableCells = candidateCells;
+          }
+        }
         // Match bullet items: - description
         const bulletMatch = line.match(/^[-*]\s+(.+)/);
         // Match numbered items: 1. description
         const numberedMatch = line.match(/^(\d+)\.\s+(.+)/);
 
-        if (tableMatch) {
+        if (tableCells) {
           // Skip rows that already have a passing result (PASS, pass, resolved, etc.)
-          const rowRemainder = line.slice(tableMatch.index! + tableMatch[0].length);
-          const cellValues = rowRemainder.split('|').map(c => c.trim());
-          const hasPassResult = cellValues.some(c => /^pass$/i.test(c) || /^resolved$/i.test(c));
+          // — checked over every cell AFTER the description column, mirroring
+          // OLD's rowRemainder scan (which only ever saw cells past the
+          // description, the description itself having already been consumed).
+          const hasPassResult = tableCells.slice(2).some(c => /^pass$/i.test(c) || /^resolved$/i.test(c));
           if (hasPassResult) continue;
           items.push({
-            test: parseInt(tableMatch[1], 10),
-            name: tableMatch[2].trim(),
+            test: parseInt(tableCells[0], 10),
+            name: tableCells[1] ?? '',
             result: 'human_needed',
             category: 'human_uat',
           });

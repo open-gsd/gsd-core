@@ -9,6 +9,18 @@ Plans execute autonomously. Checkpoints formalize interaction points where human
 3. **User only does what requires human judgment** - Visual checks, UX evaluation, "does this feel right?"
 4. **Secrets come from user, automation comes from Claude** - Ask for API keys, then Claude uses them via CLI
 5. **Auto-mode bypasses verification/decision checkpoints** — When `workflow._auto_chain_active` or `workflow.auto_advance` is true in config: human-verify auto-approves, decision auto-selects first option, human-action still stops (auth gates cannot be automated)
+6. **`gate="blocking-human"` is never auto-approved** — a checkpoint carrying this gate stops for a human in *every* mode, including auto-mode, regardless of its type. Rule 5 does not apply to it.
+
+**The `gate` attribute:**
+
+| Value | Auto-mode behavior | Use for |
+|-------|--------------------|---------|
+| `gate="blocking"` | Bypassed per rule 5 (human-verify auto-approves, decision auto-selects) | The default. Post-hoc verification and implementation choices that are safe to take the recommended path on when unattended. |
+| `gate="blocking-human"` | **Never bypassed.** Stops for a human in auto-mode too. | Irreversible or trust-establishing steps a human must actually see: package-legitimacy verification before install, and any decision whose default answer would be wrong to assume. |
+
+Reach for `gate="blocking-human"` whenever auto-approving the checkpoint would defeat its purpose. If the checkpoint exists because a human must *decide* something, `blocking` is the wrong gate — auto-mode will decide it for them.
+
+The gate spans two layers, and both must honor it. `gsd-executor` refuses to auto-approve a `gate="blocking-human"` checkpoint and escalates it via `checkpoint_return_format` precisely so a human sees it; `execute-phase`'s `checkpoint_handling` step then decides what the user is actually shown. An orchestrator that dispatches on checkpoint *type* alone would auto-approve the very checkpoint the executor just refused to auto-approve, nullifying that refusal one layer up and letting an unattended `--auto` / `--chain` run install a package no human ever vetted.
 </overview>
 
 <checkpoint_types>

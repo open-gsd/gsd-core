@@ -32,6 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { collectSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output } = ioMod;
@@ -329,9 +330,9 @@ export function detectSignals(cwd: string, now: () => number = Date.now): SmartE
 
   // Blockers list: `- <text>` items under a `## Blockers` heading.
   const blockers: string[] = [];
-  const blockersMatch = body.match(/##\s*Blockers\s*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only blockers section-collect in smart-entry.cts; mirrors state.cts (#1372), pending collectSection migration
-  if (blockersMatch) {
-    const items = blockersMatch[1].match(/^-\s+(.+)$/gm) || [];
+  const blockersSection = collectSection(body, (h) => h.level === 2 && h.text.trim().toLowerCase() === 'blockers', { levelBounded: true });
+  if (blockersSection) {
+    const items = blockersSection.body.match(/^-\s+(.+)$/gm) || [];
     for (const item of items) blockers.push(item.replace(/^-\s+/, '').trim());
   }
 

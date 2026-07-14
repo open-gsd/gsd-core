@@ -35,7 +35,7 @@
 'use strict';
 
 import fs from 'node:fs';
-import { platformWriteSync } from './shell-command-projection.cjs';
+import { platformWriteSync, posixNormalize } from './shell-command-projection.cjs';
 import { formatGsdSlash } from './runtime-slash.cjs';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ type DriftCategory = 'barrel' | 'migration' | 'route' | 'new_dir';
  */
 function classifyFile(file: unknown): DriftCategory | null {
   if (typeof file !== 'string' || !file) return null;
-  const norm = file.replace(/\\/g, '/');
+  const norm = posixNormalize(file);
   if (MIGRATION_RES.some((r) => r.test(norm))) return 'migration';
   if (ROUTE_RES.some((r) => r.test(norm))) return 'route';
   if (BARREL_RE.test(norm)) return 'barrel';
@@ -95,7 +95,7 @@ function classifyFile(file: unknown): DriftCategory | null {
  * check `structureMd.includes('src/lib')` holds.
  */
 function isPathMapped(file: string, structureMd: string): boolean {
-  const norm = file.replace(/\\/g, '/');
+  const norm = posixNormalize(file);
   const parts = norm.split('/');
   // Check prefixes from longest to shortest; any hit means "mapped".
   for (let i = parts.length - 1; i >= 1; i--) {
@@ -191,7 +191,7 @@ function detectDrift(input: unknown): DetectDriftResult | SkippedResult {
     const seen = new Map<string, string>();
 
     for (const rawFile of added) {
-      const file = rawFile.replace(/\\/g, '/');
+      const file = posixNormalize(rawFile);
       const specific = classifyFile(file);
       let category: string | null = specific;
       if (!category) {
@@ -318,7 +318,7 @@ function chooseAffectedPaths(paths: string[]): string[] {
   const out = new Set<string>();
   for (const raw of paths || []) {
     if (typeof raw !== 'string' || !raw) continue;
-    const file = raw.replace(/\\/g, '/');
+    const file = posixNormalize(raw);
     const parts = file.split('/');
     if (parts.length === 0) continue;
     const top = parts[0];
