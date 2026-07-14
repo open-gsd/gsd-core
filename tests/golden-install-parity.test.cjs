@@ -90,7 +90,7 @@ for (const runtime of runtimes) {
     if (!fs.existsSync(fixturePath)) {
       assert.fail(
         `Golden fixture missing for runtime '${runtime}': ${fixturePath}\n` +
-        'Run UPDATE_GOLDEN=1 node --test tests/golden-install-parity.test.cjs to capture.'
+        'Run "npm run gen:golden" to generate the fixtures (or, for humans, UPDATE_GOLDEN=1 node --test tests/golden-install-parity.test.cjs).'
       );
     }
 
@@ -108,7 +108,7 @@ for (const runtime of runtimes) {
       if (added.length)   lines.push(`  added   (${added.length}): ${added.join(', ')}`);
       if (removed.length) lines.push(`  removed (${removed.length}): ${removed.join(', ')}`);
       if (changed.length) lines.push(`  changed (${changed.length}): ${changed.join(', ')}`);
-      lines.push('Run UPDATE_GOLDEN=1 to recapture if the change is intentional.');
+      lines.push('If the change is intentional, run "npm run gen:golden" to regenerate the fixtures (works without node --test; humans may also use UPDATE_GOLDEN=1 node --test).');
       assert.deepEqual(actual, golden, lines.join('\n'));
     }
   });
@@ -146,7 +146,7 @@ test('golden parity — claude (local legacy layout)', async (t) => {
   if (!fs.existsSync(fixturePath)) {
     assert.fail(
       `Golden fixture missing for claude-local: ${fixturePath}\n` +
-      'Run UPDATE_GOLDEN=1 node --test tests/golden-install-parity.test.cjs to capture.',
+      'Run "npm run gen:golden" to generate the fixtures (or, for humans, UPDATE_GOLDEN=1 node --test tests/golden-install-parity.test.cjs).',
     );
   }
 
@@ -159,7 +159,7 @@ test('golden parity — claude (local legacy layout)', async (t) => {
     if (added.length)   lines.push(`  added   (${added.length}): ${added.join(', ')}`);
     if (removed.length) lines.push(`  removed (${removed.length}): ${removed.join(', ')}`);
     if (changed.length) lines.push(`  changed (${changed.length}): ${changed.join(', ')}`);
-    lines.push('Run UPDATE_GOLDEN=1 to recapture if the change is intentional.');
+    lines.push('If the change is intentional, run "npm run gen:golden" to regenerate the fixtures (works without node --test; humans may also use UPDATE_GOLDEN=1 node --test).');
     assert.deepEqual(actual, golden, lines.join('\n'));
   }
 });
