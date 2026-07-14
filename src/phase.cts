@@ -1270,11 +1270,83 @@ function updateRoadmapAfterPhaseRemoval(
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
-      content = content.replace(
-        /(\|\s*)(\d+)(\.\s)/g,
-        (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
-      );
+      // ORDINAL-RENUMBER — CELL EDIT (not row-deletion) — migrated onto
+      // updateTableCell (ADR-2143 §7, sibling of the deleteTableRow scoping
+      // directly above). The prior whole-document regex
+      // `/(\|\s*)(\d+)(\.\s)/g` rewrote ANY `| N. ` cell anywhere in the
+      // file — including a same-shaped cell in an UNRELATED, earlier table
+      // (e.g. a `| Phase | Requirements | Count |` table, or a decoy table,
+      // preceding `## Progress`; #2245-class scoping defect, same family as
+      // the row-delete fix above). Scoped here to the `## Progress` section
+      // only, mirroring that same section-slice-then-splice-back pattern.
+      //
+      // Loops because updateTableCell only rewrites the FIRST matching row
+      // per call. `processedOrdinalRows` tracks by row INDEX (stable across
+      // iterations — this only edits cell content, it never inserts/deletes
+      // rows) so an already-decremented row's new value — which may still
+      // numerically exceed `removedInt` — is never re-selected and
+      // decremented a second time (matching on the row's CURRENT value alone,
+      // without this guard, would keep re-firing on each pass).
+      //
+      // `phaseCellShapeRe` is the exact digit+dot-space shape the old regex
+      // required: a decimal sub-phase ordinal like `2.5` (no whitespace
+      // between the dot and the next character) never matches it, so it is
+      // left untouched — identical decimal-safety to the prior behaviour.
+      //
+      // updateTableCell hands the callback the TRIMMED cell value only, so
+      // the row's original leading/trailing alignment padding is recovered
+      // by a narrow, anchored lookup of the pre-edit section text (matching
+      // the row's exact current cell content between its flanking `|`s) —
+      // preserving every other byte of the row (ADR-2143 §7 byte-parity)
+      // while only the digits actually change.
+      const ordinalHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
+      if (ordinalHeadingMatch && ordinalHeadingMatch.index !== undefined) {
+        const ordinalHeadingOffset = ordinalHeadingMatch.index;
+        const ordinalBefore = content.slice(0, ordinalHeadingOffset);
+        const ordinalFromHeading = content.slice(ordinalHeadingOffset);
+        const ordinalNextHeadingOffset = ordinalFromHeading.search(/\n#{1,2}[ \t]/);
+        let ordinalSection =
+          ordinalNextHeadingOffset >= 0
+            ? ordinalFromHeading.slice(0, ordinalNextHeadingOffset)
+            : ordinalFromHeading;
+        const ordinalRest =
+          ordinalNextHeadingOffset >= 0 ? ordinalFromHeading.slice(ordinalNextHeadingOffset) : '';
+
+        const phaseCellShapeRe = /^(\d+)(\.\s)/;
+        const processedOrdinalRows = new Set<number>();
+
+        for (;;) {
+          const cellResult = updateTableCell(
+            ordinalSection,
+            (row, index) => {
+              if (processedOrdinalRows.has(index)) return false;
+              const m = phaseCellShapeRe.exec(row['Phase'] ?? '');
+              if (!m) return false;
+              const num = parseInt(m[1], 10);
+              if (!Number.isInteger(num) || num <= removedInt || num === 999) return false;
+              processedOrdinalRows.add(index);
+              return true;
+            },
+            'Phase',
+            (current) => {
+              const m = phaseCellShapeRe.exec(current);
+              if (!m) return current;
+              const decremented = decrementRoadmapPhaseNumber(m[1], removedInt);
+              const newContent = `${decremented}${m[2]}${current.slice(m[0].length)}`;
+              const padMatch = ordinalSection.match(
+                new RegExp(`^[ \\t]*\\|(\\s*)${escapeRegex(current)}(\\s*)\\|`, 'm'),
+              );
+              const leadPad = padMatch ? padMatch[1] : ' ';
+              const trailPad = padMatch ? padMatch[2] : ' ';
+              return `${leadPad}${newContent}${trailPad}`;
+            },
+          );
+          if (!cellResult.ok) break;
+          ordinalSection = cellResult.value;
+        }
+
+        content = ordinalBefore + ordinalSection + ordinalRest;
+      }
       content = content.replace(
         /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum: string, planNum: string) =>
