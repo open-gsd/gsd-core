@@ -402,6 +402,104 @@ export function updateTableCell(
   };
 }
 
+// ─── deleteTableRow (ADR-2143 §7 row-removal sibling of updateTableCell) ─────
+
+/**
+ * Surgically delete ONE whole table row while preserving every other byte of
+ * `tableText` (ADR-2143 §7, row-removal sibling of `updateTableCell`). Locates
+ * the first GFM table's header + delimiter row in `tableText` using the exact
+ * same self-contained, ragged-tolerant scan `updateTableCell` uses (own
+ * header/delimiter detection — does NOT gate on `parseMarkdownTable(tableText).ok`),
+ * finds the FIRST data row where `match(row, index)` is true, and splices out
+ * that row's entire LINE — including its trailing newline (`\r\n` or `\n`,
+ * whichever terminates it) — from `tableText`. Every other byte (header,
+ * delimiter, other rows, surrounding prose before/after the table, EOL style)
+ * is left BYTE-IDENTICAL.
+ *
+ * Ragged-tolerant by design, mirroring `updateTableCell` (#2245 review Fix 2):
+ * each data row's `{colName:cellText}` record is built ONLY from the columns
+ * physically present in THAT row — a sibling row whose cell count doesn't
+ * match the header must never abort the whole scan; `match` is simply called
+ * with whatever partial record a ragged row yields.
+ *
+ * Returns `{ok:false, reason}` for a genuinely absent/malformed table (no
+ * header line, or no valid delimiter row immediately below it) or zero rows
+ * satisfying `match` — never for a ragged sibling row.
+ */
+export function deleteTableRow(
+  tableText: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+): Result<string> {
+  const lines = splitLinesWithOffsets(tableText);
+
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return { ok: false, reason: 'no table found' };
+  }
+
+  const delimiterLine = lines[headerIdx + 1]?.line;
+  if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+
+  const headerRanges = splitTableRowRanges(lines[headerIdx].line, lines[headerIdx].start);
+  const columns = headerRanges.map((r) => unescapeCellText(tableText.slice(r.start, r.end)));
+
+  const delimiterCells = splitTableRow(delimiterLine);
+  if (!isDelimiterRow(delimiterCells)) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+  if (delimiterCells.length !== columns.length) {
+    return { ok: false, reason: 'delimiter/header column count mismatch' };
+  }
+
+  let selectedLineIdx = -1;
+  let dataRowIndex = 0;
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (!trimmed.startsWith('|')) break;
+
+    const cellRanges = splitTableRowRanges(lines[i].line, lines[i].start);
+    const record: Record<string, string> = {};
+    const presentCount = Math.min(cellRanges.length, columns.length);
+    for (let c = 0; c < presentCount; c++) {
+      record[columns[c]] = unescapeCellText(tableText.slice(cellRanges[c].start, cellRanges[c].end));
+    }
+
+    if (match(record, dataRowIndex)) {
+      selectedLineIdx = i;
+      break;
+    }
+    dataRowIndex += 1;
+  }
+
+  if (selectedLineIdx === -1) {
+    return { ok: false, reason: 'no matching row' };
+  }
+
+  // Splice out the whole LINE including its trailing EOL: the next line's
+  // recorded `start` offset is already positioned right after whatever EOL
+  // (`\r\n` or `\n`) terminated the selected line (see `splitLinesWithOffsets`
+  // above) — when the selected row is the LAST line in `tableText` (no
+  // trailing EOL to preserve), fall back to the end of the string.
+  const rowStart = lines[selectedLineIdx].start;
+  const rowEnd = selectedLineIdx + 1 < lines.length
+    ? lines[selectedLineIdx + 1].start
+    : tableText.length;
+
+  return {
+    ok: true,
+    value: tableText.slice(0, rowStart) + tableText.slice(rowEnd),
+  };
+}
+
 /**
  * Find the first table in `text` whose header matches `TABLE_SCHEMAS[schemaId]`,
  * scanning the WHOLE document (not just a named section). Returns `null` when

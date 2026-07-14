@@ -23,7 +23,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 
-const { parseMarkdownTable, matchTableSchema, TABLE_SCHEMAS, appendQuickTaskRow, findTableBySchema, findTableWithColumns, updateTableCell } = require('../gsd-core/bin/lib/markdown-table.cjs');
+const { parseMarkdownTable, matchTableSchema, TABLE_SCHEMAS, appendQuickTaskRow, findTableBySchema, findTableWithColumns, updateTableCell, deleteTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { buildHeader, normalize } = require('../scripts/lint-table-schema-drift.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -777,6 +777,140 @@ describe('updateTableCell', () => {
     const reparsed = parseMarkdownTable(result.value);
     assert.equal(reparsed.ok, true);
     assert.equal(reparsed.value.rows[1]['Status'], 'In Progress', 'the probed value round-trips to the same trimmed cell text');
+  });
+});
+
+// ─── deleteTableRow (ADR-2143 §7 row-removal sibling of updateTableCell) ────
+
+describe('deleteTableRow', () => {
+  const fourCol = [
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|-----------------|--------|-----------|',
+    '| 1. Alpha | 2/2 | Complete    | 2026-01-01 |',
+    '| 2. Beta  | 1/2 | In Progress |            |',
+    '| 3. Gamma | 0/2 | Planned     |            |',
+  ].join('\n');
+
+  test('deletes only the matched row; header/delimiter/other rows byte-preserved', () => {
+    const byPhase = (row) => row['Phase'].trim() === '2. Beta';
+    const result = deleteTableRow(fourCol, byPhase);
+    assert.equal(result.ok, true);
+
+    const beforeLines = fourCol.split('\n');
+    const afterLines = result.value.split('\n');
+    assert.equal(afterLines.length, beforeLines.length - 1, 'exactly one line removed');
+    assert.equal(afterLines[0], beforeLines[0], 'header must be untouched');
+    assert.equal(afterLines[1], beforeLines[1], 'delimiter row must be untouched');
+    assert.equal(afterLines[2], beforeLines[2], 'row 0 (Alpha) untouched');
+    assert.equal(afterLines[3], beforeLines[4], 'row 2 (Gamma) untouched, now shifted up');
+    assert.ok(!result.value.includes('2. Beta'), 'the matched row is gone');
+
+    const reparsed = parseMarkdownTable(result.value);
+    assert.equal(reparsed.ok, true);
+    assert.equal(reparsed.value.rows.length, 2);
+  });
+
+  test('surrounding prose (before header, after last row) is preserved byte-for-byte', () => {
+    const withProse = [
+      'Some intro prose.',
+      '',
+      fourCol,
+      '',
+      'Some trailing prose.',
+    ].join('\n');
+    const byPhase = (row) => row['Phase'].trim() === '1. Alpha';
+    const result = deleteTableRow(withProse, byPhase);
+    assert.equal(result.ok, true);
+    assert.ok(result.value.startsWith('Some intro prose.\n\n'), 'leading prose preserved');
+    assert.ok(result.value.endsWith('\nSome trailing prose.'), 'trailing prose preserved');
+    assert.ok(!result.value.includes('1. Alpha'), 'matched row gone');
+    assert.ok(result.value.includes('2. Beta'), 'sibling row preserved');
+    assert.ok(result.value.includes('3. Gamma'), 'sibling row preserved');
+  });
+
+  test('a ragged SIBLING row (extra cell) is tolerated and does not block deleting a well-formed row', () => {
+    const raggedSibling = [
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|-----------------|--------|-----------|',
+      '| 1. Alpha | 2/2 | Complete    | 2026-01-01 |',
+      '| 2. Beta  | 1/2 | In Progress |            | extra |',
+    ].join('\n');
+    const byPhase = (row) => row['Phase'].trim() === '1. Alpha';
+    const result = deleteTableRow(raggedSibling, byPhase);
+    assert.equal(result.ok, true, `expected the ragged sibling not to block the delete, got ${JSON.stringify(result)}`);
+    assert.ok(!result.value.includes('1. Alpha'));
+    assert.ok(result.value.includes('| 2. Beta  | 1/2 | In Progress |            | extra |'), 'ragged sibling untouched');
+  });
+
+  test('a ragged SIBLING row (missing cell) is tolerated and does not block deleting the target row', () => {
+    const raggedSibling = [
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|-----------------|--------|-----------|',
+      '| 2. Beta  | 1/2 | In Progress |',
+      '| 1. Alpha | 2/2 | Complete    | 2026-01-01 |',
+    ].join('\n');
+    const byPhase = (row) => row['Phase'].trim() === '1. Alpha';
+    const result = deleteTableRow(raggedSibling, byPhase);
+    assert.equal(result.ok, true, `expected the ragged sibling not to block the delete, got ${JSON.stringify(result)}`);
+    assert.ok(result.value.includes('| 2. Beta  | 1/2 | In Progress |'), 'ragged sibling preserved verbatim');
+    assert.ok(!result.value.includes('1. Alpha'));
+  });
+
+  test('no matching row returns {ok:false}', () => {
+    const result = deleteTableRow(fourCol, (row) => row['Phase'] === 'does not exist');
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /no matching row/);
+  });
+
+  test('no table found returns {ok:false}', () => {
+    const result = deleteTableRow('just some prose, no table here', () => true);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /no table found/);
+  });
+
+  test('match receives (row, index) — index is the 0-based DATA-row position', () => {
+    const seenIndices = [];
+    deleteTableRow(fourCol, (row, i) => { seenIndices.push(i); return i === 1; });
+    assert.deepEqual(seenIndices, [0, 1]);
+  });
+
+  test('CRLF line endings are preserved (no mixed EOL introduced), including the deleted row\'s own CRLF', () => {
+    const crlfTable = fourCol.replace(/\n/g, '\r\n');
+    const byPhase = (row) => row['Phase'].trim() === '2. Beta';
+    const result = deleteTableRow(crlfTable, byPhase);
+    assert.equal(result.ok, true);
+    assert.ok(!/(?<!\r)\n/.test(result.value), 'no bare \\n introduced');
+    assert.ok(result.value.includes('\r\n'));
+    const reparsed = parseMarkdownTable(result.value);
+    assert.equal(reparsed.ok, true);
+    assert.equal(reparsed.value.rows.length, 2);
+    assert.equal(reparsed.value.rows[0]['Phase'], '1. Alpha');
+    assert.equal(reparsed.value.rows[1]['Phase'], '3. Gamma');
+  });
+
+  test('deleting the LAST row (no trailing EOL after it) still works and leaves no dangling newline', () => {
+    const noTrailingEol = fourCol; // fourCol's last line has no trailing \n
+    const byPhase = (row) => row['Phase'].trim() === '3. Gamma';
+    const result = deleteTableRow(noTrailingEol, byPhase);
+    assert.equal(result.ok, true);
+    assert.ok(result.value.endsWith('In Progress |            |'), 'ends right after the new last row, no dangling newline');
+    assert.ok(!result.value.includes('3. Gamma'));
+  });
+
+  test('first-cell-value match works for a COMPACT unpadded row (no spaces around pipes)', () => {
+    const compact = [
+      '|Phase|Plans Complete|Status|Completed|',
+      '|---|---|---|---|',
+      '|1|Foo|0/2|Planned|',
+      '|3|Foo|0/2|Planned|',
+      '|4|Foo|0/2|Planned|',
+    ].join('\n');
+    const byFirstCell = (row) => (Object.values(row)[0] ?? '').trim() === '3';
+    const result = deleteTableRow(compact, byFirstCell);
+    assert.equal(result.ok, true, `expected the compact row to match, got ${JSON.stringify(result)}`);
+    assert.ok(!result.value.includes('|3|Foo|0/2|Planned|'), 'the compact matched row is gone');
+    assert.ok(result.value.includes('|1|Foo|0/2|Planned|'), 'sibling row 1 preserved');
+    assert.ok(result.value.includes('|4|Foo|0/2|Planned|'), 'sibling row 4 preserved');
   });
 });
 
