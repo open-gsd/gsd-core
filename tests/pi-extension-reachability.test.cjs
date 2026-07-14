@@ -73,6 +73,10 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-add-tests'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-validate-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-secure-phase'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-pause-work'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-workspace'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-ui-review'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-ui-review'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -287,6 +291,50 @@ test('native quality commands preserve their workflow contracts', async () => {
     assert.match(pi._recorded.messages.at(-1).message.content, /threats remain open/);
     await pi._recorded.commands['gsd-secure-phase'].handler('02 --auto', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-security-input-error');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native pause workspace and UI review commands preserve their workflow contracts', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-resilience-'));
+  try {
+    const phaseDir = path.join(cwd, '.planning', 'phases', '02-ui');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "02"\nstatus: complete\n---\n');
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '- [x] **Phase 2: UI**\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-pause-work'].handler('--report', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Pause Work');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-pause-work');
+    assert.match(pi._recorded.messages.at(-1).message.content, /session-report and pause-work/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /HANDOFF\.json/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Do not cancel external jobs/);
+    await pi._recorded.commands['gsd-pause-work'].handler('--unknown', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-pause-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-workspace'].handler('--remove demo', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Workspace');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-workspace');
+    assert.match(pi._recorded.messages.at(-1).message.content, /exact workspace name/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /dirty repositories/);
+    await pi._recorded.commands['gsd-workspace'].handler('--list extra', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-workspace-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-ui-review'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · UI Review');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-ui-review');
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-ui-auditor/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /six-pillar result/);
+    await pi._recorded.commands['gsd-ui-review'].handler('02 --auto', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ui-review-input-error');
   } finally {
     cleanup(cwd);
   }
