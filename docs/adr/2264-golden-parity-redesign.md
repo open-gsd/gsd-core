@@ -76,3 +76,18 @@ Only the **transformed** outputs (per-runtime projections from `runtime-artifact
 - ADR-1239 (Phase B safety net); issues #2086, #2095, #2100, #2117, #1691
 - Node.js test runner: `context.assert.snapshot` + `--test-update-snapshots`
 - Jest `--ci` snapshot posture (fail on new snapshot, deliberate `-u` regeneration)
+
+## Amendment (2026-07-14): Phase 2 redesign — the copy/transform split was unsound
+
+Implementing Phase 2 began with an empirical spike classifying every emitted install file. It **overturned the §2–§4 premise**:
+
+- **The copy/transform boundary is not clean.** Nearly every emitted file passes through a *deterministic* rewrite (path-prefix canonicalization, `{{GSD_VERSION}}` stamping, hyphen-normalization) — even for claude, the reference host. Only ~36% of claude's files are byte-identical to source; ~64% are "transformed." A "content-hash only the transformed ~5%" golden (§4) was the wrong model.
+- **The §3 from-source copy-parity property test is unsound.** Asserting `emitted == transform(source)` by calling the installer's own transform functions is largely tautological (it catches only non-determinism) — strictly *weaker* regression coverage than the current golden. Making it independent means reimplementing the transform in the test — the exact duplication this epic fights. It is also noisier than the golden it replaces: the harness's `configDir == $HOME` collapses path canonicalization differently than a real install, mis-classifying ~147 of claude's files as transforms.
+- **The real defect was stale fixtures, not platform divergence.** The Phase-1 red (`gsd-statusline.js` + 3 claude-local files) was *deterministic* (macOS hash == Linux-bench hash for every entry); the fixtures were simply stale because `golden-install-parity` was not selected by CI when the emitting source (a `hooks/` file) changed, so it merged undetected.
+
+**Revised Phase 2 (implemented in #2267):**
+
+1. **File-set snapshot** — `tests/golden-install-tree.test.cjs` + `tests/fixtures/install-tree/*.json`: a per-runtime sorted list of emitted paths (no hashes), reusing the single-source exclusions via `buildInstallTree` (= sorted keys of `buildParityManifest`). Cheap structural coverage; changes only when the file *set* changes, giving a clean reviewable diff instead of hash noise.
+2. **Anti-staleness CI selection** — `scripts/ci-test-scope.cjs` gains a rule selecting `golden-install-parity` + the file-set snapshot whenever an installed-source path changes: the four `gsd-core/` content subtrees (`workflows`, `templates`, `references`, `contexts`) + `gsd-core/bin/shared/*.json`, plus `hooks/**`, `commands/**`, `agents/**`, `skills/**`, and the shipped `scripts/*` files (`scripts/changeset/`, `scripts/lib/`, and three named generators) — not just `src/`/installer paths. `gsd-core/bin/**` (tsc-compiled) is deliberately excluded (already covered by the installer rule). This makes the #2266 silent-staleness class impossible: a source edit that changes emitted output re-verifies the fixtures at PR time.
+
+**Deferred as an optional future refinement:** the §3-style content-dedup of verbatim copies. The *safe* subset (structurally raw-copied non-`.md`/`.js` data files) is modest, and the broad form is unsound — a `.md` file that is byte-equal today transforms the moment a self-reference is added, producing false property-test failures. Since the anti-staleness rule already removes the root pain (silent stale merges) and the file-set snapshot adds structural coverage, the content-hash golden is retained as-is; churn on *transformed* output is legitimate (you should review transformed output when you change its source).
