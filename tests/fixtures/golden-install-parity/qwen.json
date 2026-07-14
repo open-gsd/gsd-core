@@ -328,7 +328,7 @@
   "hooks/gsd-read-guard.js": "2c8d417d12b51040",
   "hooks/gsd-read-injection-scanner.js": "396574bd25e99ff9",
   "hooks/gsd-session-state.sh": "e54379ba86bf1b6d",
-  "hooks/gsd-statusline.js": "739140996a3c0d49",
+  "hooks/gsd-statusline.js": "2541196849ec5ffc",
   "hooks/gsd-update-banner.js": "b457746cb76c1957",
   "hooks/gsd-validate-commit.sh": "bf5dd61d33cb3a38",
   "hooks/gsd-windsurf-pre-command.js": "948be1c6d14c79cd",

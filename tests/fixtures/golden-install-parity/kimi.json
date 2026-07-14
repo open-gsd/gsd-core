@@ -18,7 +18,7 @@
   ".kimi/hooks/gsd-read-guard.js": "9e423cd03e2d1b16",
   ".kimi/hooks/gsd-read-injection-scanner.js": "c519598b9257aafa",
   ".kimi/hooks/gsd-session-state.sh": "e54379ba86bf1b6d",
-  ".kimi/hooks/gsd-statusline.js": "2736b0885aa97bbf",
+  ".kimi/hooks/gsd-statusline.js": "be35341758d50fa5",
   ".kimi/hooks/gsd-update-banner.js": "55143a25f978f301",
   ".kimi/hooks/gsd-validate-commit.sh": "bf5dd61d33cb3a38",
   ".kimi/hooks/gsd-windsurf-pre-command.js": "948be1c6d14c79cd",
