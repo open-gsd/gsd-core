@@ -48,7 +48,7 @@ import {
 } from './state-document.cjs';
 import { tokenizeHeadings, collectSection, replaceSection } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
-import { parseMarkdownTable, updateTableCell, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
+import { parseMarkdownTable, updateTableCell, deleteTableRow, insertTableRow, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -276,8 +276,11 @@ function _stateLockBodyPid(lockPath: string): number | null {
 // Monotonic sequence for unique stale-steal rename targets (no crypto dependency).
 let _stateStealSeq = 0;
 
-// Hoisted to module scope — compiled once, not per call (#320). Stateless (/i, used with .match).
-const byPhaseTablePattern = /(\|\s*Phase\s*\|\s*Plans\s*\|\s*Total\s*\|\s*Avg\/Plan\s*\|[ \t]*\r?\n\|(?:[- :\t]+\|)+[ \t]*\r?\n)((?:[ \t]*\|[^\n]*\n)*)(?=\r?\n|$)/i;
+// The `byPhaseTablePattern` regex hoisted here for #320 (canonical-column-
+// ORDER-only By-Phase table match) is retired (#2245 audit): its last caller
+// — updatePerformanceMetricsSection's row-INSERT branch — now locates the
+// table via findTableStartOffset/insertTableRow, name-addressed and
+// header-order-agnostic like the update/sum halves of the same function.
 
 // ─── ADR-1372 T6: seam-based section splice helper ───────────────────────────
 
@@ -2323,7 +2326,6 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
     const canonCell = /^\d+$/.test(phaseNumStr) ? `0*${Number(phaseNumStr)}` : escapeRegex(phaseNumStr);
     const phaseCellRe = new RegExp(`^${canonCell}$`, 'i');
     const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
-    const newRow = `| ${phaseNum} | ${summaryCount} | - | - |`;
 
     const before = content.slice(0, tableStart);
     let tableText = content.slice(tableStart);
@@ -2353,18 +2355,38 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
 
       content = before + tableText;
     } else {
-      // Row doesn't exist — remove placeholder row and append new row. Row
-      // INSERTION (unlike a cell update) is outside updateTableCell's scope
-      // (ADR-2143 §7 Phase 4); handled directly via the section's raw table
-      // body text, same as before. byPhaseTablePattern is itself
-      // ragged-tolerant (a per-line regex with no cell-count validation).
-      const byPhaseMatch = content.match(byPhaseTablePattern);
-      if (byPhaseMatch) {
-        let tableBody = byPhaseMatch[2].trim();
-        tableBody = tableBody.replace(/^\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|$/m, '').trim();
-        tableBody = tableBody ? tableBody + '\n' + newRow : newRow;
-        content = content.replace(byPhaseTablePattern, (_match, tableHeader: string) => `${tableHeader}${tableBody}\n`);
-      }
+      // Row doesn't exist — INSERT a new row. Row insertion (unlike a cell
+      // update) is outside updateTableCell's scope (ADR-2143 §7 Phase 4);
+      // `insertTableRow` (markdown-table.cjs) is its name-addressed,
+      // header-order-agnostic sibling (#2245 audit: this used to locate the
+      // table via `byPhaseTablePattern`, a canonical-column-ORDER-only regex,
+      // and build the row as a hardcoded positional literal — so a reordered/
+      // superset By-Phase header, already tolerated above by
+      // findTableStartOffset and read by-NAME in the update/sum halves,
+      // silently inserted NOTHING).
+      //
+      // Drop a lone all-placeholder row first (e.g. the freshly-scaffolded
+      // "| - | - | - | - |" seed row) — same convention the prior
+      // canonical-order path used, generalized to any column order/count:
+      // a row whose every PRESENT cell is "-" is the placeholder.
+      const placeholderRow = (row: Record<string, string>): boolean =>
+        Object.values(row).every((cell) => cell.trim() === '-');
+      const withoutPlaceholder = deleteTableRow(tableText, placeholderRow);
+      if (withoutPlaceholder.ok) tableText = withoutPlaceholder.value;
+
+      // Map the By-Phase values onto the table's ACTUAL header columns by
+      // NAME — an unrecognized column (a superset header) falls back to "-",
+      // insertTableRow's default.
+      const valueFor = (col: string): string | undefined => {
+        if (col === 'Phase') return String(phaseNum);
+        if (col === 'Plans') return String(summaryCount);
+        if (col === 'Total' || col === 'Avg/Plan') return '-';
+        return undefined;
+      };
+      const insertResult = insertTableRow(tableText, valueFor);
+      if (insertResult.ok) tableText = insertResult.value;
+
+      content = before + tableText;
     }
   }
 

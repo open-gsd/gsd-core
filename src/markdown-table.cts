@@ -512,6 +512,101 @@ export function deleteTableRow(
   };
 }
 
+// ─── insertTableRow (ADR-2143 §7 row-insertion sibling of updateTableCell) ───
+
+/**
+ * Insert ONE new row into a GFM table while preserving every other byte of
+ * `tableText` (ADR-2143 §7, row-insertion sibling of `updateTableCell` /
+ * `deleteTableRow`). Locates the first table's header + delimiter row using
+ * the exact same self-contained, ragged-tolerant scan the other two use (own
+ * header/delimiter detection — does NOT gate on `parseMarkdownTable(tableText).ok`),
+ * builds the new row's cells in the table's ACTUAL header order — each column
+ * name is passed through `valueFor(column)`; a column for which `valueFor`
+ * returns `undefined` gets `fallback` (default `'-'`) — and splices it in
+ * immediately after the table's LAST existing data row (or immediately after
+ * the delimiter row when the table has zero data rows).
+ *
+ * Name-addressed and header-order-agnostic by construction: unlike a
+ * hardcoded positional literal (`| ${a} | ${b} | - | - |`), this never
+ * silently no-ops or mis-maps a value onto the wrong column when the header
+ * is reordered or a superset of the columns `valueFor` knows about (#2245
+ * audit sibling finding — the bug this helper replaces).
+ *
+ * EOL-preserving: the new row reuses whatever exact EOL bytes (`\r\n` or
+ * `\n`) already terminate the line it's inserted after, so a CRLF document
+ * stays CRLF and an LF document stays LF — never guessed or hardcoded. When
+ * the insertion point is at the very end of `tableText` with no following
+ * line (the table's last row has no trailing EOL of its own), the existing
+ * last row is terminated with the header/delimiter boundary's own EOL (so it
+ * gains a terminator, since it is no longer the last line) and the new row
+ * becomes the new EOL-less tail — mirroring `tableText`'s own convention of
+ * not forcing a trailing newline that wasn't already there.
+ *
+ * Returns `{ok:false, reason}` only for a genuinely absent/malformed table
+ * (no header line, or no valid delimiter row immediately below it) — never
+ * for a ragged data row (mirrors `updateTableCell`/`deleteTableRow`).
+ */
+export function insertTableRow(
+  tableText: string,
+  valueFor: (column: string) => string | undefined,
+  fallback = '-',
+): Result<string> {
+  const lines = splitLinesWithOffsets(tableText);
+
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return { ok: false, reason: 'no table found' };
+  }
+
+  const delimiterLine = lines[headerIdx + 1]?.line;
+  if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+  const delimiterCells = splitTableRow(delimiterLine);
+  if (!isDelimiterRow(delimiterCells)) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+
+  const headerRanges = splitTableRowRanges(lines[headerIdx].line, lines[headerIdx].start);
+  const columns = headerRanges.map((r) => unescapeCellText(tableText.slice(r.start, r.end)));
+
+  // Header -> delimiter EOL, reused as the fallback terminator for the "insert
+  // point is at the absolute end of tableText" edge case below.
+  const headerToDelimiterEol = tableText.slice(
+    lines[headerIdx].start + lines[headerIdx].line.length,
+    lines[headerIdx + 1].start,
+  ) || '\n';
+
+  let lastLineIdx = headerIdx + 1; // delimiter row, when the table has zero data rows
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    if (!lines[i].line.trim().startsWith('|')) break;
+    lastLineIdx = i;
+  }
+
+  const newRow = `| ${columns.map((col) => valueFor(col) ?? fallback).join(' | ')} |`;
+
+  if (lastLineIdx + 1 < lines.length) {
+    // A following line exists — insert the new row, reusing the EXACT EOL
+    // that already terminates the current last table line, so every other
+    // byte (including everything after the table) stays untouched.
+    const insertAt = lines[lastLineIdx + 1].start;
+    const eol = tableText.slice(lines[lastLineIdx].start + lines[lastLineIdx].line.length, insertAt);
+    return { ok: true, value: tableText.slice(0, insertAt) + newRow + eol + tableText.slice(insertAt) };
+  }
+
+  // The table's last row is also the last line of `tableText` (no trailing
+  // EOL). Terminate it now — it needs one, since it is no longer last — and
+  // append the new row as the new EOL-less tail.
+  return { ok: true, value: tableText + headerToDelimiterEol + newRow };
+}
+
 /**
  * Find the first table in `text` whose header matches `TABLE_SCHEMAS[schemaId]`,
  * scanning the WHOLE document (not just a named section). Returns `null` when
