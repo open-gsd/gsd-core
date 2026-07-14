@@ -216,13 +216,16 @@ describe('gsd-windsurf-pre-command.js (pre_run_command guard)', () => {
     assert.equal(result.status, 0, `expected exit 0, got ${result.status} (stderr: ${result.stderr})`);
   });
 
-  test('G10: ReDoS-guard — a 200000+-char rm -rf-shaped payload completes in well under 1s via the length cap', () => {
+  test('G10: ReDoS-guard — a 200000+-char rm -rf-shaped payload is handled without catastrophic backtracking (length cap)', () => {
     const payload = `rm -${'r'.repeat(200000)}!`;
-    const start = Date.now();
+    // The ReDoS guard is `runHook`'s spawnSync `timeout: 10000`: catastrophic
+    // backtracking on this payload would run for minutes, so the hook is
+    // SIGKILL'd and returns a non-zero status — the exit-0 assertion below IS
+    // the ReDoS check. (The prior `elapsedMs < 1000` wall-clock assertion was
+    // redundant with that and flaked on a loaded bench at ~1.1s — CLAUDE.md:
+    // do not assert on wall-clock time.)
     const result = runHook(PRE_COMMAND_SCRIPT, { tool_info: { command_line: payload } });
-    const elapsedMs = Date.now() - start;
-    assert.equal(result.status, 0, `expected exit 0 (length-capped allow), got ${result.status} (stderr: ${result.stderr})`);
-    assert.ok(elapsedMs < 1000, `expected < 1000ms, took ${elapsedMs}ms`);
+    assert.equal(result.status, 0, `expected exit 0 (length-capped allow, no ReDoS timeout), got ${result.status} (stderr: ${result.stderr})`);
   });
 
   test('G7: malformed JSON on stdin -> fail-open exit 0', () => {

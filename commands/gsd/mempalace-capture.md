@@ -55,7 +55,33 @@ This step is `onError: skip` at `discuss:post` / `plan:post` / `verify:post` -- 
 On any error or timeout, stop and let the phase continue -- capture is best-effort.
 
 1. **Dedup first.** Interactive: `mempalace_check_duplicate` on the artifact's deterministic drawer id. Headless: rely on `mempalace mine`'s content-hash idempotency.
-2. **Add the drawer (verbatim).** File the exact artifact text into `room: <room>` of `wing: <wing>` with provenance (`source_file`, phase id). Interactive: `mempalace_add_drawer`. Headless: `mempalace mine <path> --wing <wing> --room <room>`.
+2. **Add the drawer (verbatim).** File the exact artifact text into `room: <room>` of `wing: <wing>` with provenance (`source_file`, phase id). Interactive: `mempalace_add_drawer`. Headless: see below.
+
+   **`mempalace mine` has no `--room` flag** — only `search` accepts `--room` ([CLI reference: https://mempalaceofficial.com/reference/cli.html](https://mempalaceofficial.com/reference/cli.html)). Room assignment is driven by `detect_room()` matching folder-path segments against the `rooms:` list in `mempalace.yaml` ([mining guide: https://mempalaceofficial.com/guide/mining.html](https://mempalaceofficial.com/guide/mining.html) — "Rooms are auto-detected from your folder structure"; [config reference: https://mempalaceofficial.com/guide/configuration.html](https://mempalaceofficial.com/guide/configuration.html)). Stage the artifact under a room-named folder so `detect_room()` assigns it correctly:
+
+   ```bash
+   STAGE=".planning/.mempalace-stage"
+   # One-time: declare the GSD room taxonomy so detect_room() recognizes these folders
+   mkdir -p "$STAGE"
+   [ -f "$STAGE/mempalace.yaml" ] || cat > "$STAGE/mempalace.yaml" <<'YAML'
+   rooms:
+     - decisions
+     - planning
+     - milestones
+     - problems
+     - general
+   YAML
+   # Suppress MemPalace cache artifacts written into the scanned tree
+   [ -f "$STAGE/.gitignore" ] || echo "mempalace_embedder.json" > "$STAGE/.gitignore"
+   # Stage under <room>/<phase-id>/<basename> — stable path so mine's content-hash
+   # idempotency (file_already_mined keys on absolute source_file + mtime) deduplicates
+   # instead of creating duplicate drawers on re-runs.
+   ROOM_DIR="$STAGE/<room>/<phase-id>"
+   mkdir -p "$ROOM_DIR"
+   cp "<artifact-path>" "$ROOM_DIR/<basename>"
+   # Mine with --wing only — no --room flag; detect_room() assigns from the folder path
+   mempalace mine "$STAGE" --wing <wing>
+   ```
 3. **Mirror KG facts** when `config.mempalace.mirror_kg` is true: extract decision/delivery facts and `mempalace_kg_add` them with `valid_from` = the phase date (e.g. `(<project>, decided, <decision>)` from CONTEXT; `(<phase>, delivered, <capability>)` from SUMMARY). Under `augment` these are an *additive* mirror of GSD's native `.planning/graphs/`. Under `kg_backend`/`replace` the palace KG is the *authoritative* fact store — GSD still produces `.planning/graphs/` through its normal graphify, so an unreachable palace never loses a fact.
 4. Re-running a phase MUST NOT create duplicate drawers (deterministic ids + `check_duplicate`).
 
