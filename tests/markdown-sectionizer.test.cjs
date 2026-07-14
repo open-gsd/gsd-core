@@ -4,8 +4,9 @@
  * Behavioral tests for markdown-sectionizer.cjs
  *
  * Module: gsd-core/bin/lib/markdown-sectionizer.cjs
- * Exports: stripFencedCode, tokenizeHeadings, collectSections, collectSection,
- *          iterateBullets, extractTaggedBlocks, replaceSection, withSection
+ * Exports: stripFencedCode, extractFencedBlock, tokenizeHeadings, collectSections,
+ *          collectSection, iterateBullets, extractTaggedBlocks, stripTaggedBlocks,
+ *          replaceSection, withSection, deleteSection
  *
  * Covers the parser QA matrix from CONTRIBUTING.md §'Parser and project-file inputs':
  *   - LF vs CRLF line endings
@@ -30,6 +31,7 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
   stripFencedCode,
+  extractFencedBlock,
   tokenizeHeadings,
   collectSections,
   collectSection,
@@ -177,6 +179,110 @@ describe('stripFencedCode', () => {
     const r = stripFencedCode(src);
     assert.equal(r.text, 'a\nb\nc');
     assert.equal(r.unterminatedFence, false);
+  });
+});
+
+// ─── extractFencedBlock ───────────────────────────────────────────────────────
+
+describe('extractFencedBlock', () => {
+  test('returns null for empty/non-string content', () => {
+    assert.equal(extractFencedBlock('', 'coverage'), null);
+    assert.equal(extractFencedBlock(null, 'coverage'), null);
+    assert.equal(extractFencedBlock(undefined, 'coverage'), null);
+  });
+
+  test('returns null when infoString is non-string', () => {
+    assert.equal(extractFencedBlock('```coverage\nbody\n```', null), null);
+    assert.equal(extractFencedBlock('```coverage\nbody\n```', undefined), null);
+  });
+
+  test('extracts inner body of a ```coverage block', () => {
+    const src = [
+      'prose before',
+      '```coverage',
+      '[{"capability":"search","decision":"INTEGRATE","reason":""}]',
+      '```',
+      'prose after',
+    ].join('\n');
+    const result = extractFencedBlock(src, 'coverage');
+    assert.equal(result, '[{"capability":"search","decision":"INTEGRATE","reason":""}]');
+  });
+
+  test('is case-insensitive on the info string', () => {
+    const src = '```Coverage\ninner text\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), 'inner text');
+    assert.equal(extractFencedBlock(src, 'COVERAGE'), 'inner text');
+  });
+
+  test('ignores a ```json block when searching for coverage', () => {
+    const src = '```json\n{"a":1}\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), null);
+  });
+
+  test('returns null when no fence is present at all', () => {
+    const src = 'just prose, no fences here.\n## Heading\n- bullet';
+    assert.equal(extractFencedBlock(src, 'coverage'), null);
+  });
+
+  test('returns null when the named fence is present but unterminated (EOF inside fence)', () => {
+    const src = '```coverage\nunterminated body, no closing fence';
+    assert.equal(extractFencedBlock(src, 'coverage'), null);
+  });
+
+  test('handles ~~~ fences', () => {
+    const src = '~~~coverage\ntilde-fenced body\n~~~';
+    assert.equal(extractFencedBlock(src, 'coverage'), 'tilde-fenced body');
+  });
+
+  test('an info string with trailing text after the target word does NOT match (exact-equality, not prefix)', () => {
+    const src = '```coverage extra-stuff\nbody\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), null, 'the trimmed info string is "coverage extra-stuff", not "coverage"');
+  });
+
+  test('trailing whitespace on the opening info-string line is trimmed before comparison', () => {
+    const src = '```coverage   \nbody\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), 'body');
+  });
+
+  test('a fence nested inside another (longer-delimiter, differently-named) fence is not mis-extracted', () => {
+    // CommonMark same-char fences only truly nest when the OUTER delimiter run
+    // is longer (a bare 3-backtick closer would prematurely close a 3-backtick
+    // outer fence too — there's no other way for a backtick fence to contain
+    // another backtick fence). Outer uses 4 backticks, inner uses 3, so the
+    // inner ```coverage ... ``` pair is entirely CONTENT of the outer fence
+    // and never becomes its own open/close block — searching for 'coverage'
+    // must find nothing, not the outer block's body.
+    const src = [
+      '````outer',
+      '```coverage',
+      'nested body',
+      '```',
+      '````',
+    ].join('\n');
+    assert.equal(extractFencedBlock(src, 'coverage'), null, 'nested ```coverage must not be mis-extracted as a top-level match');
+    assert.equal(
+      extractFencedBlock(src, 'outer'),
+      '```coverage\nnested body\n```',
+      'the OUTER block is the one real fence and contains the nested lines (including their literal ``` markers) as raw content',
+    );
+  });
+
+  test('returns the FIRST matching block when multiple ```coverage blocks are present', () => {
+    const src = [
+      '```coverage',
+      'first',
+      '```',
+      'prose',
+      '```coverage',
+      'second',
+      '```',
+    ].join('\n');
+    assert.equal(extractFencedBlock(src, 'coverage'), 'first');
+  });
+
+  test('an empty fence body returns an empty string, not null', () => {
+    const src = '```coverage\n\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), '');
   });
 });
 

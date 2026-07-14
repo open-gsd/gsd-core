@@ -157,6 +157,121 @@ export function stripFencedCode(content: string): StripFencedResult {
   return { text: kept.join('\n'), unterminatedFence: openFence !== null };
 }
 
+// ─── extractFencedBlock ───────────────────────────────────────────────────────
+
+/** A fenced code block located by `scanFencedBlocks`: line-index span + info string. */
+interface FencedBlockRecord {
+  /** Fence delimiter character (`` ` `` or `~`). */
+  char: '`' | '~';
+  /** Fence delimiter run length (≥3). */
+  len: number;
+  /** Opening line's trailing text (untrimmed) — the CommonMark "info string". */
+  infoString: string;
+  /** 0-based index (into the `lines` array) of the OPENING delimiter line. */
+  openLineIdx: number;
+  /**
+   * 0-based index of the CLOSING delimiter line, or `-1` when the fence is
+   * unterminated (EOF reached while still open — mirrors `stripFencedCode`'s
+   * `unterminatedFence` signal).
+   */
+  closeLineIdx: number;
+}
+
+/**
+ * Shared low-level fence-scanning engine. Walks `lines` and returns every
+ * fenced block found, applying the EXACT SAME CommonMark delimiter rules as
+ * `stripFencedCode` (≥3 backticks/tildes, ≤3-space indent tolerance, a closer
+ * must be the same delimiter char with run length ≥ the opener and no
+ * trailing non-whitespace text; a mismatched delimiter char — or a same-char
+ * run that is too short or carries trailing text — encountered while a fence
+ * is already open is fence CONTENT, not a new open/close event). This is the
+ * "engine" `extractFencedBlock` reuses instead of an ad-hoc regex, so a
+ * different-info-string fence, a fence nested/indented inside another fence,
+ * and a `~~~` fence are all classified exactly as `stripFencedCode` would.
+ *
+ * Tracked duplication (same status as `tokenizeHeadings`'s copy, see its
+ * comment above): this is a second independent copy of the fence state
+ * machine, pending a T-tier consolidation.
+ */
+function scanFencedBlocks(lines: string[]): FencedBlockRecord[] {
+  const delimRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+  const blocks: FencedBlockRecord[] = [];
+  let open: { char: '`' | '~'; len: number; infoString: string; openLineIdx: number } | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, '');
+    const m = delimRe.exec(line);
+    if (!m) continue;
+
+    const char = m[2][0] as '`' | '~';
+    const len = m[2].length;
+    const trailing = m[3];
+
+    if (open === null) {
+      // CommonMark §4.5: backtick fence info string must not contain a backtick.
+      if (char === '`' && trailing.includes('`')) continue; // not a valid opener — ordinary content
+      open = { char, len, infoString: trailing.trim(), openLineIdx: i };
+    } else if (char === open.char && len >= open.len && /^\s*$/.test(trailing)) {
+      blocks.push({
+        char: open.char,
+        len: open.len,
+        infoString: open.infoString,
+        openLineIdx: open.openLineIdx,
+        closeLineIdx: i,
+      });
+      open = null;
+    }
+    // else: mismatched/insufficient delimiter while a fence is open — content, not a boundary.
+  }
+
+  if (open !== null) {
+    blocks.push({
+      char: open.char,
+      len: open.len,
+      infoString: open.infoString,
+      openLineIdx: open.openLineIdx,
+      closeLineIdx: -1,
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Return the INNER text (the lines between the delimiters, joined by `\n`) of
+ * the FIRST fenced code block whose opening info string — trimmed,
+ * case-insensitive — equals `infoString`. Returns `null` when no such block
+ * exists, including when the only matching-name fence is left unterminated
+ * (EOF inside the fence — there is no well-defined inner span to return,
+ * matching a non-greedy `\n```-anchored` regex's behaviour of also failing to
+ * match an unclosed fence).
+ *
+ * Built on `scanFencedBlocks`, the same CommonMark fence-tracking engine
+ * `stripFencedCode` uses — so a fence of a DIFFERENT info string, a fence
+ * nested/indented inside another fence, and a `~~~` fence are all handled
+ * exactly as `stripFencedCode` would classify them; this is not a fresh
+ * ad-hoc regex.
+ *
+ * Migrated from `api-coverage.cts`'s bespoke
+ * `` /```coverage\s*\n([\s\S]*?)\n```/i `` (ADR-1372 tier migration, #2143 audit).
+ */
+export function extractFencedBlock(content: string, infoString: string): string | null {
+  if (typeof content !== 'string' || content.length === 0) return null;
+  if (typeof infoString !== 'string') return null;
+
+  const target = infoString.trim().toLowerCase();
+  const lines = content.split('\n');
+  const blocks = scanFencedBlocks(lines);
+
+  for (const block of blocks) {
+    if (block.closeLineIdx === -1) continue; // unterminated — no well-defined inner span
+    if (block.infoString.trim().toLowerCase() !== target) continue;
+    return lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n');
+  }
+
+  return null;
+}
+
 // ─── tokenizeHeadings ─────────────────────────────────────────────────────────
 
 /**
