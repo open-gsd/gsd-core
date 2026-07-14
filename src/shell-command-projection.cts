@@ -60,27 +60,25 @@ export function posixNormalize(p: string): string {
  * call operator so a quoted executable token is invokable by the target
  * runtime/shell combination.
  *
- * Current evidence-backed policy:
- * - Claude Code on Windows does NOT need it: its hook commands execute under
- *   bash/Git Bash and `& ` breaks there (#3413).
- * - #1928: Gemini CLI — the ONLY runtime with a verified need for the `& `
- *   prefix on Windows — was removed (Google sunset it 2026-06-18). No currently
- *   supported runtime has a verified need, so this seam is now inert. It is
- *   retained (not deleted) so a future runtime with a verified need is a
- *   one-line re-enable, per the conservative policy below. Note: Antigravity —
- *   the Gemini-backend successor — never matched the old `runtime === 'gemini'`
- *   check, so its behavior (no prefix) is unchanged.
+ * The `&`/no-`&` decision is keyed on the **effective hook-execution shell**
+ * (`opts.hookShell`), not on runtime alone — a single runtime (Claude Code)
+ * can host either Git Bash or PowerShell on Windows, and no single static
+ * command string is valid in both (#2236):
+ * - Git Bash: `"node.exe" "hook.js"` works; `& "node.exe" …` → syntax error.
+ * - PowerShell: `& "node.exe" "hook.js"` works; bare `"node.exe" …` →
+ *   `Unexpected token`.
  *
- * Keep the policy conservative until another runtime has a verified need.
+ * Default is `false` (Git Bash form) for backward compatibility. Set
+ * `opts.hookShell = 'powershell'` to emit the PowerShell call-operator form.
  */
-export function hookCommandNeedsPowerShellCallOperator(_opts: { platform?: string; runtime?: string } = {}): boolean {
-  return false;
+export function hookCommandNeedsPowerShellCallOperator(opts: { platform?: string; runtime?: string; hookShell?: string } = {}): boolean {
+  return opts.hookShell === 'powershell';
 }
 
 /**
  * Project a fully-assembled hook command string for the target runtime.
  */
-export function formatHookCommandForRuntime(command: string, opts: { platform?: string; runtime?: string } = {}): string {
+export function formatHookCommandForRuntime(command: string, opts: { platform?: string; runtime?: string; hookShell?: string } = {}): string {
   return hookCommandNeedsPowerShellCallOperator(opts) ? `& ${command}` : command;
 }
 
@@ -164,22 +162,25 @@ export function projectShellCommandText({
   argTokens = [],
   runtime = 'generic',
   platform = process.platform,
+  hookShell,
 }: {
   runnerToken?: string | null;
   argTokens?: (string | null | undefined)[];
   runtime?: string;
   platform?: string;
+  hookShell?: string;
 }): string | null {
   if (!runnerToken) return null;
   const parts = [runnerToken, ...argTokens.filter(Boolean)] as string[];
-  return formatHookCommandForRuntime(parts.join(' '), { platform, runtime });
+  return formatHookCommandForRuntime(parts.join(' '), { platform, runtime, hookShell });
 }
 
-export function projectManagedHookCommand({ absoluteRunner, scriptPath, runtime = 'generic', platform = process.platform }: {
+export function projectManagedHookCommand({ absoluteRunner, scriptPath, runtime = 'generic', platform = process.platform, hookShell }: {
   absoluteRunner?: string | null;
   scriptPath?: string | null;
   runtime?: string;
   platform?: string;
+  hookShell?: string;
 }): string | null {
   if (!absoluteRunner || !scriptPath) return null;
   const normalizedScriptPath = platform === 'win32' ? posixNormalize(scriptPath) : scriptPath;
@@ -188,7 +189,8 @@ export function projectManagedHookCommand({ absoluteRunner, scriptPath, runtime 
     argTokens: [JSON.stringify(normalizedScriptPath)],
     runtime,
     platform,
-  });
+    hookShell,
+});
 }
 
 const MANAGED_HOOK_BASENAMES_BY_SURFACE: Record<string, Set<string>> = {
