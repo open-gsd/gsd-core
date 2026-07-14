@@ -146,6 +146,31 @@ const RULES = [
     ],
   },
   {
+    name: 'shipped install content (golden-parity drift guard, #2267)',
+    // Every source file the installer EMITS into a runtime layout is captured by
+    // golden-install-parity + the install-tree snapshot. A source edit here that
+    // changes emitted output MUST re-verify the fixtures — otherwise stale golden
+    // fixtures merge silently (#2266: a hooks/gsd-statusline.js edit changed
+    // installed output but no rule selected golden-parity, so stale fixtures
+    // shipped to next undetected). Union semantics: this ADDS the parity guard on
+    // top of each path's existing content-specific tests. Targeted lane only (the
+    // golden test skips win32 by design), no fullMatrix.
+    // NOTE: intentionally NOT a blanket 'gsd-core/' prefix — that would also
+    // sweep in gsd-core/src/ and gsd-core/bin/lib/, which are NOT installer-
+    // emitted-as-is and would wrongly override the bug-408 unit-fallback
+    // contract (gsd-core/src/some-util.js must still fall back to ['unit']
+    // when no rule matches). Only the four subpaths the installer actually
+    // ships verbatim are listed here.
+    match: path =>
+      ['hooks/', 'commands/', 'agents/', 'skills/', 'gsd-core/workflows/', 'gsd-core/templates/', 'gsd-core/references/', 'scripts/changeset/', 'scripts/lib/'].some(p => path.startsWith(p)) ||
+      (path.startsWith('gsd-core/bin/shared/') && path.endsWith('.json')) ||
+      ['scripts/fix-slash-commands.cjs', 'scripts/gen-capability-registry.cjs', 'scripts/gen-loop-host-contract.cjs'].includes(path),
+    tests: [
+      'tests/golden-install-parity.test.cjs',
+      'tests/golden-install-tree.test.cjs',
+    ],
+  },
+  {
     name: 'hooks',
     match: path => path.startsWith('hooks/'),
     fullMatrix: true,
@@ -364,8 +389,15 @@ function classify(files) {
   for (const file of files) {
     // Determine if this file is product/pipeline code.
     // docs/ and root-level .md files are intentionally excluded.
+    // 'skills/' is shipped agent-skill content installed into every runtime by
+    // the installer (see the 'shipped install content' RULES entry below) — it
+    // must be product code, or a skills/-only change silently gets
+    // code_changed=false and skips the ENTIRE CI matrix, not merely golden-parity
+    // (found while verifying the #2267 golden-parity rule against skills/**: the
+    // rule fired in `reasons` but classify()'s codeChanged gate zeroed out every
+    // targeted test because 'skills/' was absent from this list).
     if (
-      ['bin/', 'src/', 'gsd-core/', 'agents/', 'commands/', 'hooks/', 'tests/', 'scripts/', 'eslint-rules/'].some(p => file.startsWith(p)) ||
+      ['bin/', 'src/', 'gsd-core/', 'agents/', 'commands/', 'hooks/', 'skills/', 'tests/', 'scripts/', 'eslint-rules/'].some(p => file.startsWith(p)) ||
       file === 'package.json' || file === 'package-lock.json' ||
       (file.startsWith('tsconfig') && file.endsWith('.json')) ||
       file.startsWith('.github/rulesets/')

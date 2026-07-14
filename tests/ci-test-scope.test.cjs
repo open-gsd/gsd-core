@@ -581,6 +581,51 @@ describe('golden-install-parity selection (#1691 drift guard)', () => {
   });
 });
 
+describe('shipped install content (golden-parity drift guard, #2267)', () => {
+  // #2266 regression: hooks/gsd-statusline.js changed installed output but no
+  // RULES entry selected golden-install-parity, so stale golden fixtures merged
+  // to `next` undetected. The installer emits hooks/*, commands/*, agents/*,
+  // skills/*, gsd-core/workflows/*, gsd-core/templates/*, gsd-core/references/*,
+  // gsd-core/bin/shared/*.json, and a handful of shipped scripts/* files — every
+  // one of those paths must additionally select golden-install-parity AND the
+  // install-tree snapshot (union semantics: this rule ADDS to whatever
+  // content-specific rule already matched the path).
+  const SHIPPED_PATHS = [
+    'hooks/gsd-statusline.js', // exact #2266 regression
+    'gsd-core/workflows/plan-phase.md',
+    'agents/gsd-planner.md',
+    'commands/gsd/mempalace-capture.md',
+    'skills/gsd-explore/SKILL.md',
+    'gsd-core/bin/shared/model-catalog.json',
+  ];
+
+  for (const file of SHIPPED_PATHS) {
+    test(`${file} selects golden-install-parity + golden-install-tree`, () => {
+      const result = scopeFor([file]);
+      assert.strictEqual(result.code_changed, true,
+        `expected code_changed=true for ${file}, got: ${JSON.stringify(result)}`);
+      assert.ok(
+        result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+        `expected golden-install-parity in targeted_tests for ${file}, got: ${JSON.stringify(result.targeted_tests)}`,
+      );
+      assert.ok(
+        result.targeted_tests.includes('tests/golden-install-tree.test.cjs'),
+        `expected golden-install-tree in targeted_tests for ${file}, got: ${JSON.stringify(result.targeted_tests)}`,
+      );
+    });
+  }
+
+  test('docs/ change does NOT select golden-install-parity (negative case)', () => {
+    const result = scopeFor(['docs/usage.md']);
+    assert.strictEqual(result.code_changed, false,
+      `expected code_changed=false for docs-only change, got: ${JSON.stringify(result)}`);
+    assert.ok(
+      !result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
+      `docs-only change must NOT select golden-install-parity, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+});
+
 describe('code_changed=false implies clean output invariant', () => {
   // Fix 1: when code_changed is false, full_matrix, targeted_tests, windows_tests
   // must ALL be empty/false — even if a docs path coincidentally
