@@ -987,6 +987,21 @@ describe('ADR-1769 Phase 5: milestoneComplete transition — closure write', () 
       'stale Operator Next Steps tail must be replaced');
   });
 
+  test('#2245 F7: CRLF blank line after a reset heading is preserved (byte-parity with LF)', () => {
+    // resetSectionVerbatim's post-heading blank-swallow loop recognised only
+    // a bare `\n` — on a CRLF document, a `\r\n` blank line right after the
+    // heading fell into the DISCARDED span instead of the kept prefix,
+    // silently dropping one blank line relative to the LF-equivalent output.
+    const lfResult = transitionCore(preCloseBody(), intent, deps);
+    const crlfResult = transitionCore(preCloseBody().replace(/\n/g, '\r\n'), intent, deps);
+
+    assert.strictEqual(
+      crlfResult.content.replace(/\r\n/g, '\n'),
+      lfResult.content,
+      'CRLF output, normalized back to LF, must match the LF output byte-for-byte',
+    );
+  });
+
   test('Operator Next Steps section is inserted when absent', () => {
     const input = [
       '# Project State',

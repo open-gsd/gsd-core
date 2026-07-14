@@ -686,12 +686,15 @@ export function updateBullet(
   // but at least 0+) would flip such a line; matching that requires this
   // primitive's own bullet-opening recognition to tolerate the same gap,
   // otherwise a wider-spaced bullet is silently never offered to `match`.
+  // F5 (#2245 review, nit): the gap also tolerates a literal TAB (`\t`), not
+  // only spaces — the OLD `-\s*\[` regex's `\s` class matched a tab too, so a
+  // `-\t[ ] text` bullet (tab-separated marker) must still be recognised here.
   // Checkbox bullet: `<indent>- [ ] text` or `<indent>- [x] text`
-  const checkboxRe = /^(\s*)-[ ]{1,4}\[([xX ])\] (.*)$/;
+  const checkboxRe = /^(\s*)-[ \t]{1,4}\[([xX ])\] (.*)$/;
   // Plain dash/asterisk/plus bullet: `<indent>- text`, `<indent>* text`, `<indent>+ text`
-  const dashRe = /^(\s*)[-*+][ ]{1,4}(.*)$/;
+  const dashRe = /^(\s*)[-*+][ \t]{1,4}(.*)$/;
   // Numbered bullet: `<indent>1. text`
-  const numberedRe = /^(\s*)\d+\.[ ]{1,4}(.*)$/;
+  const numberedRe = /^(\s*)\d+\.[ \t]{1,4}(.*)$/;
 
   // Fence tracking — same CommonMark delimiter rules as stripFencedCode
   // (tracked duplication, see doc comment above).

@@ -44,6 +44,49 @@ interface MilestoneCompleteOptions {
   dryRun?: boolean;
 }
 
+/**
+ * Scope an `updateTableCell` call to the `## Traceability` (or
+ * `## Traceability Status`) heading's own section — up to the next H1/H2
+ * heading — instead of handing it the WHOLE REQUIREMENTS.md content.
+ *
+ * F1 (#2245 review, BLOCKER): `updateTableCell` binds to the FIRST GFM table
+ * found in whatever text it is given. The shipped requirements template
+ * (gsd-core/templates/requirements.md) puts an `## Out of Scope` table
+ * (`| Feature | Reason |`, no `Status` column) BEFORE `## Traceability` — so
+ * an unscoped whole-file call targets the Out-of-Scope table instead, fails
+ * with `{ok:false, reason:'unknown column: Status'}`, and the real
+ * Traceability row is never flipped, while the checkbox surface still flips
+ * and the command reports success (the #2140 silent-divergence class one
+ * level deeper). Mirrors phase.cts's `editProgressHeadingSlice` scoping of
+ * `## Progress` writes to that heading's own slice.
+ *
+ * Falls back to running `updateTableCell` against the whole `text` when no
+ * `## Traceability` heading exists — matching the previous (unscoped)
+ * behaviour for a REQUIREMENTS.md whose traceability table sits under some
+ * other heading, or with no heading at all (never worse than before this fix).
+ */
+function updateTraceabilityCell(
+  text: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+  column: string,
+  newValue: string | ((current: string) => string),
+): ReturnType<typeof updateTableCell> {
+  const headingMatch = text.match(/^##[ \t]+Traceability(?:[ \t]+Status)?\b/im);
+  if (!headingMatch || headingMatch.index === undefined) {
+    return updateTableCell(text, match, column, newValue);
+  }
+  const headingOffset = headingMatch.index;
+  const before = text.slice(0, headingOffset);
+  const fromHeading = text.slice(headingOffset);
+  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
+  const scoped = nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
+  const after = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
+
+  const result = updateTableCell(scoped, match, column, newValue);
+  if (!result.ok) return result;
+  return { ok: true, value: before + result.value + after };
+}
+
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
   if (!reqIdsRaw || reqIdsRaw.length === 0) {
     error('requirement IDs required. Usage: requirements mark-complete REQ-01,REQ-02 or REQ-01 REQ-02');
@@ -125,7 +168,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // Complete" gate is folded into the newValue callback so one
     // updateTableCell call both probes the current value and writes.
     let tableHit = false;
-    const tableUpdate = updateTableCell(reqContent, rowMatch, 'Status', (current) => {
+    const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
       if (/^pending$/i.test(current.trim())) {
         tableHit = true;
         return ' Complete ';
@@ -155,7 +198,7 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     // that genuinely exists. Probe via a no-op updateTableCell write (its own
     // tolerant scan) instead of findTableWithColumns (whole-table parse gate).
     let currentStatusCell = '';
-    const statusProbe = updateTableCell(reqContent, rowMatch, 'Status', (current) => {
+    const statusProbe = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
       currentStatusCell = current;
       return current;
     });

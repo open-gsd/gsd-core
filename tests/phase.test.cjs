@@ -2407,6 +2407,78 @@ Plans:
     }
   });
 
+  test('#2245 F3: Progress-ordinal renumber re-escapes an escaped pipe in the Phase cell', () => {
+    // The renumber's `newValue` callback builds its replacement from the
+    // CURRENT (unescaped) cell value and used to splice it back verbatim —
+    // an escaped `\|` in the cell de-escapes to a literal `|` and splits the
+    // cell into an extra column when spliced back unescaped.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] Phase 1: Foo
+- [ ] Phase 2: Bar
+- [ ] Phase 3: Parser | Lexer
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|-----------------|--------|-----------|
+| 1. Foo | 0/1 | Pending | - |
+| 2. Bar | 0/1 | Pending | - |
+| 3. Parser \\| Lexer | 0/1 | Pending | - |
+`,
+    );
+
+    const result = runGsdTools('phase remove 2 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      roadmap.includes('| 2. Parser \\| Lexer | 0/1 | Pending | - |'),
+      `the escaped pipe must survive the renumber intact:\n${roadmap}`,
+    );
+    // Reject the de-escaped, cell-splitting shape.
+    assert.ok(
+      !/\|\s*2\. Parser \|\s*Lexer\s*\|\s*0\/1\s*\|/.test(roadmap),
+      'the row must not have split into an extra column',
+    );
+  });
+
+  test('#2245 F8: Progress-ordinal renumber padding-recovery is keyed by row index, not trimmed value', () => {
+    // Two rows with identical TRIMMED Phase text but different padding: an
+    // already-rewritten row's NEW value can coincide with a still-unprocessed
+    // row's PRE-edit value, so a content-keyed padding lookup can steal the
+    // wrong (already-rewritten) row's padding.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] Phase 1: Anchor
+
+## Progress
+
+| Phase | Plans Complete | Status | Completed |
+|-------|-----------------|--------|-----------|
+| 4. Foo   | 0/1 | Pending | - |
+| 3. Foo | 0/1 | Pending | - |
+`,
+    );
+
+    const result = runGsdTools('phase remove 1 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      roadmap.includes('| 3. Foo   | 0/1 | Pending | - |'),
+      `row 4->3 must keep its OWN (3-space) padding:\n${roadmap}`,
+    );
+    assert.ok(
+      roadmap.includes('| 2. Foo | 0/1 | Pending | - |'),
+      `row 3->2 must keep its OWN (1-space) padding, not borrow row 4->3's:\n${roadmap}`,
+    );
+  });
+
   test('#2143 audit: removing the LAST phase preserves a trailing ## Progress section and its table', () => {
     // Root cause: updateRoadmapAfterPhaseRemoval's whole-section delete used to
     // be a raw greedy regex whose lookahead only recognised ANOTHER "Phase N:"
@@ -3193,6 +3265,68 @@ describe('phase complete command', () => {
     assert.ok(req.includes('| AUTH-02 | Phase 1 | Complete |'), 'AUTH-02 status should be Complete');
     assert.ok(req.includes('| AUTH-03 | Phase 2 | Pending |'), 'AUTH-03 should remain Pending');
     assert.ok(req.includes('| API-01 | Phase 2 | Pending |'), 'API-01 should remain Pending');
+  });
+
+  test('#2245 F1: phase complete traceability write is not fooled by an earlier Out of Scope table', () => {
+    // Same class as the milestone.cts F1 regression: the shipped requirements
+    // template puts an `## Out of Scope` table (`| Feature | Reason |`, no
+    // Status column) BEFORE `## Traceability` — an unscoped updateTableCell
+    // call binds to the FIRST table in the file (Out of Scope) and silently
+    // fails, leaving the Traceability row unflipped while the checkbox still
+    // flips and the command reports requirements_updated:true.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+- [ ] Phase 1: Auth
+
+### Phase 1: Auth
+**Goal:** User authentication
+**Requirements:** AUTH-01
+**Plans:** 1 plans
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      `# Requirements
+
+## v1 Requirements
+
+### Authentication
+
+- [ ] **AUTH-01**: User can sign up with email
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Foo | Bar |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| AUTH-01 | Phase 1 | Pending |
+`
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'STATE.md'),
+      `# State\n\n**Current Phase:** 01\n**Current Phase Name:** Auth\n**Status:** In progress\n**Current Plan:** 01-01\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n`
+    );
+
+    const p1 = path.join(tmpDir, '.planning', 'phases', '01-auth');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Summary');
+
+    const result = runVerifiedPhaseComplete('phase complete 1', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const req = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+    assert.ok(req.includes('- [x] **AUTH-01**'), 'AUTH-01 checkbox should be checked');
+    assert.ok(req.includes('| AUTH-01 | Phase 1 | Complete |'),
+      'the Traceability row (not the Out of Scope table) must be flipped to Complete');
+    assert.ok(req.includes('| Foo | Bar |'), 'the Out of Scope table must be left untouched');
   });
 
   test('handles requirements with bracket format [REQ-01, REQ-02]', () => {

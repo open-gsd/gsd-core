@@ -405,8 +405,20 @@ function parseVerificationItems(content: string, status: string): UatItem[] {
         // leading pipe and a purely-numeric first cell (mirrors what the old
         // regex effectively required: a "|digit|" cell immediately followed
         // by more content), with at least 2 physical cells so a bare "| N |"
-        // with nothing after it is NOT treated as a row (same as OLD, whose
-        // `([^|]+)` required at least one further character to match).
+        // with nothing after it is NOT treated as a row.
+        //
+        // #2245 review Fix 9: this is NOT the same as OLD for a row whose
+        // ONLY content past the digit cell is trailing whitespace (e.g.
+        // "| N | ", no second delimiting `|`). OLD's `([^|]+)` regex ran
+        // against the RAW (untrimmed) line and its `\s*` would backtrack to
+        // let `[^|]+` swallow that trailing whitespace, so OLD matched and
+        // pushed an item with an EMPTY (`.trim()`-collapsed) name. Here,
+        // `trimmedLine = line.trim()` strips that trailing whitespace BEFORE
+        // `splitTableRow` ever sees it, collapsing the line to a single cell
+        // (`candidateCells.length === 1`), which fails the `>= 2` check —
+        // the item is silently dropped instead. A real, acceptable behaviour
+        // change (an empty-named UAT item is not useful either way), but the
+        // two implementations are NOT equivalent on this input.
         let tableCells: string[] | null = null;
         if (trimmedLine.startsWith('|')) {
           const candidateCells = splitTableRow(trimmedLine);

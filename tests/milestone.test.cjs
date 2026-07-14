@@ -822,6 +822,57 @@ describe('requirements mark-complete command', () => {
     assert.strictEqual(output.write_set_complete, true);
   });
 
+  test('#2245 F1: traceability write is NOT fooled by an earlier Out of Scope table', () => {
+    // The shipped requirements template (gsd-core/templates/requirements.md)
+    // puts an `## Out of Scope` table (`| Feature | Reason |`, no Status
+    // column) BEFORE `## Traceability`. updateTableCell binds to the FIRST
+    // GFM table in whatever text it is given — an unscoped whole-file call
+    // targets the Out-of-Scope table instead and silently fails with
+    // `unknown column: Status`, so the real Traceability row is never
+    // flipped even though the checkbox surface flips and the command
+    // reports success (the #2140 silent-divergence class one level deeper).
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Foo | Bar |
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | 1 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.ok(out.marked_complete.includes('REQ-001'));
+    assert.deepStrictEqual(out.table_unmatched, [],
+      'the Traceability row for REQ-001 DOES exist — it must not be reported as unmatched');
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-001', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-001', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true,
+      'both surfaces applied — the write is fully reconciled, not just the checkbox');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **REQ-001**'), 'checkbox should be checked');
+    assert.ok(content.includes('| REQ-001 | 1 | Complete |'),
+      'the Traceability row (NOT the Out of Scope table) must be flipped to Complete');
+    assert.ok(content.includes('| Foo | Bar |'), 'the Out of Scope table must be left untouched');
+  });
+
   test('handles mixed prefixes in single call (TEST-XX, REG-XX, INFRA-XX)', () => {
     writeRequirements(tmpDir, STANDARD_REQUIREMENTS);
 

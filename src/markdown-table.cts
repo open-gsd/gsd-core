@@ -542,6 +542,14 @@ export function deleteTableRow(
  * becomes the new EOL-less tail — mirroring `tableText`'s own convention of
  * not forcing a trailing newline that wasn't already there.
  *
+ * Escaping (F4 #2245 review): unlike `updateTableCell`, whose `newValue` is
+ * spliced in VERBATIM (caller-must-escape — see its doc comment above), every
+ * value returned by `valueFor` (and `fallback`) IS escaped internally here via
+ * `escapeCell` before being joined into the new row, exactly like
+ * `appendQuickTaskRow` below — a caller-supplied name containing a literal
+ * `|` or `\` cannot silently split the new row into extra columns. Callers do
+ * NOT need to pre-escape their values.
+ *
  * Returns `{ok:false, reason}` only for a genuinely absent/malformed table
  * (no header line, or no valid delimiter row immediately below it) — never
  * for a ragged data row (mirrors `updateTableCell`/`deleteTableRow`).
@@ -590,7 +598,7 @@ export function insertTableRow(
     lastLineIdx = i;
   }
 
-  const newRow = `| ${columns.map((col) => valueFor(col) ?? fallback).join(' | ')} |`;
+  const newRow = `| ${columns.map((col) => escapeCell(valueFor(col) ?? fallback)).join(' | ')} |`;
 
   if (lastLineIdx + 1 < lines.length) {
     // A following line exists — insert the new row, reusing the EXACT EOL
@@ -679,8 +687,18 @@ export function findTableWithColumns(text: string, required: string[]): Markdown
  * `description`) would otherwise corrupt the table (extra column / a fake
  * extra row) and get rejected by the now-fail-loud `parseMarkdownTable` as a
  * ragged row.
+ *
+ * Exported (F3/#2245 review) so callers of `updateTableCell` that build a
+ * replacement value by transforming the CURRENT (already-unescaped) cell
+ * text — e.g. phase.cts's Progress-ordinal renumber, which decrements the
+ * leading digit of a `Phase` cell like `3. Parser | Lexer` and splices the
+ * rest of the cell text back verbatim — can re-escape that value before
+ * returning it from the `newValue` callback, honoring `updateTableCell`'s
+ * caller-must-re-escape contract (see its doc comment above) instead of
+ * spliceing a raw, unescaped `|` back into the table and silently splitting
+ * the cell.
  */
-function escapeCell(value: string): string {
+export function escapeCell(value: string): string {
   return String(value)
     .replace(/\r?\n+/g, ' ')
     .replace(/\\/g, '\\\\') // escape the escape char FIRST (CodeQL js/incomplete-sanitization)

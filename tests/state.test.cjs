@@ -1916,6 +1916,45 @@ Progress: [..........] 0%
       'Progress field must be preserved in Current Position');
   });
 
+  test('#2245 F2: begin-phase does not clobber an H3 subsection nested under Current Position', () => {
+    // A prior revision swapped `locateCurrentPosition` (stops at ANY heading
+    // level >= 2) for `collectSection` with its default `levelBounded: true`
+    // (stops only at H1/H2), so a `### Notes` subsection under
+    // `## Current Position` was folded into the section body and the
+    // field-write regexes (which use the `m` flag and match ANY line start)
+    // clobbered a same-named line inside that subsection.
+    const stateMd = `# Project State
+
+## Current Position
+
+Phase: 1 (Setup) — EXECUTING
+Status: Executing Phase 1
+
+### Notes
+
+Plan: DO-NOT-TOUCH
+
+## Next Steps
+
+Do the thing.
+`;
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateMd);
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '2', '--name', 'Foo', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes('Plan: DO-NOT-TOUCH'),
+      `the ### Notes subsection must not be rewritten by the Current Position field regexes:\n${content}`,
+    );
+    assert.ok(/^## Next Steps/m.test(content), 'the ## Next Steps section must remain untouched');
+    assert.ok(/^Phase:.*EXECUTING/m.test(content), 'Phase line in Current Position should still update');
+  });
+
   test('advance-plan can update Status after begin-phase', () => {
     // Simulates the full workflow: begin-phase then advance through all plans
     const stateMd = `# Project State

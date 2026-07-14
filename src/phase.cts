@@ -55,7 +55,7 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
-import { updateTableCell, deleteTableRow } from './markdown-table.cjs';
+import { updateTableCell, deleteTableRow, escapeCell } from './markdown-table.cjs';
 import { deleteSection, updateBullet } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
@@ -87,6 +87,49 @@ const looksLikePlanFile = (f: string): boolean =>
   /PLAN/i.test(f) &&
   !PLAN_OUTLINE_RE.test(f) &&
   !PLAN_PRE_BOUNCE_RE.test(f);
+
+/**
+ * Scope an `updateTableCell` call to the `## Traceability` (or
+ * `## Traceability Status`) heading's own section — up to the next H1/H2
+ * heading — instead of handing it the WHOLE REQUIREMENTS.md content.
+ *
+ * F1 (#2245 review, BLOCKER): `updateTableCell` binds to the FIRST GFM table
+ * found in whatever text it is given. The shipped requirements template
+ * (gsd-core/templates/requirements.md) puts an `## Out of Scope` table
+ * (`| Feature | Reason |`, no `Status` column) BEFORE `## Traceability` — so
+ * an unscoped whole-file call targets the Out-of-Scope table instead, fails
+ * with `{ok:false, reason:'unknown column: Status'}`, and the real
+ * Traceability row is never flipped, while the checkbox surface still flips
+ * and the command reports success (the #2140 silent-divergence class one
+ * level deeper). Mirrors `editProgressHeadingSlice` below, which scopes
+ * `## Progress` writes to that heading's own slice for the same reason.
+ *
+ * Falls back to running `updateTableCell` against the whole `text` when no
+ * `## Traceability` heading exists — matching the previous (unscoped)
+ * behaviour for a REQUIREMENTS.md whose traceability table sits under some
+ * other heading, or with no heading at all (never worse than before this fix).
+ */
+function updateTraceabilityCell(
+  text: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+  column: string,
+  newValue: string | ((current: string) => string),
+): ReturnType<typeof updateTableCell> {
+  const headingMatch = text.match(/^##[ \t]+Traceability(?:[ \t]+Status)?\b/im);
+  if (!headingMatch || headingMatch.index === undefined) {
+    return updateTableCell(text, match, column, newValue);
+  }
+  const headingOffset = headingMatch.index;
+  const before = text.slice(0, headingOffset);
+  const fromHeading = text.slice(headingOffset);
+  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
+  const scoped = nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
+  const after = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
+
+  const result = updateTableCell(scoped, match, column, newValue);
+  if (!result.ok) return result;
+  return { ok: true, value: before + result.value + after };
+}
 
 function describeNonCanonicalPlans(dirFiles: string[], matchedFiles: string[]): string | null {
   const matched = new Set(matchedFiles);
@@ -1182,6 +1225,39 @@ function decrementRoadmapPaddedPhaseNumber(raw: string, removedInt: number): str
   return String(num - 1).padStart(raw.length, '0');
 }
 
+/**
+ * Return the RAW text of the `dataRowIndex`-th data row line (0-based, in
+ * file order — header and delimiter rows excluded) of the FIRST GFM table
+ * found in `sectionText`, or `null` when the table or that row doesn't exist.
+ *
+ * F8 (#2245 review, nit) support helper: addresses a table row by its
+ * STRUCTURAL position rather than by matching its (possibly non-unique)
+ * trimmed cell content — see the Progress-ordinal renumber's padding-recovery
+ * use below for why content-matching is unsafe here (two rows with identical
+ * trimmed Phase text, or a row whose already-rewritten new value coincides
+ * with another row's pre-edit text, would otherwise resolve to the wrong line).
+ */
+function findDataRowLine(sectionText: string, dataRowIndex: number): string | null {
+  const lines = sectionText.split(/\r?\n/);
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) return null;
+
+  let seen = -1;
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    if (!lines[i].trim().startsWith('|')) break;
+    seen += 1;
+    if (seen === dataRowIndex) return lines[i];
+  }
+  return null;
+}
+
 function updateRoadmapAfterPhaseRemoval(
   roadmapPath: string,
   targetPhase: string,
@@ -1293,12 +1369,21 @@ function updateRoadmapAfterPhaseRemoval(
       // between the dot and the next character) never matches it, so it is
       // left untouched — identical decimal-safety to the prior behaviour.
       //
-      // updateTableCell hands the callback the TRIMMED cell value only, so
-      // the row's original leading/trailing alignment padding is recovered
-      // by a narrow, anchored lookup of the pre-edit section text (matching
-      // the row's exact current cell content between its flanking `|`s) —
-      // preserving every other byte of the row (ADR-2143 §7 byte-parity)
-      // while only the digits actually change.
+      // updateTableCell hands the callback the TRIMMED, UNESCAPED cell value
+      // only, so the row's original leading/trailing alignment padding is
+      // recovered by a narrow, anchored lookup within that row's OWN raw
+      // line — addressed by ROW INDEX (`matchedRowIndex`, via
+      // `findDataRowLine`), not by searching the whole section for content
+      // matching the trimmed value (F8 #2245 review: two rows with identical
+      // trimmed Phase text, or a row whose already-rewritten new value
+      // coincides with another row's pre-edit text, would otherwise resolve
+      // to the WRONG row's padding — the first/leftmost content match found).
+      // The lookup searches for `escapeCell(current)` (F3 #2245 review: the
+      // ESCAPED form, e.g. `Foo \| Bar`) — the raw line always carries the
+      // escaped form, so searching for the unescaped `current` would
+      // silently fail to find an escaped-pipe cell's own line — preserving
+      // every other byte of the row (ADR-2143 §7 byte-parity) while only the
+      // digits actually change.
       const ordinalHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
       if (ordinalHeadingMatch && ordinalHeadingMatch.index !== undefined) {
         const ordinalHeadingOffset = ordinalHeadingMatch.index;
@@ -1314,8 +1399,10 @@ function updateRoadmapAfterPhaseRemoval(
 
         const phaseCellShapeRe = /^(\d+)(\.\s)/;
         const processedOrdinalRows = new Set<number>();
+        let matchedRowIndex: number | null = null;
 
         for (;;) {
+          matchedRowIndex = null;
           const cellResult = updateTableCell(
             ordinalSection,
             (row, index) => {
@@ -1325,6 +1412,7 @@ function updateRoadmapAfterPhaseRemoval(
               const num = parseInt(m[1], 10);
               if (!Number.isInteger(num) || num <= removedInt || num === 999) return false;
               processedOrdinalRows.add(index);
+              matchedRowIndex = index;
               return true;
             },
             'Phase',
@@ -1333,12 +1421,14 @@ function updateRoadmapAfterPhaseRemoval(
               if (!m) return current;
               const decremented = decrementRoadmapPhaseNumber(m[1], removedInt);
               const newContent = `${decremented}${m[2]}${current.slice(m[0].length)}`;
-              const padMatch = ordinalSection.match(
-                new RegExp(`^[ \\t]*\\|(\\s*)${escapeRegex(current)}(\\s*)\\|`, 'm'),
-              );
+              const targetLine =
+                matchedRowIndex === null ? null : findDataRowLine(ordinalSection, matchedRowIndex);
+              const padMatch = targetLine
+                ? new RegExp(`^[ \\t]*\\|(\\s*)${escapeRegex(escapeCell(current))}(\\s*)\\|`).exec(targetLine)
+                : null;
               const leadPad = padMatch ? padMatch[1] : ' ';
               const trailPad = padMatch ? padMatch[2] : ' ';
-              return `${leadPad}${newContent}${trailPad}`;
+              return `${leadPad}${escapeCell(newContent)}${trailPad}`;
             },
           );
           if (!cellResult.ok) break;
@@ -1635,13 +1725,24 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // lives in the milestone's `- [ ] Phase N: …` checklist, OUTSIDE any
         // `### Phase N` detail section, so there is no section for
         // withPhaseSection to bind to. Migrated onto the sectionizer's
-        // `updateBullet` bullet-write seam (behaviour-preserving, no live bug):
-        // the pattern itself is unchanged, only the "find the right line, splice
-        // it back" plumbing moved off a whole-slice `.replace()` onto the seam.
-        // Applied per single physical line by updateBullet, so the pattern no
-        // longer needs the `m` flag (it never sees more than one line at a
-        // time); see planCountBodyPattern below for the sites that were
-        // migrated onto withPhaseSection instead.
+        // `updateBullet` bullet-write seam: the pattern itself is unchanged,
+        // only the "find the right line, splice it back" plumbing moved off a
+        // whole-slice `.replace()` onto the seam. Applied per single physical
+        // line by updateBullet, so the pattern no longer needs the `m` flag
+        // (it never sees more than one line at a time); see
+        // planCountBodyPattern below for the sites that were migrated onto
+        // withPhaseSection instead.
+        //
+        // #2245 review Fix 6: this is behaviour-preserving for GSD-GENERATED
+        // inputs (the only shape ROADMAP.md ever actually has), NOT byte-parity
+        // across every conceivable input. `updateBullet` is fence-aware — a
+        // checkbox-shaped line inside a fenced (``` / ~~~) code block is never
+        // offered to `match`/`transform` — whereas the retired whole-slice
+        // `.replace()` had no such fence tracking and would have flipped a
+        // bullet-shaped line inside a fence too. That divergence has no live
+        // bug because a GSD-authored ROADMAP.md milestone checklist never puts
+        // its own `- [ ] Phase N: …` entries inside a fenced code block, but it
+        // is a real (and correct) behavioural difference on pathological input.
         const checkboxPattern = new RegExp(
           `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
           'i',
@@ -1828,7 +1929,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               // requirement's write. The "only flip Pending/In Progress ->
               // Complete" gate is folded into the newValue callback so one
               // updateTableCell call both probes and writes.
-              const reqUpdate = updateTableCell(reqContent, reqRowMatch, 'Status', (current) =>
+              const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) =>
                 /^(?:pending|in progress)$/i.test(current.trim()) ? ' Complete ' : current);
               if (reqUpdate.ok) reqContent = reqUpdate.value;
             }

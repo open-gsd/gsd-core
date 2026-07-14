@@ -840,6 +840,25 @@ describe('updateBullet', () => {
     assert.equal(numberedResult, '1.   Alpha\n2.   Beta!\n');
   });
 
+  test('#2245 F5: recognises a TAB-separated marker gap (`-\\t[ ]`), not only spaces', () => {
+    // checkboxRe/dashRe/numberedRe used a literal-space `[ ]{1,4}` gap,
+    // narrower than the OLD hand-rolled `-\s*\[` regex it replaced (`\s`
+    // matches a tab too) — a `-\t[ ]` bullet was silently never offered to
+    // `match`.
+    const checkboxResult = updateBullet(
+      '-\t[ ] Phase 1: Foo\n',
+      (bulletText) => bulletText.includes('Phase 1'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+    assert.equal(checkboxResult, '-\t[x] Phase 1: Foo\n');
+
+    const dashResult = updateBullet('-\tAlpha\n-\tBeta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(dashResult, '-\tAlpha\n-\tBeta!\n');
+
+    const numberedResult = updateBullet('1.\tAlpha\n2.\tBeta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(numberedResult, '1.\tAlpha\n2.\tBeta!\n');
+  });
+
   test('property: flip/unflip round-trip restores the original document byte-for-byte, and every non-target line stays untouched', () => {
     fc.assert(
       fc.property(

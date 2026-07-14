@@ -284,8 +284,8 @@ function beginPhaseCore(content, intent, deps) {
             updated.push('Current focus');
         }
         // ## Current Position section mutation (#1104, #1365).
-        // ADR-2143: collectSection/replaceSection (fence-aware, offset-based
-        // splice). Mirrors state.cts:2261-2324 byte-for-behaviour.
+        // `locateCurrentPosition` (fence-aware, tokenizeHeadings-based) locates
+        // the section; mirrors state.cts:2261-2324 byte-for-behaviour.
         body = mutateCurrentPositionFirstTime(body, intent, today, updated);
     }
     else {
@@ -339,19 +339,25 @@ function sliceCurrentPositionSection(body) {
  * Last activity lines. Mirrors state.cts:2261-2324 byte-for-behaviour
  * (inline regex first, pipe-table fallback via stateReplaceField — #1257).
  *
- * ADR-2143 T6 follow-up: uses `collectSection`/`replaceSection` (fence-aware,
- * offset-based splice) rather than the hand-rolled `locateCurrentPosition`
- * tokenizeHeadings scan. Byte-parity holds because this is a read-modify-write
- * (the section body is preserved and only specific lines are replaced in
- * place) — the field-level regexes below never touch the section's trailing
- * whitespace, so whether that whitespace is trimmed into `replaceSection`'s
- * preserved suffix or left inline makes no difference to the final bytes.
+ * F2 (#2245 review, MAJOR): a prior revision of this function used
+ * `collectSection`/`replaceSection` here, whose default `levelBounded: true`
+ * only stops the section at the next heading of level <= the opener's own
+ * level (H1/H2 for a `##`-opened section) — an H3+ subsection nested under
+ * `## Current Position` was NOT a stop boundary and got folded into
+ * `sectionBody`, so the field regexes below (which run with the `m` flag,
+ * matching ANY line start in the body) could clobber a same-named line
+ * inside that subsection (the #2130/#2067/#2080 truncation/clobber class).
+ * Restored to the fence-aware `locateCurrentPosition` locator (which stops
+ * at ANY heading level >= 2, `STOP_H2_PLUS` — H2 through H6) + manual splice,
+ * exactly matching the `mutateCurrentPositionResume`/
+ * `mutateCurrentPositionForAdvance` siblings below, both of which use
+ * `locateCurrentPosition` directly.
  */
 function mutateCurrentPositionFirstTime(body, intent, today, updated) {
-    const section = (0, markdown_sectionizer_cjs_1.collectSection)(body, (h) => h.level === 2 && /^current\s+position$/i.test(h.text));
-    if (section === null)
+    const span = locateCurrentPosition(body);
+    if (span === null)
         return body;
-    let sectionBody = section.body;
+    let sectionBody = body.slice(span.start, span.end);
     // Phase line — inline first, then pipe-table fallback (#1257).
     const phaseLabel = `${intent.phaseNumber}${intent.phaseName ? ` (${intent.phaseName})` : ''} — EXECUTING`;
     if (/^Phase:/m.test(sectionBody)) {
@@ -394,7 +400,7 @@ function mutateCurrentPositionFirstTime(body, intent, today, updated) {
             sectionBody = replaced;
     }
     updated.push('Current Position');
-    return (0, markdown_sectionizer_cjs_1.replaceSection)(body, section, sectionBody);
+    return body.slice(0, span.start) + sectionBody + body.slice(span.end);
 }
 /**
  * Resume ## Current Position mutation: only update Last activity line
@@ -925,9 +931,25 @@ function resetSectionVerbatim(content, headingPredicate, newBody) {
     const headingLineEnd = target.offset + lines[target.line - 1].length + 1;
     // Swallow blank line(s) immediately after the heading (mirrors the retired
     // regex's greedy `\s*` folding them into the discarded match).
+    //
+    // F7 (#2245 review, nit): recognise a CRLF blank line (`\r\n`), not only a
+    // bare LF — a lone `content[bodyStart] === '\n'` check never advances past
+    // a `\r` byte, so on a CRLF STATE.md the blank line right after the
+    // heading fell into the DISCARDED [bodyStart, bodyEnd) span instead of the
+    // KEPT prefix, silently dropping one blank line (contradicting this
+    // function's own byte-parity docstring).
     let bodyStart = headingLineEnd;
-    while (bodyStart < content.length && content[bodyStart] === '\n')
-        bodyStart++;
+    while (bodyStart < content.length) {
+        if (content[bodyStart] === '\n') {
+            bodyStart += 1;
+            continue;
+        }
+        if (content[bodyStart] === '\r' && content[bodyStart + 1] === '\n') {
+            bodyStart += 2;
+            continue;
+        }
+        break;
+    }
     // Stop at the next heading of level >= 2 (mirrors the retired regex's
     // literal `##` lookahead, which matches any ATX heading two-or-more levels
     // deep); leave exactly one newline unconsumed before it, or run to EOF.
