@@ -81,6 +81,10 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-audit-uat'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-audit-milestone'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-complete-milestone'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-mvp-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-mvp-phase'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-eval-review'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-eval-review'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -407,6 +411,41 @@ test('native milestone commands preserve audit and archive gates', async () => {
     assert.match(pi._recorded.messages.at(-1).message.content, /do not push or claim release completion/);
     await pi._recorded.commands['gsd-complete-milestone'].handler('1', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-complete-milestone-input-error');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native MVP and evaluation review commands preserve workflow gates', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-mvp-eval-'));
+  try {
+    const phaseDir = path.join(cwd, '.planning', 'phases', '02-ai');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "02"\nstatus: complete\n---\n');
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '- [x] **Phase 2: AI evaluation**\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-mvp-phase'].handler('2.1 --force', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 2.1 · MVP Plan');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-mvp-phase');
+    assert.match(pi._recorded.messages.at(-1).message.content, /canonical validator/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Run SPIDR only when its size signals actually trigger/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /exact ROADMAP\.md diff/);
+    await pi._recorded.commands['gsd-mvp-phase'].handler('02 --auto', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-mvp-phase-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-eval-review'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · Eval Review');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-eval-review');
+    assert.match(pi._recorded.messages.at(-1).message.content, /AI-SPEC\.md/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-eval-auditor/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
+    await pi._recorded.commands['gsd-eval-review'].handler('02 --auto', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-eval-review-input-error');
   } finally {
     cleanup(cwd);
   }
