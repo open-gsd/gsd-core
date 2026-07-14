@@ -40,9 +40,15 @@ const PI_CAP = JSON.parse(
 );
 const PI_AXES = PI_CAP.runtime.hostIntegration;
 
+function mockZod() {
+  const schema = () => ({ default: () => schema(), optional: () => schema() });
+  return { object: () => schema(), string: schema, array: () => schema(), boolean: schema };
+}
+
 function mockPi() {
   const recorded = { commands: {}, tools: {}, events: {} };
   return {
+    zod: mockZod(),
     registerCommand(name, def) { recorded.commands[name] = def; },
     registerTool(def) { if (def && def.name) recorded.tools[def.name] = def; },
     registerProvider() {
@@ -79,10 +85,10 @@ test('pi extension-event surface declares all 30 documented ExtensionAPI events 
 // -- (2) the binding actually binds session_start/before_agent_start/ -------
 //        session_before_compact (not just declared in host-integration.cts)
 
-test('gsdPiExtension binds session_start, before_agent_start, session_before_compact, tool_call, before_provider_request', () => {
+test('gsdPiExtension binds the native session, tool, and model-routing events', () => {
   const pi = mockPi();
   gsdPiExtension(pi);
-  for (const ev of ['session_start', 'before_agent_start', 'session_before_compact', 'tool_call', 'before_provider_request']) {
+  for (const ev of ['session_start', 'tool_call', 'tool_result', 'turn_end', 'before_provider_request']) {
     assert.ok(Array.isArray(pi._recorded.events[ev]) && pi._recorded.events[ev].length > 0,
       `expected gsdPiExtension to bind pi.on("${ev}", ...)`);
   }

@@ -1006,22 +1006,69 @@ module.exports = function gsdPiExtension(pi) {
     }
   }
 
-  function workflowAdvisory(event, cwd) {
-    if (!isGsdProject(cwd)) return null;
-    const config = readConfig(cwd);
-    if (!config?.hooks?.workflow_guard) return null;
-    if (!new Set(['edit', 'write', 'ast_edit', 'ast-edit']).has(event.toolName)) return null;
+  function claudeToolName(toolName) {
+    return {
+      bash: 'Bash',
+      read: 'Read',
+      write: 'Write',
+      edit: 'Edit',
+      task: 'Task',
+      web_search: 'WebSearch',
+      web_fetch: 'WebFetch',
+    }[toolName] || toolName;
+  }
 
-    const input = event.input || {};
-    const filePath = input.path || input.filePath || input.file_path || input.file || '';
-    if (!filePath || filePath.includes('.planning/')) return null;
-    if (/\.(gitignore|env)|\/(CLAUDE|AGENTS|GEMINI)\.md$|settings\.json$/i.test(filePath)) return null;
-    const advisoryKey = path.resolve(cwd, filePath);
-    if (advisedFiles.has(advisoryKey)) return null;
-    advisedFiles.add(advisoryKey);
+  function claudeToolInput(input) {
+    const value = input && typeof input === 'object' ? input : {};
+    const filePath = value.path || value.filePath || value.file_path || value.file;
+    const toolInput = filePath ? { ...value, file_path: filePath } : { ...value };
+    if (typeof value.input === 'string' && typeof toolInput.new_string !== 'string') toolInput.new_string = value.input;
+    return toolInput;
+  }
 
-    return `⚠️ GSD workflow advisory: ${path.basename(filePath)} is being edited outside a tracked GSD workflow. ` +
-      'Use /gsd-fast or /gsd-quick when the change should update GSD state and produce a summary.';
+  function hookOutcome(result) {
+    if (!result.stdout && result.exitCode !== 2) return null;
+    let parsed;
+    try { parsed = result.stdout ? JSON.parse(result.stdout) : null; } catch { parsed = null; }
+    const block = result.exitCode === 2 || parsed?.decision === 'block';
+    const advisory = parsed?.hookSpecificOutput?.additionalContext;
+    return {
+      block,
+      reason: parsed?.reason || 'Blocked by a GSD hook.',
+      advisory: typeof advisory === 'string' ? advisory : null,
+    };
+  }
+
+  function preToolHookOutcome(event, ctx) {
+    if (!isGsdProject(ctx.cwd)) return { advisories: [] };
+    const toolName = claudeToolName(event?.toolName);
+    const toolInput = claudeToolInput(event?.input);
+    const payload = { hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: toolInput, cwd: ctx.cwd };
+    const hookFiles = [];
+    if (toolName === 'Write' || toolName === 'Edit') hookFiles.push('gsd-prompt-guard.js', 'gsd-read-guard.js');
+    if (toolName === 'Write' || toolName === 'Edit') hookFiles.push('gsd-worktree-path-guard.js');
+    if (toolName === 'Write' || toolName === 'Edit' || toolName === 'Bash') hookFiles.push('gsd-workflow-guard.js');
+    const advisories = [];
+    for (const hookFile of hookFiles) {
+      const outcome = hookOutcome(runHook(hookFile, payload, { timeout: 5000, cwd: ctx.cwd }));
+      if (!outcome) continue;
+      if (outcome.block) return outcome;
+      if (!outcome.advisory) continue;
+      const advisoryKey = `${toolInput.file_path ? path.resolve(ctx.cwd, toolInput.file_path) : event?.toolCallId || ''}\u0000${hookFile}`;
+      if (advisedFiles.has(advisoryKey)) continue;
+      advisedFiles.add(advisoryKey);
+      advisories.push({ hookFile, content: outcome.advisory });
+    }
+    return { advisories };
+  }
+
+  async function queueHookAdvisories(advisories) {
+    if (!advisories.length) return;
+    await pi.sendMessage({
+      customType: advisories.every((entry) => entry.hookFile === 'gsd-workflow-guard.js') ? 'gsd-workflow-advisory' : 'gsd-hook-advisory',
+      content: advisories.map((entry) => entry.content).join('\n\n'),
+      display: true,
+    }, { deliverAs: 'nextTurn', triggerTurn: false });
   }
 
   function commandResultContent(result, cwd) {
@@ -1826,6 +1873,10 @@ OMP interaction contract:
     }
   });
 
+  pi.on('before_provider_request', async (event, ctx) => {
+    if (ctx?.model?.provider && ctx.model.provider !== 'anthropic') return undefined;
+    return buildBeforeProviderRequestHandler()(event, ctx);
+  });
   pi.on('session_start', (_event, ctx) => {
     if (!isGsdProject(ctx.cwd)) return;
     scheduleOnboardingPrompt(ctx);
@@ -1883,16 +1934,21 @@ OMP interaction contract:
     if (taskWaitBlock) return { block: true, reason: taskWaitBlock };
     const nativePhaseBlock = nativePhaseWriteBlock(event, ctx.cwd);
     if (nativePhaseBlock) return { block: true, reason: nativePhaseBlock };
-    const advisory = workflowAdvisory(event, ctx.cwd);
-    if (!advisory) return undefined;
-    await pi.sendMessage({
-      customType: 'gsd-workflow-advisory',
-      content: advisory,
-      display: true,
-    }, { deliverAs: 'nextTurn', triggerTurn: false });
+    const hookResult = preToolHookOutcome(event, ctx);
+    if (hookResult.block) return { block: true, reason: hookResult.reason };
+    await queueHookAdvisories(hookResult.advisories);
     return undefined;
   });
-  gsdPiExtension._internals = { extractNextAction, extractCheckpoint, extractTaskResult };
+  gsdPiExtension._internals = {
+    ...gsdPiExtension._internals,
+    extractNextAction,
+    extractCheckpoint,
+    extractTaskResult,
+  };
 };
 
-module.exports._internals = {};
+module.exports._internals = {
+  PI_COMMAND_FAMILIES,
+  getArgumentCompletions,
+  buildBeforeProviderRequestHandler,
+};
