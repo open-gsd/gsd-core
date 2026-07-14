@@ -259,6 +259,16 @@ module.exports = function gsdPiExtension(pi) {
     }
   }
 
+  function trackGsdTaskRequest(event, cwd) {
+    const input = event?.input;
+    if (event?.toolName !== 'task' || typeof input?.agent !== 'string' || !input.agent.startsWith('gsd-')) return;
+    const tasks = Array.isArray(input.tasks) ? input.tasks : [];
+    const taskIds = taskIdsFor(cwd);
+    for (const task of tasks) {
+      if (typeof task?.id === 'string' && task.id) taskIds.add(task.id);
+    }
+  }
+
   function trackGsdTaskProgress(event, cwd) {
     const progress = event?.details?.progress;
     if (!Array.isArray(progress)) return;
@@ -289,6 +299,17 @@ module.exports = function gsdPiExtension(pi) {
     }
     if (taskIds.size === 0) activeGsdTaskIds.delete(projectPath);
     return changed;
+  }
+
+  function nativeTaskActivityCount(cwd) {
+    return activeGsdTaskIds.get(path.resolve(cwd))?.size || 0;
+  }
+
+  function nativeTaskActivityLines(count, chinese) {
+    if (!count) return [];
+    return [chinese
+      ? `OMP 原生任务运行中：${count} 个。请在任务与 Job 面板跟踪。`
+      : `Native GSD tasks running in OMP: ${count}. Track them in the task and Job panels.`];
   }
 
 
@@ -887,6 +908,7 @@ module.exports = function gsdPiExtension(pi) {
 
   function widgetLines(cwd) {
     const chinese = usesChinese(cwd);
+    if (nativeTaskActivityCount(cwd) > 0) return [];
     const recovery = nativeTaskRecovery(cwd);
     const action = recovery ? null : readNextAction(cwd);
     const state = stateSnapshot(cwd);
@@ -926,14 +948,16 @@ module.exports = function gsdPiExtension(pi) {
 
   function localizedStatusSummary(cwd) {
     const chinese = usesChinese(cwd);
-    const recovery = nativeTaskRecovery(cwd);
+    const activeTaskCount = nativeTaskActivityCount(cwd);
+    const recovery = activeTaskCount ? null : nativeTaskRecovery(cwd);
     const state = stateSnapshot(cwd);
     const action = recovery ? null : readNextAction(cwd);
     const checkpoint = !recovery && !action ? resumableCheckpoint(cwd, state) : null;
     const recoveryLines = nativeTaskRecoveryLines(recovery, chinese);
     const checkpointLines = checkpointRecoveryLines(checkpoint, chinese);
-    if (!state) return [chinese ? '未检测到 GSD 项目状态。' : 'No GSD project state detected.', ...recoveryLines, ...checkpointLines].join('\n');
-    if (state.unreadable) return [chinese ? 'GSD 状态文件无法解析。' : 'GSD state file could not be parsed.', ...recoveryLines, ...checkpointLines].join('\n');
+    const activityLines = nativeTaskActivityLines(activeTaskCount, chinese);
+    if (!state) return [chinese ? '未检测到 GSD 项目状态。' : 'No GSD project state detected.', ...activityLines, ...recoveryLines, ...checkpointLines].join('\n');
+    if (state.unreadable) return [chinese ? 'GSD 状态文件无法解析。' : 'GSD state file could not be parsed.', ...activityLines, ...recoveryLines, ...checkpointLines].join('\n');
     const progressValue = planProgress(cwd, state);
     const progressText = progressValue
       ? localizedPlanProgress(progressValue, cwd)
@@ -946,6 +970,7 @@ module.exports = function gsdPiExtension(pi) {
         `计划：${progressText}`,
         `风险：${riskSummary(state, true)}`,
         `下一步：${localizedNextStep(state.nextStep, cwd) || '请查看 .planning/STATE.md'}`,
+        ...activityLines,
         ...recoveryLines,
         ...checkpointLines,
       ].join('\n')
@@ -956,6 +981,7 @@ module.exports = function gsdPiExtension(pi) {
         `Plans: ${progressText}`,
         `Risks: ${riskSummary(state, false)}`,
         `Next: ${state.nextStep || 'See .planning/STATE.md'}`,
+        ...activityLines,
         ...recoveryLines,
         ...checkpointLines,
       ].join('\n');
@@ -1245,6 +1271,18 @@ module.exports = function gsdPiExtension(pi) {
   }
 
   async function chooseNextAction(ctx, state) {
+    const activeTaskCount = nativeTaskActivityCount(ctx.cwd);
+    if (activeTaskCount > 0) {
+      const chinese = usesChinese(ctx.cwd);
+      await pi.sendMessage({
+        customType: 'gsd-native-tasks-active',
+        content: chinese
+          ? `OMP 中有 ${activeTaskCount} 个原生 GSD 任务正在运行。请使用任务与 Job 面板跟踪；任务结束后再推进下一步。`
+          : `${activeTaskCount} native GSD task${activeTaskCount === 1 ? ' is' : 's are'} running in OMP. Track it in the task and Job panels; advance after it settles.`,
+        display: true,
+      }, { triggerTurn: false });
+      return;
+    }
     const recovery = nativeTaskRecovery(ctx.cwd);
     const continuation = !recovery && readNextAction(ctx.cwd);
     if (continuation) return choosePendingContinuation(ctx, continuation);
@@ -1840,6 +1878,7 @@ OMP interaction contract:
   });
 
   pi.on('tool_call', async (event, ctx) => {
+    trackGsdTaskRequest(event, ctx.cwd);
     const taskWaitBlock = nativeTaskWaitBlock(event, ctx.cwd);
     if (taskWaitBlock) return { block: true, reason: taskWaitBlock };
     const nativePhaseBlock = nativePhaseWriteBlock(event, ctx.cwd);

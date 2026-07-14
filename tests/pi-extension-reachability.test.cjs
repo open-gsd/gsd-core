@@ -828,6 +828,48 @@ test('the adapter leaves native task activity to OMP', async () => {
   assert.deepEqual(widgets, []);
 });
 
+test('running native tasks suppress stale recovery UI and block next routing', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-active-task-status-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'English' }));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "04"\nstatus: executing\n---\n');
+    fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([
+      { phase: 4, plan: '04-01', task: 'Phase04PriorReview', status: 'failed' },
+    ]));
+    const pi = mockPi();
+    gsdPiExtension(pi);
+    const widgets = [];
+    const ctx = {
+      cwd,
+      hasUI: true,
+      ui: { setWidget: (_key, lines) => widgets.push(lines.map(stripAnsi)) },
+    };
+
+    await pi._recorded.events.session_start({}, ctx);
+    assert.match(widgets.at(-1).join('\n'), /Recovery needed/);
+    await pi._recorded.events.tool_call({
+      toolName: 'task',
+      input: {
+        agent: 'gsd-code-reviewer',
+        tasks: [{ id: 'Phase04CodeReview', role: 'GSD reviewer', description: 'Review phase', assignment: 'Review phase 04' }],
+      },
+    }, ctx);
+    await pi._recorded.events.turn_end({}, ctx);
+    assert.deepEqual(widgets.at(-1), []);
+
+    await pi._recorded.commands['gsd-status'].handler('', { cwd });
+    assert.match(pi._recorded.messages.at(-1).message.content, /Native GSD tasks running in OMP: 1/);
+    assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /Native task recovery/);
+
+    await pi._recorded.commands['gsd-next'].handler('', ctx);
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-tasks-active');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
 test('the OMP adapter persists native executor task results', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
