@@ -55,7 +55,7 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
-import { updateTableCell } from './markdown-table.cjs';
+import { updateTableCell, deleteTableRow } from './markdown-table.cjs';
 import { deleteSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
@@ -1200,11 +1200,46 @@ function updateRoadmapAfterPhaseRemoval(
       new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gi'),
       '',
     );
-    // allow-adhoc-markdown: ROW-DELETION (not a cell update) — removes the WHOLE Progress-table row for a removed phase; updateTableCell (ADR-2143 §7 Phase 4) only supports single-cell replacement, not row removal, so this is out of that primitive's scope pending a future row-delete seam
-    content = content.replace(
-      new RegExp(`\\n?\\|\\s*${escaped}\\.?\\s[^|]*\\|[^\\n]*`, 'gi'), // allow-adhoc-markdown: ROW-DELETION (not a cell update) — see the marker above; the new RegExp(...) node itself also trips the table-regex fingerprint check independently
-      '',
-    );
+    // ROW-DELETION (not a cell update) — removes the WHOLE Progress-table row
+    // for a removed phase via deleteTableRow (ADR-2143 §7 row-removal sibling
+    // of updateTableCell). Scoped to the `## Progress` section — mirroring
+    // deriveProgressFromRoadmap's read-side scoping (phase-lifecycle.cts) —
+    // so a same-numbered row in an earlier, unrelated table (e.g. a
+    // `| Phase | Requirements | Count |` table preceding `## Progress`,
+    // #2012) is never touched. Matches the row by its FIRST cell only: for an
+    // integer removal, a zero-pad-insensitive leading-integer comparison
+    // (`01.`, `1.`, `1 `, bare `1` all match phase 1; a decimal sub-phase
+    // cell like `2.5` never matches an integer removal); for a decimal
+    // removal, the exact decimal token. This replaces the prior regex's
+    // `\.?\s` requirement, which silently left a COMPACT unpadded row (e.g.
+    // `|2|0/2|Planned|-|`) undeleted — its closing `|` follows the digit with
+    // no whitespace to match (#2245 audit) — and which was also unscoped to
+    // any particular table.
+    const progressHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
+    if (progressHeadingMatch && progressHeadingMatch.index !== undefined) {
+      const headingOffset = progressHeadingMatch.index;
+      const before = content.slice(0, headingOffset);
+      const fromHeading = content.slice(headingOffset);
+      const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
+      const progressSection =
+        nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
+      const rest = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
+
+      const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
+        const firstCellRaw = (Object.values(row)[0] ?? '').trim();
+        if (isDecimal) {
+          return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
+        }
+        const leadingMatch = firstCellRaw.match(/^0*(\d+)(\.\d+)?/);
+        if (!leadingMatch || leadingMatch[2]) return false;
+        return parseInt(leadingMatch[1], 10) === removedInt;
+      };
+
+      const deleteResult = deleteTableRow(progressSection, matchRemovedProgressRow);
+      if (deleteResult.ok) {
+        content = before + deleteResult.value + rest;
+      }
+    }
 
     if (!isDecimal) {
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it

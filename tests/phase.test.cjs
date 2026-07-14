@@ -2457,6 +2457,116 @@ Plans:
       "Phase 1's own progress row must survive",
     );
   });
+
+  test('#2245 audit: COMPACT unpadded Progress row for the removed phase is deleted (deleteTableRow migration)', () => {
+    // Root cause: the prior ROW-DELETION regex was
+    // `\|\s*${escaped}\.?\s[^|]*\|` — the `\.?\s` required a WHITESPACE
+    // character immediately after the phase number. A fully compact, unpadded
+    // row (no spaces around any pipe, e.g. `|2|0/2|Planned|-|`) has the
+    // closing `|` immediately after the digit — no whitespace to match — so
+    // the row was never recognised and the removed phase's stale row was left
+    // behind. Migrated onto deleteTableRow (ADR-2143 §7), which matches the
+    // row by its FIRST cell's value regardless of padding.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Setup
+
+### Phase 2: Beta
+**Goal:** Something
+
+### Phase 3: Features
+**Goal:** Core features
+
+## Progress
+
+|Phase|Plans Complete|Status|Completed|
+|---|---|---|---|
+|1|0/1|Planned|-|
+|2|0/2|Planned|-|
+|3|0/1|Planned|-|
+`,
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-beta'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03-features'), { recursive: true });
+
+    const result = runGsdTools('phase remove 2', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      !roadmap.includes('|2|0/2|Planned|-|'),
+      'the COMPACT phase-2 progress row must be deleted (it survived pre-fix)',
+    );
+    assert.ok(roadmap.includes('|1|0/1|Planned|-|'), "phase 1's compact progress row must survive");
+    assert.ok(
+      roadmap.includes('|3|0/1|Planned|-|'),
+      "phase 3's compact progress row must survive (its own bare-digit renumbering is a separate, out-of-scope cross-phase-renumber concern)",
+    );
+  });
+
+  test('#2245 audit: a PADDED Progress table deletes exactly the removed row, byte-parity on the rest', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Setup
+
+### Phase 2: Beta
+**Goal:** Something
+
+### Phase 3: Features
+**Goal:** Core features
+
+## Progress
+
+| Phase | Plans Complete | Status      | Completed  |
+|-------|-----------------|-------------|------------|
+| 1. Foundation | 2/2 | Complete    | 2026-01-01 |
+| 2. Beta       | 1/2 | In Progress |            |
+| 3. Features   | 0/2 | Planned     |            |
+`,
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-beta'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '03-features'), { recursive: true });
+
+    const result = runGsdTools('phase remove 2', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(!roadmap.includes('2. Beta'), 'removed phase 2 progress row must be gone');
+    assert.ok(
+      roadmap.includes('| Phase | Plans Complete | Status      | Completed  |'),
+      'Progress table header must be byte-identical',
+    );
+    assert.ok(
+      roadmap.includes('|-------|-----------------|-------------|------------|'),
+      'Progress table delimiter row must be byte-identical',
+    );
+    assert.ok(
+      roadmap.includes('| 1. Foundation | 2/2 | Complete    | 2026-01-01 |'),
+      "phase 1's row must be byte-identical (untouched)",
+    );
+    // Phase 3 is renumbered to phase 2 (its heading and phases/ directory both
+    // become "2" once phase 2 is removed) — the pre-existing renumber block
+    // below (untouched by this migration) decrements its Progress-table
+    // ordinal too, `3.` -> `2.`, so the surviving row's phase number tracks
+    // its new identity consistently with the heading/directory; every OTHER
+    // byte of the row (padding, Plans/Status/Completed cells) stays identical.
+    assert.ok(
+      !roadmap.includes('| 3. Features   | 0/2 | Planned     |            |'),
+      'the stale phase-3 ordinal must not survive once renumbered to phase 2',
+    );
+    assert.ok(
+      roadmap.includes('| 2. Features   | 0/2 | Planned     |            |'),
+      "surviving row's Plans/Status/Completed cells stay byte-identical; only its leading ordinal renumbers 3->2",
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
