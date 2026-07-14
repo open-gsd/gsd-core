@@ -38,6 +38,7 @@ const {
   stripTaggedBlocks,
   replaceSection,
   withSection,
+  deleteSection,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 // ─── stripFencedCode ──────────────────────────────────────────────────────────
@@ -1257,6 +1258,169 @@ describe('withSection: property-based tests', () => {
     );
 
     assert.ok(result.includes('alpha body line EDITED'), "Phase 1's own body was correctly edited");
+  });
+});
+
+// ─── deleteSection ────────────────────────────────────────────────────────────
+
+describe('deleteSection', () => {
+  test('no-match is a no-op — content is returned unchanged', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const result = deleteSection(content, (h) => h.text === 'Nonexistent');
+    assert.equal(result, content, 'no matching heading -> content unchanged');
+  });
+
+  test('non-string content is returned unchanged', () => {
+    assert.equal(deleteSection(null, () => true), null);
+    assert.equal(deleteSection(undefined, () => true), undefined);
+  });
+
+  test('deleting a middle ### Phase 2 leaves its siblings intact', () => {
+    const content = [
+      '### Phase 1: Foundation',
+      '**Goal:** Setup',
+      '',
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '### Phase 3: Features',
+      '**Goal:** Core features',
+      '',
+    ].join('\n');
+
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2'));
+
+    assert.ok(!result.includes('Phase 2'), 'Phase 2 heading removed');
+    assert.ok(!result.includes('Authentication'), 'Phase 2 body content removed');
+    assert.ok(result.includes('### Phase 1: Foundation'), 'Phase 1 heading preserved');
+    assert.ok(result.includes('Setup'), 'Phase 1 body preserved');
+    assert.ok(result.includes('### Phase 3: Features'), 'Phase 3 heading preserved');
+    assert.ok(result.includes('Core features'), 'Phase 3 body preserved');
+    assert.ok(!result.includes('\n\n\n'), 'no triple-newline (double-blank) seam left behind');
+  });
+
+  test('deleting the LAST ### Phase N does not touch a following ## Progress heading/table', () => {
+    const content = [
+      '# Roadmap',
+      '',
+      '### Phase 1: Foundation',
+      '**Goal:** Setup',
+      '',
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans | Status | Completed |',
+      '|---|---|---|---|',
+      '| 1 | 0/1 | Planned | - |',
+      '| 2 | 0/1 | Planned | - |',
+      '',
+    ].join('\n');
+
+    // "### Phase 2" is the LAST phase heading in the document — a naive scan
+    // for "the next Phase heading" would run to EOF and take ## Progress with
+    // it. deleteSection's level-bounded stop (any heading, level <= target's
+    // level) must stop at ## Progress instead.
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2'));
+
+    assert.ok(!result.includes('Phase 2'), 'Phase 2 section removed');
+    assert.ok(!result.includes('Authentication'), 'Phase 2 body removed');
+    assert.ok(result.includes('## Progress'), 'Progress heading survives');
+    assert.ok(result.includes('| Phase | Plans | Status | Completed |'), 'Progress table header survives');
+    assert.ok(result.includes('| 1 | 0/1 | Planned | - |'), 'Progress table row 1 survives');
+    assert.ok(result.includes('| 2 | 0/1 | Planned | - |'), 'Progress table row 2 survives');
+  });
+
+  test('a nested #### subsection under the target is removed with it', () => {
+    const content = [
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '#### Phase 2.1: Follow-up',
+      '**Goal:** Nested cleanup',
+      '',
+      '### Phase 3: Features',
+      '**Goal:** Core features',
+      '',
+    ].join('\n');
+
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2:'));
+
+    assert.ok(!result.includes('Phase 2:'), 'Phase 2 heading removed');
+    assert.ok(!result.includes('Phase 2.1'), 'nested #### subsection removed alongside its parent');
+    assert.ok(!result.includes('Nested cleanup'), 'nested subsection body removed');
+    assert.ok(result.includes('### Phase 3: Features'), 'sibling Phase 3 preserved');
+    assert.ok(result.includes('Core features'), 'Phase 3 body preserved');
+  });
+
+  test('stopAtLevel option is honored, mirroring collectSection (a shallower opener also stops at a deeper heading)', () => {
+    const content = [
+      '## Parent',
+      'Parent intro',
+      '### Child',
+      'Child body',
+      '## Sibling',
+      'Sibling body',
+    ].join('\n');
+
+    // stopAtLevel: 3 makes the level-2 "Parent" opener ALSO stop at the next
+    // level-3 heading (rather than nesting it, per the default levelBounded
+    // rule) — so only "Parent intro" is removed; ### Child and everything
+    // after it (including ## Sibling) survives untouched.
+    const result = deleteSection(content, (h) => h.text === 'Parent', { stopAtLevel: 3 });
+
+    assert.ok(!result.includes('Parent intro'), 'Parent heading + its own intro line removed');
+    assert.ok(result.includes('### Child\nChild body'), 'stopAtLevel:3 stops BEFORE ### Child — it survives');
+    assert.ok(result.includes('## Sibling\nSibling body'), 'Sibling section untouched');
+  });
+
+  test('levelBounded: false stops at the very next heading, regardless of level (deeper headings are not nested)', () => {
+    const content = [
+      '## Parent',
+      'Parent intro',
+      '### Child',
+      'Child body',
+      '## Sibling',
+      'Sibling body',
+    ].join('\n');
+
+    // With levelBounded:false, "Parent" stops at the IMMEDIATE next heading
+    // (### Child, even though it's a deeper level than Parent) instead of
+    // nesting it — the opposite of the default levelBounded:true rule, which
+    // would fold ### Child into Parent's deleted range as nested content.
+    const result = deleteSection(content, (h) => h.text === 'Parent', { levelBounded: false });
+
+    assert.ok(!result.includes('Parent intro'), 'Parent heading + its own intro line removed');
+    assert.ok(result.includes('### Child\nChild body'), 'levelBounded:false stops at ### Child — it survives, not nested');
+    assert.ok(result.includes('## Sibling\nSibling body'), 'Sibling section untouched');
+  });
+
+  test('a pre-existing double-blank separator immediately before the deleted heading is collapsed to one blank line', () => {
+    const content = [
+      'Intro paragraph.',
+      '',
+      '',
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '### Phase 3: Features',
+      '**Goal:** Core features',
+    ].join('\n');
+
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2'));
+
+    assert.ok(!result.includes('\n\n\n'), 'no triple-newline (double-blank) seam remains');
+    assert.ok(
+      result.includes('Intro paragraph.\n\n### Phase 3: Features'),
+      `exactly one blank line survives at the seam, got ${JSON.stringify(result)}`,
+    );
+  });
+
+  test('section at EOF (no following heading) deletes through end of string', () => {
+    const content = '### Phase 1\nBody 1\n### Phase 2\nBody 2';
+    const result = deleteSection(content, (h) => h.text === 'Phase 2');
+    assert.equal(result, '### Phase 1\nBody 1\n');
   });
 });
 

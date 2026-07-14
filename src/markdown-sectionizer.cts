@@ -667,5 +667,94 @@ export function withSection(
   return replaceSection(content, section, newBody);
 }
 
+// ─── deleteSection ────────────────────────────────────────────────────────────
+
+/**
+ * Delete an entire section — the matching heading line ITSELF plus its body —
+ * and return the resulting full content string.
+ *
+ * Locates the target heading via the SAME machinery `collectSection` uses
+ * (`tokenizeHeadings` + `headingPredicate`), then determines the stop boundary
+ * with the SAME level-bounding rule (`levelBounded` / `stopAtLevel`, see
+ * `CollectSectionOptions`): the deleted range runs from the target heading's
+ * OWN start offset up to (but not including) the next heading whose level is
+ * the same-or-higher (lower level number) than the target's — so a level-3
+ * `### Phase N` section deletes through any nested `####` content but STOPS at
+ * the next `##`/`###` sibling, whatever that heading's text is (unlike a
+ * hand-rolled regex anchored to a specific heading TEXT pattern, which keeps
+ * scanning past an unrelated heading and can run away to EOF when no further
+ * heading of that specific text shape follows — the whole-section-deletion
+ * data-loss class this primitive retires).
+ *
+ * Unlike `collectSection`/`withSection` (which operate on a section's BODY
+ * only, leaving the heading line untouched), `deleteSection` removes the
+ * heading line too — the counterpart for "delete section" call sites that
+ * `withSection` structurally cannot serve.
+ *
+ * Collapses at most one resulting blank-line seam: if removing the section
+ * leaves 2+ blank lines immediately at the splice point (e.g. the original
+ * document already had a double-blank separator immediately before the
+ * deleted heading), the seam is normalized down to a single blank line so no
+ * double-blank gap accumulates where the section used to sit. Content
+ * elsewhere in the document is never touched.
+ *
+ * Returns `content` unchanged when no heading matches `headingPredicate`
+ * (bounded no-op, mirroring `withSection`'s miss behaviour).
+ */
+export function deleteSection(
+  content: string,
+  headingPredicate: (heading: HeadingToken) => boolean,
+  opts: CollectSectionOptions = {},
+): string {
+  if (typeof content !== 'string') return content;
+
+  const { levelBounded = true, stopAtLevel } = opts;
+
+  const headings = tokenizeHeadings(content);
+  const targetIdx = headings.findIndex(headingPredicate);
+  if (targetIdx === -1) return content;
+
+  const target = headings[targetIdx];
+  const lines = content.split('\n');
+
+  // Determine the stop line using the SAME level-bounding rule collectSection uses.
+  let stopLine = lines.length + 1; // 1-based, exclusive (default: EOF+1)
+  for (let j = targetIdx + 1; j < headings.length; j++) {
+    const next = headings[j];
+    let isStop: boolean;
+    if (stopAtLevel !== undefined) {
+      isStop = next.level <= stopAtLevel;
+    } else {
+      isStop = levelBounded ? next.level <= target.level : true;
+    }
+    if (isStop) {
+      stopLine = next.line;
+      break;
+    }
+  }
+
+  // Character offsets — same line-offset table collectSection builds.
+  const lineOffsets: number[] = new Array<number>(lines.length);
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    lineOffsets[i] = acc;
+    acc += lines[i].length + 1; // +1 for the '\n' separator
+  }
+  const eofOffset = acc;
+
+  const sectionStart = lineOffsets[target.line - 1]; // start of the target heading LINE itself
+  const sectionEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+
+  const before = content.slice(0, sectionStart);
+  const after = content.slice(sectionEnd);
+
+  // Collapse a resulting blank-line seam to at most one blank line (2 newlines).
+  // Only the tail of `before` (immediately at the splice point) is touched —
+  // this never reaches into unrelated content elsewhere in the document.
+  const collapsedBefore = before.replace(/(?:\r\n|\n){3,}$/, (m) => (m.includes('\r\n') ? '\r\n\r\n' : '\n\n'));
+
+  return collapsedBefore + after;
+}
+
 // Consumers: require('../gsd-core/bin/lib/markdown-sectionizer.cjs')
 // Named CJS exports are the canonical surface (ADR-457 .cts → .cjs build-at-publish).
