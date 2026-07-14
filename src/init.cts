@@ -979,6 +979,22 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const config = loadConfig(cwd);
   let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
 
+  // #2237: surface ambiguous phase-directory collisions instead of silently
+  // taking the first match when unrelated projects share a .planning/phases/ tree.
+  if (phaseInfo?.['ambiguous_matches']) {
+    const matches = phaseInfo['ambiguous_matches'] as string[];
+    const result: Record<string, unknown> = {
+      phase_found: false,
+      phase_dir: null,
+      phase_number: null,
+      phase_name: null,
+      ambiguous_matches: matches,
+      warning: `Phase ${phase} is ambiguous: ${matches.length} directories match (${matches.map((m: string) => `"${m}"`).join(', ')}). Set a distinct project_code in .planning/config.json to scope resolution.`,
+    };
+    output(withProjectRoot(cwd, result), raw);
+    return;
+  }
+
   if (phaseInfo?.['archived']) {
     const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
     if (roadmapPhase?.['found']) {

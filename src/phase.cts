@@ -371,8 +371,20 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
         .map((e) => e.name)
         .sort((a, b) => comparePhaseNum(a, b));
 
-      const match = dirs.find((d) => phaseTokenMatches(d, normalized));
-      if (!match) continue;
+      // #2237: fail loud when multiple directories match the same bare phase
+      // number — prevents cross-project file writes when unrelated projects
+      // share a .planning/phases/ tree.
+      const matches = dirs.filter((d) => phaseTokenMatches(d, normalized));
+      if (matches.length === 0) continue;
+      if (matches.length > 1) {
+        output({
+          ...notFound,
+          ambiguous_matches: matches,
+          warning: `Phase ${normalized} is ambiguous: ${matches.length} directories match (${matches.map(m => `"${m}"`).join(', ')}). Set a distinct project_code in .planning/config.json to scope resolution.`,
+        }, raw, '');
+        return;
+      }
+      const match = matches[0];
 
       const dirMatch =
         match.match(
