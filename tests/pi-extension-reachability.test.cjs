@@ -1922,13 +1922,13 @@ test('the GSD next action prepares checkpoint recovery only for active matching 
   }
 });
 
-test('the adapter turns a completed GSD Next Up block into a prepared continuation', async () => {
+test('the adapter runs a fresh-session GSD Next Up continuation after confirmation', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
   const output = `
 ────────────────────────────────────────────────────────────────────────────────
 
- ▶ Next Up
+## ▶ Next Up — [GSD] Adapter
 
  Phase 1 gap closure — plan the metadata-refresh-before-validation boundary.
 
@@ -1956,12 +1956,12 @@ test('the adapter turns a completed GSD Next Up block into a prepared continuati
   fs.writeFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), JSON.stringify(action));
 
   const widgets = [];
-  const editor = [];
+  const sessions = [];
   const ctx = { cwd, hasUI: true, ui: {
     select: async (_title, options) => options[0],
-    setEditorText: (text) => editor.push(text),
+    confirm: async () => true,
     setWidget: (key, lines, options) => widgets.push({ key, lines, options }),
-  } };
+  }, newSession: async (options) => sessions.push(options) };
   await pi._recorded.events.session_start({}, ctx);
   assert.deepEqual(widgets[0].lines.map(stripAnsi), [
     'GSD · Next Up',
@@ -1970,7 +1970,70 @@ test('the adapter turns a completed GSD Next Up block into a prepared continuati
   ]);
 
   await pi._recorded.commands['gsd-next'].handler('', ctx);
-  assert.deepEqual(editor, ['/new\n/gsd:plan-phase 01 --gaps']);
+  assert.equal(sessions.length, 1);
+  const appended = [];
+  await sessions[0].setup({ appendMessage: (message) => appended.push(message) });
+  assert.match(appended[0].content[0].text, /Execute it now, end-to-end/);
+  assert.match(appended[0].content[0].text, /GSD action: `gsd:plan-phase`/);
+  assert.match(appended[0].content[0].text, /Arguments \(literal data\): "01 --gaps"/);
+});
+
+test('the adapter runs a selected non-fresh GSD continuation without editor copy-paste', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-direct-continuation-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'English' }));
+    fs.writeFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), JSON.stringify({
+      label: 'Clarify optional enhancement scope',
+      command: '/gsd:discuss-phase 05',
+      requiresFreshContext: false,
+    }));
+    const pi = mockPi();
+    gsdPiExtension(pi);
+    await pi._recorded.commands['gsd-next'].handler('', {
+      cwd,
+      hasUI: true,
+      ui: { select: async (_title, options) => options[0] },
+    });
+    const continuation = pi._recorded.messages.at(-1);
+    assert.equal(continuation.message.customType, 'gsd-native-continuation');
+    assert.equal(continuation.options.triggerTurn, true);
+    assert.match(continuation.message.content, /GSD action: `gsd:discuss-phase`/);
+    assert.match(continuation.message.content, /Arguments \(literal data\): "05"/);
+    assert.match(continuation.message.content, /Do not display a command for the user to copy/);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native assistant completion captures Next Up and routes the selected action', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-message-next-up-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'English' }));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "05"\nstatus: executing\n---\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+    await pi._recorded.events.message_end({
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '## ▶ Next Up\n\nPhase 5: Optional Enhancements — clarify scope before planning.\n\n```text\n/gsd:discuss-phase 05\n```\n' }],
+      },
+    }, {
+      cwd,
+      hasUI: true,
+      ui: { select: async (_title, options) => options[0] },
+    });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), 'utf8')), {
+      label: 'Phase 5: Optional Enhancements — clarify scope before planning.',
+      command: '/gsd:discuss-phase 05',
+      requiresFreshContext: false,
+    });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+  } finally {
+    cleanup(cwd);
+  }
 });
 
 
