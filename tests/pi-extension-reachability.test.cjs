@@ -66,6 +66,13 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-ui-phase'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-spec-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ui-phase'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-settings'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-add-tests'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-validate-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-secure-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-add-tests'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-validate-phase'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-secure-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -230,6 +237,56 @@ test('native specification and UI commands preserve their workflow contracts', a
     await pi._recorded.commands['gsd-ui-phase'].handler('02 --unknown', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ui-input-error');
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native quality commands preserve their workflow contracts', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-quality-'));
+  try {
+    const phaseDir = path.join(cwd, '.planning', 'phases', '02-quality');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "02"\nstatus: complete\n---\n');
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '- [x] **Phase 2: Quality**\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-settings'].handler('--text', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Settings');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-settings');
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `ask`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /active-workstream config path/);
+    await pi._recorded.commands['gsd-settings'].handler('--auto', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-settings-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-add-tests'].handler('02 focus on error paths', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · Tests');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-add-tests');
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-add-tests/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /TDD\/E2E\/Skip classification approval/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Never mark an unexecuted test as passing/);
+    await pi._recorded.commands['gsd-add-tests'].handler('two', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-add-tests-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-validate-phase'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · Validation');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-validate-phase');
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-nyquist-auditor/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-secure-phase'].handler('02 --text', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · Security');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-secure-phase');
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-security-auditor/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /threats remain open/);
+    await pi._recorded.commands['gsd-secure-phase'].handler('02 --auto', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-security-input-error');
   } finally {
     cleanup(cwd);
   }
