@@ -235,6 +235,7 @@ module.exports = function gsdPiExtension(pi) {
   const path = require('node:path');
   const advisedFiles = new Set();
   const activeGsdTaskIds = new Map();
+  const activeGsdTaskIdsByCall = new Map();
   const nativePhaseCwds = new Set();
   const onboardingPromptCwds = new Set();
 
@@ -248,9 +249,32 @@ module.exports = function gsdPiExtension(pi) {
     return taskIds;
   }
 
+  function taskCallsFor(cwd) {
+    const projectPath = path.resolve(cwd);
+    let taskCalls = activeGsdTaskIdsByCall.get(projectPath);
+    if (!taskCalls) {
+      taskCalls = new Map();
+      activeGsdTaskIdsByCall.set(projectPath, taskCalls);
+    }
+    return taskCalls;
+  }
+
+  function forgetTaskCallIds(cwd, settledIds) {
+    const projectPath = path.resolve(cwd);
+    const taskCalls = activeGsdTaskIdsByCall.get(projectPath);
+    if (!taskCalls) return;
+    for (const [callId, taskIds] of taskCalls) {
+      const remaining = taskIds.filter((taskId) => !settledIds.has(taskId));
+      if (remaining.length) taskCalls.set(callId, remaining);
+      else taskCalls.delete(callId);
+    }
+    if (taskCalls.size === 0) activeGsdTaskIdsByCall.delete(projectPath);
+  }
+
   function releaseGsdProjectRuntimeState(cwd) {
     const projectPath = path.resolve(cwd);
     activeGsdTaskIds.delete(projectPath);
+    activeGsdTaskIdsByCall.delete(projectPath);
     nativePhaseCwds.delete(projectPath);
     onboardingPromptCwds.delete(projectPath);
     const projectPrefix = `${projectPath}${path.sep}`;
@@ -263,10 +287,10 @@ module.exports = function gsdPiExtension(pi) {
     const input = event?.input;
     if (event?.toolName !== 'task' || typeof input?.agent !== 'string' || !input.agent.startsWith('gsd-')) return;
     const tasks = Array.isArray(input.tasks) ? input.tasks : [];
-    const taskIds = taskIdsFor(cwd);
-    for (const task of tasks) {
-      if (typeof task?.id === 'string' && task.id) taskIds.add(task.id);
-    }
+    const taskIds = tasks.flatMap((task) => typeof task?.id === 'string' && task.id ? [task.id] : []);
+    if (!taskIds.length) return;
+    for (const taskId of taskIds) taskIdsFor(cwd).add(taskId);
+    if (typeof event.toolCallId === 'string' && event.toolCallId) taskCallsFor(cwd).set(event.toolCallId, taskIds);
   }
 
   function trackGsdTaskProgress(event, cwd) {
@@ -278,6 +302,7 @@ module.exports = function gsdPiExtension(pi) {
       if (typeof task?.agent !== 'string' || !task.agent.startsWith('gsd-') || typeof task.id !== 'string' || !task.id) continue;
       if (['completed', 'failed', 'aborted'].includes(task.status)) {
         taskIds?.delete(task.id);
+        forgetTaskCallIds(cwd, new Set([task.id]));
         continue;
       }
       taskIds ||= taskIdsFor(cwd);
@@ -293,12 +318,27 @@ module.exports = function gsdPiExtension(pi) {
     const projectPath = path.resolve(cwd);
     const taskIds = activeGsdTaskIds.get(projectPath);
     if (!taskIds) return false;
-    let changed = false;
+    const settledIds = new Set();
     for (const job of jobs) {
-      if (job?.status !== 'running' && typeof job?.id === 'string' && taskIds.delete(job.id)) changed = true;
+      if (job?.status !== 'running' && typeof job?.id === 'string' && taskIds.delete(job.id)) settledIds.add(job.id);
     }
+    if (settledIds.size) forgetTaskCallIds(cwd, settledIds);
     if (taskIds.size === 0) activeGsdTaskIds.delete(projectPath);
-    return changed;
+    return settledIds.size > 0;
+  }
+
+  function releaseFailedGsdTaskRequest(event, cwd) {
+    if (event?.toolName !== 'task' || !event.isError || typeof event.toolCallId !== 'string') return false;
+    const projectPath = path.resolve(cwd);
+    const taskCalls = activeGsdTaskIdsByCall.get(projectPath);
+    const taskIds = taskCalls?.get(event.toolCallId);
+    if (!taskIds) return false;
+    const activeTaskIds = activeGsdTaskIds.get(projectPath);
+    for (const taskId of taskIds) activeTaskIds?.delete(taskId);
+    taskCalls.delete(event.toolCallId);
+    if (taskCalls.size === 0) activeGsdTaskIdsByCall.delete(projectPath);
+    if (activeTaskIds?.size === 0) activeGsdTaskIds.delete(projectPath);
+    return true;
   }
 
   function nativeTaskActivityCount(cwd) {
@@ -1991,7 +2031,7 @@ OMP phase-management contract:
     const tokens = parseCommandLine(input);
     const [operation = 'list', name] = tokens;
     const named = ['create', 'status', 'switch', 'complete', 'resume'];
-    if (!['list', 'progress', ...named].includes(operation) || (['list', 'progress'].includes(operation) && tokens.length !== 1) || (named.includes(operation) && (tokens.length !== 2 || !/^[a-z0-9][a-z0-9-]{0,59}$/i.test(name || '')))) return null;
+    if (!['list', 'progress', ...named].includes(operation) || (['list', 'progress'].includes(operation) && tokens.length > 1) || (named.includes(operation) && (tokens.length !== 2 || !/^[a-z0-9][a-z0-9-]{0,59}$/i.test(name || '')))) return null;
     return `# OMP native GSD workstreams
 
 Execute the gsd-workstreams ${operation} operation end-to-end for this command input: ${JSON.stringify(tokens.join(' ') || 'list')}.
@@ -2857,6 +2897,7 @@ OMP debugging contract:
   pi.on('tool_result', async (event, ctx) => {
     if (!isGsdProject(ctx.cwd)) return;
     releaseSettledGsdTasks(event, ctx.cwd);
+    releaseFailedGsdTaskRequest(event, ctx.cwd);
     trackGsdTaskProgress(event, ctx.cwd);
     const output = (event.content || [])
       .filter((chunk) => chunk.type === 'text')

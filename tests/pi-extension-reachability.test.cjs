@@ -496,6 +496,12 @@ test('remaining native workflow commands preserve operational gates', async () =
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-phase-input-error');
 
     pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-workstreams'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Workstreams');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-workstreams');
+    assert.match(pi._recorded.messages.at(-1).message.content, /workstreams list operation/);
+
+    pi._recorded.sessionName = undefined;
     await pi._recorded.commands['gsd-workstreams'].handler('complete release-1', { cwd });
     assert.equal(pi._recorded.sessionName, 'GSD · Workstreams');
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-workstreams');
@@ -1263,6 +1269,55 @@ test('running native tasks suppress stale recovery UI and block next routing', a
     await pi._recorded.commands['gsd-next'].handler('', ctx);
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-tasks-active');
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('a rejected native task call releases only its tracked task batch', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-rejected-task-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "04"\nstatus: executing\n---\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+    const ctx = { cwd, hasUI: false };
+    await pi._recorded.events.tool_call({
+      toolName: 'task',
+      toolCallId: 'rejected-review',
+      input: {
+        agent: 'gsd-code-reviewer',
+        tasks: [{ id: 'Phase04CodeReview', role: 'GSD reviewer', description: 'Review phase', assignment: 'Review phase 04' }],
+      },
+    }, ctx);
+    await pi._recorded.events.tool_call({
+      toolName: 'task',
+      toolCallId: 'surviving-review',
+      input: {
+        agent: 'gsd-code-reviewer',
+        tasks: [{ id: 'Phase04SecondReview', role: 'GSD reviewer', description: 'Review follow-up', assignment: 'Review phase 04 follow-up' }],
+      },
+    }, ctx);
+    await pi._recorded.commands['gsd-status'].handler('', { cwd });
+    assert.match(pi._recorded.messages.at(-1).message.content, /Native GSD tasks running in OMP: 2/);
+
+    await pi._recorded.events.tool_result({
+      toolName: 'task',
+      toolCallId: 'rejected-review',
+      isError: true,
+      content: [{ type: 'text', text: 'Task validation failed' }],
+    }, ctx);
+    await pi._recorded.commands['gsd-status'].handler('', { cwd });
+    assert.match(pi._recorded.messages.at(-1).message.content, /Native GSD tasks running in OMP: 1/);
+
+    await pi._recorded.events.tool_result({
+      toolName: 'task',
+      toolCallId: 'surviving-review',
+      isError: true,
+      content: [{ type: 'text', text: 'Task validation failed' }],
+    }, ctx);
+    await pi._recorded.commands['gsd-status'].handler('', { cwd });
+    assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /Native GSD tasks running in OMP/);
   } finally {
     cleanup(cwd);
   }
