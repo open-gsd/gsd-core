@@ -63,35 +63,35 @@ test('install-shared.cjs exports the canonical buildParityManifest + exclusion c
 // as plain text to prove they no longer re-declare the builder/constants
 // inline — the runtime-contract-under-test IS the source text (whether a
 // second inline copy exists), not behavior a require() could exercise.
-// allow-test-rule: source text is the product for this anti-divergence check, see #2266
-test('golden-install-parity.test.cjs does not re-declare an inline buildParityManifest or exclusion constants (#2266)', () => {
-  const testHarnessPath = path.join(ROOT, 'tests', 'golden-install-parity.test.cjs');
-  const content = fs.readFileSync(testHarnessPath, 'utf8');
+//
+// ALL FIVE identifiers are guarded, not just buildParityManifest + VOLATILE_FILES:
+// the drift that shipped broken fixtures was a MISSING exclusion-constant entry
+// (#2100 = generator's HOOK_CONFIG_FILES copy lacked settings.local.json; #2095 =
+// kimi's HOOK_CONFIG_RELATIVE_PATHS entry), so a re-declared HOOK_CONFIG_FILES /
+// HOOK_CONFIG_RELATIVE_PATHS / EXCLUDED_PREFIXES is exactly the failure class this
+// guard exists to prevent — checking only two of four would leave that gap open.
+const FORBIDDEN_INLINE = [
+  { label: 'buildParityManifest',        re: /function\s+buildParityManifest/ },
+  { label: 'VOLATILE_FILES',             re: /const\s+VOLATILE_FILES\s*=\s*new\s+Set/ },
+  { label: 'HOOK_CONFIG_FILES',          re: /const\s+HOOK_CONFIG_FILES\s*=\s*new\s+Set/ },
+  { label: 'HOOK_CONFIG_RELATIVE_PATHS', re: /const\s+HOOK_CONFIG_RELATIVE_PATHS\s*=\s*new\s+Set/ },
+  { label: 'EXCLUDED_PREFIXES',          re: /const\s+EXCLUDED_PREFIXES\s*=\s*\[/ },
+];
 
-  assert.ok(
-    !/function\s+buildParityManifest/.test(content),
-    'tests/golden-install-parity.test.cjs must import buildParityManifest from ' +
-    './helpers/install-shared.cjs, not re-declare it inline'
-  );
-  assert.ok(
-    !/const\s+VOLATILE_FILES\s*=\s*new\s+Set/.test(content),
-    'tests/golden-install-parity.test.cjs must import VOLATILE_FILES from ' +
-    './helpers/install-shared.cjs, not re-declare it inline'
-  );
-});
+const CONSUMERS = [
+  { name: 'tests/golden-install-parity.test.cjs',       rel: ['tests', 'golden-install-parity.test.cjs'],     from: './helpers/install-shared.cjs' },
+  { name: 'scripts/gen-golden-install-parity-zcode.cjs', rel: ['scripts', 'gen-golden-install-parity-zcode.cjs'], from: 'tests/helpers/install-shared.cjs' },
+];
 
-test('gen-golden-install-parity-zcode.cjs does not re-declare an inline buildParityManifest or exclusion constants (#2266)', () => {
-  const generatorPath = path.join(ROOT, 'scripts', 'gen-golden-install-parity-zcode.cjs');
-  const content = fs.readFileSync(generatorPath, 'utf8');
-
-  assert.ok(
-    !/function\s+buildParityManifest/.test(content),
-    'scripts/gen-golden-install-parity-zcode.cjs must import buildParityManifest from ' +
-    'tests/helpers/install-shared.cjs, not re-declare it inline'
-  );
-  assert.ok(
-    !/const\s+VOLATILE_FILES\s*=\s*new\s+Set/.test(content),
-    'scripts/gen-golden-install-parity-zcode.cjs must import VOLATILE_FILES from ' +
-    'tests/helpers/install-shared.cjs, not re-declare it inline'
-  );
-});
+for (const consumer of CONSUMERS) {
+  test(`${consumer.name} does not re-declare an inline buildParityManifest or any exclusion constant (#2266)`, () => {
+    // allow-test-rule: source text is the product for this anti-divergence check, see #2266
+    const content = fs.readFileSync(path.join(ROOT, ...consumer.rel), 'utf8');
+    for (const { label, re } of FORBIDDEN_INLINE) {
+      assert.ok(
+        !re.test(content),
+        `${consumer.name} must import ${label} from ${consumer.from}, not re-declare it inline`
+      );
+    }
+  });
+}

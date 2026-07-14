@@ -1,9 +1,15 @@
 'use strict';
 
 /**
- * Shared helpers and constants for install test suite.
- * Used by install.test.cjs, install-runtime-artifacts.test.cjs,
- * and install-minimal-hooks.test.cjs.
+ * Shared helpers and constants for the install test suites and the
+ * golden-install-parity harness. Provides the install/uninstall drivers
+ * (walk, runMinimalInstall, RUNTIME_META, BUILD_SCRIPT) and the single
+ * canonical golden-parity manifest builder (buildParityManifest) plus its
+ * exclusion constants (VOLATILE_FILES, HOOK_CONFIG_FILES,
+ * HOOK_CONFIG_RELATIVE_PATHS, EXCLUDED_PREFIXES). Imported by many
+ * tests/*.test.cjs and by scripts/gen-golden-install-parity-zcode.cjs — do
+ * NOT re-declare the builder/constants inline (enforced by
+ * tests/golden-parity-single-source.test.cjs, #2266).
  */
 
 const fs = require('node:fs');
