@@ -498,6 +498,7 @@ stopped_at: Plan 2 of Phase 3
       { input: 'Ready to plan', expected: 'planning' },
       { input: 'Phase complete — ready for verification', expected: 'verifying' },
       { input: 'Milestone complete', expected: 'completed' },
+      { input: 'All phases complete', expected: 'completed' },
     ];
 
     for (const { input, expected } of statusTests) {
@@ -1795,7 +1796,7 @@ describe('progress counters correct after plan execution (#1589)', () => {
     );
 
     // Trigger a STATE.md write (e.g. state update Status)
-    const result = runGsdTools('state update Status "Milestone complete"', tmpDir);
+    const result = runGsdTools('state update Status "All phases complete"', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     // Read the frontmatter — percent must be derived from disk (4/4 = 100%), not from body "0%"
@@ -2038,7 +2039,7 @@ describe('updatePerformanceMetricsSection', () => {
     const afterFirst = fs.readFileSync(statePath, 'utf-8');
 
     // Reset state so we can complete again
-    let resetContent = afterFirst.replace(/Milestone complete|Ready to plan/, 'Executing Phase 5');
+    let resetContent = afterFirst.replace(/All phases complete|Ready to plan/, 'Executing Phase 5');
     resetContent = resetContent.replace(/Not started/, '1');
     fs.writeFileSync(statePath, resetContent);
 

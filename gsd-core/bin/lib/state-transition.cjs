@@ -591,8 +591,8 @@ function advancePlanCore(content, deps) {
  * Migrates the inline STATE.md transform that lived inside `cmdPhaseComplete`
  * (phase.cts) onto the substrate. Owns the field-classification-governed body
  * mutations: Current Phase (preserving the `of total` shape and phase name),
- * Current Phase Name, Status (`Milestone complete` on the last phase, else
- * `Ready to plan`), Current Plan (`Not started`), Last Activity + Description,
+ * Current Phase Name, Status (`All phases complete` on the last phase, else
+ * `Ready to plan` per ADR-2207), Current Plan (`Not started`), Last Activity + Description,
  * and the Completed/Total Phases + Progress percent block (re-derived from the
  * roadmap via the injected `roadmapProvider`).
  *
@@ -672,8 +672,10 @@ function completePhaseCore(content, intent, deps) {
             updated.push('Current Phase Name');
         }
     }
-    // Status — `Milestone complete` on the final phase, otherwise `Ready to plan`.
-    const statusValue = intent.isLastPhase ? 'Milestone complete' : 'Ready to plan';
+    // Status — `All phases complete` on the final phase (ADR-2207), otherwise
+    // `Ready to plan`. Milestone termination (`<version> milestone complete`) is
+    // owned solely by the milestone-close verb (milestoneCompleteCore).
+    const statusValue = intent.isLastPhase ? 'All phases complete' : 'Ready to plan';
     const statusAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Status', null, statusValue);
     if (statusAfter !== body) {
         body = statusAfter;

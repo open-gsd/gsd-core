@@ -598,13 +598,13 @@ describe('ADR-1769 Phase 3: completePhase transition — body field updates', ()
     assert.strictEqual(stateExtractField(result.content, 'Status'), 'Ready to plan');
   });
 
-  test('Status becomes "Milestone complete" when isLastPhase is true', () => {
+  test('Status becomes "All phases complete" when isLastPhase is true', () => {
     const result = transitionCore(
       completePhaseBody(),
       { kind: 'completePhase', phaseNum: '5', nextPhaseNum: null, nextPhaseName: null, isLastPhase: true, planCount: 2, summaryCount: 2 },
       deps,
     );
-    assert.strictEqual(stateExtractField(result.content, 'Status'), 'Milestone complete');
+    assert.strictEqual(stateExtractField(result.content, 'Status'), 'All phases complete');
   });
 
   test('Current Plan resets to "Not started"', () => {

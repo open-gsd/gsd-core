@@ -1729,7 +1729,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         }
       }
 
-      // #2028: don't stamp "Milestone complete" when a LOWER-numbered phase is
+      // #2028: don't stamp "All phases complete" when a LOWER-numbered phase is
       // still outstanding. The two blocks above only clear isLastPhase when a
       // HIGHER-numbered phase exists, so completing the numerically-highest phase
       // out of order (e.g. Phase 10 before Phase 9) wrongly read as milestone-end.
