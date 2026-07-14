@@ -85,3 +85,15 @@ for (const runtime of targets) {
   fs.writeFileSync(fixturePath, JSON.stringify(actual, null, 2) + '\n', 'utf8');
   process.stdout.write(`[gen] ${runtime}: wrote ${Object.keys(actual).length} file hashes -> ${fixturePath}\n`);
 }
+
+// Regenerate the claude-local fixture (local scope, distinct legacy layout).
+const { configDir: localConfigDir, root: localRoot } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
+let localActual;
+try {
+  localActual = buildParityManifest(localConfigDir, localRoot);
+} finally {
+  cleanup(localRoot);
+}
+const localFixturePath = path.join(FIXTURE_DIR, 'claude-local.json');
+fs.writeFileSync(localFixturePath, JSON.stringify(localActual, null, 2) + '\n', 'utf8');
+process.stdout.write(`[gen] claude-local: wrote ${Object.keys(localActual).length} file hashes -> ${localFixturePath}\n`);
