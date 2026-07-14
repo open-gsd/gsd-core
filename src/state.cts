@@ -27,7 +27,7 @@ const { planningDir, planningPaths } = planningWorkspace;
 import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
+const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -46,7 +46,9 @@ import {
   KNOWN_TEMPLATE_DEFAULTS,
   stateReplaceFieldIfTemplate,
 } from './state-document.cjs';
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, collectSection, replaceSection } from './markdown-sectionizer.cjs';
+import type { HeadingToken } from './markdown-sectionizer.cjs';
+import { parseMarkdownTable, updateTableCell, deleteTableRow, insertTableRow, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -274,8 +276,11 @@ function _stateLockBodyPid(lockPath: string): number | null {
 // Monotonic sequence for unique stale-steal rename targets (no crypto dependency).
 let _stateStealSeq = 0;
 
-// Hoisted to module scope — compiled once, not per call (#320). Stateless (/i, used with .match).
-const byPhaseTablePattern = /(\|\s*Phase\s*\|\s*Plans\s*\|\s*Total\s*\|\s*Avg\/Plan\s*\|[ \t]*\r?\n\|(?:[- :\t]+\|)+[ \t]*\r?\n)((?:[ \t]*\|[^\n]*\n)*)(?=\r?\n|$)/i;
+// The `byPhaseTablePattern` regex hoisted here for #320 (canonical-column-
+// ORDER-only By-Phase table match) is retired (#2245 audit): its last caller
+// — updatePerformanceMetricsSection's row-INSERT branch — now locates the
+// table via findTableStartOffset/insertTableRow, name-addressed and
+// header-order-agnostic like the update/sum halves of the same function.
 
 // ─── ADR-1372 T6: seam-based section splice helper ───────────────────────────
 
@@ -540,33 +545,133 @@ function cmdStateRecordMetric(cwd: string, options: StateRecordMetricOptions, ra
   let _recorded = false;
   let created = false;
   readModifyWriteStateMd(statePath, (content) => {
-    // Find Performance Metrics section and its table
-    const metricsPattern = /(##\s*Performance Metrics[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n)([\s\S]*?)(?=\n##|\n$|$)/i; // allow-adhoc-markdown: metrics-table write-path section-collect in state.cts; pending collectSection migration #1372
-    const metricsMatch = content.match(metricsPattern);
-
     const newRow = `| Phase ${phase} P${plan} | ${duration} | ${tasks || '-'} tasks | ${files || '-'} files |`;
 
-    if (metricsMatch) {
-      let tableBody = metricsMatch[2].trimEnd();
+    // Find the "## Performance Metrics" section via the markdown-sectionizer
+    // seam (ADR-2143 §7) — supersedes the prior hand-rolled section+table
+    // regex.
+    const metricsSection = collectSection(content, (h) => /^performance metrics$/i.test(h.text.trim()));
 
-      if (tableBody.trim() === '' || tableBody.includes('None yet')) {
-        tableBody = newRow;
-      } else {
-        tableBody = tableBody + '\n' + newRow;
+    const eol = metricsSection && /\r\n/.test(metricsSection.body) ? '\r\n' : '\n';
+    const lines = metricsSection ? metricsSection.body.split(/\r?\n/) : [];
+
+    // Locate THIS command's OWN metrics table by its HEADER shape, using the
+    // exact same splitTableRow/isDelimiterRow header/delimiter-shape checks
+    // `parseMarkdownTable` uses. A live "## Performance Metrics" section
+    // (gsd-core/templates/state.md:39-56) also carries the "By Phase"
+    // velocity table (`| Phase | Plans | Total | Avg/Plan |`) — the prior
+    // "first table in the section" targeting spliced every per-plan row into
+    // THAT table instead, polluting it on EVERY plan completion
+    // (execute-plan.md:414 calls record-metric per-plan) (#2245/#2143).
+    // Matching the header cells to this command's own canonical
+    // `Plan | Duration | Tasks | Files` shape (case-insensitive/trimmed)
+    // finds the right table regardless of what else shares the section, and
+    // deliberately does NOT require `parseMarkdownTable(...).ok` (which
+    // additionally requires every DATA row's cell count to match the
+    // header) — a single ragged sibling row (a hand-edited stray/extra pipe)
+    // must not blind this scan (#2245 Blocker 2 parity with the other
+    // Phase-4 ragged-tolerance fixes: updateTableCell / findTableStartOffset).
+    const METRICS_HEADER = ['plan', 'duration', 'tasks', 'files'];
+    let headerIdx = -1;
+    for (let i = 0; i < lines.length - 1; i++) {
+      const trimmed = lines[i].trim();
+      if (!trimmed.startsWith('|') || trimmed.indexOf('|', 1) === -1) continue;
+      const delimiterLine = lines[i + 1];
+      if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) continue;
+      const headerCells = splitTableRow(lines[i]);
+      const delimiterCells = splitTableRow(delimiterLine);
+      if (!isDelimiterRow(delimiterCells) || delimiterCells.length !== headerCells.length) continue;
+      const normalized = headerCells.map((cell) => cell.trim().toLowerCase());
+      const isMetricsHeader = normalized.length === METRICS_HEADER.length
+        && normalized.every((cell, idx) => cell === METRICS_HEADER[idx]);
+      if (isMetricsHeader) { headerIdx = i; break; }
+    }
+    const hasTable = headerIdx !== -1;
+
+    if (metricsSection && hasTable) {
+      const delimiterIdx = headerIdx + 1;
+      const prefixLines = lines.slice(0, delimiterIdx + 1);
+
+      // Ragged-tolerant row scan: every consecutive `|`-prefixed line
+      // following the delimiter counts as an existing row REGARDLESS of its
+      // cell count matching the header — a ragged sibling row must never
+      // blind this scan to the table's true last row (unlike
+      // `parsedTable.value.rows.length`, which this replaces). Anchored to
+      // the METRICS table's OWN header/delimiter (`headerIdx` above), never
+      // the section's first table (#2245/#2143).
+      let lastRowIdx = delimiterIdx;
+      for (let i = delimiterIdx + 1; i < lines.length; i++) {
+        if (!lines[i].trim().startsWith('|')) break;
+        lastRowIdx = i;
       }
+      const rowCount = lastRowIdx - delimiterIdx;
 
       _recorded = true;
-      return content.replace(metricsPattern, (_match, header: string) => `${header}${tableBody}\n`);
+
+      let newBody: string;
+      if (rowCount > 0) {
+        // Splice the new row immediately after the table's LAST existing data
+        // row — every other byte of the section, INCLUDING any trailing prose
+        // that follows the table (e.g. the default template's "**Recent
+        // Trend:**" subsection + "*Updated after each plan completion*"
+        // footer), is preserved verbatim. The prior implementation truncated
+        // the section body to header+delimiter+rows+newRow, silently dropping
+        // everything that followed the table on a live STATE.md (#2245
+        // Blocker 1 — a per-plan path, run after every plan execution).
+        // `lastRowIdx` (computed above by the ragged-tolerant scan) already
+        // equals `delimiterIdx + rowCount` by construction.
+        const before = lines.slice(0, lastRowIdx + 1);
+        const after = lines.slice(lastRowIdx + 1);
+        newBody = [...before, newRow, ...after].join(eol);
+      } else {
+        // No existing data rows (e.g. a "None yet" placeholder line instead of
+        // a real row) — replace the placeholder/table-body remainder with the
+        // new row, matching the section's prior (verified) collapse-to-
+        // first-row behavior for an otherwise-empty table.
+        // No trailing eol here: replaceSection's `content.slice(bodyEnd)`
+        // already supplies the newline(s) that followed the (trimEnd()-ed)
+        // section body.
+        newBody = prefixLines.join(eol) + eol + newRow;
+      }
+
+      return replaceSection(content, metricsSection, newBody);
     }
 
-    // Section absent — DWIM: auto-create canonical ## Performance Metrics scaffold,
-    // then append the row. Matches state begin-phase / advance-plan DWIM behavior.
+    if (metricsSection) {
+      // Section EXISTS but carries no metrics table of its own — e.g. a live
+      // STATE.md whose "## Performance Metrics" section holds only the
+      // By-Phase velocity table (gsd-core/templates/state.md:48). Self-heal
+      // by appending a fresh Per-Plan Metrics table to the END of the
+      // section body — every existing byte (By-Phase table, Recent Trend,
+      // footer) is preserved verbatim, and no second "## Performance
+      // Metrics" heading is introduced. The section already existed, so
+      // `created` stays false (#2245/#2143).
+      _recorded = true;
+      const newBody = metricsSection.body
+        + eol + '**Per-Plan Metrics:**'
+        + eol + eol
+        + '| Plan | Duration | Tasks | Files |'
+        + eol
+        + '|------|----------|-------|-------|'
+        + eol
+        + newRow
+        + eol;
+      return replaceSection(content, metricsSection, newBody);
+    }
+
+    // Section absent (or malformed) — DWIM: auto-create canonical
+    // ## Performance Metrics scaffold, then append the row. Matches state
+    // begin-phase / advance-plan DWIM behavior. Header corrected to this
+    // command's own canonical shape (`Plan | Duration | Tasks | Files`) —
+    // the prior scaffold's `| Phase | Plan | Duration | Notes |` header
+    // matched neither the appended row's shape nor the canonical table
+    // above (#2245/#2143).
     const scaffold = [
       '',
       '## Performance Metrics',
       '',
-      '| Phase | Plan | Duration | Notes |',
-      '|-------|------|----------|-------|',
+      '| Plan | Duration | Tasks | Files |',
+      '|------|----------|-------|-------|',
       newRow,
       '',
     ].join('\n');
@@ -1120,15 +1225,22 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
  * Match the session section body from a STATE.md body. #1101: recognise the
  * bootstrap `## Session Continuity` heading but PREFER the normalized `## Session`
  * block when both exist (legacy duplicate files), so the reader agrees with the
- * writer (which updates `## Session` first). `(?:^|\n)` line-anchors (kept out of
- * `/m` so `$` stays end-of-string for the `(?=\n##|$)` section boundary), which
- * excludes an h3 `### Session Continuity`; the trailing-` Archive` boundary still
- * excludes `## Session Continuity Archive` (preserving the #2444 scoping).
- * Returns the match whose group 1 is the section body, or null.
+ * writer (which updates `## Session` first). Level-2-exact heading match
+ * (excludes an h3 `### Session Continuity`); the exact `'session continuity'`
+ * text match still excludes `## Session Continuity Archive` (preserving the
+ * #2444 scoping). Migrated onto the `collectSection` seam (#2143 audit,
+ * epic #2143): CRLF-safe — the prior hand-rolled `[ \t]*\n` regex silently
+ * failed to match a CRLF `## Session\r\n` heading line (the `\r` broke the
+ * `[ \t]*\n` boundary); `tokenizeHeadings` strips the trailing `\r` before
+ * heading-text extraction, so this now matches CRLF headings too.
+ * Returns the section body, or null.
  */
-function matchSessionSection(body: string): RegExpMatchArray | null {
-  return body.match(/(?:^|\n)##[ \t]*Session[ \t]*\n([\s\S]*?)(?=\n##|$)/i) // allow-adhoc-markdown: read-only session-section extract in state.cts; pending collectSection migration #1372
-    || body.match(/(?:^|\n)##[ \t]*Session Continuity[ \t]*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only session-continuity section extract in state.cts; pending collectSection migration #1372
+function matchSessionSection(body: string): string | null {
+  const isSession = (h: HeadingToken): boolean => h.level === 2 && h.text.trim().toLowerCase() === 'session';
+  const isSessionContinuity = (h: HeadingToken): boolean => h.level === 2 && h.text.trim().toLowerCase() === 'session continuity';
+  const section = collectSection(body, isSession, { levelBounded: true })
+    ?? collectSection(body, isSessionContinuity, { levelBounded: true });
+  return section ? section.body : null;
 }
 
 function parseProsePhaseField(value: string | null): { phase: string | null; name: string | null } {
@@ -1200,14 +1312,15 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
   const progressPercent = progressRaw ? parseInt(progressRaw.replace('%', ''), 10) : null;
 
-  // Extract decisions table
+  // Extract decisions table — via the markdown-sectionizer/markdown-table
+  // seams (ADR-2143 §7), cells addressed by column NAME rather than a
+  // hand-rolled section+table regex.
   const decisions: Array<{ phase: string; summary: string; rationale: string }> = [];
-  const decisionsMatch = body.match(/##\s*Decisions Made[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n([\s\S]*?)(?=\n##|\n$|$)/i); // allow-adhoc-markdown: read-only decisions-table section-collect in state.cts; pending collectSection migration #1372
-  if (decisionsMatch) {
-    const tableBody = decisionsMatch[1];
-    const rows = tableBody.trim().split('\n').filter(r => r.includes('|'));
-    for (const row of rows) {
-      const cells = row.split('|').map(c => c.trim()).filter(Boolean);
+  const decisionsSection = collectSection(body, (h) => /^decisions made$/i.test(h.text.trim()));
+  const decisionsTable = decisionsSection ? parseMarkdownTable(decisionsSection.body) : null;
+  if (decisionsTable && decisionsTable.ok) {
+    for (const row of decisionsTable.value.rows) {
+      const cells = decisionsTable.value.columns.map((c) => (row[c] ?? '').trim()).filter(Boolean);
       if (cells.length >= 3) {
         decisions.push({
           phase: cells[0],
@@ -1220,10 +1333,9 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
 
   // Extract blockers list
   const blockers: string[] = [];
-  const blockersMatch = body.match(/##\s*Blockers\s*\n([\s\S]*?)(?=\n##|$)/i); // allow-adhoc-markdown: read-only blockers section-collect in state.cts; pending collectSection migration #1372
-  if (blockersMatch) {
-    const blockersSection = blockersMatch[1];
-    const items = blockersSection.match(/^-\s+(.+)$/gm) || [];
+  const blockersSection = collectSection(body, (h) => h.level === 2 && h.text.trim().toLowerCase() === 'blockers', { levelBounded: true });
+  if (blockersSection) {
+    const items = blockersSection.body.match(/^-\s+(.+)$/gm) || [];
     for (const item of items) {
       blockers.push(item.replace(/^-\s+/, '').trim());
     }
@@ -1239,8 +1351,8 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
   // `## Session Continuity` heading. See matchSessionSection for the anchoring.
   const sessionMatch = matchSessionSection(body);
-  if (sessionMatch) {
-    const sessionSection = sessionMatch[1];
+  if (sessionMatch !== null) {
+    const sessionSection = sessionMatch;
     // Accept both `**Last Date:**` (canonical template form) and `**Last session:**`
     // (the form written by the DWIM auto-create / normalize path added for #944).
     const lastDateMatch = sessionSection.match(/\*\*Last Date:\*\*\s*(.+)/i)
@@ -1360,18 +1472,20 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   // #1101: prefer the canonical `## Session` block, falling back to the bootstrap
   // `## Session Continuity` heading. See matchSessionSection for the anchoring.
   const sessionSectionMatch = matchSessionSection(bodyContent);
-  const sessionBodyScope = sessionSectionMatch ? sessionSectionMatch[1] : bodyContent;
+  const sessionBodyScope = sessionSectionMatch ?? bodyContent;
   const stoppedAt = stateExtractField(sessionBodyScope, 'Stopped At') || stateExtractField(sessionBodyScope, 'Stopped at');
   const pausedAt = stateExtractField(bodyContent, 'Paused At');
 
   let milestone: string | null = null;
   let milestoneName: string | null = null;
   if (cwd) {
-    try {
-      const info = getMilestoneInfo(cwd);
-      milestone = info.version;
-      milestoneName = info.name;
-    } catch { /* intentionally empty */ }
+    // DEAD catch removed (#2245 audit): getMilestoneInfo has its own outer
+    // try/catch (roadmap-parser.cts) that already swallows every internal
+    // failure and always returns a MilestoneInfo — it never throws, so this
+    // wrapper could never be triggered.
+    const info = getMilestoneInfo(cwd);
+    milestone = info.version;
+    milestoneName = info.name;
   }
 
   let totalPhases: number | null = totalPhasesRaw ? parseInt(totalPhasesRaw, 10) : null;
@@ -1508,6 +1622,13 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
         completedPlans = cached.completedPlans;
         milestoneUnbounded = cached.milestoneBounded === false;
       }
+      /* best-effort (#2245 audit): this is a READ path building STATE.md's
+       * display frontmatter. The real throw source is fs.readdirSync(phasesDir)
+       * a few lines up — an inaccessible/racily-removed phases dir must not
+       * crash `state show`; on failure this simply keeps whatever
+       * frontmatter-derived totals/completedPhases/etc. were already set
+       * above, a graceful degrade rather than a corrupted write (nothing is
+       * persisted from this block). */
     } catch { /* intentionally empty */ }
   }
 
@@ -1550,20 +1671,6 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
   if (Object.keys(progress).length > 0) fm['progress'] = progress;
 
   return fm;
-}
-
-function stripFrontmatter(content: string): string {
-  // Strip ALL frontmatter blocks at the start of the file.
-  // Handles CRLF line endings and multiple stacked blocks (corruption recovery).
-  // Greedy: keeps stripping ---...--- blocks separated by optional whitespace.
-  let result = content;
-
-  while (true) {
-    const stripped = result.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\s*/, '');
-    if (stripped === result) break;
-    result = stripped;
-  }
-  return result;
 }
 
 function syncStateFrontmatter(content: string, cwd: string | undefined): string {
@@ -1954,7 +2061,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // A stale "Stopped at:" in a non-Session section (e.g. Session Continuity
     // Archive prose) must not interfere with the delta comparison.
     const preSessionMatch = matchSessionSection(preBody);
-    const preSessionScope = preSessionMatch ? preSessionMatch[1] : preBody;
+    const preSessionScope = preSessionMatch ?? preBody;
     const preBodyStoppedAt = stateExtractField(preSessionScope, 'Stopped At') || stateExtractField(preSessionScope, 'Stopped at');
 
     // ADR-1769 Phase 6 / #1743 / #1695: snapshot the body source for the curated
@@ -1988,7 +2095,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     // Bug #1230 / Change B: scope stopped_at delta to the ## Session section,
     // consistent with the pre-transform snapshot above and buildStateFrontmatter.
     const postSessionMatch = matchSessionSection(postBody);
-    const postSessionScope = postSessionMatch ? postSessionMatch[1] : postBody;
+    const postSessionScope = postSessionMatch ?? postBody;
     const postBodyStoppedAt = stateExtractField(postSessionScope, 'Stopped At') || stateExtractField(postSessionScope, 'Stopped at');
     // ADR-1769 Phase 6 / #1695: post-transform body Phase source for the
     // current_phase_name delta comparison.
@@ -2158,6 +2265,38 @@ function cmdSignalResume(cwd: string, raw: boolean): void {
 // ─── Gate Functions (STATE.md consistency enforcement) ────────────────────────
 
 /**
+ * Find the character offset where the FIRST GFM table whose header is a
+ * superset of `required` column names begins (order-independent; extra
+ * columns tolerated) — the position-aware counterpart to markdown-table's
+ * `findTableWithColumns`, used to scope `updateTableCell` (which always
+ * operates on "the first table in its input") to the RIGHT table when an
+ * unrelated earlier table (that doesn't itself name every required column)
+ * may precede it in the same document. Returns `null` when no such table is
+ * found. Never trips the table-regex fingerprint (no `[^|]` cell-capture
+ * class) and never throws.
+ *
+ * Ragged-tolerant (#2245 Blocker 2): accepts the offset the moment a HEADER
+ * line names every required column — it deliberately does NOT additionally
+ * require `parseMarkdownTable(text.slice(m.index)).ok`, which validates every
+ * DATA row's cell count. A ragged sibling row anywhere in the table used to
+ * make that whole-table parse fail, so the offset came back `null` and the
+ * caller's `updateTableCell` calls (which scope to this offset) never even
+ * ran against an otherwise-perfectly-findable row.
+ */
+function findTableStartOffset(text: string, required: string[]): number | null {
+  const lineRe = /^[ \t]*\|.*\|[ \t]*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = lineRe.exec(text)) !== null) {
+    const trimmed = m[0].trim();
+    const cols = trimmed.replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
+    if (required.every((rq) => cols.includes(rq))) {
+      return m.index;
+    }
+  }
+  return null;
+}
+
+/**
  * Update the ## Performance Metrics section in STATE.md content.
  * Increments Velocity totals and upserts a By Phase table row.
  * Returns modified content string.
@@ -2168,46 +2307,125 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
   // the same phase again upserts the same row, so the column sum is stable. The previous
   // blind-add (prevTotal + summaryCount) re-read the cumulative total each call and
   // double-counted on every re-run. (#1582)
-  const byPhaseMatch = content.match(byPhaseTablePattern);
-  if (byPhaseMatch) {
-    let tableBody = byPhaseMatch[2].trim();
+  //
+  // Located by column NAME via the markdown-table seam (ADR-2143 §7) —
+  // supersedes the prior module-level byPhaseTablePattern regex for the
+  // existence/lookup half of this logic.
+  const byPhaseCols = ['Phase', 'Plans', 'Total', 'Avg/Plan'];
+  // Ragged-tolerant (#2245 Blocker 2): scope to the table's start offset
+  // (findTableStartOffset — itself now ragged-tolerant, see above) rather
+  // than gating existence/lookup on findTableWithColumns, which requires the
+  // WHOLE table to parse — a ragged row for a DIFFERENT phase used to
+  // silently no-op every phase's upsert.
+  const tableStart = findTableStartOffset(content, byPhaseCols);
+  if (tableStart !== null) {
     // Match the existing row for this phase, tolerating leading-zero padding in either
     // direction (#1659): canonicalize a numeric phase to its integer form so a seeded
     // "| 05 |" row is upserted (not duplicated) by `phase complete 5`, and vice-versa.
     const phaseNumStr = String(phaseNum);
     const canonCell = /^\d+$/.test(phaseNumStr) ? `0*${Number(phaseNumStr)}` : escapeRegex(phaseNumStr);
-    const phaseRowPattern = new RegExp(`^\\|\\s*${canonCell}\\s*\\|.*$`, 'm');
-    const newRow = `| ${phaseNum} | ${summaryCount} | - | - |`;
+    const phaseCellRe = new RegExp(`^${canonCell}$`, 'i');
+    const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
 
-    if (phaseRowPattern.test(tableBody)) {
-      // Update existing row
-      tableBody = tableBody.replace(phaseRowPattern, newRow);
+    const before = content.slice(0, tableStart);
+    let tableText = content.slice(tableStart);
+
+    // Ragged-tolerant existence probe: a no-op updateTableCell write on the
+    // identifying "Phase" column (its own tolerant row scan) decides whether
+    // this phase's row already exists, without requiring every OTHER row in
+    // the table to also parse cleanly.
+    let rowExists = false;
+    const existsProbe = updateTableCell(tableText, rowMatch, 'Phase', (current) => {
+      rowExists = true;
+      return current;
+    });
+    void existsProbe;
+
+    if (rowExists) {
+      // Update existing row — one updateTableCell call per column (Phase
+      // itself may also change shape, e.g. "05" -> "5" per #1659).
+      const phaseResult = updateTableCell(tableText, rowMatch, 'Phase', ` ${phaseNum} `);
+      if (phaseResult.ok) tableText = phaseResult.value;
+      const plansResult = updateTableCell(tableText, rowMatch, 'Plans', ` ${summaryCount} `);
+      if (plansResult.ok) tableText = plansResult.value;
+      const totalResult = updateTableCell(tableText, rowMatch, 'Total', ' - ');
+      if (totalResult.ok) tableText = totalResult.value;
+      const avgResult = updateTableCell(tableText, rowMatch, 'Avg/Plan', ' - ');
+      if (avgResult.ok) tableText = avgResult.value;
+
+      content = before + tableText;
     } else {
-      // Remove placeholder row and add new row
-      tableBody = tableBody.replace(/^\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|$/m, '').trim();
-      tableBody = tableBody ? tableBody + '\n' + newRow : newRow;
-    }
+      // Row doesn't exist — INSERT a new row. Row insertion (unlike a cell
+      // update) is outside updateTableCell's scope (ADR-2143 §7 Phase 4);
+      // `insertTableRow` (markdown-table.cjs) is its name-addressed,
+      // header-order-agnostic sibling (#2245 audit: this used to locate the
+      // table via `byPhaseTablePattern`, a canonical-column-ORDER-only regex,
+      // and build the row as a hardcoded positional literal — so a reordered/
+      // superset By-Phase header, already tolerated above by
+      // findTableStartOffset and read by-NAME in the update/sum halves,
+      // silently inserted NOTHING).
+      //
+      // Drop a lone all-placeholder row first (e.g. the freshly-scaffolded
+      // "| - | - | - | - |" seed row) — same convention the prior
+      // canonical-order path used, generalized to any column order/count:
+      // a row whose every PRESENT cell is "-" is the placeholder.
+      const placeholderRow = (row: Record<string, string>): boolean =>
+        Object.values(row).every((cell) => cell.trim() === '-');
+      const withoutPlaceholder = deleteTableRow(tableText, placeholderRow);
+      if (withoutPlaceholder.ok) tableText = withoutPlaceholder.value;
 
-    content = content.replace(byPhaseTablePattern, (_match, tableHeader: string) => `${tableHeader}${tableBody}\n`);
+      // Map the By-Phase values onto the table's ACTUAL header columns by
+      // NAME — an unrecognized column (a superset header) falls back to "-",
+      // insertTableRow's default.
+      const valueFor = (col: string): string | undefined => {
+        if (col === 'Phase') return String(phaseNum);
+        if (col === 'Plans') return String(summaryCount);
+        if (col === 'Total' || col === 'Avg/Plan') return '-';
+        return undefined;
+      };
+      const insertResult = insertTableRow(tableText, valueFor);
+      if (insertResult.ok) tableText = insertResult.value;
+
+      content = before + tableText;
+    }
   }
 
   // Velocity: Total plans completed — DERIVED as the sum of the By-Phase Plans column
-  // (the second cell) across all data rows. Idempotent by construction (re-running phase
-  // complete upserts the same row → same sum) and self-healing (a hand-edited inflated
-  // total is corrected to the true sum on the next completion). When the By-Phase table
-  // is absent, leave the velocity total unchanged rather than guess. (#1582)
+  // across all data rows. Idempotent by construction (re-running phase complete upserts
+  // the same row → same sum) and self-healing (a hand-edited inflated total is corrected
+  // to the true sum on the next completion). When the By-Phase table is absent, leave the
+  // velocity total unchanged rather than guess. (#1582)
+  //
+  // Ragged-tolerant AND name-addressed (#2245 audit): each data row is split via
+  // `splitTableRow` and its "Plans" cell located by the HEADER's own column
+  // order (not a fixed ordinal), so a reordered/superset By-Phase header is
+  // summed correctly instead of silently reading the wrong cell. A row that's
+  // too short to physically contain the "Plans" column is skipped, not
+  // treated as an error — mirrors updateTableCell's ragged-row tolerance
+  // (a hand-edited/ragged row for one phase must not blank out the derived
+  // total for every phase). Still scoped via findTableStartOffset so the RIGHT
+  // table is summed when an earlier unrelated table also has a "Phase"
+  // column (#2012).
   if (/Total plans completed:\s*(\d+|\[N\])/.test(content)) {
-    const tableForSum = content.match(byPhaseTablePattern);
-    if (tableForSum) {
+    const sumTableStart = findTableStartOffset(content, byPhaseCols);
+    if (sumTableStart !== null) {
+      const tableLines = content.slice(sumTableStart).split(/\r?\n/);
+      const headerCells = splitTableRow(tableLines[0] ?? '');
+      const plansIdx = headerCells.indexOf('Plans');
       let sum = 0;
-      for (const row of tableForSum[2].split(/\r?\n/)) {
-        // Data rows look like `| <phase> | <plans> | … |`, optionally indented (the
-        // byPhaseTablePattern data-row capture allows `[ \t]*` leading whitespace, so the
-        // sum must too or hand-edited/legacy indented rows are silently skipped — #1582
-        // codex review). Header (`| Phase | Plans | …`) and separator (`| --- | --- | …`)
-        // rows have a non-numeric second cell and are skipped; non-numeric cells → 0.
-        const cellMatch = row.match(/^\s*\|\s*[^|]+\s*\|\s*(\d+)\s*\|/);
-        if (cellMatch) sum += parseInt(cellMatch[1], 10);
+      if (plansIdx !== -1) {
+        // The delimiter row is skipped by NAME (isDelimiterRow), not by a
+        // hardcoded "always line index 1" assumption, so this stays
+        // self-consistent with the ragged-tolerant read below.
+        const delimiterCells = splitTableRow(tableLines[1] ?? '');
+        const dataStart = isDelimiterRow(delimiterCells) ? 2 : 1;
+        for (const row of tableLines.slice(dataStart)) {
+          if (!row.trim().startsWith('|')) break;
+          const cells = splitTableRow(row);
+          if (plansIdx < cells.length && /^\d+$/.test(cells[plansIdx])) {
+            sum += parseInt(cells[plansIdx], 10);
+          }
+        }
       }
       content = content.replace(
         /Total plans completed:\s*(\d+|\[N\])/,
@@ -2344,7 +2562,10 @@ function cmdStateValidate(cwd: string, raw: boolean): void {
               warnings.push(`Status drift: STATE.md says "${status}" but ${vf} shows verification passed — phase may be complete`);
               drift['verification_status'] = { state_status: status, verification: 'passed' };
             }
-          } catch { /* intentionally empty */ }
+          } catch { /* best-effort (#2245 audit): cmdStateValidate is a diagnostic
+             * warnings scan across N VERIFICATION.md files — one unreadable file
+             * (permission/race) must not abort the scan of the rest; it's simply
+             * excluded from drift detection. */ }
         }
 
         // Check if all plans have summaries but status still says executing
@@ -2355,7 +2576,13 @@ function cmdStateValidate(cwd: string, raw: boolean): void {
           }
         }
       }
-    } catch { /* intentionally empty */ }
+    } catch { /* best-effort (#2245 audit): cmdStateValidate is a read-only
+       * diagnostic scan of the current phase's directory (readdirSync +
+       * scanPhasePlans). A disk-scan failure here means drift detection for
+       * this phase is skipped for this run, degrading to "no warnings from
+       * that scan" rather than crashing the validate command — the same
+       * degrade-on-scan-failure pattern buildStateFrontmatter's own disk scan
+       * already uses. */ }
   }
 
   const valid = warnings.length === 0;
@@ -2451,29 +2678,30 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
 
   // Determine total phases from ROADMAP (may be larger than realized disk dirs).
   // Mirrors the logic in buildStateFrontmatter so both report consistent percents (#3242 Bug B).
+  // DEAD catch removed (#2245 audit): every operation in this block is a regex
+  // exec/test over an already-read string plus pure Set/Math ops — none of
+  // which can throw — so the try/catch could never be triggered.
   let syncTotalPhases: number | null = null;
-  try {
-    let roadmapPhaseCount = 0;
-    if (syncRoadmapScope !== null) {
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
-      let m: RegExpExecArray | null;
-      while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
-        // Only count tokens that contain at least one digit — excludes
-        // pure-word section headings (Overview, Details) while keeping
-        // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-        if (!/\d/.test(m[1])) continue;
-        // #1514: retired/folded phases are struck through; exclude from total.
-        if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
-        roadmapPhaseCount++;
-      }
+  let roadmapPhaseCount = 0;
+  if (syncRoadmapScope !== null) {
+    // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+    const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
+    let m: RegExpExecArray | null;
+    while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
+      // Only count tokens that contain at least one digit — excludes
+      // pure-word section headings (Overview, Details) while keeping
+      // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
+      if (!/\d/.test(m[1])) continue;
+      // #1514: retired/folded phases are struck through; exclude from total.
+      if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
+      roadmapPhaseCount++;
     }
-    if (roadmapPhaseCount > 0) {
-      syncTotalPhases = Math.max(entries.length, roadmapPhaseCount);
-    } else {
-      syncTotalPhases = entries.length;
-    }
-  } catch { /* intentionally empty */ }
+  }
+  if (roadmapPhaseCount > 0) {
+    syncTotalPhases = Math.max(entries.length, roadmapPhaseCount);
+  } else {
+    syncTotalPhases = entries.length;
+  }
 
   // ADR-1769 Phase 7: the body writes (Total Plans in Phase, Progress bar, Last
   // Activity) are the pure `syncCore` in src/state-transition.cts.

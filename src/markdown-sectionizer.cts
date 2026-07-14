@@ -157,6 +157,121 @@ export function stripFencedCode(content: string): StripFencedResult {
   return { text: kept.join('\n'), unterminatedFence: openFence !== null };
 }
 
+// ─── extractFencedBlock ───────────────────────────────────────────────────────
+
+/** A fenced code block located by `scanFencedBlocks`: line-index span + info string. */
+interface FencedBlockRecord {
+  /** Fence delimiter character (`` ` `` or `~`). */
+  char: '`' | '~';
+  /** Fence delimiter run length (≥3). */
+  len: number;
+  /** Opening line's trailing text (untrimmed) — the CommonMark "info string". */
+  infoString: string;
+  /** 0-based index (into the `lines` array) of the OPENING delimiter line. */
+  openLineIdx: number;
+  /**
+   * 0-based index of the CLOSING delimiter line, or `-1` when the fence is
+   * unterminated (EOF reached while still open — mirrors `stripFencedCode`'s
+   * `unterminatedFence` signal).
+   */
+  closeLineIdx: number;
+}
+
+/**
+ * Shared low-level fence-scanning engine. Walks `lines` and returns every
+ * fenced block found, applying the EXACT SAME CommonMark delimiter rules as
+ * `stripFencedCode` (≥3 backticks/tildes, ≤3-space indent tolerance, a closer
+ * must be the same delimiter char with run length ≥ the opener and no
+ * trailing non-whitespace text; a mismatched delimiter char — or a same-char
+ * run that is too short or carries trailing text — encountered while a fence
+ * is already open is fence CONTENT, not a new open/close event). This is the
+ * "engine" `extractFencedBlock` reuses instead of an ad-hoc regex, so a
+ * different-info-string fence, a fence nested/indented inside another fence,
+ * and a `~~~` fence are all classified exactly as `stripFencedCode` would.
+ *
+ * Tracked duplication (same status as `tokenizeHeadings`'s copy, see its
+ * comment above): this is a second independent copy of the fence state
+ * machine, pending a T-tier consolidation.
+ */
+function scanFencedBlocks(lines: string[]): FencedBlockRecord[] {
+  const delimRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+  const blocks: FencedBlockRecord[] = [];
+  let open: { char: '`' | '~'; len: number; infoString: string; openLineIdx: number } | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, '');
+    const m = delimRe.exec(line);
+    if (!m) continue;
+
+    const char = m[2][0] as '`' | '~';
+    const len = m[2].length;
+    const trailing = m[3];
+
+    if (open === null) {
+      // CommonMark §4.5: backtick fence info string must not contain a backtick.
+      if (char === '`' && trailing.includes('`')) continue; // not a valid opener — ordinary content
+      open = { char, len, infoString: trailing.trim(), openLineIdx: i };
+    } else if (char === open.char && len >= open.len && /^\s*$/.test(trailing)) {
+      blocks.push({
+        char: open.char,
+        len: open.len,
+        infoString: open.infoString,
+        openLineIdx: open.openLineIdx,
+        closeLineIdx: i,
+      });
+      open = null;
+    }
+    // else: mismatched/insufficient delimiter while a fence is open — content, not a boundary.
+  }
+
+  if (open !== null) {
+    blocks.push({
+      char: open.char,
+      len: open.len,
+      infoString: open.infoString,
+      openLineIdx: open.openLineIdx,
+      closeLineIdx: -1,
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * Return the INNER text (the lines between the delimiters, joined by `\n`) of
+ * the FIRST fenced code block whose opening info string — trimmed,
+ * case-insensitive — equals `infoString`. Returns `null` when no such block
+ * exists, including when the only matching-name fence is left unterminated
+ * (EOF inside the fence — there is no well-defined inner span to return,
+ * matching a non-greedy `\n```-anchored` regex's behaviour of also failing to
+ * match an unclosed fence).
+ *
+ * Built on `scanFencedBlocks`, the same CommonMark fence-tracking engine
+ * `stripFencedCode` uses — so a fence of a DIFFERENT info string, a fence
+ * nested/indented inside another fence, and a `~~~` fence are all handled
+ * exactly as `stripFencedCode` would classify them; this is not a fresh
+ * ad-hoc regex.
+ *
+ * Migrated from `api-coverage.cts`'s bespoke
+ * `` /```coverage\s*\n([\s\S]*?)\n```/i `` (ADR-1372 tier migration, #2143 audit).
+ */
+export function extractFencedBlock(content: string, infoString: string): string | null {
+  if (typeof content !== 'string' || content.length === 0) return null;
+  if (typeof infoString !== 'string') return null;
+
+  const target = infoString.trim().toLowerCase();
+  const lines = content.split('\n');
+  const blocks = scanFencedBlocks(lines);
+
+  for (const block of blocks) {
+    if (block.closeLineIdx === -1) continue; // unterminated — no well-defined inner span
+    if (block.infoString.trim().toLowerCase() !== target) continue;
+    return lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n');
+  }
+
+  return null;
+}
+
 // ─── tokenizeHeadings ─────────────────────────────────────────────────────────
 
 /**
@@ -509,6 +624,146 @@ export function iterateBullets(sectionText: string): BulletItem[] {
   return items;
 }
 
+// ─── updateBullet ─────────────────────────────────────────────────────────────
+
+/**
+ * Locate the FIRST top-level bullet-opening line — checkbox (`- [ ]`/`- [x]`),
+ * dash/asterisk/plus (`- `/`* `/`+ `), or numbered (`1. `) — whose bullet text
+ * satisfies `match(bulletText, rawLine)`, replace that ONE physical line with
+ * `transform(rawLine)`, and return the resulting full content string. Every
+ * other byte in `content` — surrounding bullets, indentation, EOL style — is
+ * left untouched: this is a pure single-line splice, not a document-wide
+ * regex `.replace()`.
+ *
+ * Unlike `iterateBullets` (read-only, no offsets, and not itself fence-aware
+ * — callers pre-strip fences when that matters), `updateBullet` tracks
+ * character offsets itself so it can splice the transformed line back into
+ * the ORIGINAL `content`, and is fence-aware on its own: a bullet-shaped line
+ * inside a fenced code block (``` / ~~~, same CommonMark delimiter rules as
+ * `stripFencedCode`) is never offered to `match`/`transform`. (Tracked
+ * duplication of the fence state machine — same status as `tokenizeHeadings`'s
+ * copy, see its doc comment — pending a T-tier consolidation.)
+ *
+ * `rawLine` (second argument to both `match` and `transform`) is the
+ * UNMODIFIED physical line exactly as it appears between `\n` separators — so
+ * on a CRLF document its trailing `\r` is included, matching what a
+ * hand-rolled `^...[^\n]*`-shaped, `m`-flagged regex applied to the whole
+ * document would have seen. `bulletText` (first argument to `match`) is the
+ * bullet's own text with marker/checkbox stripped and any trailing `\r`
+ * removed — the same extraction `iterateBullets` uses for `BulletItem.text`.
+ *
+ * Only the OPENING line of a (possibly multi-line) bullet is ever matched or
+ * replaced — indented continuation lines are never presented to `match` or
+ * `transform`.
+ *
+ * The gap between the marker and its content tolerates 1 or more spaces — not
+ * only exactly one — mirroring CommonMark/GFM's 1–4-space allowance for
+ * list-marker spacing (`checkboxRe`/`numberedRe`/`dashRe`'s own dedicated
+ * quantifier caps at 4 per GFM; a wider run still recognises the line as a
+ * bullet opener via the uncapped `dashRe` fallback catching the excess as
+ * ordinary bullet text). So `-  [ ] text` (two spaces), `1.   text` (three
+ * spaces), and even a pathologically wide run are all recognised bullet
+ * openers, just as the canonical single-space `- [ ] text` / `1. text` are.
+ *
+ * Bounded no-op: if no bullet-opening line satisfies `match`, or `transform`
+ * returns a non-string, `content` is returned completely unchanged.
+ */
+export function updateBullet(
+  content: string,
+  match: (bulletText: string, rawLine: string) => boolean,
+  transform: (rawLine: string) => string,
+): string {
+  if (typeof content !== 'string' || content.length === 0) return content;
+
+  const lines = content.split('\n');
+
+  // Marker-to-content gap: CommonMark/GFM tolerates 1–4 spaces between a list
+  // marker and its content (5+ pushes the content into indented-code-block
+  // territory) — so `-  [ ] Phase 1: Foo` (two spaces) is still a valid
+  // bullet opener, not just the single-space `- [ ] …` shape. A hand-rolled
+  // single-space-only regex (e.g. the OLD `mutateMilestonePhase` checkbox
+  // regex before its `updateBullet` migration, which used `-\s*\[` — no cap,
+  // but at least 0+) would flip such a line; matching that requires this
+  // primitive's own bullet-opening recognition to tolerate the same gap,
+  // otherwise a wider-spaced bullet is silently never offered to `match`.
+  // F5 (#2245 review, nit): the gap also tolerates a literal TAB (`\t`), not
+  // only spaces — the OLD `-\s*\[` regex's `\s` class matched a tab too, so a
+  // `-\t[ ] text` bullet (tab-separated marker) must still be recognised here.
+  // Checkbox bullet: `<indent>- [ ] text` or `<indent>- [x] text`
+  const checkboxRe = /^(\s*)-[ \t]{1,4}\[([xX ])\] (.*)$/;
+  // Plain dash/asterisk/plus bullet: `<indent>- text`, `<indent>* text`, `<indent>+ text`
+  const dashRe = /^(\s*)[-*+][ \t]{1,4}(.*)$/;
+  // Numbered bullet: `<indent>1. text`
+  const numberedRe = /^(\s*)\d+\.[ \t]{1,4}(.*)$/;
+
+  // Fence tracking — same CommonMark delimiter rules as stripFencedCode
+  // (tracked duplication, see doc comment above).
+  const delimRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
+  let openFence: FenceState | null = null;
+
+  let offset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const line = rawLine.replace(/\r$/, '');
+
+    const dm = delimRe.exec(line);
+    if (dm) {
+      const char = dm[2][0] as '`' | '~';
+      const len = dm[2].length;
+      const trailing = dm[3];
+      if (openFence === null) {
+        // CommonMark §4.5: backtick fence info string must not contain a backtick.
+        if (!(char === '`' && trailing.includes('`'))) {
+          // Valid opener — record fence state; this delimiter line is not a bullet.
+          openFence = { char, len };
+          offset += rawLine.length + 1;
+          continue;
+        }
+        // else: not a valid opener — falls through to the bullet check below.
+      } else if (char === openFence.char && len >= openFence.len && /^\s*$/.test(trailing)) {
+        // Closing delimiter — close the fence; this line is not a bullet.
+        openFence = null;
+        offset += rawLine.length + 1;
+        continue;
+      } else {
+        // Mismatched/insufficient delimiter while a fence is open — fence content.
+        offset += rawLine.length + 1;
+        continue;
+      }
+    }
+
+    if (openFence !== null) {
+      // Inside a fence — never a bullet candidate.
+      offset += rawLine.length + 1;
+      continue;
+    }
+
+    let bulletText: string | null = null;
+    const cbm = checkboxRe.exec(line);
+    if (cbm) {
+      bulletText = cbm[3];
+    } else {
+      const dm2 = dashRe.exec(line);
+      if (dm2) {
+        bulletText = dm2[2];
+      } else {
+        const nm = numberedRe.exec(line);
+        if (nm) bulletText = nm[2];
+      }
+    }
+
+    if (bulletText !== null && match(bulletText, rawLine)) {
+      const newLine = transform(rawLine);
+      if (typeof newLine !== 'string') return content;
+      return content.slice(0, offset) + newLine + content.slice(offset + rawLine.length);
+    }
+
+    offset += rawLine.length + 1;
+  }
+
+  return content;
+}
+
 // ─── extractTaggedBlocks ──────────────────────────────────────────────────────
 
 /**
@@ -665,6 +920,95 @@ export function withSection(
   const newBody = edit(section.body);
   if (typeof newBody !== 'string' || newBody === section.body) return content;
   return replaceSection(content, section, newBody);
+}
+
+// ─── deleteSection ────────────────────────────────────────────────────────────
+
+/**
+ * Delete an entire section — the matching heading line ITSELF plus its body —
+ * and return the resulting full content string.
+ *
+ * Locates the target heading via the SAME machinery `collectSection` uses
+ * (`tokenizeHeadings` + `headingPredicate`), then determines the stop boundary
+ * with the SAME level-bounding rule (`levelBounded` / `stopAtLevel`, see
+ * `CollectSectionOptions`): the deleted range runs from the target heading's
+ * OWN start offset up to (but not including) the next heading whose level is
+ * the same-or-higher (lower level number) than the target's — so a level-3
+ * `### Phase N` section deletes through any nested `####` content but STOPS at
+ * the next `##`/`###` sibling, whatever that heading's text is (unlike a
+ * hand-rolled regex anchored to a specific heading TEXT pattern, which keeps
+ * scanning past an unrelated heading and can run away to EOF when no further
+ * heading of that specific text shape follows — the whole-section-deletion
+ * data-loss class this primitive retires).
+ *
+ * Unlike `collectSection`/`withSection` (which operate on a section's BODY
+ * only, leaving the heading line untouched), `deleteSection` removes the
+ * heading line too — the counterpart for "delete section" call sites that
+ * `withSection` structurally cannot serve.
+ *
+ * Collapses at most one resulting blank-line seam: if removing the section
+ * leaves 2+ blank lines immediately at the splice point (e.g. the original
+ * document already had a double-blank separator immediately before the
+ * deleted heading), the seam is normalized down to a single blank line so no
+ * double-blank gap accumulates where the section used to sit. Content
+ * elsewhere in the document is never touched.
+ *
+ * Returns `content` unchanged when no heading matches `headingPredicate`
+ * (bounded no-op, mirroring `withSection`'s miss behaviour).
+ */
+export function deleteSection(
+  content: string,
+  headingPredicate: (heading: HeadingToken) => boolean,
+  opts: CollectSectionOptions = {},
+): string {
+  if (typeof content !== 'string') return content;
+
+  const { levelBounded = true, stopAtLevel } = opts;
+
+  const headings = tokenizeHeadings(content);
+  const targetIdx = headings.findIndex(headingPredicate);
+  if (targetIdx === -1) return content;
+
+  const target = headings[targetIdx];
+  const lines = content.split('\n');
+
+  // Determine the stop line using the SAME level-bounding rule collectSection uses.
+  let stopLine = lines.length + 1; // 1-based, exclusive (default: EOF+1)
+  for (let j = targetIdx + 1; j < headings.length; j++) {
+    const next = headings[j];
+    let isStop: boolean;
+    if (stopAtLevel !== undefined) {
+      isStop = next.level <= stopAtLevel;
+    } else {
+      isStop = levelBounded ? next.level <= target.level : true;
+    }
+    if (isStop) {
+      stopLine = next.line;
+      break;
+    }
+  }
+
+  // Character offsets — same line-offset table collectSection builds.
+  const lineOffsets: number[] = new Array<number>(lines.length);
+  let acc = 0;
+  for (let i = 0; i < lines.length; i++) {
+    lineOffsets[i] = acc;
+    acc += lines[i].length + 1; // +1 for the '\n' separator
+  }
+  const eofOffset = acc;
+
+  const sectionStart = lineOffsets[target.line - 1]; // start of the target heading LINE itself
+  const sectionEnd = stopLine <= lines.length ? lineOffsets[stopLine - 1] : eofOffset;
+
+  const before = content.slice(0, sectionStart);
+  const after = content.slice(sectionEnd);
+
+  // Collapse a resulting blank-line seam to at most one blank line (2 newlines).
+  // Only the tail of `before` (immediately at the splice point) is touched —
+  // this never reaches into unrelated content elsewhere in the document.
+  const collapsedBefore = before.replace(/(?:\r\n|\n){3,}$/, (m) => (m.includes('\r\n') ? '\r\n\r\n' : '\n\n'));
+
+  return collapsedBefore + after;
 }
 
 // Consumers: require('../gsd-core/bin/lib/markdown-sectionizer.cjs')

@@ -20,6 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
+import { updateTableCell } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -41,6 +42,49 @@ interface MilestoneCompleteOptions {
   force?: boolean;
   archivePhases?: boolean;
   dryRun?: boolean;
+}
+
+/**
+ * Scope an `updateTableCell` call to the `## Traceability` (or
+ * `## Traceability Status`) heading's own section — up to the next H1/H2
+ * heading — instead of handing it the WHOLE REQUIREMENTS.md content.
+ *
+ * F1 (#2245 review, BLOCKER): `updateTableCell` binds to the FIRST GFM table
+ * found in whatever text it is given. The shipped requirements template
+ * (gsd-core/templates/requirements.md) puts an `## Out of Scope` table
+ * (`| Feature | Reason |`, no `Status` column) BEFORE `## Traceability` — so
+ * an unscoped whole-file call targets the Out-of-Scope table instead, fails
+ * with `{ok:false, reason:'unknown column: Status'}`, and the real
+ * Traceability row is never flipped, while the checkbox surface still flips
+ * and the command reports success (the #2140 silent-divergence class one
+ * level deeper). Mirrors phase.cts's `editProgressHeadingSlice` scoping of
+ * `## Progress` writes to that heading's own slice.
+ *
+ * Falls back to running `updateTableCell` against the whole `text` when no
+ * `## Traceability` heading exists — matching the previous (unscoped)
+ * behaviour for a REQUIREMENTS.md whose traceability table sits under some
+ * other heading, or with no heading at all (never worse than before this fix).
+ */
+function updateTraceabilityCell(
+  text: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+  column: string,
+  newValue: string | ((current: string) => string),
+): ReturnType<typeof updateTableCell> {
+  const headingMatch = text.match(/^##[ \t]+Traceability(?:[ \t]+Status)?\b/im);
+  if (!headingMatch || headingMatch.index === undefined) {
+    return updateTableCell(text, match, column, newValue);
+  }
+  const headingOffset = headingMatch.index;
+  const before = text.slice(0, headingOffset);
+  const fromHeading = text.slice(headingOffset);
+  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
+  const scoped = nextHeadingOffset >= 0 ? fromHeading.slice(0, nextHeadingOffset) : fromHeading;
+  const after = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
+
+  const result = updateTableCell(scoped, match, column, newValue);
+  if (!result.ok) return result;
+  return { ok: true, value: before + result.value + after };
 }
 
 function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: boolean): void {
@@ -76,10 +120,14 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   // reads the table) still sees Pending while the CLI reported success.
   const tableUnmatched: string[] = [];
 
-  // A traceability table is present if the file has a "| Requirement | … |"
-  // header. A REQUIREMENTS.md with no such table is legitimate (mid-roadmap), so
-  // a missing row only counts as drift when a table actually exists.
-  const hasTable = /^\|\s*Requirement\s*\|/im.test(reqContent);
+  // A traceability table is present if the file has a requirement-ID column
+  // header: "Requirement", "Requirement ID", or "REQ-ID" (#2769/#2203) — kept
+  // in sync with the positional first-cell rowMatch/hasRow below so a
+  // REQ-ID-headed table (the real-world format) participates in the
+  // write-set and the #2140 drift check below, not just the "Requirement"
+  // case. A REQUIREMENTS.md with no such table is legitimate (mid-roadmap),
+  // so a missing row only counts as drift when a table actually exists.
+  const hasTable = /^\|\s*(?:Requirement(?:\s*ID)?|REQ[-\s]?ID)\s*\|/im.test(reqContent);
 
   // ADR-2143 §6 per-surface write-set, tracked PER requirement ID: a
   // multi-ID batch must not OR one ID's surface outcome into another's —
@@ -104,11 +152,32 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     const checkboxHit = afterCheckbox !== reqContent;
     if (checkboxHit) reqContent = afterCheckbox;
 
-    // Surface 2 — the traceability row: | REQ-ID | Phase N | Pending | → ... Complete |
-    const tablePattern = new RegExp(`(\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|)\\s*Pending\\s*(\\|)`, 'gi');
-    const afterTable = reqContent.replace(tablePattern, '$1 Complete $2');
-    const tableHit = afterTable !== reqContent;
-    if (tableHit) reqContent = afterTable;
+    // Surface 2 — the traceability row: | <REQ-ID> | Phase N | Pending | → ... Complete |
+    // via the markdown-table seam (ADR-2143 §7) — supersedes the prior ordinal
+    // regex. Match the row by its FIRST cell's value (the requirement-ID column)
+    // regardless of that column's HEADER name — real tables head it `REQ-ID`,
+    // others `Requirement` (#2769/#2203); this mirrors the prior regex's first-cell
+    // `\|\s*<id>\s*\|` anchor. Object.values(row) is in header order so [0] is the
+    // first column. Case-insensitive (mirrors the prior regex's 'i' flag).
+    const rowMatch = (row: Record<string, string>): boolean =>
+      (Object.values(row)[0] ?? '').trim().toLowerCase() === reqId.toLowerCase();
+    // Ragged-tolerant (#2245 Blocker 2): drive the write purely off
+    // updateTableCell's own tolerant row scan — a DIFFERENT requirement's row
+    // elsewhere in the same table having a mismatched cell count must never
+    // silently no-op THIS requirement's write. The "only flip Pending ->
+    // Complete" gate is folded into the newValue callback so one
+    // updateTableCell call both probes the current value and writes.
+    let tableHit = false;
+    const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
+      if (/^pending$/i.test(current.trim())) {
+        tableHit = true;
+        return ' Complete ';
+      }
+      return current;
+    });
+    if (tableUpdate.ok) {
+      reqContent = tableUpdate.value;
+    }
 
     // ADR-2143 §6 per-ID write-set entries: this ID's checkbox surface is
     // always tracked; the traceability surface is tracked only when the file
@@ -121,11 +190,21 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     }
 
     // Coverage of the traceability surface for this ID (computed after any flip).
-    // hasRow keys on the ID + a second cell (`| ID | <phase> |`) so a bare mention
-    // of the ID in a non-traceability table does not masquerade as a real row.
-    const hasRow = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|`, 'i').test(reqContent);
+    // hasRow keys on the ID's FIRST cell (the requirement-ID column, by position —
+    // see rowMatch above) so a bare mention of the ID in a non-traceability table
+    // does not masquerade as a real row.
+    // Ragged-tolerant (#2245 Blocker 2): same reasoning as the write above — a
+    // sibling row's raggedness must not blind this classification to a row
+    // that genuinely exists. Probe via a no-op updateTableCell write (its own
+    // tolerant scan) instead of findTableWithColumns (whole-table parse gate).
+    let currentStatusCell = '';
+    const statusProbe = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
+      currentStatusCell = current;
+      return current;
+    });
+    const hasRow = statusProbe.ok;
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
-    const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i').test(reqContent);
+    const doneTable = Boolean(hasRow && /^complete$/i.test(currentStatusCell.trim()));
 
     if (checkboxHit || tableHit) {
       updated.push(reqId);
@@ -327,12 +406,20 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
             totalTasks += xmlTaskMatches.length || mdTaskMatches.length;
           }
         } catch {
-          /* intentionally empty */
+          /* best-effort (#2245 audit): one unreadable/malformed SUMMARY.md
+           * must not abort the accomplishments/task-count roll-up for every
+           * OTHER summary across every OTHER phase — it's simply excluded
+           * from the milestone's shipped-summary text. */
         }
       }
     }
   } catch {
-    /* intentionally empty */
+    /* best-effort (#2245 audit): mirrors the phaseDirEntries IIFE a few
+     * lines below this function (same phasesDir, same "try readdirSync,
+     * tolerate ENOENT" pattern) — phasesDir may legitimately not exist yet
+     * (e.g. milestone being force-completed before any phase directories
+     * were created). Degrades stats to phaseCount/totalPlans/totalTasks=0,
+     * accomplishments=[] rather than crash `milestone complete`. */
   }
 
   // #2118: --dry-run preview — compute what WOULD happen without mutating.
@@ -451,21 +538,31 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   let phasesArchived = false;
   // #1871: archive phase dirs by default on milestone complete (opt out via --no-archive-phases).
   if (options.archivePhases !== false) {
+    // #2245 audit (was ERROR-HIDING): retryRenameSync moves one phase dir at a
+    // time — a mid-loop failure (e.g. the Nth rename) used to leave
+    // `phasesArchived` at its `false` default even though the first N-1 dirs
+    // had ALREADY been moved to phaseArchiveDir on disk, silently
+    // under-reporting a real partial archive in the JSON result. archivedCount
+    // is now computed in a `finally` so it reflects whatever succeeded before
+    // any failure, instead of being lost with the swallowed exception.
+    let archivedCount = 0;
     try {
       const phaseArchiveDir = path.join(archiveDir, `${version}-phases`);
       platformEnsureDir(phaseArchiveDir);
 
       const phaseEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const phaseDirNames = phaseEntries.filter((e) => e.isDirectory()).map((e) => e.name);
-      let archivedCount = 0;
       for (const dir of phaseDirNames) {
         if (!isDirInMilestone(dir)) continue;
         retryRenameSync(path.join(phasesDir, dir), path.join(phaseArchiveDir, dir));
         archivedCount++;
       }
-      phasesArchived = archivedCount > 0;
     } catch {
-      /* intentionally empty */
+      /* best-effort: phasesDir may not exist yet, or the archive rename loop
+       * failed partway — phasesArchived below still reflects whatever
+       * archivedCount succeeded before the failure. */
+    } finally {
+      phasesArchived = archivedCount > 0;
     }
   }
 
