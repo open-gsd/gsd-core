@@ -157,7 +157,15 @@ PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
 
 OMP is global-only. A local install is rejected because OMP does not discover project-local agent roots by default.
 After restart, OMP exposes native GSD slash commands such as `/gsd`, `/gsd-status`, and `/gsd-progress`; phase execution uses OMP's native `task` and job controls.
+For adapter development only, refresh the projected extension, agents, and skills from a source checkout:
 
+```bash
+node pi/install-omp-extension.cjs
+node pi/install-omp-agents.cjs
+node pi/install-omp-skills.cjs
+```
+
+These development commands are not the normal user installation or update path.
 
 #### Updating OMP
 

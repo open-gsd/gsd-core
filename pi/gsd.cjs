@@ -1605,6 +1605,8 @@ Execute the gsd-progress workflow${mode} end-to-end.
 OMP progress contract:
 - For \`--next\`, delegate all routing to the canonical progress workflow. Do not re-derive phase routing in this adapter or bypass its Gates 1–3 and Route 0 incomplete-phase invariant.
 - Preserve the workflow's state inspection, safety gates, routing, and user-interaction rules. The native command is an entry point, not a replacement workflow.
+- This message activates the \`gsd-progress\` skill workflow, not a \`gsd-tools\` CLI subcommand. Read \`skill://gsd-progress\`, then execute its selected workflow in this turn.
+- Do not call \`gsd_invoke\` to run this workflow. In particular, \`family: "gsd"\` is invalid; \`/gsd-progress\` is a native workflow entry point, not a \`gsd-tools\` family.
 `;
   }
 
@@ -1785,7 +1787,7 @@ OMP interaction contract:
   pi.registerTool({
     name: 'gsd_invoke',
     label: 'GSD Invoke',
-    description: 'Invoke a GSD command family and return the structured result.',
+    description: 'Invoke a gsd-tools top-level family (for example, family "progress"), not a slash workflow. Never use "gsd" as the family.',
     parameters: z.object({
       family: z.string().default('query'),
       subcommand: z.string().default('help'),

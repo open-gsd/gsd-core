@@ -156,6 +156,8 @@ test('native progress delegates next-step routing to the canonical workflow', as
   assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
   assert.match(pi._recorded.messages.at(-1).message.content, /gsd-progress workflow --next/);
   assert.match(pi._recorded.messages.at(-1).message.content, /Gates 1–3 and Route 0/);
+  assert.match(pi._recorded.messages.at(-1).message.content, /Do not call `gsd_invoke`/);
+  assert.match(pi._recorded.messages.at(-1).message.content, /`family: "gsd"` is invalid/);
 
   await pi._recorded.commands['gsd-progress'].handler('--auto', { cwd: path.resolve(__dirname, '..') });
   assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-progress-input-error');
