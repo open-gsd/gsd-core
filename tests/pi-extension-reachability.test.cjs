@@ -78,6 +78,9 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-ui-review'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ui-review'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-audit-fix'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-audit-uat'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-audit-milestone'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-complete-milestone'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -366,6 +369,44 @@ test('native audit fix command preserves safety and execution gates', async () =
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
     await pi._recorded.commands['gsd-audit-fix'].handler('--max 0', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-audit-fix-input-error');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native milestone commands preserve audit and archive gates', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-milestone-'));
+  try {
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-audit-uat'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · UAT Audit');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-audit-uat');
+    assert.match(pi._recorded.messages.at(-1).message.content, /prioritized human UAT test plan/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /without modifying artifacts/);
+    await pi._recorded.commands['gsd-audit-uat'].handler('unexpected', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-audit-uat-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-audit-milestone'].handler('v1.0', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Milestone Audit');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-audit-milestone');
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-integration-checker/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Unsatisfied and orphaned requirements must force/);
+    await pi._recorded.commands['gsd-audit-milestone'].handler('not-a-version', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-audit-milestone-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-complete-milestone'].handler('1.0', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Milestone 1.0 · Complete');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-complete-milestone');
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `ask`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Archive before deletion/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /do not push or claim release completion/);
+    await pi._recorded.commands['gsd-complete-milestone'].handler('1', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-complete-milestone-input-error');
   } finally {
     cleanup(cwd);
   }
