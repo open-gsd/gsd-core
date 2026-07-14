@@ -227,6 +227,13 @@ function buildParityManifest(configDir, root) {
   return sorted;
 }
 
+/** Sorted list of emitted relative paths for a runtime install (file-set snapshot,
+ *  #2267). Reuses buildParityManifest's exact exclusion set so the tree and the
+ *  content manifest never diverge on which files they cover. */
+function buildInstallTree(configDir, root) {
+  return Object.keys(buildParityManifest(configDir, root)).sort();
+}
+
 function simulateHookCopy(hooksSrc, hooksDest) {
   fs.mkdirSync(hooksDest, { recursive: true });
   for (const entry of fs.readdirSync(hooksSrc)) {
@@ -397,6 +404,7 @@ module.exports = {
   stripAnsi,
   walk,
   buildParityManifest,
+  buildInstallTree,
   simulateHookCopy,
   installerEnv,
   runMinimalInstall,
