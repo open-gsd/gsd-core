@@ -133,6 +133,34 @@ OPENCODE_CONFIG_DIR=~/.config/opencode-alt npx @opengsd/gsd-core@latest --openco
 
 ---
 
+### Oh My Pi (OMP)
+
+OMP is a first-class global runtime. Install it through the standard installer:
+
+```bash
+npx @opengsd/gsd-core@latest --omp --global
+```
+
+The installer writes a self-contained GSD runtime to `~/.omp/agent/`, including `extensions/gsd-omp.ts`, its adapter module, GSD agents, skills, and runtime CLI. The extension does not depend on a source checkout. Restart OMP after installation.
+
+To use a different OMP agent directory, set `PI_CODING_AGENT_DIR`:
+
+```bash
+PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
+```
+
+OMP is global-only. A local install is rejected because OMP does not discover project-local agent roots by default.
+
+#### Updating OMP
+
+For an npm-managed OMP installation, run `/gsd-update` from OMP. It detects `~/.omp/agent/` (or `PI_CODING_AGENT_DIR`), reinstalls the managed extension, adapter, agents, skills, and GSD runtime, then prompts you to restart OMP.
+
+If the OMP runtime was installed from a Git checkout, `/gsd-update` stops before replacing it with an npm package and prints the checkout update command instead. This preserves local fork changes.
+
+For adapter development only, `npm run install:omp` remains available to project local changes into an OMP agent directory; it is not the normal user installation or update path.
+
+---
+
 ### Kilo
 
 ```bash

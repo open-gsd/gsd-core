@@ -1919,6 +1919,84 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "omp": {
+    "id": "omp",
+    "role": "runtime",
+    "version": "1.7.0-rc.6",
+    "title": "Oh My Pi",
+    "description": "Oh My Pi — Pi-compatible extension host with native task orchestration, installed globally under ~/.omp/agent; extension and OMP-projected agents are managed by GSD.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "agent",
+        "parent": ".omp",
+        "env": [
+          "PI_CODING_AGENT_DIR"
+        ]
+      },
+      "localConfigDir": ".omp/agent",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "extensionEvents": "pi",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "localInstallDeferred": true,
+        "skipSharedHooksInstall": true,
+        "skipSettingsUi": true,
+        "skipUpdateBannerCommand": true,
+        "skipCodexSkillsManifest": true
+      }
+    }
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -4980,6 +5058,84 @@ const runtimes = {
       }
     }
   },
+  "omp": {
+    "id": "omp",
+    "role": "runtime",
+    "version": "1.7.0-rc.6",
+    "title": "Oh My Pi",
+    "description": "Oh My Pi — Pi-compatible extension host with native task orchestration, installed globally under ~/.omp/agent; extension and OMP-projected agents are managed by GSD.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.6.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home-nested",
+        "name": "agent",
+        "parent": ".omp",
+        "env": [
+          "PI_CODING_AGENT_DIR"
+        ]
+      },
+      "localConfigDir": ".omp/agent",
+      "configFormat": "none",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "nested",
+            "recursive": false,
+            "converter": "convertClaudeCommandToClaudeSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": null
+          }
+        ],
+        "local": []
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "none",
+      "extensionEvents": "pi",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "profile-marker-only",
+      "writesSharedSettings": false,
+      "permissionWriter": null,
+      "extendedHookEvents": [],
+      "hostIntegration": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": "undocumented",
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "active",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "bun"
+      },
+      "hostBehaviors": {
+        "localInstallDeferred": true,
+        "skipSharedHooksInstall": true,
+        "skipSettingsUi": true,
+        "skipUpdateBannerCommand": true,
+        "skipCodexSkillsManifest": true
+      }
+    }
+  },
   "opencode": {
     "id": "opencode",
     "role": "runtime",
@@ -5756,6 +5912,7 @@ const _requiresGraph = {
   "kimi": [],
   "mempalace": [],
   "nyquist": [],
+  "omp": [],
   "opencode": [],
   "pattern-mapper": [
     "research"

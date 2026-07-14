@@ -76,6 +76,35 @@ OPENCODE_CONFIG_DIR=~/.config/opencode-alt npx @opengsd/gsd-core@latest --openco
 
 ---
 
+### Oh My Pi (OMP)
+
+OMP 是一等的全局运行时，请通过标准安装程序安装：
+
+```bash
+npx @opengsd/gsd-core@latest --omp --global
+```
+
+安装程序会将自包含的 GSD runtime 写入 `~/.omp/agent/`，其中包括 `extensions/gsd-omp.ts`、适配器模块、GSD agents、skills 和 runtime CLI。extension 不依赖源码 checkout。安装后重启 OMP。
+
+如需使用不同的 OMP agent 目录，请设置 `PI_CODING_AGENT_DIR`：
+
+```bash
+PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
+```
+
+OMP 仅支持全局安装。由于 OMP 默认不会发现项目本地的 agent 根目录，`--local` 会被拒绝。
+
+#### 更新 OMP
+
+如果 OMP 使用 npm 管理，请在 OMP 中运行 `/gsd-update`。它会识别 `~/.omp/agent/`（或 `PI_CODING_AGENT_DIR`），重新安装受管理的 extension、适配器、agents、skills 和 GSD runtime，然后提示重启 OMP。
+
+如果 OMP runtime 来自 Git checkout，`/gsd-update` 会在替换为 npm 包之前停止，并输出 checkout 的更新命令，从而保留个人 fork 修改。
+
+如果 OMP runtime 来自 Git checkout，`/gsd-update` 会在替换为 npm 包之前停止，并输出 checkout 的更新命令，从而保留个人 fork 修改。
+仅在开发适配器时，仍可使用 `npm run install:omp` 将当前项目的本地修改投影到 OMP agent 目录；它不是普通用户的安装或升级路径。
+
+---
+
 ### Kilo
 
 ```bash

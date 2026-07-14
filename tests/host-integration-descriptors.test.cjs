@@ -38,7 +38,7 @@ const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'sub
 const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
-// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, pi, qwen, trae (10)
+// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, omp, opencode, pi, qwen, trae (11)
 // declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
 // ide: vscode (1) — #2103, the first installed ide-profile host.
 const EXPECTED_PROFILES = {
@@ -48,6 +48,7 @@ const EXPECTED_PROFILES = {
   hermes:      'programmatic-cli',
   kilo:        'programmatic-cli',
   kimi:        'programmatic-cli',
+  omp:         'programmatic-cli',
   opencode:    'programmatic-cli',
   pi:          'programmatic-cli',
   qwen:        'programmatic-cli',
@@ -267,7 +268,7 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
 
   // ─── shouldFlattenDispatch per-host (#853 discriminator) ─────────────────────
 
-  // Expected: false (may background) for codex, cursor, kimi, and opencode;
+  // Expected: false (may background) for codex, cursor, kimi, omp, and opencode;
   // true (must inline) for the other 13.
   const EXPECTED_FLATTEN = {
     antigravity: true,
@@ -288,6 +289,8 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
     // dispatch.background/backgroundDispatch true → NOT force-flattened.
     opencode:    false,
+    // OMP dispatches native background tasks, so phase work is not force-flattened.
+    omp:         false,
     // #2102: pi's dispatch.background/backgroundDispatch are both false
     // (undocumented background-subagent primitive) → force-flattened.
     pi:          true,
