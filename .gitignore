@@ -239,6 +239,7 @@ tmp/
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+.planning/.mempalace-stage/
 
 # Local scratch + Claude-test artifacts
 .scratch/
