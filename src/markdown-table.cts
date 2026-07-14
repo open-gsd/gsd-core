@@ -489,10 +489,22 @@ export function deleteTableRow(
   // (`\r\n` or `\n`) terminated the selected line (see `splitLinesWithOffsets`
   // above) — when the selected row is the LAST line in `tableText` (no
   // trailing EOL to preserve), fall back to the end of the string.
-  const rowStart = lines[selectedLineIdx].start;
-  const rowEnd = selectedLineIdx + 1 < lines.length
-    ? lines[selectedLineIdx + 1].start
-    : tableText.length;
+  let rowStart = lines[selectedLineIdx].start;
+  let rowEnd: number;
+  if (selectedLineIdx + 1 < lines.length) {
+    rowEnd = lines[selectedLineIdx + 1].start;
+  } else {
+    // The selected row is the LAST line and has no trailing EOL: deleting from
+    // its `start` to end-of-string would strand the EOL that terminated the
+    // PREVIOUS line as a dangling newline. Back `rowStart` up over that
+    // preceding `\n` (and its `\r`, if any) so the table ends cleanly after the
+    // new last row.
+    rowEnd = tableText.length;
+    if (rowStart > 0 && tableText[rowStart - 1] === '\n') {
+      rowStart -= 1;
+      if (rowStart > 0 && tableText[rowStart - 1] === '\r') rowStart -= 1;
+    }
+  }
 
   return {
     ok: true,
