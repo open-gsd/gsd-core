@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { cleanup } = require('./helpers.cjs');
 const { createFixture, seedWorkstream } = require('./fixtures/index.cjs');
-const { buildWorkstreamInventory } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');
+const { buildWorkstreamInventory, isCompletedInventory } = require('../gsd-core/bin/lib/workstream-inventory-builder.cjs');
 const { inspectWorkstream } = require('../gsd-core/bin/lib/workstream-inventory.cjs');
 
 const STALE_STATE = 'status: executing\n';
@@ -99,5 +99,28 @@ describe('#1913 — workstream status derived from authoritative shipped signals
     assert.equal(inv.status, 'executing');
     assert.equal(inv.status_source, 'field');
     assert.equal(inv.status_conflict, false);
+  });
+});
+
+describe('isCompletedInventory — ADR-2207 status lifecycle', () => {
+  test('terminal "milestone complete" variants are completed', () => {
+    assert.ok(isCompletedInventory('1.0 milestone complete'));
+    assert.ok(isCompletedInventory('Milestone complete'));
+    assert.ok(isCompletedInventory('milestone  complete'));
+  });
+
+  test('intermediate "All phases complete" is NOT completed (ADR-2207)', () => {
+    assert.ok(!isCompletedInventory('All phases complete'),
+      'All phases complete is an intermediate state — milestone not yet formally closed');
+  });
+
+  test('archived is completed', () => {
+    assert.ok(isCompletedInventory('archived'));
+  });
+
+  test('active statuses are NOT completed', () => {
+    assert.ok(!isCompletedInventory('Ready to plan'));
+    assert.ok(!isCompletedInventory('In progress'));
+    assert.ok(!isCompletedInventory('Executing'));
   });
 });
