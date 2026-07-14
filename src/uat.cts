@@ -377,10 +377,22 @@ function parseVerificationItems(content: string, status: string): UatItem[] {
       { levelBounded: true },
     );
     if (hvSection) {
+      // #2245 review Fix 3: reverted to the pre-Phase-4 (HEAD 2cbf18642)
+      // implementation. The live Human Verification section is NOT a strict
+      // GFM table — the planner/verifier templates mix table rows, numbered
+      // items, and bullet items in the same section (and a `### N.` heading
+      // format is common too), so a table-XOR-list read (parse a table, and
+      // if it parses, suppress numbered/bullet items entirely) silently
+      // dropped items on any mixed or malformed section: a malformed
+      // `| N | … |` table with no valid header/delimiter yielded ZERO items
+      // instead of reading the rows positionally. This per-line scan reads
+      // table rows AND numbered items AND bullet items as a UNION (whichever
+      // pattern a given line matches), exactly like OLD, and reads
+      // `| N | desc |` rows even without a valid table header/delimiter.
       const lines = hvSection.body.split('\n');
       for (const line of lines) {
         // Match table rows: | N | description | ... |
-        const tableMatch = line.match(/\|\s*(\d+)\s*\|\s*([^|]+)/);
+        const tableMatch = line.match(/\|\s*(\d+)\s*\|\s*([^|]+)/); // allow-adhoc-markdown: loose human-verification section mixes table+numbered+bullet, not a strict GFM table #2245
         // Match bullet items: - description
         const bulletMatch = line.match(/^[-*]\s+(.+)/);
         // Match numbered items: 1. description

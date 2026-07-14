@@ -20,6 +20,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { writeSetComplete } from './write-set.cjs';
 import type { WriteSet } from './write-set.cjs';
+import { updateTableCell } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -105,10 +106,29 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     if (checkboxHit) reqContent = afterCheckbox;
 
     // Surface 2 — the traceability row: | REQ-ID | Phase N | Pending | → ... Complete |
-    const tablePattern = new RegExp(`(\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|)\\s*Pending\\s*(\\|)`, 'gi');
-    const afterTable = reqContent.replace(tablePattern, '$1 Complete $2');
-    const tableHit = afterTable !== reqContent;
-    if (tableHit) reqContent = afterTable;
+    // Matched/updated by column NAME via the markdown-table seam (ADR-2143 §7)
+    // — supersedes the prior ordinal-capture regex. Row match is case-
+    // insensitive (mirrors the prior regex's 'i' flag applying uniformly to
+    // the whole pattern, including the ID).
+    const rowMatch = (row: Record<string, string>): boolean =>
+      (row['Requirement'] ?? '').trim().toLowerCase() === reqId.toLowerCase();
+    // Ragged-tolerant (#2245 Blocker 2): drive the write purely off
+    // updateTableCell's own tolerant row scan — a DIFFERENT requirement's row
+    // elsewhere in the same table having a mismatched cell count must never
+    // silently no-op THIS requirement's write. The "only flip Pending ->
+    // Complete" gate is folded into the newValue callback so one
+    // updateTableCell call both probes the current value and writes.
+    let tableHit = false;
+    const tableUpdate = updateTableCell(reqContent, rowMatch, 'Status', (current) => {
+      if (/^pending$/i.test(current.trim())) {
+        tableHit = true;
+        return ' Complete ';
+      }
+      return current;
+    });
+    if (tableUpdate.ok) {
+      reqContent = tableUpdate.value;
+    }
 
     // ADR-2143 §6 per-ID write-set entries: this ID's checkbox surface is
     // always tracked; the traceability surface is tracked only when the file
@@ -121,11 +141,20 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     }
 
     // Coverage of the traceability surface for this ID (computed after any flip).
-    // hasRow keys on the ID + a second cell (`| ID | <phase> |`) so a bare mention
-    // of the ID in a non-traceability table does not masquerade as a real row.
-    const hasRow = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|`, 'i').test(reqContent);
+    // hasRow keys on the ID's Requirement cell (by NAME) so a bare mention of
+    // the ID in a non-traceability table does not masquerade as a real row.
+    // Ragged-tolerant (#2245 Blocker 2): same reasoning as the write above — a
+    // sibling row's raggedness must not blind this classification to a row
+    // that genuinely exists. Probe via a no-op updateTableCell write (its own
+    // tolerant scan) instead of findTableWithColumns (whole-table parse gate).
+    let currentStatusCell = '';
+    const statusProbe = updateTableCell(reqContent, rowMatch, 'Status', (current) => {
+      currentStatusCell = current;
+      return current;
+    });
+    const hasRow = statusProbe.ok;
     const doneCheckbox = new RegExp(`-\\s*\\[x\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent);
-    const doneTable = new RegExp(`\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|\\s*Complete\\s*\\|`, 'i').test(reqContent);
+    const doneTable = Boolean(hasRow && /^complete$/i.test(currentStatusCell.trim()));
 
     if (checkboxHit || tableHit) {
       updated.push(reqId);

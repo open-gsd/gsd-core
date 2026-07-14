@@ -55,6 +55,7 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
+import { updateTableCell } from './markdown-table.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -1175,6 +1176,7 @@ function updateRoadmapAfterPhaseRemoval(
     let content = fs.readFileSync(roadmapPath, 'utf-8');
     const escaped = escapeRegex(targetPhase);
 
+    // allow-adhoc-markdown: SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE detail section INCLUDING its own heading line; withSection/collectSection (ADR-2143 §4) only replace a section's BODY, not delete the heading too, so whole-section removal is out of that seam's scope
     content = content.replace(
       new RegExp(
         `\\n?(?<h>#{2,4})\\s*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:[\\s\\S]*?(?=\\n\\k<h>(?!#)\\s+Phase\\s+[^\\n:]+\\s*:|$)`,
@@ -1186,8 +1188,9 @@ function updateRoadmapAfterPhaseRemoval(
       new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gi'),
       '',
     );
+    // allow-adhoc-markdown: ROW-DELETION (not a cell update) — removes the WHOLE Progress-table row for a removed phase; updateTableCell (ADR-2143 §7 Phase 4) only supports single-cell replacement, not row removal, so this is out of that primitive's scope pending a future row-delete seam
     content = content.replace(
-      new RegExp(`\\n?\\|\\s*${escaped}\\.?\\s[^|]*\\|[^\\n]*`, 'gi'),
+      new RegExp(`\\n?\\|\\s*${escaped}\\.?\\s[^|]*\\|[^\\n]*`, 'gi'), // allow-adhoc-markdown: ROW-DELETION (not a cell update) — see the marker above; the new RegExp(...) node itself also trips the table-regex fingerprint check independently
       '',
     );
 
@@ -1490,39 +1493,44 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           'im',
         );
 
-        const tableRowPattern = new RegExp(
-          `^(\\|\\s*${phaseEscaped}\\.?\\s[^|]*(?:\\|[^\\n]*))$`,
-          'im',
-        );
-        // Scope the Progress-row search to the ## Progress section so the regex
-        // doesn't bind to an earlier table (e.g. | Phase | Requirements | Count |)
-        // whose rows also start with the phase number. (#2012)
-        const updateProgressRow = (fullRow: string): string => {
-          const cells = fullRow.split('|').slice(1, -1);
-          const dateShape = /^\d{4}-\d{2}-\d{2}$/;
-          if (cells.length === 5) {
-            cells[2] = ` ${summaryCount}/${planCount} `;
-            cells[3] = ' Complete    ';
-            // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
-            const existingDate5 = cells[4].trim();
-            cells[4] = dateShape.test(existingDate5) ? cells[4] : ` ${today} `;
-          } else if (cells.length === 4) {
-            cells[1] = ` ${summaryCount}/${planCount} `;
-            cells[2] = ' Complete    ';
-            // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
-            const existingDate4 = cells[3].trim();
-            cells[3] = dateShape.test(existingDate4) ? cells[3] : ` ${today} `;
+        // Progress table row: update Plans Complete/Status/Completed columns BY
+        // COLUMN NAME (handles 4- or 5-column RoadmapProgress tables) via the
+        // markdown-table seam (ADR-2143 §7) — supersedes the prior ordinal
+        // cells[]-index regex. Applied inside mutateMilestonePhase below (per
+        // milestone window), further scoped to the ## Progress heading within
+        // that window so the row lookup doesn't bind to an earlier table (e.g.
+        // | Phase | Requirements | Count |) whose rows also start with the
+        // phase number (#2012).
+        // #2245 Blocker 4: optional dot must be followed by whitespace-or-end,
+        // not dot-OR-whitespace-OR-end as alternatives — the prior form let a
+        // bare "." satisfy the whole lookahead, so completing phase "2"
+        // over-matched a decimal sub-phase row like "2.5 Extra". Matches "2",
+        // "2.", "2 Alpha"; rejects "2.5 Extra".
+        const phaseCellRe = new RegExp(`^${phaseEscaped}\\.?(?:\\s|$)`, 'i');
+        const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
+        const dateShape = /^\d{4}-\d{2}-\d{2}$/;
+
+        /**
+         * Within `text` (already scoped to one milestone window by the
+         * caller), scope further to the `## Progress` heading section (up to
+         * the next `#`/`##` heading) when present, run `edit` against just
+         * that slice, and splice the result back — falling back to the whole
+         * `text` when no `## Progress` heading exists (mirrors phase-
+         * lifecycle.cjs's deriveProgressFromRoadmap read-side scoping).
+         */
+        const editProgressHeadingSlice = (text: string, edit: (scoped: string) => string): string => {
+          const progressMatch = text.match(/^##[ \t]+Progress\b/im);
+          if (!progressMatch || progressMatch.index === undefined) {
+            return edit(text);
           }
-          return '|' + cells.join('|') + '|';
+          const headingOffset = progressMatch.index;
+          const beforeHeading = text.slice(0, headingOffset);
+          const fromHeading = text.slice(headingOffset);
+          const nextHeading = fromHeading.search(/\n#{1,2}[ \t]/);
+          const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
+          const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
+          return beforeHeading + edit(scoped) + after;
         };
-        const progressIdx = roadmapContent.indexOf('## Progress');
-        if (progressIdx >= 0) {
-          const beforeProgress = roadmapContent.slice(0, progressIdx);
-          const progressSection = roadmapContent.slice(progressIdx);
-          roadmapContent = beforeProgress + progressSection.replace(tableRowPattern, updateProgressRow);
-        } else {
-          roadmapContent = roadmapContent.replace(tableRowPattern, updateProgressRow);
-        }
 
         // ADR-2143 §4: the plan-count write is now routed through
         // withPhaseSection (see mutateMilestonePhase below), which hands this
@@ -1544,6 +1552,30 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const mutateMilestonePhase = (slice: string): string => {
           let s = slice;
           s = s.replace(checkboxPattern, `$1x$2 (completed ${today})`);
+
+          s = editProgressHeadingSlice(s, (scoped) => {
+            let text = scoped;
+
+            const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
+            if (plansResult.ok) text = plansResult.value;
+
+            const statusResult = updateTableCell(text, rowMatch, 'Status', ' Complete    ');
+            if (statusResult.ok) text = statusResult.value;
+
+            // Preserve only a valid ISO date (#1161: idempotent; self-heal
+            // garbage). Ragged-tolerant (#2245 Blocker 2): decide via the
+            // CURRENT Completed cell inside a single updateTableCell callback
+            // (its own tolerant row scan) rather than gating on
+            // findTableWithColumns (which requires the WHOLE table to parse —
+            // a ragged SIBLING row elsewhere used to silently no-op this
+            // row's date stamp too).
+            const completedResult = updateTableCell(text, rowMatch, 'Completed', (current) =>
+              dateShape.test(current.trim()) ? current : ` ${today} `);
+            if (completedResult.ok) text = completedResult.value;
+
+            return text;
+          });
+
           // ADR-2143 §4: the plan-count write and the per-plan checkbox flips
           // are both scoped to phase N's OWN detail section via
           // withPhaseSection — the edit callback below only ever sees that
@@ -1621,13 +1653,23 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
                 new RegExp(`(-\\s*\\[)[ ](\\]\\s*\\*\\*${reqEscaped}\\*\\*)`, 'gi'),
                 '$1x$2',
               );
-              reqContent = reqContent.replace(
-                new RegExp(
-                  `(\\|\\s*${reqEscaped}\\s*\\|[^|]+\\|)\\s*(?:Pending|In Progress)\\s*(\\|)`,
-                  'gi',
-                ),
-                '$1 Complete $2',
-              );
+
+              // Traceability row: | REQ-ID | Phase N | Pending|In Progress | ->
+              // ... Complete | — by column NAME via the markdown-table seam
+              // (ADR-2143 §7), matching the row by its Requirement cell
+              // (case-insensitive, mirroring the prior regex's 'i' flag).
+              const reqRowMatch = (row: Record<string, string>): boolean =>
+                (row['Requirement'] ?? '').trim().toLowerCase() === reqId.toLowerCase();
+              // Ragged-tolerant (#2245 Blocker 2): drive the write purely off
+              // updateTableCell's own tolerant row scan — a DIFFERENT
+              // requirement's row elsewhere in the same table having a
+              // mismatched cell count must never silently no-op THIS
+              // requirement's write. The "only flip Pending/In Progress ->
+              // Complete" gate is folded into the newValue callback so one
+              // updateTableCell call both probes and writes.
+              const reqUpdate = updateTableCell(reqContent, reqRowMatch, 'Status', (current) =>
+                /^(?:pending|in progress)$/i.test(current.trim()) ? ' Complete ' : current);
+              if (reqUpdate.ok) reqContent = reqUpdate.value;
             }
           }
 

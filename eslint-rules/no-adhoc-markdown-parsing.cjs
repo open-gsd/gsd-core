@@ -4,7 +4,8 @@
  * no-adhoc-markdown-parsing
  *
  * Flags hand-rolled markdown-structure scanning in src/*.cts that duplicates
- * the canonical seam (src/markdown-sectionizer.cts). Applies to two patterns:
+ * the canonical seam (src/markdown-sectionizer.cts, src/markdown-table.cts).
+ * Applies to three patterns:
  *
  *   1. FENCE-BLOCK-STRIP — regex literals whose source contains a triple-backtick
  *                          or triple-tilde fence delimiter AND a multiline body
@@ -22,12 +23,55 @@
  *                          Fingerprint: [\\s\\S] (multiline body) AND (?= lookahead
  *                          that references a heading anchor #.
  *
+ *   3. TABLE-REGEX       — regex literals whose source contains an escaped pipe
+ *                          (\|, the GFM table-cell delimiter) AND a negated-pipe
+ *                          cell-capture character class ([^|] / [^\|]), e.g.
+ *                          /\|[^|]*\|/. This is the fingerprint of a hand-rolled
+ *                          markdown table-row/cell scan (ADR-2143 §7). Kept
+ *                          deliberately conservative — a regex with an escaped
+ *                          pipe but no negated-pipe cell class (e.g. a bare
+ *                          `\|` delimiter probe) is NOT flagged, to keep the
+ *                          false-positive rate low.
+ *
+ *                          ALSO inspects `new RegExp(<arg>)` where `<arg>` is a
+ *                          string Literal or a TemplateLiteral (ADR-2143 §7
+ *                          Phase 4) — a dynamically-built table-row pattern such
+ *                          as `new RegExp(`^(\\|\\s*${phase}...[^|]*)$`)` is the
+ *                          exact same hand-rolled table scan, just constructed
+ *                          at runtime instead of written as a literal. Only the
+ *                          STATIC text is inspected: for a TemplateLiteral, the
+ *                          quasis (cooked, escapes resolved) are concatenated
+ *                          and any `${...}` expression contributes nothing —
+ *                          conservative by design, so a dynamic segment can
+ *                          never manufacture or hide the fingerprint. A `new
+ *                          RegExp(someIdentifier)` (the pattern built elsewhere
+ *                          and referenced by variable) is NOT inspected here —
+ *                          out of scope for this literal/template check.
+ *
+ *   4. ADHOC-REPLACE-MUTATION — a `.replace(` call whose receiver identifier
+ *                          name matches /roadmap|state|reqContent|content/i AND
+ *                          whose first argument is a regex Literal or a `new
+ *                          RegExp(<Literal-or-TemplateLiteral>)` matching EITHER
+ *                          the TABLE-REGEX or the SECTION-COLLECT fingerprint
+ *                          (ADR-2143 §7 Phase 4). Targets the specific ad-hoc
+ *                          write pattern `roadmapContent.replace(tableRowPattern,
+ *                          ...)` / `stateContent.replace(sectionPattern, ...)` —
+ *                          a mutation of a roadmap/state document via a hand-
+ *                          rolled table or section regex. `withSection(...)` /
+ *                          `withPhaseSection(...)` / `updateTableCell(...)`
+ *                          calls (the canonical seam mutators) are never
+ *                          `.replace(` calls on such a receiver and so never trip
+ *                          this — nor does `.replace()` on a receiver whose name
+ *                          doesn't match the roadmap/state fingerprint.
+ *
  * Per-finding exemption: add  // allow-adhoc-markdown: <reason>  as a
  * trailing comment on the same source line, OR as a standalone comment on the
  * line immediately preceding the flagged node.  (Mirrors no-source-grep's
  * // allow-test-rule: mechanism but is scoped to individual findings.)
  *
- * Authors must import from src/markdown-sectionizer.cts instead.
+ * Authors must import from src/markdown-sectionizer.cts (fences/sections) or
+ * src/markdown-table.cts (parseMarkdownTable / findTableWithColumns /
+ * updateTableCell / TABLE_SCHEMAS) instead.
  */
 
 /** @type {import('eslint').Rule.RuleModule} */
@@ -36,7 +80,7 @@ const rule = {
     type: 'problem',
     docs: {
       description:
-        'Disallow hand-rolled markdown-structure scanning (fence-block-strip, section-collect) in src/*.cts — import the markdown-sectionizer seam instead.',
+        'Disallow hand-rolled markdown-structure scanning (fence-block-strip, section-collect, table-regex) in src/*.cts — import the markdown-sectionizer / markdown-table seam instead.',
       category: 'Best Practices',
     },
     schema: [],
@@ -45,6 +89,10 @@ const rule = {
         'Ad-hoc fence-block-strip regex detected (triple-fence delimiter + multiline body). Import stripFencedCode() from ./markdown-sectionizer instead. Suppress with: // allow-adhoc-markdown: <reason>',
       sectionCollect:
         'Ad-hoc section-collect regex detected (heading + [\\s\\S]*? + lookahead). Import collectSection() from ./markdown-sectionizer instead. Suppress with: // allow-adhoc-markdown: <reason>',
+      tableRegex:
+        'Ad-hoc table-row/cell regex detected (escaped pipe + negated-pipe cell-capture class). Use parseMarkdownTable() / findTableWithColumns() / TABLE_SCHEMAS from ./markdown-table instead. Suppress with: // allow-adhoc-markdown: <reason>',
+      adhocReplaceMutation:
+        'Ad-hoc .replace() mutation of a roadmap/state document using a hand-rolled table or section regex. Use updateTableCell() (./markdown-table) or withSection()/withPhaseSection() (./markdown-sectionizer) instead. Suppress with: // allow-adhoc-markdown: <reason>',
     },
   },
 
@@ -96,15 +144,122 @@ const rule = {
     //   /(#{1,6}...\n)([\s\S]*?)(?=\n#{...}|$)/
     // The key fingerprint is: [\\s\\S] (or [\s\S]) AND (?= (lookahead) AND # in
     // the same regex, forming the "body up to next heading" construct.
-    function isSectionCollectRegex(node) {
-      if (node.type !== 'Literal' || !node.regex) return false;
-      const src = node.regex.pattern || '';
+    function isSectionCollectRegexSource(src) {
       // Must contain [\s\S] (the non-greedy body)
       const hasMultilineBody = src.includes('[\\s\\S]') || src.includes('[\\S\\s]');
       if (!hasMultilineBody) return false;
       // Must contain a lookahead (?= that references a heading anchor #
       const hasHeadingLookahead = /\(\?=.*#/.test(src);
       return hasHeadingLookahead;
+    }
+
+    function isSectionCollectRegex(node) {
+      if (node.type !== 'Literal' || !node.regex) return false;
+      return isSectionCollectRegexSource(node.regex.pattern || '');
+    }
+
+    // ── Table-regex detection ───────────────────────────────────────────────
+    // A regex source containing an escaped pipe (\| — the GFM table-cell
+    // delimiter) AND a negated-pipe cell-capture character class ([^|] or
+    // [^\|]), indicating a hand-rolled table-row/cell scan such as /\|[^|]*\|/.
+    // Conservative by design: a bare escaped-pipe delimiter probe with no
+    // negated-pipe cell class is NOT flagged.
+    function isTableRegexSource(src) {
+      // Must contain an escaped pipe
+      if (!src.includes('\\|')) return false;
+      // Must ALSO contain a negated-pipe cell-capture class: [^|] or [^\|]
+      return /\[\^\\?\|\]/.test(src);
+    }
+
+    function isTableRegex(node) {
+      if (node.type !== 'Literal' || !node.regex) return false;
+      return isTableRegexSource(node.regex.pattern || '');
+    }
+
+    // ── new RegExp(<Literal-string | TemplateLiteral>) source extraction ─────
+    // Builds the EFFECTIVE regex source text for a `new RegExp(...)` call so
+    // the same fingerprint checks above can run against it. Only a string
+    // Literal or a TemplateLiteral first argument is inspected — anything else
+    // (an Identifier, a call, string concatenation via `+`) is out of scope,
+    // keeping this conservative (no false positives from an un-inspectable
+    // dynamic pattern). For a TemplateLiteral, only the STATIC quasis (cooked —
+    // escapes already resolved, matching what `node.regex.pattern` gives for a
+    // literal) are concatenated; every `${...}` expression contributes nothing,
+    // so a dynamic segment can neither manufacture nor hide the fingerprint.
+    function getNewRegExpSource(node) {
+      if (node.type !== 'NewExpression') return null;
+      if (!node.callee || node.callee.type !== 'Identifier' || node.callee.name !== 'RegExp') return null;
+      const arg = node.arguments && node.arguments[0];
+      if (!arg) return null;
+      if (arg.type === 'Literal' && typeof arg.value === 'string') {
+        return arg.value;
+      }
+      if (arg.type === 'TemplateLiteral') {
+        return arg.quasis.map((q) => (q.value && q.value.cooked) || '').join('');
+      }
+      return null;
+    }
+
+    function isNewRegExpTableRegex(node) {
+      const src = getNewRegExpSource(node);
+      return src !== null && isTableRegexSource(src);
+    }
+
+    // ── ADHOC-REPLACE-MUTATION detection (ADR-2143 §7 Phase 4) ──────────────
+    // A `.replace(` call whose receiver is a roadmap/state-ish identifier AND
+    // whose first argument resolves (directly, or via a same-scope `const`
+    // declaration) to a regex Literal or `new RegExp(...)` matching either the
+    // TABLE or SECTION-COLLECT fingerprint.
+    const REPLACE_RECEIVER_RE = /roadmap|state|reqContent|content/i;
+
+    /** Resolve a Literal-regex or new-RegExp(...) source directly from `node`. */
+    function directRegexSource(node) {
+      if (node.type === 'Literal' && node.regex) return node.regex.pattern || '';
+      const newRegExpSrc = getNewRegExpSource(node);
+      if (newRegExpSrc !== null) return newRegExpSrc;
+      return null;
+    }
+
+    /** Walk up the scope chain from `scope` to find `identifierName`'s declared initializer. */
+    function resolveVariableInit(identifierName, scope) {
+      let s = scope;
+      while (s) {
+        const variable = s.variables.find((v) => v.name === identifierName);
+        if (variable) {
+          const def = variable.defs && variable.defs[0];
+          if (def && def.node && def.node.type === 'VariableDeclarator' && def.node.init) {
+            return def.node.init;
+          }
+          return null;
+        }
+        s = s.upper;
+      }
+      return null;
+    }
+
+    /** Resolve the effective regex source for a `.replace()` pattern argument. */
+    function resolveReplacePatternSource(argNode, scope) {
+      const direct = directRegexSource(argNode);
+      if (direct !== null) return direct;
+      if (argNode.type === 'Identifier') {
+        const init = resolveVariableInit(argNode.name, scope);
+        if (init) return directRegexSource(init);
+      }
+      return null;
+    }
+
+    function isAdhocReplaceMutation(node, scope) {
+      if (node.type !== 'CallExpression') return false;
+      const callee = node.callee;
+      if (!callee || callee.type !== 'MemberExpression' || callee.computed) return false;
+      if (!callee.property || callee.property.name !== 'replace') return false;
+      const receiver = callee.object;
+      if (!receiver || receiver.type !== 'Identifier' || !REPLACE_RECEIVER_RE.test(receiver.name)) return false;
+      const patternArg = node.arguments && node.arguments[0];
+      if (!patternArg) return false;
+      const src = resolveReplacePatternSource(patternArg, scope);
+      if (src === null) return false;
+      return isTableRegexSource(src) || isSectionCollectRegexSource(src);
     }
 
     return {
@@ -121,6 +276,33 @@ const rule = {
         if (isSectionCollectRegex(node)) {
           if (!isAllowed(node)) {
             context.report({ node, messageId: 'sectionCollect' });
+          }
+          return;
+        }
+
+        // 3. Table-regex (hand-rolled table-row/cell scan)
+        if (isTableRegex(node)) {
+          if (!isAllowed(node)) {
+            context.report({ node, messageId: 'tableRegex' });
+          }
+        }
+      },
+
+      // 3b. Table-regex built via new RegExp(<Literal-string | TemplateLiteral>)
+      NewExpression(node) {
+        if (isNewRegExpTableRegex(node)) {
+          if (!isAllowed(node)) {
+            context.report({ node, messageId: 'tableRegex' });
+          }
+        }
+      },
+
+      // 4. Ad-hoc .replace() mutation of a roadmap/state document
+      CallExpression(node) {
+        const scope = context.getScope ? context.getScope() : sourceCode.getScope(node);
+        if (isAdhocReplaceMutation(node, scope)) {
+          if (!isAllowed(node)) {
+            context.report({ node, messageId: 'adhocReplaceMutation' });
           }
         }
       },

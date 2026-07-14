@@ -46,7 +46,8 @@ import {
   KNOWN_TEMPLATE_DEFAULTS,
   stateReplaceFieldIfTemplate,
 } from './state-document.cjs';
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, collectSection, replaceSection } from './markdown-sectionizer.cjs';
+import { parseMarkdownTable, updateTableCell, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -540,27 +541,94 @@ function cmdStateRecordMetric(cwd: string, options: StateRecordMetricOptions, ra
   let _recorded = false;
   let created = false;
   readModifyWriteStateMd(statePath, (content) => {
-    // Find Performance Metrics section and its table
-    const metricsPattern = /(##\s*Performance Metrics[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n)([\s\S]*?)(?=\n##|\n$|$)/i; // allow-adhoc-markdown: metrics-table write-path section-collect in state.cts; pending collectSection migration #1372
-    const metricsMatch = content.match(metricsPattern);
-
     const newRow = `| Phase ${phase} P${plan} | ${duration} | ${tasks || '-'} tasks | ${files || '-'} files |`;
 
-    if (metricsMatch) {
-      let tableBody = metricsMatch[2].trimEnd();
+    // Find the "## Performance Metrics" section via the markdown-sectionizer
+    // seam (ADR-2143 §7) — supersedes the prior hand-rolled section+table
+    // regex.
+    const metricsSection = collectSection(content, (h) => /^performance metrics$/i.test(h.text.trim()));
 
-      if (tableBody.trim() === '' || tableBody.includes('None yet')) {
-        tableBody = newRow;
-      } else {
-        tableBody = tableBody + '\n' + newRow;
+    // Locate the header + delimiter rows by LINE, using the exact same
+    // splitTableRow/isDelimiterRow header/delimiter-shape checks
+    // `parseMarkdownTable` itself uses — deliberately NOT gated on
+    // `parseMarkdownTable(...).ok`, which additionally requires every DATA
+    // row's cell count to match the header. A single ragged sibling row (a
+    // hand-edited stray/extra pipe elsewhere in the table) used to fail that
+    // whole-table parse and fall through to the "section absent (or
+    // malformed)" scaffold branch below, appending a DUPLICATE "## Performance
+    // Metrics" section on every per-plan record-metric call — compounding on
+    // every execute-plan run (#2245 Blocker 2 parity with the other Phase-4
+    // ragged-tolerance fixes: updateTableCell / findTableStartOffset, neither
+    // of which requires the WHOLE table to parse before acting on one row).
+    // Only a genuinely absent header+delimiter pair (no table at all in the
+    // section) still falls through to the scaffold branch.
+    const eol = metricsSection && /\r\n/.test(metricsSection.body) ? '\r\n' : '\n';
+    const lines = metricsSection ? metricsSection.body.split(/\r?\n/) : [];
+    let headerIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) { headerIdx = i; break; }
+    }
+    const delimiterLine = headerIdx === -1 ? undefined : lines[headerIdx + 1];
+    const headerCells = headerIdx === -1 ? [] : splitTableRow(lines[headerIdx]);
+    const delimiterCells = delimiterLine !== undefined && delimiterLine.trim().startsWith('|')
+      ? splitTableRow(delimiterLine)
+      : null;
+    const hasTable = headerIdx !== -1
+      && delimiterCells !== null
+      && isDelimiterRow(delimiterCells)
+      && delimiterCells.length === headerCells.length;
+
+    if (metricsSection && hasTable) {
+      const delimiterIdx = headerIdx + 1;
+      const prefixLines = lines.slice(0, delimiterIdx + 1);
+
+      // Ragged-tolerant row scan: every consecutive `|`-prefixed line
+      // following the delimiter counts as an existing row REGARDLESS of its
+      // cell count matching the header — a ragged sibling row must never
+      // blind this scan to the table's true last row (unlike
+      // `parsedTable.value.rows.length`, which this replaces).
+      let lastRowIdx = delimiterIdx;
+      for (let i = delimiterIdx + 1; i < lines.length; i++) {
+        if (!lines[i].trim().startsWith('|')) break;
+        lastRowIdx = i;
       }
+      const rowCount = lastRowIdx - delimiterIdx;
 
       _recorded = true;
-      return content.replace(metricsPattern, (_match, header: string) => `${header}${tableBody}\n`);
+
+      let newBody: string;
+      if (rowCount > 0) {
+        // Splice the new row immediately after the table's LAST existing data
+        // row — every other byte of the section, INCLUDING any trailing prose
+        // that follows the table (e.g. the default template's "**Recent
+        // Trend:**" subsection + "*Updated after each plan completion*"
+        // footer), is preserved verbatim. The prior implementation truncated
+        // the section body to header+delimiter+rows+newRow, silently dropping
+        // everything that followed the table on a live STATE.md (#2245
+        // Blocker 1 — a per-plan path, run after every plan execution).
+        // `lastRowIdx` (computed above by the ragged-tolerant scan) already
+        // equals `delimiterIdx + rowCount` by construction.
+        const before = lines.slice(0, lastRowIdx + 1);
+        const after = lines.slice(lastRowIdx + 1);
+        newBody = [...before, newRow, ...after].join(eol);
+      } else {
+        // No existing data rows (e.g. a "None yet" placeholder line instead of
+        // a real row) — replace the placeholder/table-body remainder with the
+        // new row, matching the section's prior (verified) collapse-to-
+        // first-row behavior for an otherwise-empty table.
+        // No trailing eol here: replaceSection's `content.slice(bodyEnd)`
+        // already supplies the newline(s) that followed the (trimEnd()-ed)
+        // section body.
+        newBody = prefixLines.join(eol) + eol + newRow;
+      }
+
+      return replaceSection(content, metricsSection, newBody);
     }
 
-    // Section absent — DWIM: auto-create canonical ## Performance Metrics scaffold,
-    // then append the row. Matches state begin-phase / advance-plan DWIM behavior.
+    // Section absent (or malformed) — DWIM: auto-create canonical
+    // ## Performance Metrics scaffold, then append the row. Matches state
+    // begin-phase / advance-plan DWIM behavior.
     const scaffold = [
       '',
       '## Performance Metrics',
@@ -1200,14 +1268,15 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
   const progressPercent = progressRaw ? parseInt(progressRaw.replace('%', ''), 10) : null;
 
-  // Extract decisions table
+  // Extract decisions table — via the markdown-sectionizer/markdown-table
+  // seams (ADR-2143 §7), cells addressed by column NAME rather than a
+  // hand-rolled section+table regex.
   const decisions: Array<{ phase: string; summary: string; rationale: string }> = [];
-  const decisionsMatch = body.match(/##\s*Decisions Made[\s\S]*?\n\|[^\n]+\n\|[-|\s]+\n([\s\S]*?)(?=\n##|\n$|$)/i); // allow-adhoc-markdown: read-only decisions-table section-collect in state.cts; pending collectSection migration #1372
-  if (decisionsMatch) {
-    const tableBody = decisionsMatch[1];
-    const rows = tableBody.trim().split('\n').filter(r => r.includes('|'));
-    for (const row of rows) {
-      const cells = row.split('|').map(c => c.trim()).filter(Boolean);
+  const decisionsSection = collectSection(body, (h) => /^decisions made$/i.test(h.text.trim()));
+  const decisionsTable = decisionsSection ? parseMarkdownTable(decisionsSection.body) : null;
+  if (decisionsTable && decisionsTable.ok) {
+    for (const row of decisionsTable.value.rows) {
+      const cells = decisionsTable.value.columns.map((c) => (row[c] ?? '').trim()).filter(Boolean);
       if (cells.length >= 3) {
         decisions.push({
           phase: cells[0],
@@ -2158,6 +2227,38 @@ function cmdSignalResume(cwd: string, raw: boolean): void {
 // ─── Gate Functions (STATE.md consistency enforcement) ────────────────────────
 
 /**
+ * Find the character offset where the FIRST GFM table whose header is a
+ * superset of `required` column names begins (order-independent; extra
+ * columns tolerated) — the position-aware counterpart to markdown-table's
+ * `findTableWithColumns`, used to scope `updateTableCell` (which always
+ * operates on "the first table in its input") to the RIGHT table when an
+ * unrelated earlier table (that doesn't itself name every required column)
+ * may precede it in the same document. Returns `null` when no such table is
+ * found. Never trips the table-regex fingerprint (no `[^|]` cell-capture
+ * class) and never throws.
+ *
+ * Ragged-tolerant (#2245 Blocker 2): accepts the offset the moment a HEADER
+ * line names every required column — it deliberately does NOT additionally
+ * require `parseMarkdownTable(text.slice(m.index)).ok`, which validates every
+ * DATA row's cell count. A ragged sibling row anywhere in the table used to
+ * make that whole-table parse fail, so the offset came back `null` and the
+ * caller's `updateTableCell` calls (which scope to this offset) never even
+ * ran against an otherwise-perfectly-findable row.
+ */
+function findTableStartOffset(text: string, required: string[]): number | null {
+  const lineRe = /^[ \t]*\|.*\|[ \t]*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = lineRe.exec(text)) !== null) {
+    const trimmed = m[0].trim();
+    const cols = trimmed.replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim());
+    if (required.every((rq) => cols.includes(rq))) {
+      return m.index;
+    }
+  }
+  return null;
+}
+
+/**
  * Update the ## Performance Metrics section in STATE.md content.
  * Increments Velocity totals and upserts a By Phase table row.
  * Returns modified content string.
@@ -2168,45 +2269,92 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
   // the same phase again upserts the same row, so the column sum is stable. The previous
   // blind-add (prevTotal + summaryCount) re-read the cumulative total each call and
   // double-counted on every re-run. (#1582)
-  const byPhaseMatch = content.match(byPhaseTablePattern);
-  if (byPhaseMatch) {
-    let tableBody = byPhaseMatch[2].trim();
+  //
+  // Located by column NAME via the markdown-table seam (ADR-2143 §7) —
+  // supersedes the prior module-level byPhaseTablePattern regex for the
+  // existence/lookup half of this logic.
+  const byPhaseCols = ['Phase', 'Plans', 'Total', 'Avg/Plan'];
+  // Ragged-tolerant (#2245 Blocker 2): scope to the table's start offset
+  // (findTableStartOffset — itself now ragged-tolerant, see above) rather
+  // than gating existence/lookup on findTableWithColumns, which requires the
+  // WHOLE table to parse — a ragged row for a DIFFERENT phase used to
+  // silently no-op every phase's upsert.
+  const tableStart = findTableStartOffset(content, byPhaseCols);
+  if (tableStart !== null) {
     // Match the existing row for this phase, tolerating leading-zero padding in either
     // direction (#1659): canonicalize a numeric phase to its integer form so a seeded
     // "| 05 |" row is upserted (not duplicated) by `phase complete 5`, and vice-versa.
     const phaseNumStr = String(phaseNum);
     const canonCell = /^\d+$/.test(phaseNumStr) ? `0*${Number(phaseNumStr)}` : escapeRegex(phaseNumStr);
-    const phaseRowPattern = new RegExp(`^\\|\\s*${canonCell}\\s*\\|.*$`, 'm');
+    const phaseCellRe = new RegExp(`^${canonCell}$`, 'i');
+    const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
     const newRow = `| ${phaseNum} | ${summaryCount} | - | - |`;
 
-    if (phaseRowPattern.test(tableBody)) {
-      // Update existing row
-      tableBody = tableBody.replace(phaseRowPattern, newRow);
-    } else {
-      // Remove placeholder row and add new row
-      tableBody = tableBody.replace(/^\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|$/m, '').trim();
-      tableBody = tableBody ? tableBody + '\n' + newRow : newRow;
-    }
+    const before = content.slice(0, tableStart);
+    let tableText = content.slice(tableStart);
 
-    content = content.replace(byPhaseTablePattern, (_match, tableHeader: string) => `${tableHeader}${tableBody}\n`);
+    // Ragged-tolerant existence probe: a no-op updateTableCell write on the
+    // identifying "Phase" column (its own tolerant row scan) decides whether
+    // this phase's row already exists, without requiring every OTHER row in
+    // the table to also parse cleanly.
+    let rowExists = false;
+    const existsProbe = updateTableCell(tableText, rowMatch, 'Phase', (current) => {
+      rowExists = true;
+      return current;
+    });
+    void existsProbe;
+
+    if (rowExists) {
+      // Update existing row — one updateTableCell call per column (Phase
+      // itself may also change shape, e.g. "05" -> "5" per #1659).
+      const phaseResult = updateTableCell(tableText, rowMatch, 'Phase', ` ${phaseNum} `);
+      if (phaseResult.ok) tableText = phaseResult.value;
+      const plansResult = updateTableCell(tableText, rowMatch, 'Plans', ` ${summaryCount} `);
+      if (plansResult.ok) tableText = plansResult.value;
+      const totalResult = updateTableCell(tableText, rowMatch, 'Total', ' - ');
+      if (totalResult.ok) tableText = totalResult.value;
+      const avgResult = updateTableCell(tableText, rowMatch, 'Avg/Plan', ' - ');
+      if (avgResult.ok) tableText = avgResult.value;
+
+      content = before + tableText;
+    } else {
+      // Row doesn't exist — remove placeholder row and append new row. Row
+      // INSERTION (unlike a cell update) is outside updateTableCell's scope
+      // (ADR-2143 §7 Phase 4); handled directly via the section's raw table
+      // body text, same as before. byPhaseTablePattern is itself
+      // ragged-tolerant (a per-line regex with no cell-count validation).
+      const byPhaseMatch = content.match(byPhaseTablePattern);
+      if (byPhaseMatch) {
+        let tableBody = byPhaseMatch[2].trim();
+        tableBody = tableBody.replace(/^\|\s*-\s*\|\s*-\s*\|\s*-\s*\|\s*-\s*\|$/m, '').trim();
+        tableBody = tableBody ? tableBody + '\n' + newRow : newRow;
+        content = content.replace(byPhaseTablePattern, (_match, tableHeader: string) => `${tableHeader}${tableBody}\n`);
+      }
+    }
   }
 
   // Velocity: Total plans completed — DERIVED as the sum of the By-Phase Plans column
-  // (the second cell) across all data rows. Idempotent by construction (re-running phase
-  // complete upserts the same row → same sum) and self-healing (a hand-edited inflated
-  // total is corrected to the true sum on the next completion). When the By-Phase table
-  // is absent, leave the velocity total unchanged rather than guess. (#1582)
+  // across all data rows. Idempotent by construction (re-running phase complete upserts
+  // the same row → same sum) and self-healing (a hand-edited inflated total is corrected
+  // to the true sum on the next completion). When the By-Phase table is absent, leave the
+  // velocity total unchanged rather than guess. (#1582)
+  //
+  // Ragged-tolerant (#2245 Blocker 2): summed POSITIONALLY (the row's second
+  // cell) rather than by column NAME via findTableWithColumns, which requires
+  // the WHOLE table to parse — a hand-edited/ragged row for one phase must
+  // not blank out the derived total for every phase (mirrors OLD's
+  // byPhaseTablePattern-based sum, which was never gated on full-table
+  // validity either). Still scoped via findTableStartOffset so the RIGHT
+  // table is summed when an earlier unrelated table also has a "Phase"
+  // column (#2012).
   if (/Total plans completed:\s*(\d+|\[N\])/.test(content)) {
-    const tableForSum = content.match(byPhaseTablePattern);
-    if (tableForSum) {
+    const sumTableStart = findTableStartOffset(content, byPhaseCols);
+    if (sumTableStart !== null) {
+      const tableLines = content.slice(sumTableStart).split(/\r?\n/).slice(2);
       let sum = 0;
-      for (const row of tableForSum[2].split(/\r?\n/)) {
-        // Data rows look like `| <phase> | <plans> | … |`, optionally indented (the
-        // byPhaseTablePattern data-row capture allows `[ \t]*` leading whitespace, so the
-        // sum must too or hand-edited/legacy indented rows are silently skipped — #1582
-        // codex review). Header (`| Phase | Plans | …`) and separator (`| --- | --- | …`)
-        // rows have a non-numeric second cell and are skipped; non-numeric cells → 0.
-        const cellMatch = row.match(/^\s*\|\s*[^|]+\s*\|\s*(\d+)\s*\|/);
+      for (const row of tableLines) {
+        if (!row.trim().startsWith('|')) break;
+        const cellMatch = row.match(/^\s*\|\s*[^|]+\s*\|\s*(\d+)\s*\|/); // allow-adhoc-markdown: ragged-tolerant positional By-Phase sum, mirrors OLD's byPhaseTablePattern regex — must not require every row to parse as a well-formed table (#2245)
         if (cellMatch) sum += parseInt(cellMatch[1], 10);
       }
       content = content.replace(

@@ -1212,6 +1212,45 @@ describe('cmdStateRecordMetric (state record-metric)', () => {
     assert.ok(updated.includes('| Phase 1 P1 | 3min | 2 tasks | 3 files |'), 'existing row should still be present');
   });
 
+  // #2245 Blocker 2: a RAGGED sibling data row (a hand-edited stray/extra
+  // pipe) in the existing Performance Metrics table used to fail the
+  // whole-table `parseMarkdownTable` gate, which fell through to the
+  // "section absent (or malformed)" scaffold branch and appended a SECOND
+  // "## Performance Metrics" heading — compounding on every per-plan
+  // record-metric call. The append must be ragged-tolerant: it locates the
+  // table's last existing row and splices the new row after it WITHOUT
+  // requiring every sibling row to parse cleanly, and must never introduce a
+  // duplicate heading when a (possibly ragged) table already exists.
+  test('#2245 appends into a RAGGED existing table without duplicating the heading', () => {
+    const raggedFixture = [
+      '# Project State',
+      '',
+      '## Performance Metrics',
+      '',
+      '| Plan | Duration | Tasks | Files |',
+      '|------|----------|-------|-------|',
+      '| Phase 1 P1 | 3min | 2 tasks | 3 files |',
+      '| Phase 1 P2 | 4min | 3 tasks | 5 files | extra |',
+      '',
+      '## Session Continuity',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), raggedFixture);
+
+    const result = runGsdTools('state record-metric --phase 2 --plan 1 --duration 5min --tasks 3 --files 4', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(!output.created, 'created must be absent/false — an existing (ragged) section must not be treated as auto-created');
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const headingMatches = updated.match(/^## Performance Metrics\s*$/gim) || [];
+    assert.strictEqual(headingMatches.length, 1, `exactly ONE "## Performance Metrics" heading expected, got ${headingMatches.length}:\n${updated}`);
+    assert.ok(updated.includes('| Phase 1 P2 | 4min | 3 tasks | 5 files | extra |'), 'existing ragged row must be preserved verbatim');
+    assert.ok(updated.includes('| Phase 1 P1 | 3min | 2 tasks | 3 files |'), 'existing clean row should still be present');
+    assert.ok(updated.includes('| Phase 2 P1 | 5min | 3 tasks | 4 files |'), 'new row should be appended into the existing table');
+  });
+
   test('replaces None yet placeholder with first metric', () => {
     const noneYetFixture = [
       '# Project State',
