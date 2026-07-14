@@ -62,6 +62,10 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-ship'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-code-review'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-debug'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-spec-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-ui-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-spec-phase'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-ui-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -182,6 +186,49 @@ test('native code review and debug commands preserve their workflow contracts', 
 
     await pi._recorded.commands['gsd-debug'].handler('status ../invalid', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-debug-input-error');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native specification and UI commands preserve their workflow contracts', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-spec-ui-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "02"\nstatus: discussing\n---\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-spec-phase'].handler('02 --auto', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · Spec');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-spec-phase');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-spec-phase/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `ask`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /edge-completeness and prohibition probes/);
+
+    await pi._recorded.commands['gsd-spec-phase'].handler('02 --all', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-spec-input-error');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-ui-phase'].handler('02 --text', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · UI');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-ui-phase');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-ui-phase/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-ui-researcher/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-ui-checker/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /UI-consideration probe/);
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '- [ ] **Phase 2: Native UI**\n');
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-ui-phase'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · UI');
+    assert.match(pi._recorded.messages.at(-1).message.content, /UI phase \`02\`/);
+
+    await pi._recorded.commands['gsd-ui-phase'].handler('02 --unknown', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ui-input-error');
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
   } finally {
     cleanup(cwd);
