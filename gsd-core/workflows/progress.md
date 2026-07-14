@@ -536,7 +536,7 @@ State: "Current phase is {X}. Milestone has {N} phases (highest: {Y})."
 | Condition | Meaning | Action |
 |-----------|---------|--------|
 | current phase < highest phase | More phases remain | Go to **Route C** |
-| current phase = highest phase | Milestone complete | Go to **Route D** |
+| current phase = highest phase | All phases complete | Go to **Route D** |
 
 ---
 
@@ -602,7 +602,7 @@ NEXT_HAS_UI=$(echo "$NEXT_PHASE_SECTION" | grep -qi "UI hint.*yes" && echo "true
 
 ---
 
-**Route D: Milestone complete**
+**Route D: All phases complete (milestone ready to close)**
 
 ```
 ---

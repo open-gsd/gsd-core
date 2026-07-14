@@ -2940,7 +2940,7 @@ describe('phase complete command', () => {
     assert.strictEqual(output.next_phase, null, 'no next phase');
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
-    assert.ok(state.includes('Milestone complete'), 'status should be milestone complete');
+    assert.ok(state.includes('All phases complete'), 'status should be All phases complete');
   });
 
   // #1591: when the active milestone's phase checklist is wrapped in a
@@ -3031,8 +3031,8 @@ describe('phase complete command', () => {
     // still in progress.
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(
-      !/Milestone complete/i.test(state),
-      'a mid-milestone phase must not flip STATE.md to "Milestone complete" (#1591)',
+      !/Milestone complete|All phases complete/i.test(state),
+      'a mid-milestone phase must not flip STATE.md to milestone-complete (#1591)',
     );
   });
 
@@ -3101,8 +3101,8 @@ describe('phase complete command', () => {
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(
-      !/Milestone complete/i.test(state),
-      'a mid-milestone phase must not flip STATE.md to "Milestone complete" — bold checklist (#1591)',
+      !/Milestone complete|All phases complete/i.test(state),
+      'a mid-milestone phase must not flip STATE.md to milestone-complete — bold checklist (#1591)',
     );
   });
 
@@ -3182,8 +3182,8 @@ describe('phase complete command', () => {
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(
-      !/Milestone complete/i.test(state),
-      'a mid-milestone phase must not flip STATE.md to "Milestone complete" (#1752)',
+      !/Milestone complete|All phases complete/i.test(state),
+      'a mid-milestone phase must not flip STATE.md to milestone-complete (#1752)',
     );
     const tpMatch = state.match(/total_phases:\s*(\d+)/);
     assert.ok(tpMatch, 'STATE.md must carry a total_phases value after phase.complete');
@@ -3747,7 +3747,7 @@ describe('phase complete command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
-    assert.ok(state.includes('Milestone complete'), 'plain Status field should be updated');
+    assert.ok(state.includes('All phases complete'), 'plain Status field should be updated');
     assert.ok(state.includes('Not started'), 'plain Plan field should be updated');
     // Verify compound format preserved
     assert.ok(state.match(/Phase:.*of\s+1/), 'should preserve "of N" in compound Phase format');
@@ -4169,7 +4169,7 @@ describe('#2028 — phase complete milestone-end + workstream guard', () => {
   // A complement phase numbered AFTER Phase 9 but executed first. Completing the
   // numerically-highest phase must not read as milestone-end while a lower phase
   // is still outstanding (the isLastPhase blocks only checked for HIGHER phases).
-  test('does NOT stamp "Milestone complete" when a lower-numbered phase is still outstanding', () => {
+  test('does NOT stamp "All phases complete" when a lower-numbered phase is still outstanding', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
       `# Roadmap\n\n- [ ] Phase 9: Introspection\n- [ ] Phase 10: Complement\n\n### Phase 9: Introspection\n**Goal:** baseline\n\n### Phase 10: Complement\n**Goal:** complement\n`
@@ -4198,8 +4198,8 @@ describe('#2028 — phase complete milestone-end + workstream guard', () => {
 
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.ok(
-      !/Milestone complete/i.test(state),
-      'STATE.md must NOT flip to "Milestone complete" while a lower phase is outstanding',
+      !/Milestone complete|All phases complete/i.test(state),
+      'STATE.md must NOT flip to milestone-complete while a lower phase is outstanding',
     );
     assert.ok(/Ready to plan/i.test(state), 'status should be "Ready to plan"');
     assert.match(
@@ -4236,7 +4236,7 @@ describe('#2028 — phase complete milestone-end + workstream guard', () => {
     const output = JSON.parse(result.output);
     assert.strictEqual(output.is_last_phase, true, 'all lower phases complete → Phase 10 is milestone-end');
     const state = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
-    assert.ok(/Milestone complete/i.test(state), 'status should be "Milestone complete"');
+    assert.ok(/All phases complete/i.test(state), 'status should be "All phases complete"');
   });
 
   // The lower-phase scan must not treat an unrelated checklist line that merely
@@ -4318,9 +4318,9 @@ describe('#2028 — phase complete milestone-end + workstream guard', () => {
       rootState,
       'root STATE.md must NOT be written when --ws targets a workstream',
     );
-    // The workstream's own STATE.md advanced (single phase → milestone complete).
+    // The workstream's own STATE.md advanced (single phase → all phases complete).
     const wsState = fs.readFileSync(path.join(wsDir, 'STATE.md'), 'utf-8');
-    assert.match(wsState, /Milestone complete/i, "the workstream's STATE.md should be the one updated");
+    assert.match(wsState, /All phases complete/i, "the workstream's STATE.md should be the one updated");
   });
 
   // The guard only fires in workstream mode — a flat project (no workstreams dir)
