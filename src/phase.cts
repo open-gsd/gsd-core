@@ -56,6 +56,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { updateTableCell } from './markdown-table.cjs';
+import { deleteSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -1176,13 +1177,24 @@ function updateRoadmapAfterPhaseRemoval(
     let content = fs.readFileSync(roadmapPath, 'utf-8');
     const escaped = escapeRegex(targetPhase);
 
-    // allow-adhoc-markdown: SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE detail section INCLUDING its own heading line; withSection/collectSection (ADR-2143 §4) only replace a section's BODY, not delete the heading too, so whole-section removal is out of that seam's scope
-    content = content.replace(
-      new RegExp(
-        `\\n?(?<h>#{2,4})\\s*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:[\\s\\S]*?(?=\\n\\k<h>(?!#)\\s+Phase\\s+[^\\n:]+\\s*:|$)`,
-        'i',
-      ),
-      '',
+    // SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE
+    // detail section INCLUDING its own heading line. Migrated onto deleteSection
+    // (ADR-2143 §4 / markdown-sectionizer T7): it locates the target heading via
+    // tokenizeHeadings + this predicate, then splices out the range from that
+    // heading's own start through the next heading of the SAME-OR-HIGHER level —
+    // whatever that heading's text is. This fixes a data-loss bug in the prior
+    // hand-rolled regex, whose lookahead only recognised ANOTHER "Phase N:"
+    // heading as a stop boundary: removing the LAST phase in a roadmap left no
+    // such heading to stop at, so the lazy `[\s\S]*?` scan ran to EOF and swept
+    // away everything after it — including a trailing `## Progress` heading and
+    // its tracking table.
+    const phaseHeadingRe = new RegExp(
+      `^Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
+      'i',
+    );
+    content = deleteSection(
+      content,
+      (h) => h.level >= 2 && h.level <= 4 && phaseHeadingRe.test(h.text),
     );
     content = content.replace(
       new RegExp(`\\n?-\\s*\\[[ x]\\]\\s*.*Phase\\s+${escaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*`, 'gi'),

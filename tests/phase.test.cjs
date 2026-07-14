@@ -2406,6 +2406,57 @@ Plans:
       );
     }
   });
+
+  test('#2143 audit: removing the LAST phase preserves a trailing ## Progress section and its table', () => {
+    // Root cause: updateRoadmapAfterPhaseRemoval's whole-section delete used to
+    // be a raw greedy regex whose lookahead only recognised ANOTHER "Phase N:"
+    // heading as a stop boundary. Removing the LAST phase left no such heading
+    // to stop at, so the lazy [\s\S]*? scan ran to EOF and swept away
+    // everything after it — including a trailing `## Progress` heading and its
+    // tracking table (data loss). Fixed by migrating the delete onto
+    // deleteSection (markdown-sectionizer.cjs), whose level-bounded stop halts
+    // at the next heading of the SAME-OR-HIGHER level regardless of its text.
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap
+
+### Phase 1: Foundation
+**Goal:** Setup
+
+### Phase 2: Auth
+**Goal:** Authentication
+
+## Progress
+
+| Phase | Plans | Status | Completed |
+|---|---|---|---|
+| 1 | 0/1 | Planned | - |
+| 2 | 0/1 | Planned | - |
+`,
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-foundation'), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '02-auth'), { recursive: true });
+
+    const result = runGsdTools('phase remove 2 --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(!roadmap.includes('Phase 2: Auth'), 'removed Phase 2 section must be gone');
+    assert.ok(!roadmap.includes('Authentication'), 'removed Phase 2 body content must be gone');
+    assert.ok(roadmap.includes('### Phase 1: Foundation'), 'Phase 1 (untouched) must survive');
+    assert.ok(
+      roadmap.includes('## Progress'),
+      'trailing ## Progress heading must survive removing the LAST phase — the #2143 audit data-loss bug',
+    );
+    assert.ok(
+      roadmap.includes('| Phase | Plans | Status | Completed |'),
+      'Progress table header must survive',
+    );
+    assert.ok(
+      roadmap.includes('| 1 | 0/1 | Planned | - |'),
+      "Phase 1's own progress row must survive",
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
