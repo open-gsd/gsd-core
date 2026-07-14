@@ -6,6 +6,9 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+// Namespace (not destructured) so tests can inject spawn failures by
+// monkeypatching childProcess.execFileSync.
+const childProcess = require('child_process');
 const { isSemverNewer } = require('../gsd-core/bin/lib/semver-compare.cjs');
 const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
 
@@ -332,6 +335,83 @@ function compactModelName(name) {
   return name.replace(/\s*\(([^)]+?)\s+(?:context|ctx)\)$/i, ' ($1)');
 }
 
+// --- Git segment (opt-in) ------------------------------------------------------
+//
+// Opt-in via `statusline.show_git: true` in .planning/config.json. Renders the
+// current branch plus compact work-state markers after the directory segment:
+//   " │ main+2~1?3↑1"  (staged / unstaged / untracked / ahead / behind)
+//   " │ main✓"         (clean, in sync)
+// One `git status --porcelain=v2 --branch` spawn per render — no shell, args
+// are a fixed array, and the workspace dir is passed via -C. Fails silently
+// (segment absent) outside a repo, without git, or on timeout.
+
+const GIT_STATUS_TIMEOUT_MS = 1500;
+
+/**
+ * Run `git status --porcelain=v2 --branch` in dir.
+ * Returns raw stdout, or null when git is missing, dir isn't a repo, or the
+ * call times out. Never throws.
+ */
+function readGitStatus(dir) {
+  try {
+    // 8 MiB maxBuffer (default 1 MiB) headroom for repos with very many changed
+    // or untracked files; overflow still degrades safely to segment-absent via
+    // the catch below.
+    return childProcess.execFileSync('git', ['-C', dir, 'status', '--porcelain=v2', '--branch'],
+      { encoding: 'utf8', timeout: GIT_STATUS_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Pure function: parse `git status --porcelain=v2 --branch` output.
+ *
+ * Returns { branch, ahead, behind, staged, unstaged, untracked } or null when
+ * the text carries no branch header (not a repo / unparseable). Detached HEAD
+ * reports branch "(detached)" — porcelain v2's literal spelling, shown as-is.
+ * Unmerged (conflict) entries count as unstaged: they're pending work either way.
+ */
+function parseGitStatus(text) {
+  if (typeof text !== 'string') return null;
+  const info = { branch: null, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0 };
+  for (const line of text.split('\n')) {
+    if (line.startsWith('# branch.head ')) {
+      info.branch = line.slice('# branch.head '.length).trim() || null;
+    } else if (line.startsWith('# branch.ab ')) {
+      const m = line.match(/\+(\d+) -(\d+)/);
+      if (m) { info.ahead = parseInt(m[1], 10); info.behind = parseInt(m[2], 10); }
+    } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
+      // Changed / renamed entries: XY pair at cols 2-3, '.' = unmodified side
+      const xy = line.slice(2, 4);
+      if (xy[0] !== '.') info.staged++;
+      if (xy[1] !== '.') info.unstaged++;
+    } else if (line.startsWith('u ')) {
+      info.unstaged++;
+    } else if (line.startsWith('? ')) {
+      info.untracked++;
+    }
+  }
+  return info.branch ? info : null;
+}
+
+/**
+ * Pure function: format parsed git info into the statusline segment, divider
+ * included (mirrors lastCmdSuffix). Branch is dimmed to match the directory
+ * segment; markers keep their own colors. Returns '' when info is absent.
+ */
+function buildGitSegment(info) {
+  if (!info || !info.branch) return '';
+  const markers = [];
+  if (info.staged) markers.push(`\x1b[32m+${info.staged}\x1b[0m`);
+  if (info.unstaged) markers.push(`\x1b[33m~${info.unstaged}\x1b[0m`);
+  if (info.untracked) markers.push(`\x1b[31m?${info.untracked}\x1b[0m`);
+  if (info.ahead) markers.push(`\x1b[32m↑${info.ahead}\x1b[0m`);
+  if (info.behind) markers.push(`\x1b[31m↓${info.behind}\x1b[0m`);
+  const state = markers.length ? markers.join('') : '\x1b[32m✓\x1b[0m';
+  return ` │ \x1b[2m${info.branch}\x1b[0m${state}`;
+}
+
 // --- stdin ------------------------------------------------------------------
 
 function runStatusline() {
@@ -478,6 +558,7 @@ function runStatusline() {
     // Failure here must never break the statusline — wrap the entire lookup.
     let lastCmdSuffix = '';
     let position = 'end';
+    let gitSuffix = '';
     try {
       if (getConfigValue(cfg, 'statusline.show_last_command') === true) {
         const transcriptPath = data.transcript_path;
@@ -488,8 +569,11 @@ function runStatusline() {
       }
       const cfgPos = getConfigValue(cfg, 'statusline.context_position');
       if (cfgPos != null) position = cfgPos;
+      if (getConfigValue(cfg, 'statusline.show_git') === true) {
+        gitSuffix = buildGitSegment(parseGitStatus(readGitStatus(dir)));
+      }
     } catch (e) {
-      // Never break the statusline on config/transcript errors
+      // Never break the statusline on config/transcript/git errors
     }
 
     // Output
@@ -500,7 +584,7 @@ function runStatusline() {
         ? `\x1b[2m${gsdStateStr}\x1b[0m`
         : null;
 
-    process.stdout.write(composeStatusline({ gsdUpdate, model, ctx, middle, dirname, lastCmdSuffix, position }));
+    process.stdout.write(composeStatusline({ gsdUpdate, model, ctx, middle, dirname, lastCmdSuffix, gitSuffix, position }));
   } catch (e) {
     // Silent fail - don't break statusline on parse errors
   }
@@ -519,6 +603,7 @@ function runStatusline() {
  * @param {string|null} [opts.middle=null]  - middle segment (todo task or GSD state), null = absent
  * @param {string} opts.dirname             - project directory basename (dim styling applied here)
  * @param {string} [opts.lastCmdSuffix='']  - last-command suffix, e.g. ' │ last: /foo'
+ * @param {string} [opts.gitSuffix='']      - git branch/status segment, e.g. ' │ main✓' (after dirname)
  * @param {'end'|'front'} [opts.position='end']
  *   - 'end'   (default): ctx appended after dirname — preserved byte-for-byte
  *   - 'front': ctx immediately after model name so the meter stays visible in narrow terminals
@@ -534,6 +619,7 @@ function composeStatusline({
   middle = null,
   dirname,
   lastCmdSuffix = '',
+  gitSuffix = '',
   position = 'end',
 } = {}) {
   const modelSeg = `\x1b[2m${model}\x1b[0m`;
@@ -542,12 +628,12 @@ function composeStatusline({
   const pos = position === 'front' ? 'front' : 'end';
 
   if (pos === 'front') {
-    if (middle) return `${gsdUpdate}${modelSeg}${ctx} │ ${middle} │ ${dirSeg}${lastCmdSuffix}`;
-    return `${gsdUpdate}${modelSeg}${ctx} │ ${dirSeg}${lastCmdSuffix}`;
+    if (middle) return `${gsdUpdate}${modelSeg}${ctx} │ ${middle} │ ${dirSeg}${gitSuffix}${lastCmdSuffix}`;
+    return `${gsdUpdate}${modelSeg}${ctx} │ ${dirSeg}${gitSuffix}${lastCmdSuffix}`;
   }
   // 'end' — preserved byte-for-byte relative to original inline templates
-  if (middle) return `${gsdUpdate}${modelSeg} │ ${middle} │ ${dirSeg}${ctx}${lastCmdSuffix}`;
-  return `${gsdUpdate}${modelSeg} │ ${dirSeg}${ctx}${lastCmdSuffix}`;
+  if (middle) return `${gsdUpdate}${modelSeg} │ ${middle} │ ${dirSeg}${gitSuffix}${ctx}${lastCmdSuffix}`;
+  return `${gsdUpdate}${modelSeg} │ ${dirSeg}${gitSuffix}${ctx}${lastCmdSuffix}`;
 }
 
 function isInstalledAheadOfLatest(installed, latest) {
@@ -590,6 +676,7 @@ module.exports = {
   formatTokens,
   contextTokenSuffix,
   compactModelName,
+  readGitStatus, parseGitStatus, buildGitSegment,
 };
 
 /**
@@ -603,6 +690,7 @@ function renderStatusline(data) {
 
   let lastCmdSuffix = '';
   let position = 'end';
+  let gitSuffix = '';
   try {
     const cfg = readGsdConfig(dir);
     if (getConfigValue(cfg, 'statusline.show_last_command') === true) {
@@ -613,11 +701,14 @@ function renderStatusline(data) {
     }
     const cfgPos = getConfigValue(cfg, 'statusline.context_position');
     if (cfgPos != null) position = cfgPos;
+    if (getConfigValue(cfg, 'statusline.show_git') === true) {
+      gitSuffix = buildGitSegment(parseGitStatus(readGitStatus(dir)));
+    }
   } catch (e) { /* swallow */ }
 
   const gsdStateStr = formatGsdState(readGsdState(dir) || {});
   const middle = gsdStateStr ? `\x1b[2m${gsdStateStr}\x1b[0m` : null;
-  return composeStatusline({ model, ctx: '', middle, dirname, lastCmdSuffix, position });
+  return composeStatusline({ model, ctx: '', middle, dirname, lastCmdSuffix, gitSuffix, position });
 }
 
 module.exports.renderStatusline = renderStatusline;

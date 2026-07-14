@@ -770,6 +770,13 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     }
   }
 
+  // statusline.show_git — boolean only
+  if (kp === 'statusline.show_git') {
+    if (typeof parsedValue !== 'boolean') {
+      error(`Invalid statusline.show_git '${val}'. Must be a boolean (true or false).`);
+    }
+  }
+
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
   if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');

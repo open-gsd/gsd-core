@@ -531,6 +531,9 @@ node gsd-tools.cjs list-seeds [status]
 # Check file/directory existence
 node gsd-tools.cjs verify-path-exists <path>
 
+# Append a row to STATE.md's "Quick Tasks Completed" table (schema-backed; #2133)
+node gsd-tools.cjs quick-tasks-append --task "<description>"
+
 # Aggregate all SUMMARY.md data
 node gsd-tools.cjs history-digest
 

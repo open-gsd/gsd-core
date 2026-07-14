@@ -647,6 +647,19 @@ describe('requirements mark-complete command', () => {
     assert.ok(content.includes('- [x] **FOO-01**'), 'checkbox should be checked');
     // The table is untouched (no FOO-01 row synthesized).
     assert.ok(!content.includes('FOO-01 | Phase'), 'no FOO-01 row should be invented');
+
+    // ADR-2143 §6 write-set: additive structured read of the same per-surface
+    // facts — checkbox surface applied (fresh write this run), traceability
+    // surface did NOT (no row existed to flip), so the set is not complete.
+    // This does not change `updated`/`marked_complete` above. Per-ID: each
+    // outcome carries `requirement` so a multi-ID batch cannot OR one ID's
+    // outcome into another's (the #2140 class one level up).
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'FOO-01', surface: 'checkbox', applied: true },
+      { requirement: 'FOO-01', surface: 'traceability', applied: false },
+    ]);
+    assert.strictEqual(out.write_set_complete, false,
+      'writeSetComplete requires EVERY surface applied, not an OR — a checkbox-only write is not complete');
   });
 
   test('#2140 re-run on the half-written file does NOT mask the drift as already_complete', () => {
@@ -664,6 +677,15 @@ describe('requirements mark-complete command', () => {
       'nothing flipped on re-run, so not marked_complete');
     assert.ok(out.table_unmatched.includes('FOO-01'),
       'the drift must still be surfaced as table_unmatched on re-run');
+
+    // ADR-2143 §6 write-set: nothing was written THIS run on either surface
+    // (checkbox was already [x], the row still doesn't exist), so both
+    // surfaces report applied:false and the set is not complete.
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'FOO-01', surface: 'checkbox', applied: false },
+      { requirement: 'FOO-01', surface: 'traceability', applied: false },
+    ]);
+    assert.strictEqual(out.write_set_complete, false);
   });
 
   test('#2140 no traceability table at all → still a clean success (no table_unmatched)', () => {
@@ -676,6 +698,104 @@ describe('requirements mark-complete command', () => {
     assert.ok(out.marked_complete.includes('NO-TABLE-01'));
     assert.ok(!out.table_unmatched || !out.table_unmatched.includes('NO-TABLE-01'),
       'no table_unmatched when there is no traceability table');
+
+    // ADR-2143 §6 write-set: the traceability surface is omitted entirely
+    // (not reported as a false applied:false) when the file has no
+    // traceability table — nothing was required of it. A single-surface
+    // write-set that fully applied is complete.
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'NO-TABLE-01', surface: 'checkbox', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true);
+  });
+
+  test('#2140-class multi-ID: one ID\'s partial reconcile is not masked by another ID\'s full one', () => {
+    // Adversarial-review regression: write_set/write_set_complete were built
+    // from two INVOCATION-WIDE booleans OR-accumulated across every ID in the
+    // batch, so a fully-reconciled REQ-02 in the same call could mask a
+    // checkbox-only partial write on REQ-01. The write-set must be tracked
+    // PER (requirement, surface) so REQ-01's unmatched traceability row
+    // cannot be hidden by REQ-02 reconciling cleanly.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-01**: feature one (no traceability row)
+- [ ] **REQ-02**: feature two (has traceability row)
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| REQ-02 | Phase 1 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements mark-complete REQ-01,REQ-02', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    // Pre-existing fields are unchanged: both checkboxes flip (marked_complete),
+    // REQ-01 has no table row so it surfaces as table_unmatched.
+    assert.deepStrictEqual(out.marked_complete.sort(), ['REQ-01', 'REQ-02']);
+    assert.deepStrictEqual(out.table_unmatched, ['REQ-01']);
+    assert.deepStrictEqual(out.not_found, []);
+    assert.deepStrictEqual(out.already_complete, []);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **REQ-01**'), 'REQ-01 checkbox should be checked');
+    assert.ok(content.includes('- [x] **REQ-02**'), 'REQ-02 checkbox should be checked');
+    assert.ok(content.includes('| REQ-02 | Phase 1 | Complete |'), 'REQ-02 table row should be Complete');
+    assert.ok(!content.includes('REQ-01 | Phase'), 'no REQ-01 row should be invented');
+
+    // The write-set is now per-ID: REQ-01's traceability surface did NOT
+    // apply (no row to flip) even though REQ-02's did — the aggregate must
+    // not OR REQ-02's success into REQ-01's outcome.
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-01', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-01', surface: 'traceability', applied: false },
+      { requirement: 'REQ-02', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-02', surface: 'traceability', applied: true },
+    ]);
+    // Because REQ-01's traceability entry did not apply, the batch as a
+    // whole is NOT complete — this is the exact bug the fix closes.
+    assert.strictEqual(out.write_set_complete, false,
+      'REQ-01\'s unmatched traceability row must not be masked by REQ-02 fully reconciling');
+  });
+
+  test('#2140-class multi-ID: fully-reconciled batch reports write_set_complete:true', () => {
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-01**: feature one
+- [ ] **REQ-02**: feature two
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| REQ-01 | Phase 1 | Pending |
+| REQ-02 | Phase 1 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements mark-complete REQ-01,REQ-02', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.deepStrictEqual(out.marked_complete.sort(), ['REQ-01', 'REQ-02']);
+    assert.deepStrictEqual(out.table_unmatched, []);
+
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-01', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-01', surface: 'traceability', applied: true },
+      { requirement: 'REQ-02', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-02', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true);
   });
 
   test('marks single requirement complete (checkbox + table)', () => {
@@ -692,6 +812,14 @@ describe('requirements mark-complete command', () => {
     assert.ok(content.includes('- [x] **TEST-01**'), 'checkbox should be checked');
     assert.ok(content.includes('| TEST-01 | Phase 1 | Complete |'), 'table row should be Complete');
     assert.ok(content.includes('- [ ] **TEST-02**'), 'TEST-02 should remain unchecked');
+
+    // ADR-2143 §6 write-set: both surfaces got a fresh write this run, so the
+    // write-set is complete.
+    assert.deepStrictEqual(output.write_set, [
+      { requirement: 'TEST-01', surface: 'checkbox', applied: true },
+      { requirement: 'TEST-01', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(output.write_set_complete, true);
   });
 
   test('handles mixed prefixes in single call (TEST-XX, REG-XX, INFRA-XX)', () => {

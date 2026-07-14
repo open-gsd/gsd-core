@@ -441,25 +441,27 @@ describe('bug #3805: fast.md log_to_state must be schema-aware', () => {
   });
 
   test('fast.md log_to_state step references the 5-column quick.md schema', () => {
-    // The fix must handle the 5-col schema: | # | Description | Date | Commit | Directory |
-    // Test that all 5 column names appear in the log_to_state step's context.
-    // Extract the log_to_state step content to scope the check.
+    // Schema-awareness no longer lives inline in fast.md as hardcoded column
+    // names — it was moved to the schema-backed `quick-tasks-append` helper
+    // (`appendQuickTaskRow` in markdown-table.cjs; #2133, ADR-2143 §3/§7),
+    // which introspects the existing table's schema (5-col or 6-col) itself.
+    // Assert the step delegates to that helper instead of requiring the old
+    // literal column names.
     const logToStateMatch = fastMdContent.match(/<step name="log_to_state">([\s\S]*?)<\/step>/);
     assert.ok(logToStateMatch, 'fast.md must contain a <step name="log_to_state"> element');
 
     const stepContent = logToStateMatch[1];
 
-    // All 5 column names from quick.md Step 7 must be referenced in the step.
-    for (const col of QUICK_MD_STEP7_COLUMNS) {
-      assert.ok(
-        stepContent.toLowerCase().includes(col.toLowerCase()),
-        [
-          `fast.md log_to_state step does not reference column "${col}"`,
-          `Expected all 5 columns from quick.md Step 7: ${QUICK_MD_STEP7_COLUMNS.join(', ')}`,
-          `(${QUICK_MD_STEP7_COL_COUNT}-column schema)`,
-        ].join('\n')
-      );
-    }
+    assert.ok(
+      stepContent.includes('quick-tasks-append'),
+      [
+        'fast.md log_to_state step does not invoke the schema-aware quick-tasks-append helper.',
+        'Schema-awareness now lives in the gsd-tools quick-tasks-append subcommand',
+        `(appendQuickTaskRow, handling both the ${QUICK_MD_STEP7_COL_COUNT}-column quick.md Step 7 schema`,
+        `${QUICK_MD_STEP7_COLUMNS.join(', ')} and the 6-column with-status variant) —`,
+        'the step must delegate to it rather than hardcoding column names inline.',
+      ].join('\n')
+    );
   });
 
   test('fast.md log_to_state step skips STATE.md write on unrecognized schema', () => {

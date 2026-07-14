@@ -20,6 +20,8 @@
  *   - Issue #4 (open-gsd/gsd-core)
  */
 
+import { findTableWithColumns } from './markdown-table.cjs';
+
 /** Result of deriveProgressFromRoadmap. */
 export interface RoadmapProgress {
   completedPhases: number | null;
@@ -30,51 +32,79 @@ export interface RoadmapProgress {
 /**
  * Derive completed_phases, total_phases, and total_plans from ROADMAP content.
  * Root cause fix for issue #4 — see gen-phase-lifecycle.mjs for full documentation.
+ *
+ * ADR-2143 §3 ("addressed by NAME, never ordinal"): the Progress table is
+ * located via the markdown-table seam's `findTableWithColumns`, which is
+ * column-NAME/order/count-invariant — it matches the first table whose header
+ * is a SUPERSET of the canonical `Phase` / `Plans Complete` / `Status` /
+ * `Completed` names, in any order, tolerating extra/injected unrelated
+ * columns (#2137's fast-check property test shuffles headers and injects
+ * columns and asserts the derived counts never change). This supersedes the
+ * earlier `findTableBySchema` exact-schema lookup, which required an exact
+ * canonical column SET+ORDER and returned all-null on any reordering or
+ * injection.
+ *
+ * Scoped to the `## Progress` section when the document has one (#2012 decoy
+ * avoidance — a differently-headed table sharing the same column names must
+ * not be picked up instead); a headingless milestone slice (#1445) falls back
+ * to scanning the whole input, preserving the "Progress table not under a
+ * `## Progress` heading, or not the first table in the document, still
+ * resolves" behaviour.
+ *
+ * Cells are read by column NAME (`r['Status']`, `r['Plans Complete']`,
+ * `r['Phase']`), fixing #2137 (the old position-based regex assumed "Status"
+ * was always the 3rd cell and "Plans Complete" the 2nd, which broke for the
+ * 5-column milestone-grouped variant that inserts a `Milestone` column ahead
+ * of them).
  */
 export function deriveProgressFromRoadmap(roadmapContent: string): RoadmapProgress {
   let completedPhases: number | null = null;
   let totalPhases: number | null = null;
   let totalPlans: number | null = null;
 
-  try {
-    // Count Complete rows in the progress table (Status column = "Complete").
-    // Pattern: row where the phase cell starts with a digit (data row, not header),
-    // followed by any cell content, then a "Complete" status cell.
-    // Handles both short form ("| 4. |") and long form ("| 01. Foundation |").
-    // See phase-lifecycle.ts ~line 1655 for the original SDK pattern.
-    const tableCompletePattern = /\|\s*\d+[^|]*\|\s*[^|]*\|\s*Complete\s*\|/gi;
-    const completeMatches = roadmapContent.match(tableCompletePattern);
-    completedPhases = completeMatches ? completeMatches.length : null;
+  // ADR-2143 §5 (fail-loud, no null-swallow): this used to be wrapped in a
+  // try/catch that silently fell through to the existing (null) values on any
+  // thrown error. `findTableWithColumns`/`parseMarkdownTable` never throw —
+  // an unparseable or absent table resolves to `null` /
+  // `{ ok: false, reason }`, not an exception — so the catch was masking
+  // nothing but dead code paths. Removed per ADR-2143 §5; the public
+  // `RoadmapProgress` contract (nulls = absent) is unchanged.
+  //
+  // ADR-2143 §3: read the Progress table by column NAME (order/injection-invariant),
+  // via the markdown-table seam. Scope to the `## Progress` section when present
+  // (#2012 decoy avoidance); a headingless milestone slice (#1445) falls back to the
+  // whole input. Requires the canonical Phase/Plans Complete/Status/Completed columns
+  // in any order (extra columns ignored) — supersedes findTableBySchema's exact-schema lookup.
+  const progressMatch = roadmapContent.match(/^##[ \t]+Progress\b/im);
+  let scoped = roadmapContent;
+  if (progressMatch && progressMatch.index !== undefined) {
+    const afterHeading = roadmapContent.slice(progressMatch.index);
+    const nextHeading = afterHeading.search(/\n#{1,2}[ \t]/);
+    scoped = nextHeading >= 0 ? afterHeading.slice(0, nextHeading) : afterHeading;
+  }
+  const table = findTableWithColumns(scoped, ['Phase', 'Plans Complete', 'Status', 'Completed']);
 
-    // Count total phase rows in the progress table.
-    // Identify the table by looking for Phase|...|Status|...|Completed header.
-    const progressTableMatch = roadmapContent.match(
-      // allow-adhoc-markdown: table-scoped regex with heading lookahead as stop; table parsing, out of seam scope; pending #1372
-      /\|\s*Phase\s*\|[^|]*\|[^|]*Status[^|]*\|[^|]*Completed[^|]*\|[\s\S]*?(?=\n\n|\n##|$)/i,
-    );
-    if (progressTableMatch) {
-      const tableText = progressTableMatch[0];
-      // Count data rows (rows starting with pipe then a phase number),
-      // excluding 999.x backlog phases. Mirrors init.cts /^999(?:\.|$)/ filter.
-      const dataRowPattern = /^\|\s*(\d+[^|]*)\|/gm;
-      let dataRowCount = 0;
-      let drm: RegExpExecArray | null;
-      while ((drm = dataRowPattern.exec(tableText)) !== null) {
-        if (/^999\b/.test(drm[1].trim())) continue;
-        dataRowCount++;
-      }
-      totalPhases = dataRowCount > 0 ? dataRowCount : null;
-    }
+  if (table) {
+    const allRows = table.rows;
 
-    // Sum plan counts from M/N columns in progress table
+    const completed = allRows.filter((r) => /^complete$/i.test((r['Status'] ?? '').trim())).length;
+    completedPhases = completed > 0 ? completed : null;
+
+    // Data rows only (exclude 999.x backlog phases). Mirrors init.cts /^999(?:\.|$)/ filter.
+    const dataRows = allRows.filter((r) => {
+      const phase = (r['Phase'] ?? '').trim();
+      return /^\d/.test(phase) && !/^999\b/.test(phase);
+    });
+    totalPhases = dataRows.length > 0 ? dataRows.length : null;
+
     let totalPlansSum = 0;
-    const planCellPattern = /\|\s*\d+[^|]*\|\s*(\d+)\/(\d+)\s*\|/gi;
-    let pm: RegExpExecArray | null;
-    while ((pm = planCellPattern.exec(roadmapContent)) !== null) {
-      totalPlansSum += parseInt(pm[2], 10);
+    for (const r of allRows) {
+      const cell = (r['Plans Complete'] ?? '').trim();
+      const m = /(\d+)\s*\/\s*(\d+)/.exec(cell);
+      if (m) totalPlansSum += parseInt(m[2], 10);
     }
-    if (totalPlansSum > 0) totalPlans = totalPlansSum;
-  } catch { /* intentionally empty — fall through to existing values */ }
+    totalPlans = totalPlansSum > 0 ? totalPlansSum : null;
+  }
 
   return { completedPhases, totalPhases, totalPlans };
 }
