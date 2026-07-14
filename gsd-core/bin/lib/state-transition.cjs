@@ -28,7 +28,7 @@ const markdown_sectionizer_cjs_1 = require("./markdown-sectionizer.cjs");
 const phase_lifecycle_cjs_1 = require("./phase-lifecycle.cjs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const phaseIdMod = require("./phase-id.cjs");
-const { extractFrontmatter, reconstructFrontmatter } = frontmatter;
+const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
 const { escapeRegex } = phaseIdMod;
 // Stop predicate for section-body slicing: a level-2+ heading ends the section.
 const STOP_H2_PLUS = (lv) => lv >= 2;
@@ -226,7 +226,7 @@ function beginPhaseCore(content, intent, deps) {
     const reassemble = (b) => hasFrontmatter
         ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
         : b;
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     // Consult the field-classification table for the frontmatter keys this
     // transition touches (codex Phase 1 review: "table not consulted by
     // transitionCore"). The table tracks FRONTMATTER keys (lowercase: `status`,
@@ -284,8 +284,8 @@ function beginPhaseCore(content, intent, deps) {
             updated.push('Current focus');
         }
         // ## Current Position section mutation (#1104, #1365).
-        // ADR-1372 T6: tokenizeHeadings + offset splicing (replaceSection adoption
-        // deferred to a later phase). Mirrors state.cts:2261-2324 byte-for-behaviour.
+        // `locateCurrentPosition` (fence-aware, tokenizeHeadings-based) locates
+        // the section; mirrors state.cts:2261-2324 byte-for-behaviour.
         body = mutateCurrentPositionFirstTime(body, intent, today, updated);
     }
     else {
@@ -338,6 +338,20 @@ function sliceCurrentPositionSection(body) {
  * First-time ## Current Position mutation: update Phase / Plan / Status /
  * Last activity lines. Mirrors state.cts:2261-2324 byte-for-behaviour
  * (inline regex first, pipe-table fallback via stateReplaceField — #1257).
+ *
+ * F2 (#2245 review, MAJOR): a prior revision of this function used
+ * `collectSection`/`replaceSection` here, whose default `levelBounded: true`
+ * only stops the section at the next heading of level <= the opener's own
+ * level (H1/H2 for a `##`-opened section) — an H3+ subsection nested under
+ * `## Current Position` was NOT a stop boundary and got folded into
+ * `sectionBody`, so the field regexes below (which run with the `m` flag,
+ * matching ANY line start in the body) could clobber a same-named line
+ * inside that subsection (the #2130/#2067/#2080 truncation/clobber class).
+ * Restored to the fence-aware `locateCurrentPosition` locator (which stops
+ * at ANY heading level >= 2, `STOP_H2_PLUS` — H2 through H6) + manual splice,
+ * exactly matching the `mutateCurrentPositionResume`/
+ * `mutateCurrentPositionForAdvance` siblings below, both of which use
+ * `locateCurrentPosition` directly.
  */
 function mutateCurrentPositionFirstTime(body, intent, today, updated) {
     const span = locateCurrentPosition(body);
@@ -415,25 +429,6 @@ function mutateCurrentPositionResume(body, intent, today, updated) {
     return body.slice(0, span.start) + sectionBody + body.slice(span.end);
 }
 /**
- * Strip ALL frontmatter blocks from the start of `content`.
- *
- * TODO (ADR-1769 follow-up): move to `frontmatter.cjs` or `state-document.cjs`
- * so it's a shared primitive. Inlined here in Phase 1 to avoid touching
- * `state.cjs` (which is the migration target itself) and to keep the Phase 1
- * diff contained. Body is byte-identical to `state.cts:1653 stripFrontmatter`
- * (same CRLF + stacked-block handling).
- */
-function stripFrontmatter(content) {
-    let result = content;
-    while (true) {
-        const stripped = result.replace(/^\s*---\r?\n[\s\S]*?\r?\n---\s*/, '');
-        if (stripped === result)
-            break;
-        result = stripped;
-    }
-    return result;
-}
-/**
  * Update fields within the ## Current Position section for advancePlan.
  * Mirrors `updateCurrentPositionFields` (state.cts:496) byte-for-behaviour:
  * only replaces Status / Last Activity when the existing value is a known
@@ -502,7 +497,7 @@ function mutateCurrentPositionForAdvance(content, fields, statusDefaults, lastAc
  * adapter to construct CLI output.
  */
 function advancePlanCore(content, deps) {
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     // #1255: body-field replacements operate on body only (frontmatter stripped),
     // not on the full content. The YAML `status:` key matches `^Status:\s*`
     // before the body field if full content is passed (codex Phase 2 review:
@@ -608,7 +603,7 @@ function advancePlanCore(content, deps) {
  */
 function completePhaseCore(content, intent, deps) {
     const updated = [];
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     // Consult the field-classification table for the frontmatter keys this
     // transition touches (same guard beginPhaseCore applies). A missing row is a
     // substrate defect — fail loudly rather than silently re-encoding policy.
@@ -764,7 +759,7 @@ function completePhaseCore(content, intent, deps) {
  */
 function plannedPhaseCore(content, intent, deps) {
     const updated = [];
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
         const cls = getFieldClassification(fmKey);
         if (cls === null) {
@@ -842,7 +837,7 @@ function plannedPhaseCore(content, intent, deps) {
  * directly and must not run the steady-state `syncStateFrontmatter` post-sync.
  */
 function milestoneSwitchCore(content, intent, deps) {
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     const updated = [
         'milestone',
         'milestone_name',
@@ -906,6 +901,70 @@ function milestoneSwitchCore(content, intent, deps) {
 // milestoneComplete — intent implementation (Phase 5)
 // ----------------------------------------------------------------------------
 /**
+ * Replace a section's ENTIRE body with `newBody`, discarding whatever was
+ * there — the "wholesale reset" write pattern used by milestoneComplete's
+ * closure write (## Current Position / ## Operator Next Steps). Retires the
+ * fence-blind raw regex `(##\s*<heading>\s*\n)([\s\S]*?)(?=\n##|$)`, which a
+ * literal `##` inside a fenced code block in the section body could fool into
+ * stopping early (the #2130/#2067/#2080 truncation class) — heading location
+ * here goes through `tokenizeHeadings`, which is fence-aware.
+ *
+ * Byte-parity note: the retired regex's greedy `\s*` (before its mandatory
+ * `\n`) swallowed any blank line(s) immediately after the heading into the
+ * discarded match, and its non-greedy body match always left exactly ONE
+ * newline unconsumed before the next heading (or EOF), regardless of how many
+ * blank lines originally separated the section from what followed. Both
+ * edges are reproduced explicitly (rather than delegated to `collectSection`'s
+ * `trimEnd()`-based body, which trims a *different* amount and would drift
+ * the surrounding blank-line count) so `newBody`'s own leading/trailing
+ * formatting is exactly what appears in the output.
+ *
+ * Returns `null` when no heading matches `headingPredicate` (mirrors the
+ * retired regex's `pattern.test(body)` miss) — callers fall back to their own
+ * append-a-new-section path.
+ */
+function resetSectionVerbatim(content, headingPredicate, newBody) {
+    const headings = (0, markdown_sectionizer_cjs_1.tokenizeHeadings)(content);
+    const idx = headings.findIndex(headingPredicate);
+    if (idx === -1)
+        return null;
+    const target = headings[idx];
+    const lines = content.split('\n');
+    const headingLineEnd = target.offset + lines[target.line - 1].length + 1;
+    // Swallow blank line(s) immediately after the heading (mirrors the retired
+    // regex's greedy `\s*` folding them into the discarded match).
+    //
+    // F7 (#2245 review, nit): recognise a CRLF blank line (`\r\n`), not only a
+    // bare LF — a lone `content[bodyStart] === '\n'` check never advances past
+    // a `\r` byte, so on a CRLF STATE.md the blank line right after the
+    // heading fell into the DISCARDED [bodyStart, bodyEnd) span instead of the
+    // KEPT prefix, silently dropping one blank line (contradicting this
+    // function's own byte-parity docstring).
+    let bodyStart = headingLineEnd;
+    while (bodyStart < content.length) {
+        if (content[bodyStart] === '\n') {
+            bodyStart += 1;
+            continue;
+        }
+        if (content[bodyStart] === '\r' && content[bodyStart + 1] === '\n') {
+            bodyStart += 2;
+            continue;
+        }
+        break;
+    }
+    // Stop at the next heading of level >= 2 (mirrors the retired regex's
+    // literal `##` lookahead, which matches any ATX heading two-or-more levels
+    // deep); leave exactly one newline unconsumed before it, or run to EOF.
+    let bodyEnd = content.length;
+    for (let j = idx + 1; j < headings.length; j++) {
+        if (STOP_H2_PLUS(headings[j].level)) {
+            bodyEnd = headings[j].offset - 1;
+            break;
+        }
+    }
+    return content.slice(0, bodyStart) + newBody + content.slice(bodyEnd);
+}
+/**
  * Apply a `milestoneComplete` transition to STATE.md content.
  *
  * Migrates the STATE.md write path inside `cmdMilestoneComplete` (milestone.cts)
@@ -919,17 +978,11 @@ function milestoneSwitchCore(content, intent, deps) {
  * runtime-specific next-milestone slash command, injecting it via
  * `intent.nextMilestoneCommand` so the core stays pure.
  *
- * The two section resets use raw regex (with the pre-seam `allow-adhoc-markdown`
- * waivers carried from milestone.cts) rather than tokenizeHeadings because the
- * `## Operator Next Steps` section is non-canonical (not in STATE_MD_SECTIONS)
- * and the existing behavior + its tests pin the exact regex semantics. A future
- * collectSection migration (#1372) can swap both to section primitives.
- *
  * Behavior is byte-for-byte with the pre-migration milestone.cts:314-353 block.
  */
 function milestoneCompleteCore(content, intent, deps) {
     const updated = [];
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     const version = intent.version;
     for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
         const cls = getFieldClassification(fmKey);
@@ -965,22 +1018,22 @@ function milestoneCompleteCore(content, intent, deps) {
     }
     // ## Current Position reset — stop resume/progress flows pointing at closed
     // execution instructions.
-    const positionPattern = /(##\s*Current Position\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify carried from milestone.cts; pending collectSection migration #1372
     const closedPositionBody = `\nPhase: Milestone ${version} complete\n` +
         `Plan: —\n` +
         `Status: Awaiting next milestone\n` +
         `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
-    if (positionPattern.test(body)) {
-        body = body.replace(positionPattern, (_m, header) => `${header}${closedPositionBody}`);
+    const positionReset = resetSectionVerbatim(body, (h) => h.level === 2 && /^current\s+position$/i.test(h.text), closedPositionBody);
+    if (positionReset !== null) {
+        body = positionReset;
     }
     else {
         body = `${body.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
     }
     updated.push('Current Position');
     // ## Operator Next Steps — normalize stale tails that can persist after close.
-    const operatorPattern = /(##\s*Operator Next Steps\s*\n)([\s\S]*?)(?=\n##|$)/i; // allow-adhoc-markdown: pre-seam section write-modify carried from milestone.cts; pending collectSection migration #1372
-    if (operatorPattern.test(body)) {
-        body = body.replace(operatorPattern, `$1\n- Start the next milestone with ${intent.nextMilestoneCommand}\n\n`);
+    const operatorReset = resetSectionVerbatim(body, (h) => h.level === 2 && /^operator\s+next\s+steps$/i.test(h.text), `\n- Start the next milestone with ${intent.nextMilestoneCommand}\n\n`);
+    if (operatorReset !== null) {
+        body = operatorReset;
     }
     else {
         body = `${body.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${intent.nextMilestoneCommand}\n`;
@@ -1177,7 +1230,7 @@ function pruneCore(content, intent) {
  * (rather than silently writing fallback-derived wrong values).
  */
 function syncCore(content, intent, deps) {
-    const today = deps.clock.today();
+    const today = deps.clock.localToday();
     const changes = [];
     let modified = content;
     const updated = [];

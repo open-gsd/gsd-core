@@ -3952,12 +3952,14 @@ describe('FIX 3: tightened runtime validator — probeExists optional string', (
 // ── 24e. Closed-vocab set exports are correct ─────────────────────────────────
 
 describe('ADR-1016 phase 5a: closed-vocab set exports', () => {
-  test('VALID_CONFIG_HOME_KINDS has exactly the 4 expected values', () => {
+  test('VALID_CONFIG_HOME_KINDS has exactly the 5 expected values', () => {
     assert.ok(VALID_CONFIG_HOME_KINDS instanceof Set);
-    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root']) {
+    // 'none' added #2103 — a runtime with NO file-projected config directory
+    // at all (e.g. vscode — Marketplace/VSIX-distributed).
+    for (const v of ['dot-home', 'dot-home-nested', 'xdg', 'generic-agents-root', 'none']) {
       assert.ok(VALID_CONFIG_HOME_KINDS.has(v), 'VALID_CONFIG_HOME_KINDS must contain "' + v + '"');
     }
-    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 4, 'VALID_CONFIG_HOME_KINDS must have exactly 4 members');
+    assert.strictEqual(VALID_CONFIG_HOME_KINDS.size, 5, 'VALID_CONFIG_HOME_KINDS must have exactly 5 members');
   });
 
   test('VALID_COMMAND_STYLES has exactly 2 values', () => {
@@ -4261,15 +4263,18 @@ describe('ADR-857 phase 5e: configFormat ↔ installSurface parity gate', () => 
   });
 
   // INSTALL_SURFACE_TO_CONFIG_FORMAT export check
-  test('INSTALL_SURFACE_TO_CONFIG_FORMAT covers all 6 installSurface values with correct mappings', () => {
+  test('INSTALL_SURFACE_TO_CONFIG_FORMAT covers all 7 installSurface values with correct mappings', () => {
     assert.ok(INSTALL_SURFACE_TO_CONFIG_FORMAT instanceof Map, 'Must be a Map');
-    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.size, 6, 'Must cover 6 installSurface values');
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.size, 7, 'Must cover 7 installSurface values');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('settings-json'),        'settings-json');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('codex-toml'),           'toml');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('copilot-instructions'), 'markdown');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cline-rules'),          'markdown-dir');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('cursor-hooks-json'),    'none');
     assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('profile-marker-only'),  'none');
+    // 'none' added #2103 — a runtime with no CLI install surface at all (e.g.
+    // vscode) has no config-file format to write either.
+    assert.strictEqual(INSTALL_SURFACE_TO_CONFIG_FORMAT.get('none'),                'none');
   });
 
   // Feature capabilities (role:feature) are silently ignored by the gate
@@ -4432,10 +4437,71 @@ describe('ADR-857 phase 5f: cross-field consistency gate rejection tests (DEFECT
     );
   });
 
+  // #2103: configHome.kind==='none' carve-out (VS Code — Marketplace/VSIX, no
+  // file-projected config directory). Adversarial review flagged AC4's
+  // "accept vscode AND reject a faked configHome" requirement as untested —
+  // the real vscode descriptor validating clean (tests/capability-registry.test.cjs's
+  // "ADR-1016 phase 5a" suite, capability-validator-parity tests, etc.) only
+  // proves the ACCEPT half. These three tests are the REJECT half: they prove
+  // the two new branches in validateRuntimeBody/validateConfigHome actually
+  // fire, quoting their EXACT error strings so a future edit that silently
+  // weakens either branch fails loudly here.
+  describe('#2103 configHome.kind==="none" carve-out (vscode) — accept/reject pair', () => {
+    test('ACCEPT: configHome.kind:"none" + localConfigDir:null + installSurface:"none" + hooksSurface:"none" validates with ZERO errors', () => {
+      const cap = makeValidRuntimeCap({
+        runtime: {
+          configHome: { kind: 'none', name: 'test-none-rt', env: [] },
+          localConfigDir: null,
+          configFormat: 'none',
+          installSurface: 'none',
+          hooksSurface: 'none',
+        },
+      });
+      const errors = validateRuntimeBody(cap);
+      assert.deepEqual(errors, [], 'a genuinely kind:"none" descriptor (vscode-shaped) must validate clean, got: ' + JSON.stringify(errors));
+    });
+
+    test('REJECT #1: localConfigDir non-null while configHome.kind==="none" → exact validateRuntimeBody error', () => {
+      const cap = makeValidRuntimeCap({
+        runtime: {
+          configHome: { kind: 'none', name: 'test-none-rt', env: [] },
+          localConfigDir: '.vscode', // faked — a kind:'none' descriptor must not also claim a local dir
+          configFormat: 'none',
+          installSurface: 'none',
+          hooksSurface: 'none',
+        },
+      });
+      const errors = validateRuntimeBody(cap);
+      assert.deepEqual(
+        errors,
+        ['runtime.localConfigDir must be null or absent when configHome.kind is "none"; got: ".vscode"'],
+        'expected the exact localConfigDir-vs-kind:"none" rejection, got: ' + JSON.stringify(errors),
+      );
+    });
+
+    test('REJECT #2: configHome.name present-but-empty while configHome.kind==="none" → exact validateConfigHome error', () => {
+      const cap = makeValidRuntimeCap({
+        runtime: {
+          configHome: { kind: 'none', name: '', env: [] }, // faked — present name must still be non-empty
+          localConfigDir: null,
+          configFormat: 'none',
+          installSurface: 'none',
+          hooksSurface: 'none',
+        },
+      });
+      const errors = validateRuntimeBody(cap);
+      assert.deepEqual(
+        errors,
+        ['capability "test-runtime" runtime.configHome.name must be a non-empty string if present when kind is "none"'],
+        'expected the exact configHome.name-vs-kind:"none" rejection, got: ' + JSON.stringify(errors),
+      );
+    });
+  });
+
   // Verify the new constants are well-formed
-  test('INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES covers all 6 installSurface values', () => {
+  test('INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES covers all 7 installSurface values', () => {
     assert.ok(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES instanceof Map, 'Must be a Map');
-    assert.strictEqual(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.size, 6, 'Must cover 6 installSurface values');
+    assert.strictEqual(INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.size, 7, 'Must cover 7 installSurface values');
     for (const installSurface of VALID_INSTALL_SURFACES) {
       assert.ok(
         INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES.has(installSurface),
@@ -6509,7 +6575,10 @@ describe('enh-1055 descriptor-drive: ALLOWED_CONFIG_RUNTIMES completeness', () =
   test('equals the registry runtimes that declare an installSurface', () => {
     const descriptorAllowed = new Set(
       Object.entries(enh1055Registry.runtimes)
-        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string')
+        // installSurface:'none' (#2103 vscode — extension-distributed, no config
+        // directory) is NOT a config-adapter runtime: production ALLOWED_CONFIG_RUNTIMES
+        // excludes it so `allRuntimes === ALLOWED_CONFIG_RUNTIMES` (issue-57) stays true.
+        .filter(([, cap]) => cap && cap.runtime && typeof cap.runtime.installSurface === 'string' && cap.runtime.installSurface !== 'none')
         .map(([id]) => id),
     );
     assert.deepStrictEqual(new Set(ALLOWED_CONFIG_RUNTIMES), descriptorAllowed);

@@ -12,7 +12,7 @@
 
 'use strict';
 
-const { test, describe, before, beforeEach, afterEach } = require('node:test');
+const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
@@ -111,6 +111,131 @@ describe('milestone complete command', () => {
     const milestones = fs.readFileSync(path.join(tmpDir, '.planning', 'MILESTONES.md'), 'utf-8');
     assert.ok(milestones.includes('v1.0 MVP Foundation'));
     assert.ok(milestones.includes('Set up project infrastructure'));
+  });
+
+  test('#2118 — --dry-run does NOT mutate: no archive, no STATE.md rewrite, no phase move', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'REQUIREMENTS.md'),
+      `# Requirements\n\n- [x] User auth\n`,
+    );
+    writeState(tmpDir);
+    const phasePath = mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+
+    // Capture pre-state
+    const stateBefore = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    const result = runGsdTools('milestone complete v1.0 --name Test --dry-run', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true, 'dry_run must be true');
+    assert.strictEqual(output.version, 'v1.0');
+    assert.ok(output.stats.phases >= 1, 'should count at least 1 phase');
+    assert.ok(output.would_archive.roadmap, 'should list roadmap archive plan');
+    assert.ok(output.would_archive.requirements, 'should list requirements archive plan');
+    assert.ok(
+      output.would_archive.phases.includes('01-foundation'),
+      'should list phase dir for archive',
+    );
+    assert.ok(
+      Array.isArray(output.accomplishments) && output.accomplishments.includes('Set up project infrastructure'),
+      'dry-run preview should surface accomplishments from phase SUMMARY one-liners (#2118)',
+    );
+
+    // CRITICAL: no mutations occurred
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'ROADMAP.md')),
+      'ROADMAP.md must NOT be archived (dry-run)',
+    );
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md')),
+      'REQUIREMENTS.md must NOT be archived (dry-run)',
+    );
+    assert.ok(
+      fs.existsSync(phasePath),
+      'phase directory must NOT be moved (dry-run)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
+      'MILESTONES.md must NOT be created (dry-run)',
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'),
+      stateBefore,
+      'STATE.md must be unchanged (dry-run)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'archive dir must NOT be created (dry-run) — platformEnsureDir must be gated',
+    );
+  });
+
+  test('#2118 — --dry-run --no-archive-phases omits phase list from preview', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation');
+
+    const result = runGsdTools('milestone complete v1.0 --dry-run --no-archive-phases', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true);
+    assert.deepStrictEqual(output.would_archive.phases, [], 'phases list must be empty with --no-archive-phases');
+  });
+
+  test('#2118 — --dry-run --force bypasses the unstarted-phases guard', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir, 'milestone: v1.0\n');
+    // No phase directory for Phase 1 — guard would block without --force
+
+    // Capture pre-state
+    const stateBefore = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    const result = runGsdTools('milestone complete v1.0 --dry-run --force', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.dry_run, true, 'preview should run past the guard with --force');
+
+    // CRITICAL: --force must still be a zero-mutation dry-run preview
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'archive dir must NOT be created (dry-run --force) — platformEnsureDir must be gated',
+    );
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8'),
+      stateBefore,
+      'STATE.md must be unchanged (dry-run --force)',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'MILESTONES.md')),
+      'MILESTONES.md must NOT be created (dry-run --force)',
+    );
+  });
+
+  test('#2118 — --dry-run --raw emits structured preview JSON, not the literal "dry-run" string', () => {
+    writeRoadmap(tmpDir, `# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n`);
+    writeState(tmpDir);
+    mkPhaseDir(tmpDir, '01-foundation', { oneLiner: 'Set up project infrastructure' });
+
+    const result = runGsdTools(['milestone', 'complete', 'v1.0', '--name', 'Test', '--dry-run', '--raw'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    // Before the fix, output(dryRunResult, raw, 'dry-run') meant --raw discarded
+    // the structured payload and printed only the literal string "dry-run",
+    // which is not parseable JSON.
+    let output;
+    assert.doesNotThrow(
+      () => { output = JSON.parse(result.output); },
+      `--dry-run --raw output must be parseable JSON, not the literal "dry-run" string; got ${JSON.stringify(result.output)}`,
+    );
+    assert.strictEqual(output.dry_run, true, 'dry_run must be true, not the literal string "dry-run"');
+    assert.strictEqual(output.version, 'v1.0');
+    assert.ok(
+      Array.isArray(output.accomplishments) && output.accomplishments.includes('Set up project infrastructure'),
+      'structured preview surviving --raw should include accomplishments',
+    );
   });
 
   test('prepends to existing MILESTONES.md (reverse chronological)', () => {
@@ -488,6 +613,191 @@ describe('requirements mark-complete command', () => {
 | INFRA-01 | Phase 6 | Pending |
 `;
 
+  // #2140: a traceability table EXISTS but has no row for the ID being completed.
+  // Only the checkbox can reconcile; the table surface is unsynced. The CLI must
+  // not report this as a payload indistinguishable from a full reconcile.
+  const TABLE_WITHOUT_FOO = `# Requirements
+
+## Coverage
+- [ ] **FOO-01**: feature one
+- [ ] **BAR-01**: feature two
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| BAR-01 | Phase 1 | Pending |
+`;
+
+  test('#2140 checkbox-only reconcile surfaces table_unmatched (not silent success)', () => {
+    writeRequirements(tmpDir, TABLE_WITHOUT_FOO);
+
+    const result = runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    assert.ok(result.success);
+
+    const out = JSON.parse(result.output);
+    // The checkbox WAS written, so it is in marked_complete...
+    assert.ok(out.marked_complete.includes('FOO-01'), 'checkbox reconcile is reported');
+    // ...but the traceability table had no FOO-01 row, which must be surfaced.
+    assert.ok(Array.isArray(out.table_unmatched), 'table_unmatched bucket must exist');
+    assert.ok(out.table_unmatched.includes('FOO-01'),
+      'an ID with a checkbox but no table row must be surfaced as table_unmatched');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **FOO-01**'), 'checkbox should be checked');
+    // The table is untouched (no FOO-01 row synthesized).
+    assert.ok(!content.includes('FOO-01 | Phase'), 'no FOO-01 row should be invented');
+
+    // ADR-2143 §6 write-set: additive structured read of the same per-surface
+    // facts — checkbox surface applied (fresh write this run), traceability
+    // surface did NOT (no row existed to flip), so the set is not complete.
+    // This does not change `updated`/`marked_complete` above. Per-ID: each
+    // outcome carries `requirement` so a multi-ID batch cannot OR one ID's
+    // outcome into another's (the #2140 class one level up).
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'FOO-01', surface: 'checkbox', applied: true },
+      { requirement: 'FOO-01', surface: 'traceability', applied: false },
+    ]);
+    assert.strictEqual(out.write_set_complete, false,
+      'writeSetComplete requires EVERY surface applied, not an OR — a checkbox-only write is not complete');
+  });
+
+  test('#2140 re-run on the half-written file does NOT mask the drift as already_complete', () => {
+    writeRequirements(tmpDir, TABLE_WITHOUT_FOO);
+    // First run: flips the checkbox, surfaces table_unmatched.
+    runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    // Second run on the now-[x]-checkbox-with-no-row file.
+    const result = runGsdTools('requirements mark-complete FOO-01', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.ok(!out.already_complete.includes('FOO-01'),
+      'a [x] checkbox with no table row is PARTIALLY reconciled, not already_complete');
+    assert.ok(!out.marked_complete.includes('FOO-01'),
+      'nothing flipped on re-run, so not marked_complete');
+    assert.ok(out.table_unmatched.includes('FOO-01'),
+      'the drift must still be surfaced as table_unmatched on re-run');
+
+    // ADR-2143 §6 write-set: nothing was written THIS run on either surface
+    // (checkbox was already [x], the row still doesn't exist), so both
+    // surfaces report applied:false and the set is not complete.
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'FOO-01', surface: 'checkbox', applied: false },
+      { requirement: 'FOO-01', surface: 'traceability', applied: false },
+    ]);
+    assert.strictEqual(out.write_set_complete, false);
+  });
+
+  test('#2140 no traceability table at all → still a clean success (no table_unmatched)', () => {
+    // A REQUIREMENTS.md with no traceability table is legitimate; a checkbox-only
+    // reconcile must remain an unqualified success with no table_unmatched entry.
+    writeRequirements(tmpDir, '# Requirements\n\n- [ ] **NO-TABLE-01**: thing\n');
+    const result = runGsdTools('requirements mark-complete NO-TABLE-01', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+    assert.ok(out.marked_complete.includes('NO-TABLE-01'));
+    assert.ok(!out.table_unmatched || !out.table_unmatched.includes('NO-TABLE-01'),
+      'no table_unmatched when there is no traceability table');
+
+    // ADR-2143 §6 write-set: the traceability surface is omitted entirely
+    // (not reported as a false applied:false) when the file has no
+    // traceability table — nothing was required of it. A single-surface
+    // write-set that fully applied is complete.
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'NO-TABLE-01', surface: 'checkbox', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true);
+  });
+
+  test('#2140-class multi-ID: one ID\'s partial reconcile is not masked by another ID\'s full one', () => {
+    // Adversarial-review regression: write_set/write_set_complete were built
+    // from two INVOCATION-WIDE booleans OR-accumulated across every ID in the
+    // batch, so a fully-reconciled REQ-02 in the same call could mask a
+    // checkbox-only partial write on REQ-01. The write-set must be tracked
+    // PER (requirement, surface) so REQ-01's unmatched traceability row
+    // cannot be hidden by REQ-02 reconciling cleanly.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-01**: feature one (no traceability row)
+- [ ] **REQ-02**: feature two (has traceability row)
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| REQ-02 | Phase 1 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements mark-complete REQ-01,REQ-02', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    // Pre-existing fields are unchanged: both checkboxes flip (marked_complete),
+    // REQ-01 has no table row so it surfaces as table_unmatched.
+    assert.deepStrictEqual(out.marked_complete.sort(), ['REQ-01', 'REQ-02']);
+    assert.deepStrictEqual(out.table_unmatched, ['REQ-01']);
+    assert.deepStrictEqual(out.not_found, []);
+    assert.deepStrictEqual(out.already_complete, []);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **REQ-01**'), 'REQ-01 checkbox should be checked');
+    assert.ok(content.includes('- [x] **REQ-02**'), 'REQ-02 checkbox should be checked');
+    assert.ok(content.includes('| REQ-02 | Phase 1 | Complete |'), 'REQ-02 table row should be Complete');
+    assert.ok(!content.includes('REQ-01 | Phase'), 'no REQ-01 row should be invented');
+
+    // The write-set is now per-ID: REQ-01's traceability surface did NOT
+    // apply (no row to flip) even though REQ-02's did — the aggregate must
+    // not OR REQ-02's success into REQ-01's outcome.
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-01', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-01', surface: 'traceability', applied: false },
+      { requirement: 'REQ-02', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-02', surface: 'traceability', applied: true },
+    ]);
+    // Because REQ-01's traceability entry did not apply, the batch as a
+    // whole is NOT complete — this is the exact bug the fix closes.
+    assert.strictEqual(out.write_set_complete, false,
+      'REQ-01\'s unmatched traceability row must not be masked by REQ-02 fully reconciling');
+  });
+
+  test('#2140-class multi-ID: fully-reconciled batch reports write_set_complete:true', () => {
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-01**: feature one
+- [ ] **REQ-02**: feature two
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| REQ-01 | Phase 1 | Pending |
+| REQ-02 | Phase 1 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements mark-complete REQ-01,REQ-02', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.deepStrictEqual(out.marked_complete.sort(), ['REQ-01', 'REQ-02']);
+    assert.deepStrictEqual(out.table_unmatched, []);
+
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-01', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-01', surface: 'traceability', applied: true },
+      { requirement: 'REQ-02', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-02', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true);
+  });
+
   test('marks single requirement complete (checkbox + table)', () => {
     writeRequirements(tmpDir, STANDARD_REQUIREMENTS);
 
@@ -502,6 +812,65 @@ describe('requirements mark-complete command', () => {
     assert.ok(content.includes('- [x] **TEST-01**'), 'checkbox should be checked');
     assert.ok(content.includes('| TEST-01 | Phase 1 | Complete |'), 'table row should be Complete');
     assert.ok(content.includes('- [ ] **TEST-02**'), 'TEST-02 should remain unchecked');
+
+    // ADR-2143 §6 write-set: both surfaces got a fresh write this run, so the
+    // write-set is complete.
+    assert.deepStrictEqual(output.write_set, [
+      { requirement: 'TEST-01', surface: 'checkbox', applied: true },
+      { requirement: 'TEST-01', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(output.write_set_complete, true);
+  });
+
+  test('#2245 F1: traceability write is NOT fooled by an earlier Out of Scope table', () => {
+    // The shipped requirements template (gsd-core/templates/requirements.md)
+    // puts an `## Out of Scope` table (`| Feature | Reason |`, no Status
+    // column) BEFORE `## Traceability`. updateTableCell binds to the FIRST
+    // GFM table in whatever text it is given — an unscoped whole-file call
+    // targets the Out-of-Scope table instead and silently fails with
+    // `unknown column: Status`, so the real Traceability row is never
+    // flipped even though the checkbox surface flips and the command
+    // reports success (the #2140 silent-divergence class one level deeper).
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Foo | Bar |
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | 1 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success);
+    const out = JSON.parse(result.output);
+
+    assert.ok(out.marked_complete.includes('REQ-001'));
+    assert.deepStrictEqual(out.table_unmatched, [],
+      'the Traceability row for REQ-001 DOES exist — it must not be reported as unmatched');
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-001', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-001', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true,
+      'both surfaces applied — the write is fully reconciled, not just the checkbox');
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **REQ-001**'), 'checkbox should be checked');
+    assert.ok(content.includes('| REQ-001 | 1 | Complete |'),
+      'the Traceability row (NOT the Out of Scope table) must be flipped to Complete');
+    assert.ok(content.includes('| Foo | Bar |'), 'the Out of Scope table must be left untouched');
   });
 
   test('handles mixed prefixes in single call (TEST-XX, REG-XX, INFRA-XX)', () => {
@@ -605,64 +974,191 @@ describe('requirements mark-complete command', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// milestone.cjs regex global-state fix (structural regression guard)
+// requirements mark-complete: traceability write (regression, ADR-2143 §7)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('milestone.cjs regex global state fix', () => {
-  // allow-test-rule: structural-regression-guard
-  // milestone.cjs must use replace()+compare, not test()+replace(), to avoid
-  // regex lastIndex corruption with global flags.
-  const MILESTONE_SRC = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'milestone.cjs');
-  let src;
+describe('requirements mark-complete: traceability write (regression, ADR-2143 §7)', () => {
+  let tmpDir;
 
-  before(() => { src = fs.readFileSync(MILESTONE_SRC, 'utf-8'); });
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
 
-  test('checkbox update uses replace() + compare, not test() + replace()', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
+  function writeRequirements(tmpDir, content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), content, 'utf-8');
+  }
+
+  function readRequirements(tmpDir) {
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+  }
+
+  test('multi-ID batch: both rows flip, no regex lastIndex/global-state leak', () => {
+    // Behavioural replacement for the retired structural guard: the old
+    // test()+replace() idiom on a global regex would advance lastIndex on the
+    // first ID's probe and silently miss the second ID's row. Two Pending
+    // rows in one table, both IDs in a single invocation, both must flip.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+- [ ] **REQ-002**: feature two
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | Phase 1 | Pending |
+| REQ-002 | Phase 1 | Pending |
+`,
     );
-    assert.ok(!funcBody.includes('checkboxPattern.test(reqContent)'));
+
+    const result = runGsdTools('requirements mark-complete REQ-001,REQ-002', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.marked_complete.sort(), ['REQ-001', 'REQ-002']);
+
+    const content = readRequirements(tmpDir);
     assert.ok(
-      funcBody.includes('afterCheckbox !== reqContent') ||
-      funcBody.includes('afterCheckbox!==reqContent'),
+      content.includes('| REQ-001 | Phase 1 | Complete |'),
+      'REQ-001 row should flip to Complete',
     );
-  });
-
-  test('table update uses replace() + compare, not test() + replace()', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
-    );
-    assert.ok(!funcBody.includes('tablePattern.test(reqContent)'));
     assert.ok(
-      funcBody.includes('afterTable !== reqContent') ||
-      funcBody.includes('afterTable!==reqContent'),
+      content.includes('| REQ-002 | Phase 1 | Complete |'),
+      'REQ-002 row should flip to Complete — a global-regex lastIndex leak would miss this row',
     );
   });
 
-  test('done-check regexes use non-global flag (only need existence check)', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
+  for (const header of ['REQ-ID', 'Requirement']) {
+    test(`traceability row matched regardless of ID-column header name ('${header}') (#2769/#2203)`, () => {
+      // Real tables head the requirement-ID column 'REQ-ID'; some head it
+      // 'Requirement'. The row must be matched by its FIRST cell's value,
+      // independent of what that column is named in the header.
+      writeRequirements(
+        tmpDir,
+        `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+
+## Traceability
+
+| ${header} | Phase | Status |
+|${'-'.repeat(header.length + 2)}|-------|--------|
+| REQ-001 | Phase 1 | Pending |
+`,
+      );
+
+      const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const out = JSON.parse(result.output);
+      assert.ok(
+        out.marked_complete.includes('REQ-001'),
+        `REQ-001 should be marked complete under '${header}' header`,
+      );
+
+      const content = readRequirements(tmpDir);
+      assert.ok(
+        content.includes('| REQ-001 | Phase 1 | Complete |'),
+        `REQ-001 row should flip to Complete under '${header}' header`,
+      );
+    });
+  }
+
+  test('REQ-ID-headed table participates in write_set (#2769/#2203)', () => {
+    // hasTable must recognize a REQ-ID header (not just 'Requirement') so the
+    // traceability surface is tracked in write_set, not silently omitted
+    // despite the row actually flipping.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | Phase 1 | Pending |
+`,
     );
-    const doneCheckboxMatch = funcBody.match(/doneCheckbox\s*=\s*new RegExp\([^)]+,\s*'([^']+)'\)/);
-    const doneTableMatch = funcBody.match(/doneTable\s*=\s*new RegExp\([^)]+,\s*'([^']+)'\)/);
-    assert.ok(doneCheckboxMatch, 'doneCheckbox regex should exist');
-    assert.ok(doneTableMatch, 'doneTable regex should exist');
-    assert.ok(!doneCheckboxMatch[1].includes('g'));
-    assert.ok(!doneTableMatch[1].includes('g'));
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.write_set, [
+      { requirement: 'REQ-001', surface: 'checkbox', applied: true },
+      { requirement: 'REQ-001', surface: 'traceability', applied: true },
+    ]);
+    assert.strictEqual(out.write_set_complete, true);
   });
 
-  test('no duplicate regex construction for the same pattern', () => {
-    const funcBody = src.slice(
-      src.indexOf('function cmdRequirementsMarkComplete'),
-      src.indexOf('function cmdMilestoneComplete'),
+  test('REQ-ID-headed table trips #2140 table_unmatched drift check on a missing row', () => {
+    // Checkbox flips, but there is no REQ-001 row in the REQ-ID-headed table.
+    // Before the hasTable fix this was silently treated as "no table
+    // required" (hasTable false for REQ-ID headers) and table_unmatched never
+    // fired — masking the exact #2140 partial-reconcile class for the
+    // real-world table format.
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [ ] **REQ-001**: feature one (no traceability row)
+- [ ] **REQ-002**: feature two (has traceability row)
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-002 | Phase 1 | Pending |
+`,
     );
-    const tableConstructions = funcBody.split('\n').filter(
-      line => line.includes('tablePattern') && line.includes('new RegExp'),
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.table_unmatched, ['REQ-001']);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **REQ-001**'), 'REQ-001 checkbox should be checked');
+    assert.ok(!content.includes('REQ-001 | Phase'), 'no REQ-001 row should be invented');
+  });
+
+  test('idempotent: already-Complete row reports already_complete, no double-write/corruption', () => {
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Coverage
+- [x] **REQ-001**: feature one
+
+## Traceability
+
+| REQ-ID | Phase | Status |
+|--------|-------|--------|
+| REQ-001 | Phase 1 | Complete |
+`,
     );
-    assert.ok(tableConstructions.length <= 1, `Expected ≤1 tablePattern construction, got ${tableConstructions.length}`);
+
+    const result = runGsdTools('requirements mark-complete REQ-001', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.already_complete, ['REQ-001']);
+    assert.deepStrictEqual(out.marked_complete, []);
+
+    const content = readRequirements(tmpDir);
+    const rowMatches = content.match(/\|\s*REQ-001\s*\|\s*Phase 1\s*\|\s*Complete\s*\|/g) || [];
+    assert.strictEqual(
+      rowMatches.length, 1,
+      `expected exactly one unchanged REQ-001 row, got ${rowMatches.length} (no double-write/corruption)`,
+    );
   });
 });
 

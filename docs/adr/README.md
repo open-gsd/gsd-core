@@ -68,6 +68,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [2121-phase-identifier-parsing-consolidation.md](2121-phase-identifier-parsing-consolidation.md) | Phase-identifier parsing consolidation — single canonical owner (phase-id.cts) + anti-divergence guard | Accepted |
 | [2143-markdown-table-and-mutation-consolidation.md](2143-markdown-table-and-mutation-consolidation.md) | Markdown table model, bounded mutation, and fail-loud consolidation (#1372 part 2) | Accepted |
 | [2164-statusline-scope-boundary.md](2164-statusline-scope-boundary.md) | Statusline draws its data boundary at local, read-only sources (no external/credentialed data) | Accepted |
+| [612-bracket-phase-id-convention.md](612-bracket-phase-id-convention.md) | Bracket phase-ID convention — lift the milestone into a `[PROJECT.MM]` prefix; terminal deprecation of M-NN | Proposed |
 
 ## Seam map
 

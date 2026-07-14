@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { platformReadSync } from './shell-command-projection.cjs';
+import { collectSection } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
@@ -165,9 +166,9 @@ function scanDebugSessions(planDir: string): DebugSessionItem[] {
 
     // Extract hypothesis from "Current Focus" block if parseable
     let hypothesis = '';
-    const focusMatch = content.match(/##\s*Current Focus[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i); // allow-adhoc-markdown: pre-seam read-only section extract in audit.cts; pending migration #1372
-    if (focusMatch) {
-      const focusText = focusMatch[1].trim().split('\n')[0].trim();
+    const focusSection = collectSection(content, (h) => h.level === 2 && h.text.trim().toLowerCase().startsWith('current focus'), { levelBounded: true });
+    if (focusSection) {
+      const focusText = focusSection.body.trim().split('\n')[0].trim();
       hypothesis = sanitizeForDisplay(focusText.slice(0, 100));
     }
 
@@ -652,9 +653,9 @@ function scanContextQuestions(planDir: string): ContextQuestionItem[] {
 
       // Also check for ## Open Questions section in body
       if (questions.length === 0) {
-        const oqMatch = content.match(/##\s*Open Questions[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i); // allow-adhoc-markdown: pre-seam read-only section extract in audit.cts; pending migration #1372
-        if (oqMatch) {
-          const oqBody = oqMatch[1].trim();
+        const oqSection = collectSection(content, (h) => h.level === 2 && h.text.trim().toLowerCase().startsWith('open questions'), { levelBounded: true });
+        if (oqSection) {
+          const oqBody = oqSection.body.trim();
           if (oqBody && oqBody.length > 0 && !/^\s*none\s*$/i.test(oqBody)) {
             const items = oqBody.split('\n')
               .map((l: string) => l.trim())

@@ -4,8 +4,9 @@
  * Behavioral tests for markdown-sectionizer.cjs
  *
  * Module: gsd-core/bin/lib/markdown-sectionizer.cjs
- * Exports: stripFencedCode, tokenizeHeadings, collectSections, collectSection,
- *          iterateBullets, extractTaggedBlocks, replaceSection
+ * Exports: stripFencedCode, extractFencedBlock, tokenizeHeadings, collectSections,
+ *          collectSection, iterateBullets, updateBullet, extractTaggedBlocks,
+ *          stripTaggedBlocks, replaceSection, withSection, deleteSection
  *
  * Covers the parser QA matrix from CONTRIBUTING.md §'Parser and project-file inputs':
  *   - LF vs CRLF line endings
@@ -16,7 +17,9 @@
  *   - All three bullet markers (dash/checkbox/numbered) + indented continuation lines
  *   - Empty/whitespace/non-string input
  *
- * Includes a fast-check property test (stripFencedCode idempotence invariant).
+ * Includes fast-check property tests: stripFencedCode idempotence invariant,
+ * and withSection's ADR-2143 §4 bounded-mutation guarantee (an edit confined to
+ * one section cannot alter any other section, even with a greedy regex).
  * The parity guard for the T0-era tracked duplication (stripFencedCode vs
  * uat-predicate _stripFencedBlocks) was removed in T5: uat-predicate now imports
  * the seam directly, so the guard would compare the seam to itself.
@@ -28,13 +31,17 @@ const fc = require('./helpers/fast-check-setup.cjs');
 
 const {
   stripFencedCode,
+  extractFencedBlock,
   tokenizeHeadings,
   collectSections,
   collectSection,
   iterateBullets,
+  updateBullet,
   extractTaggedBlocks,
   stripTaggedBlocks,
   replaceSection,
+  withSection,
+  deleteSection,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 // ─── stripFencedCode ──────────────────────────────────────────────────────────
@@ -173,6 +180,110 @@ describe('stripFencedCode', () => {
     const r = stripFencedCode(src);
     assert.equal(r.text, 'a\nb\nc');
     assert.equal(r.unterminatedFence, false);
+  });
+});
+
+// ─── extractFencedBlock ───────────────────────────────────────────────────────
+
+describe('extractFencedBlock', () => {
+  test('returns null for empty/non-string content', () => {
+    assert.equal(extractFencedBlock('', 'coverage'), null);
+    assert.equal(extractFencedBlock(null, 'coverage'), null);
+    assert.equal(extractFencedBlock(undefined, 'coverage'), null);
+  });
+
+  test('returns null when infoString is non-string', () => {
+    assert.equal(extractFencedBlock('```coverage\nbody\n```', null), null);
+    assert.equal(extractFencedBlock('```coverage\nbody\n```', undefined), null);
+  });
+
+  test('extracts inner body of a ```coverage block', () => {
+    const src = [
+      'prose before',
+      '```coverage',
+      '[{"capability":"search","decision":"INTEGRATE","reason":""}]',
+      '```',
+      'prose after',
+    ].join('\n');
+    const result = extractFencedBlock(src, 'coverage');
+    assert.equal(result, '[{"capability":"search","decision":"INTEGRATE","reason":""}]');
+  });
+
+  test('is case-insensitive on the info string', () => {
+    const src = '```Coverage\ninner text\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), 'inner text');
+    assert.equal(extractFencedBlock(src, 'COVERAGE'), 'inner text');
+  });
+
+  test('ignores a ```json block when searching for coverage', () => {
+    const src = '```json\n{"a":1}\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), null);
+  });
+
+  test('returns null when no fence is present at all', () => {
+    const src = 'just prose, no fences here.\n## Heading\n- bullet';
+    assert.equal(extractFencedBlock(src, 'coverage'), null);
+  });
+
+  test('returns null when the named fence is present but unterminated (EOF inside fence)', () => {
+    const src = '```coverage\nunterminated body, no closing fence';
+    assert.equal(extractFencedBlock(src, 'coverage'), null);
+  });
+
+  test('handles ~~~ fences', () => {
+    const src = '~~~coverage\ntilde-fenced body\n~~~';
+    assert.equal(extractFencedBlock(src, 'coverage'), 'tilde-fenced body');
+  });
+
+  test('an info string with trailing text after the target word does NOT match (exact-equality, not prefix)', () => {
+    const src = '```coverage extra-stuff\nbody\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), null, 'the trimmed info string is "coverage extra-stuff", not "coverage"');
+  });
+
+  test('trailing whitespace on the opening info-string line is trimmed before comparison', () => {
+    const src = '```coverage   \nbody\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), 'body');
+  });
+
+  test('a fence nested inside another (longer-delimiter, differently-named) fence is not mis-extracted', () => {
+    // CommonMark same-char fences only truly nest when the OUTER delimiter run
+    // is longer (a bare 3-backtick closer would prematurely close a 3-backtick
+    // outer fence too — there's no other way for a backtick fence to contain
+    // another backtick fence). Outer uses 4 backticks, inner uses 3, so the
+    // inner ```coverage ... ``` pair is entirely CONTENT of the outer fence
+    // and never becomes its own open/close block — searching for 'coverage'
+    // must find nothing, not the outer block's body.
+    const src = [
+      '````outer',
+      '```coverage',
+      'nested body',
+      '```',
+      '````',
+    ].join('\n');
+    assert.equal(extractFencedBlock(src, 'coverage'), null, 'nested ```coverage must not be mis-extracted as a top-level match');
+    assert.equal(
+      extractFencedBlock(src, 'outer'),
+      '```coverage\nnested body\n```',
+      'the OUTER block is the one real fence and contains the nested lines (including their literal ``` markers) as raw content',
+    );
+  });
+
+  test('returns the FIRST matching block when multiple ```coverage blocks are present', () => {
+    const src = [
+      '```coverage',
+      'first',
+      '```',
+      'prose',
+      '```coverage',
+      'second',
+      '```',
+    ].join('\n');
+    assert.equal(extractFencedBlock(src, 'coverage'), 'first');
+  });
+
+  test('an empty fence body returns an empty string, not null', () => {
+    const src = '```coverage\n\n```';
+    assert.equal(extractFencedBlock(src, 'coverage'), '');
   });
 });
 
@@ -546,6 +657,252 @@ describe('iterateBullets', () => {
     const items = iterateBullets(src);
     assert.equal(items.length, 1);
     assert.equal(items[0].text, 'Bullet');
+  });
+});
+
+// ─── updateBullet ─────────────────────────────────────────────────────────────
+
+describe('updateBullet', () => {
+  test('non-string / empty content is returned unchanged', () => {
+    assert.equal(updateBullet(null, () => true, (l) => l), null);
+    assert.equal(updateBullet(undefined, () => true, (l) => l), undefined);
+    assert.equal(updateBullet('', () => true, (l) => l), '');
+  });
+
+  test('no-match is a no-op — content is returned unchanged', () => {
+    const content = '- [ ] Phase 1: Foo\n- [ ] Phase 2: Bar\n';
+    const result = updateBullet(content, (text) => text.includes('Phase 9'), (l) => `${l} EDITED`);
+    assert.equal(result, content);
+  });
+
+  test('flips only the matched bullet; every other bullet/line is byte-identical', () => {
+    const content = [
+      '# Roadmap',
+      '',
+      '- [ ] Phase 1: Foundation',
+      '- [ ] Phase 2: API',
+      '- [ ] Phase 3: Polish',
+      '',
+    ].join('\n');
+
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 2'),
+      (rawLine) => `${rawLine.replace('[ ]', '[x]')} (completed 2026-01-01)`,
+    );
+
+    assert.equal(
+      result,
+      [
+        '# Roadmap',
+        '',
+        '- [ ] Phase 1: Foundation',
+        '- [x] Phase 2: API (completed 2026-01-01)',
+        '- [ ] Phase 3: Polish',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('bulletText passed to match has the marker/checkbox stripped; rawLine is the untouched physical line', () => {
+    const content = '- [ ] Phase 1: Foo\n';
+    let seenText;
+    let seenRaw;
+    updateBullet(
+      content,
+      (bulletText, rawLine) => {
+        seenText = bulletText;
+        seenRaw = rawLine;
+        return true;
+      },
+      (rawLine) => rawLine,
+    );
+    assert.equal(seenText, 'Phase 1: Foo');
+    assert.equal(seenRaw, '- [ ] Phase 1: Foo');
+  });
+
+  test('recognises dash and numbered bullets too, not only checkboxes', () => {
+    const dashContent = '- Alpha\n- Beta\n';
+    const dashResult = updateBullet(dashContent, (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(dashResult, '- Alpha\n- Beta!\n');
+
+    const numberedContent = '1. Alpha\n2. Beta\n';
+    const numberedResult = updateBullet(numberedContent, (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(numberedResult, '1. Alpha\n2. Beta!\n');
+  });
+
+  test('ignores a matching bullet inside a fenced code block — the real bullet outside the fence is flipped', () => {
+    const content = [
+      '- [ ] Phase 1: Foo',
+      '```md',
+      '- [ ] Phase 1: Foo (inside fence, must not match)',
+      '```',
+      '- [ ] Phase 2: Bar',
+      '',
+    ].join('\n');
+
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 1'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+
+    assert.equal(
+      result,
+      [
+        '- [x] Phase 1: Foo',
+        '```md',
+        '- [ ] Phase 1: Foo (inside fence, must not match)',
+        '```',
+        '- [ ] Phase 2: Bar',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  test('a matching bullet that exists ONLY inside a fenced code block is a genuine no-op', () => {
+    const content = [
+      '```md',
+      '- [ ] Phase 9: OnlyInFence',
+      '```',
+      '- [ ] Phase 1: Foo',
+      '',
+    ].join('\n');
+
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 9'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+
+    assert.equal(result, content, 'the only matching bullet lives inside the fence — no-op');
+  });
+
+  test('CRLF line endings are preserved — only the matched line changes; others keep \\r\\n untouched', () => {
+    const content = '- [ ] Phase 1: Foo\r\n- [ ] Phase 2: Bar\r\n';
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.includes('Phase 2'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+    assert.equal(result, '- [ ] Phase 1: Foo\r\n- [x] Phase 2: Bar\r\n');
+  });
+
+  test('transform returning a non-string is a bounded no-op', () => {
+    const content = '- [ ] Phase 1: Foo\n';
+    const result = updateBullet(content, () => true, () => undefined);
+    assert.equal(result, content);
+  });
+
+  test('only the FIRST matching bullet is replaced, even when a later bullet also matches', () => {
+    const content = '- [ ] Phase 1: Foo\n- [ ] Phase 1: Foo (duplicate)\n';
+    const result = updateBullet(
+      content,
+      (bulletText) => bulletText.startsWith('Phase 1'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+    assert.equal(result, '- [x] Phase 1: Foo\n- [ ] Phase 1: Foo (duplicate)\n');
+  });
+
+  test('preserves the indentation of the matched bullet line', () => {
+    const content = '  - [ ] Nested: Item\n';
+    const result = updateBullet(content, (t) => t.includes('Nested'), (l) => l.replace('[ ]', '[x]'));
+    assert.equal(result, '  - [x] Nested: Item\n');
+  });
+
+  // GFM/CommonMark tolerates more than one space between a list marker and
+  // its content — a checkboxRe pinned to exactly one space fails to recognise
+  // `-  [ ] …` (two spaces) as a CHECKBOX at all; it instead falls through to
+  // the generic dash-bullet shape, leaking the literal `[ ] ` marker into
+  // bulletText (` [ ] Phase 1: Foo` instead of the clean `Phase 1: Foo`) —
+  // silently wrong for any caller whose `match`/`transform` assumes bulletText
+  // has the checkbox marker stripped.
+  test('recognises a multi-space marker (`-  [ ]`, two spaces) as a proper checkbox bullet — bulletText has the marker cleanly stripped', () => {
+    const content = '-  [ ] Phase 1: Foo\n';
+    let seenBulletText;
+    const result = updateBullet(
+      content,
+      (bulletText) => {
+        seenBulletText = bulletText;
+        return bulletText.includes('Phase 1');
+      },
+      (rawLine) => `${rawLine.replace('[ ]', '[x]')} (completed 2026-01-01)`,
+    );
+    assert.equal(seenBulletText, 'Phase 1: Foo', 'bulletText must be cleanly stripped of the checkbox marker, not leak it in as dash-bullet text');
+    assert.equal(result, '-  [x] Phase 1: Foo (completed 2026-01-01)\n');
+  });
+
+  test('recognises a multi-space dash/numbered marker too (not only checkboxes)', () => {
+    const dashResult = updateBullet('-   Alpha\n-   Beta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(dashResult, '-   Alpha\n-   Beta!\n');
+
+    const numberedResult = updateBullet('1.   Alpha\n2.   Beta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(numberedResult, '1.   Alpha\n2.   Beta!\n');
+  });
+
+  test('#2245 F5: recognises a TAB-separated marker gap (`-\\t[ ]`), not only spaces', () => {
+    // checkboxRe/dashRe/numberedRe used a literal-space `[ ]{1,4}` gap,
+    // narrower than the OLD hand-rolled `-\s*\[` regex it replaced (`\s`
+    // matches a tab too) — a `-\t[ ]` bullet was silently never offered to
+    // `match`.
+    const checkboxResult = updateBullet(
+      '-\t[ ] Phase 1: Foo\n',
+      (bulletText) => bulletText.includes('Phase 1'),
+      (rawLine) => rawLine.replace('[ ]', '[x]'),
+    );
+    assert.equal(checkboxResult, '-\t[x] Phase 1: Foo\n');
+
+    const dashResult = updateBullet('-\tAlpha\n-\tBeta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(dashResult, '-\tAlpha\n-\tBeta!\n');
+
+    const numberedResult = updateBullet('1.\tAlpha\n2.\tBeta\n', (t) => t === 'Beta', (l) => `${l}!`);
+    assert.equal(numberedResult, '1.\tAlpha\n2.\tBeta!\n');
+  });
+
+  test('property: flip/unflip round-trip restores the original document byte-for-byte, and every non-target line stays untouched', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 8 }).chain((n) =>
+          fc.record({
+            n: fc.constant(n),
+            labels: fc.array(
+              fc.string({ minLength: 1, maxLength: 20 }).filter(
+                (s) => !/[\r\n]/.test(s) && s.trim().length > 0 && !s.includes('EDITED'),
+              ),
+              { minLength: n, maxLength: n },
+            ),
+            targetIdx: fc.integer({ min: 0, max: n - 1 }),
+          }),
+        ),
+        ({ n, labels, targetIdx }) => {
+          const lines = [];
+          for (let k = 0; k < n; k++) {
+            lines.push(`- [ ] Item ${k}: ${labels[k]}`);
+          }
+          const content = `${lines.join('\n')}\n`;
+
+          const flipped = updateBullet(
+            content,
+            (bulletText) => bulletText.includes(`Item ${targetIdx}:`),
+            (rawLine) => `${rawLine.replace('[ ]', '[x]')} EDITED`,
+          );
+
+          const flippedLines = flipped.split('\n');
+          for (let k = 0; k < n; k++) {
+            if (k === targetIdx) continue;
+            assert.equal(flippedLines[k], lines[k], `line ${k} must stay byte-identical`);
+          }
+          assert.equal(flippedLines[targetIdx], `- [x] Item ${targetIdx}: ${labels[targetIdx]} EDITED`);
+
+          const restored = updateBullet(
+            flipped,
+            (bulletText) => bulletText.includes(`Item ${targetIdx}:`),
+            (rawLine) => rawLine.replace('[x]', '[ ]').replace(' EDITED', ''),
+          );
+          assert.equal(restored, content, 'round-trip must restore the original document byte-for-byte');
+        },
+      ),
+    );
   });
 });
 
@@ -1050,6 +1407,373 @@ describe('extractTaggedBlocks: nested same-name tag behavior (#2128 stop-at-next
     );
     assert.deepEqual(extractTaggedBlocks('<task type="auto">body</task>', 'task', true), ['body'], 'attributed task matched with allowAttributes=true');
     assert.deepEqual(extractTaggedBlocks('<task type="auto">body</task>', 'task'), [], 'attributed task NOT matched with allowAttributes=false');
+  });
+});
+
+// ─── withSection ───────────────────────────────────────────────────────────────
+
+describe('withSection', () => {
+  test('edits only the targeted section, leaving surrounding sections untouched', () => {
+    const content = '## Intro\nIntro body.\n## Name\nOld name body.\n## Footer\nFooter body.\n';
+    const result = withSection(content, 'Name', (body) => body.replace('Old name body.', 'New name body.'));
+    assert.ok(result.includes('## Intro\nIntro body.'), 'Intro section preserved verbatim');
+    assert.ok(result.includes('## Name\nNew name body.'), 'Name section updated');
+    assert.ok(!result.includes('Old name body.'), 'old body removed');
+    assert.ok(result.includes('## Footer\nFooter body.'), 'Footer section preserved verbatim');
+  });
+
+  test('a section not present in content leaves content unchanged (bounded no-op)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const result = withSection(content, 'Nonexistent', (body) => body + ' MUTATED');
+    assert.equal(result, content, 'no matching heading -> content returned unchanged');
+  });
+
+  test('predicate form: target may be a HeadingToken predicate function', () => {
+    const content = '## Alpha\nAlpha body\n## Beta\nBeta body\n';
+    const result = withSection(content, (h) => h.level === 2 && h.text === 'Beta', (body) => body.toUpperCase());
+    assert.ok(result.includes('## Beta\nBETA BODY'), 'predicate-matched section edited');
+    assert.ok(result.includes('## Alpha\nAlpha body'), 'non-matched section untouched');
+  });
+
+  test('edit returning the identical body is a no-op (no splice performed)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const result = withSection(content, 'A', (body) => body);
+    assert.equal(result, content, 'identical body -> no-op');
+  });
+
+  test('edit returning a non-string is a no-op (defensive)', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    // Deliberately malformed edit callback (returns a number, not a string).
+    const result = withSection(content, 'A', () => 42);
+    assert.equal(result, content, 'non-string return -> no-op');
+  });
+
+  test('non-string content is returned unchanged', () => {
+    assert.equal(withSection(null, 'A', (b) => b + 'x'), null);
+    assert.equal(withSection(undefined, 'A', (b) => b + 'x'), undefined);
+  });
+
+  test('ADR-2143 §4: a greedy regex inside the edit callback cannot cross a section boundary', () => {
+    // Build a 3-section document; run a maximally-greedy regex (`[\s\S]*`) inside
+    // the edit callback for section 2. The callback only ever sees section 2's
+    // body, so sections 1 and 3 must remain byte-identical.
+    const content = [
+      '## Section One',
+      'alpha content line 1',
+      'alpha content line 2',
+      '## Section Two',
+      'beta content to be replaced',
+      '## Section Three',
+      'gamma content line 1',
+      'gamma content line 2',
+    ].join('\n') + '\n';
+
+    const before = collectSection(content, (h) => h.text === 'Section One');
+    const afterSectionThree = collectSection(content, (h) => h.text === 'Section Three');
+    assert.ok(before !== null && afterSectionThree !== null);
+
+    const result = withSection(content, 'Section Two', (body) => body.replace(/[\s\S]*/, 'REPLACED ENTIRELY'));
+
+    const resultOne = collectSection(result, (h) => h.text === 'Section One');
+    const resultThree = collectSection(result, (h) => h.text === 'Section Three');
+    assert.equal(resultOne.body, before.body, 'Section One byte-identical after greedy edit on Section Two');
+    assert.equal(resultThree.body, afterSectionThree.body, 'Section Three byte-identical after greedy edit on Section Two');
+    assert.ok(result.includes('## Section Two\nREPLACED ENTIRELY'), 'Section Two was replaced as intended');
+  });
+});
+
+describe('withSection: property-based tests', () => {
+  // Anchored phase-heading predicate mirroring roadmap-parser.cjs's
+  // withPhaseSection fix: the phase token must sit at the START of the
+  // heading text, so a section whose TITLE merely mentions another phase
+  // number is never matched by that other phase's query.
+  const anchoredPhasePredicate = (k) => {
+    const re = new RegExp(`^Phase\\s+${k}(?=[\\s:(]|$)`, 'i');
+    return (h) => re.test(h.text);
+  };
+
+  test('property (ADR-2143 §4): editing phase k never alters any sibling section j≠k', () => {
+    // Model a ROADMAP-like document with N `## Phase k` sections (k=1..N), each
+    // with a distinct, generated body. Pick a random k, run withSection to append
+    // ' EDITED' to that section's body, and assert every OTHER section (j≠k) is
+    // byte-identical in the output — the bounded-mutation guarantee this seam
+    // exists to provide (structurally retires the #2130/#2067/#2080 boundary-
+    // crossing class).
+    //
+    // Also exercises Blocker 1 (title-collision hijack): each section's heading
+    // TITLE may be decorated with a reference to a DIFFERENT phase number
+    // (e.g. `Phase 3: legacy Phase 1 notes`), and the predicate above (anchored
+    // to the start of the heading text) must still resolve to the section whose
+    // OWN number matches, never a differently-numbered section whose title
+    // happens to mention the queried number.
+    //
+    // Heading level is kept UNIFORM (`##`) across sections deliberately: mixing
+    // random heading levels would make "which section is k" ambiguous for this
+    // property (a shallower section can syntactically nest a deeper one) — see
+    // the separate explicit mixed-level test below instead.
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 2, max: 6 }).chain((n) =>
+          fc.record({
+            n: fc.constant(n),
+            bodies: fc.array(
+              fc.string({ minLength: 1, maxLength: 40 }).filter((s) => !/[\r\n]/.test(s) && s.trim().length > 0),
+              { minLength: n, maxLength: n },
+            ),
+            targetIdx: fc.integer({ min: 0, max: n - 1 }),
+            // For each section, optionally reference a DIFFERENT phase number in
+            // its own heading title (title-collision decoy). `undefined`/self
+            // means "no decoy for this section".
+            titleDecoys: fc.array(
+              fc.option(fc.integer({ min: 1, max: 6 }), { nil: undefined }),
+              { minLength: n, maxLength: n },
+            ),
+          }),
+        ),
+        ({ n, bodies, targetIdx, titleDecoys }) => {
+          const lines = [];
+          for (let k = 1; k <= n; k++) {
+            const decoy = titleDecoys[k - 1];
+            const heading = decoy !== undefined && decoy !== k
+              ? `Phase ${k}: legacy Phase ${decoy} notes`
+              : `Phase ${k}`;
+            lines.push(`## ${heading}`);
+            lines.push(`body-${k}: ${bodies[k - 1]}`);
+          }
+          const doc = lines.join('\n') + '\n';
+          const targetPhase = targetIdx + 1;
+
+          // Snapshot every section's body BEFORE the edit.
+          const before = [];
+          for (let k = 1; k <= n; k++) {
+            const s = collectSection(doc, anchoredPhasePredicate(k));
+            assert.ok(s !== null, `Phase ${k} section must be found before edit`);
+            before.push(s.body);
+          }
+
+          const result = withSection(
+            doc,
+            anchoredPhasePredicate(targetPhase),
+            (body) => body + ' EDITED',
+          );
+
+          for (let k = 1; k <= n; k++) {
+            const s = collectSection(result, anchoredPhasePredicate(k));
+            assert.ok(s !== null, `Phase ${k} section must still be found after edit`);
+            if (k === targetPhase) {
+              assert.equal(s.body, before[k - 1] + ' EDITED', `Phase ${targetPhase} (the target) must be edited`);
+            } else {
+              assert.equal(s.body, before[k - 1], `Phase ${k} (j≠k) must be byte-identical after editing Phase ${targetPhase}`);
+            }
+          }
+        },
+      ),
+    );
+  });
+
+  test('mixed heading levels + title collision: withSection({levelBounded:false}) does not fold a deeper heading into the target section, and the anchored predicate is not hijacked by a title mentioning another phase', () => {
+    // Phase 3 (appearing FIRST) has a title that mentions "Phase 1" — under the
+    // OLD unanchored regex this would be matched first (document order) by a
+    // query for phase 1 (Blocker 1). Phase 1 is followed by a DEEPER heading
+    // (`#### Phase 2`, level 4 vs Phase 1's level 3) — under the default
+    // `levelBounded: true` this would nest Phase 2 inside Phase 1's section
+    // and let an edit on Phase 1 reach into it (Blocker 2).
+    const content = [
+      '### Phase 3: Migrate off Phase 1 pipeline',
+      'gamma body line',
+      '### Phase 1: Foundation',
+      'alpha body line',
+      '#### Phase 2: API (deeper level, nested syntactically under Phase 1)',
+      '**Plans:** 1 plans',
+    ].join('\n') + '\n';
+
+    const before2 = collectSection(content, anchoredPhasePredicate(2));
+    assert.ok(before2 !== null, 'Phase 2 section must be found before edit');
+
+    const result = withSection(
+      content,
+      anchoredPhasePredicate(1),
+      (body) => body + ' EDITED',
+      { levelBounded: false },
+    );
+
+    assert.ok(
+      result.includes('### Phase 3: Migrate off Phase 1 pipeline\ngamma body line'),
+      'Phase 3 (title mentions "Phase 1") is byte-identical — not hijacked by the anchored Phase-1 query',
+    );
+    assert.ok(!result.includes('gamma body line EDITED'), 'the edit did not land in Phase 3');
+
+    const after2 = collectSection(result, anchoredPhasePredicate(2));
+    assert.equal(
+      after2.body,
+      before2.body,
+      'Phase 2 (deeper level than Phase 1) stays byte-identical — levelBounded:false stopped Phase 1 at the next heading of ANY level',
+    );
+
+    assert.ok(result.includes('alpha body line EDITED'), "Phase 1's own body was correctly edited");
+  });
+});
+
+// ─── deleteSection ────────────────────────────────────────────────────────────
+
+describe('deleteSection', () => {
+  test('no-match is a no-op — content is returned unchanged', () => {
+    const content = '## A\nBody A\n## B\nBody B\n';
+    const result = deleteSection(content, (h) => h.text === 'Nonexistent');
+    assert.equal(result, content, 'no matching heading -> content unchanged');
+  });
+
+  test('non-string content is returned unchanged', () => {
+    assert.equal(deleteSection(null, () => true), null);
+    assert.equal(deleteSection(undefined, () => true), undefined);
+  });
+
+  test('deleting a middle ### Phase 2 leaves its siblings intact', () => {
+    const content = [
+      '### Phase 1: Foundation',
+      '**Goal:** Setup',
+      '',
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '### Phase 3: Features',
+      '**Goal:** Core features',
+      '',
+    ].join('\n');
+
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2'));
+
+    assert.ok(!result.includes('Phase 2'), 'Phase 2 heading removed');
+    assert.ok(!result.includes('Authentication'), 'Phase 2 body content removed');
+    assert.ok(result.includes('### Phase 1: Foundation'), 'Phase 1 heading preserved');
+    assert.ok(result.includes('Setup'), 'Phase 1 body preserved');
+    assert.ok(result.includes('### Phase 3: Features'), 'Phase 3 heading preserved');
+    assert.ok(result.includes('Core features'), 'Phase 3 body preserved');
+    assert.ok(!result.includes('\n\n\n'), 'no triple-newline (double-blank) seam left behind');
+  });
+
+  test('deleting the LAST ### Phase N does not touch a following ## Progress heading/table', () => {
+    const content = [
+      '# Roadmap',
+      '',
+      '### Phase 1: Foundation',
+      '**Goal:** Setup',
+      '',
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans | Status | Completed |',
+      '|---|---|---|---|',
+      '| 1 | 0/1 | Planned | - |',
+      '| 2 | 0/1 | Planned | - |',
+      '',
+    ].join('\n');
+
+    // "### Phase 2" is the LAST phase heading in the document — a naive scan
+    // for "the next Phase heading" would run to EOF and take ## Progress with
+    // it. deleteSection's level-bounded stop (any heading, level <= target's
+    // level) must stop at ## Progress instead.
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2'));
+
+    assert.ok(!result.includes('Phase 2'), 'Phase 2 section removed');
+    assert.ok(!result.includes('Authentication'), 'Phase 2 body removed');
+    assert.ok(result.includes('## Progress'), 'Progress heading survives');
+    assert.ok(result.includes('| Phase | Plans | Status | Completed |'), 'Progress table header survives');
+    assert.ok(result.includes('| 1 | 0/1 | Planned | - |'), 'Progress table row 1 survives');
+    assert.ok(result.includes('| 2 | 0/1 | Planned | - |'), 'Progress table row 2 survives');
+  });
+
+  test('a nested #### subsection under the target is removed with it', () => {
+    const content = [
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '#### Phase 2.1: Follow-up',
+      '**Goal:** Nested cleanup',
+      '',
+      '### Phase 3: Features',
+      '**Goal:** Core features',
+      '',
+    ].join('\n');
+
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2:'));
+
+    assert.ok(!result.includes('Phase 2:'), 'Phase 2 heading removed');
+    assert.ok(!result.includes('Phase 2.1'), 'nested #### subsection removed alongside its parent');
+    assert.ok(!result.includes('Nested cleanup'), 'nested subsection body removed');
+    assert.ok(result.includes('### Phase 3: Features'), 'sibling Phase 3 preserved');
+    assert.ok(result.includes('Core features'), 'Phase 3 body preserved');
+  });
+
+  test('stopAtLevel option is honored, mirroring collectSection (a shallower opener also stops at a deeper heading)', () => {
+    const content = [
+      '## Parent',
+      'Parent intro',
+      '### Child',
+      'Child body',
+      '## Sibling',
+      'Sibling body',
+    ].join('\n');
+
+    // stopAtLevel: 3 makes the level-2 "Parent" opener ALSO stop at the next
+    // level-3 heading (rather than nesting it, per the default levelBounded
+    // rule) — so only "Parent intro" is removed; ### Child and everything
+    // after it (including ## Sibling) survives untouched.
+    const result = deleteSection(content, (h) => h.text === 'Parent', { stopAtLevel: 3 });
+
+    assert.ok(!result.includes('Parent intro'), 'Parent heading + its own intro line removed');
+    assert.ok(result.includes('### Child\nChild body'), 'stopAtLevel:3 stops BEFORE ### Child — it survives');
+    assert.ok(result.includes('## Sibling\nSibling body'), 'Sibling section untouched');
+  });
+
+  test('levelBounded: false stops at the very next heading, regardless of level (deeper headings are not nested)', () => {
+    const content = [
+      '## Parent',
+      'Parent intro',
+      '### Child',
+      'Child body',
+      '## Sibling',
+      'Sibling body',
+    ].join('\n');
+
+    // With levelBounded:false, "Parent" stops at the IMMEDIATE next heading
+    // (### Child, even though it's a deeper level than Parent) instead of
+    // nesting it — the opposite of the default levelBounded:true rule, which
+    // would fold ### Child into Parent's deleted range as nested content.
+    const result = deleteSection(content, (h) => h.text === 'Parent', { levelBounded: false });
+
+    assert.ok(!result.includes('Parent intro'), 'Parent heading + its own intro line removed');
+    assert.ok(result.includes('### Child\nChild body'), 'levelBounded:false stops at ### Child — it survives, not nested');
+    assert.ok(result.includes('## Sibling\nSibling body'), 'Sibling section untouched');
+  });
+
+  test('a pre-existing double-blank separator immediately before the deleted heading is collapsed to one blank line', () => {
+    const content = [
+      'Intro paragraph.',
+      '',
+      '',
+      '### Phase 2: Auth',
+      '**Goal:** Authentication',
+      '',
+      '### Phase 3: Features',
+      '**Goal:** Core features',
+    ].join('\n');
+
+    const result = deleteSection(content, (h) => h.text.startsWith('Phase 2'));
+
+    assert.ok(!result.includes('\n\n\n'), 'no triple-newline (double-blank) seam remains');
+    assert.ok(
+      result.includes('Intro paragraph.\n\n### Phase 3: Features'),
+      `exactly one blank line survives at the seam, got ${JSON.stringify(result)}`,
+    );
+  });
+
+  test('section at EOF (no following heading) deletes through end of string', () => {
+    const content = '### Phase 1\nBody 1\n### Phase 2\nBody 2';
+    const result = deleteSection(content, (h) => h.text === 'Phase 2');
+    assert.equal(result, '### Phase 1\nBody 1\n');
   });
 });
 

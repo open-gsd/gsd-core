@@ -16,7 +16,7 @@ import {
   type MigrationRecord,
   type MigrationAction,
 } from './installer-migration-authoring.cjs';
-import { platformWriteSync, retryRenameSync } from './shell-command-projection.cjs';
+import { platformWriteSync, retryRenameSync, posixNormalize } from './shell-command-projection.cjs';
 import { realClock, type Clock } from './clock.cjs';
 
 const MANIFEST_NAME = 'gsd-file-manifest.json';
@@ -139,7 +139,7 @@ function normalizeRelPath(relPath: string): string {
   if (typeof relPath !== 'string' || relPath.trim() === '') {
     throw new Error('migration action relPath must be a non-empty string');
   }
-  const normalized = relPath.replace(/\\/g, '/');
+  const normalized = posixNormalize(relPath);
   if (path.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
     throw new Error(`migration action relPath must stay inside configDir: ${relPath}`);
   }

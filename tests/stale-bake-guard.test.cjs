@@ -468,16 +468,21 @@ describe('stale-bake-guard parity with bin/install.js bake paths', () => {
 
   test('readGsdEffectiveModelOverrides resolves codex + opencode overrides from .planning/config.json', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-parity-'));
+    // #2152: sandbox HOME so the real ~/.gsd/defaults.json cannot bleed its global
+    // model_overrides into this project-only assertion (hermeticity). Mirrors the
+    // sibling subtests that pass a homedir option to warnIfStaleBake.
+    const sandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-parity-home-'));
     try {
       fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
       fs.writeFileSync(
         path.join(tmp, '.planning', 'config.json'),
         JSON.stringify({ model_overrides: { 'gsd-executor': 'opencode-go/flash', 'gsd-planner': 'openai/gpt-5' } }),
       );
-      const resolved = install.readGsdEffectiveModelOverrides(tmp);
+      const resolved = install.readGsdEffectiveModelOverrides(tmp, { homedir: () => sandboxHome });
       assert.deepEqual(resolved, { 'gsd-executor': 'opencode-go/flash', 'gsd-planner': 'openai/gpt-5' });
     } finally {
       cleanup(tmp);
+      cleanup(sandboxHome);
     }
   });
 });

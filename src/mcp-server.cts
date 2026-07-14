@@ -5,8 +5,16 @@
  * so any MCP-consuming host (Claude/Codex/OpenCode/VS Code/Gemini/Cursor/Cline/
  * Hermes) can drive GSD with NO bespoke plugin:
  *
- *   - point 1 (command): tool `gsd_invoke_command` → the command-routing hub
- *     (`createHub`/`dispatch`, src/command-routing-hub.cts).
+ *   - point 1 (command): tool `gsd_invoke_command` → `dispatchGsdCommand`
+ *     (src/shell-command-projection.cts), a bounded subprocess-shim to
+ *     gsd-tools.cjs. #2102 Stage 2: `commandRoutingHub.createHub()` called
+ *     with no args here always hit `if(!_cjsRegistry) return
+ *     makeUnknownCommand()` — every dispatch was UnknownCommand. No
+ *     fully-populated hub factory exists anywhere in gsd-core (every
+ *     createHub() caller builds a single-family hub for its own narrow
+ *     purpose), so the fix routes through the SAME shared dispatch helper
+ *     the pi extension uses (pi/gsd.cjs), mirroring the SUBPROCESS-REUSE
+ *     precedent already established for the OpenCode/Kilo hook bridge.
  *   - point 5 (state IO): tools `gsd_read_state` / `gsd_write_state` → the
  *     Phase 3 `stateIO` seam (src/state-io.cts, filesystem default).
  *
@@ -21,9 +29,10 @@
 'use strict';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import commandRoutingHub = require('./command-routing-hub.cjs');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateIo = require('./state-io.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import shellCommandProjection = require('./shell-command-projection.cjs');
+const { dispatchGsdCommand } = shellCommandProjection;
 
 export const PROTOCOL_VERSION = '2024-11-05';
 export const SERVER_NAME = 'gsd-core';
@@ -108,9 +117,11 @@ function callTool(name: string, args: unknown, ctx: McpContext): { content: Arra
       if (!family || !subcommand) {
         return { isError: true, content: [{ type: 'text', text: 'gsd_invoke_command requires string "family" and "subcommand".' }] };
       }
-      const hub = commandRoutingHub.createHub();
-      const res = hub.dispatch({ family, subcommand, args: Array.isArray(a.args) ? a.args : [], cwd, raw: undefined });
-      return { content: [{ type: 'text', text: JSON.stringify(res) }] };
+      const res = dispatchGsdCommand({ family, subcommand, args: Array.isArray(a.args) ? (a.args as string[]) : [], cwd });
+      if (!res.ok) {
+        return { isError: true, content: [{ type: 'text', text: res.stderr || res.stdout || `dispatch failed (exit ${res.code})` }] };
+      }
+      return { content: [{ type: 'text', text: res.stdout }] };
     }
     if (name === 'gsd_read_state') {
       const p = asString(a.path);

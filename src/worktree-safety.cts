@@ -10,7 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execGit as execGitSeam } from './shell-command-projection.cjs';
+import { execGit as execGitSeam, posixNormalize } from './shell-command-projection.cjs';
 
 // Default timeout for worktree-related git subprocess calls.
 // 10 s is generous enough for normal git operations on large repos while still
@@ -588,7 +588,7 @@ function rescueSummaryArtifacts(
     // relPath is the path relative to the worktree root (e.g. ".planning/q1-SUMMARY.md")
     // Normalize to forward slashes so the Set comparison against `git status --porcelain`
     // output works on Windows too (git always emits forward slashes in porcelain output).
-    const relPath = absPath.slice(worktreePath.length).replace(/^[/\\]/, '').replace(/\\/g, '/');
+    const relPath = posixNormalize(absPath.slice(worktreePath.length).replace(/^[/\\]/, ''));
 
     // #706: skip rescue when the SUMMARY is already committed on the branch.
     // Use `git cat-file -e HEAD:<relPath>` (not `ls-files --error-unmatch`) so

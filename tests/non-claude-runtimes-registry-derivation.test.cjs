@@ -23,7 +23,7 @@ const registry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const runtimeNamePolicy = require('../gsd-core/bin/lib/runtime-name-policy.cjs');
 
 const { NON_CLAUDE_RUNTIMES } = conversion;
-const { getDirName } = runtimeNamePolicy;
+const { getDirName, NO_LOCAL_CONFIG_DIR_SENTINEL } = runtimeNamePolicy;
 
 // Golden oracle: hardcoded sorted known-good list of all non-Claude runtimes.
 // A pinned expected value in a TEST is correct — the test IS the oracle.
@@ -77,4 +77,18 @@ test('DRIFT GUARD: every registry-declared non-Claude runtime has an explicit ge
       `getDirName('${rt}') returned '.claude' — runtime '${rt}' is in the registry but missing an explicit getDirName branch`,
     );
   }
+});
+
+// #2103: vscode is a registry runtime (role:runtime) whose configHome.kind is
+// 'none' — it has NO file-projected config directory at all (Marketplace/VSIX
+// extension). It is covered by the generic loop above (its dir must not be
+// '.claude'), but that assertion alone would ALSO pass for a plain string
+// typo, so this pins the actual documented sentinel value honestly rather
+// than riding on the generic "not .claude" check.
+test('#2103: getDirName("vscode") returns the documented no-local-config-dir sentinel, not .claude and not a real dot-dir', () => {
+  assert.ok(NON_CLAUDE_RUNTIMES.includes('vscode'), 'vscode must be a registered non-Claude runtime');
+  const dir = getDirName('vscode');
+  assert.equal(dir, NO_LOCAL_CONFIG_DIR_SENTINEL);
+  assert.notEqual(dir, '.claude');
+  assert.ok(!dir.startsWith('.'), 'the sentinel must not look like a plausible dot-dir name');
 });

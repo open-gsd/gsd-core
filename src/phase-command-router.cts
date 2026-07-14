@@ -163,7 +163,28 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
         return { ok: true as const, data: null };
       },
       complete: (_ctx: Record<string, unknown>): { ok: true; data: null } => {
-        phase.cmdPhaseComplete(cwd, args[2], raw);
+        // #2201: accept --phase N as well as the positional form (the state
+        // family already accepts --phase). An unrecognized flag is a usage
+        // error, not "Phase --phase not found".
+        let phaseNum: string | null = null;
+        for (let i = 2; i < args.length; i++) {
+          if (args[i] === '--phase') {
+            phaseNum = args[++i];
+            if (!phaseNum || phaseNum.startsWith('--'))
+              return makeInvalidArgs('--phase', '--phase requires a value') as never;
+          } else if (args[i].startsWith('--phase=')) {
+            phaseNum = args[i].slice(8);
+          } else if (args[i] === '--raw') {
+            continue;
+          } else if (args[i].startsWith('--')) {
+            return makeInvalidArgs(args[i], `phase complete does not support ${args[i]}`) as never;
+          } else {
+            phaseNum = args[i];
+          }
+        }
+        if (!phaseNum)
+          return makeInvalidArgs('--phase', 'phase number required (positional or --phase N)') as never;
+        phase.cmdPhaseComplete(cwd, phaseNum, raw);
         return { ok: true as const, data: null };
       },
       'uat-passed': (_ctx: Record<string, unknown>): { ok: true; data: null } => {
@@ -185,7 +206,26 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
       },
       // #1437 — list plan files for a phase
       'list-plans': (_ctx: Record<string, unknown>): { ok: true; data: null } => {
-        phase.cmdPhaseListPlans(cwd, args[2], raw);
+        // #2201: accept --phase N as well as positional.
+        let phaseNum: string | null = null;
+        for (let i = 2; i < args.length; i++) {
+          if (args[i] === '--phase') {
+            phaseNum = args[++i];
+            if (!phaseNum || phaseNum.startsWith('--'))
+              return makeInvalidArgs('--phase', '--phase requires a value') as never;
+          } else if (args[i].startsWith('--phase=')) {
+            phaseNum = args[i].slice(8);
+          } else if (args[i] === '--raw') {
+            continue;
+          } else if (args[i].startsWith('--')) {
+            return makeInvalidArgs(args[i], `phase list-plans does not support ${args[i]}`) as never;
+          } else {
+            phaseNum = args[i];
+          }
+        }
+        if (!phaseNum)
+          return makeInvalidArgs('--phase', 'phase number required (positional or --phase N)') as never;
+        phase.cmdPhaseListPlans(cwd, phaseNum, raw);
         return { ok: true as const, data: null };
       },
     },
