@@ -77,6 +77,7 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-workspace'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ui-review'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ui-review'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-audit-fix'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -335,6 +336,36 @@ test('native pause workspace and UI review commands preserve their workflow cont
     assert.match(pi._recorded.messages.at(-1).message.content, /six-pillar result/);
     await pi._recorded.commands['gsd-ui-review'].handler('02 --auto', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ui-review-input-error');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native audit fix command preserves safety and execution gates', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-audit-fix-'));
+  try {
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-audit-fix'].handler('--source audit-uat --severity high --max 2', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Audit Fix');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-audit-fix');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-audit-fix/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /agent: "gsd-executor"/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /isolated: true/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /first test failure/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /Every successful commit must include the finding ID/);
+
+    await pi._recorded.commands['gsd-audit-fix'].handler('--dry-run', { cwd });
+    assert.match(pi._recorded.messages.at(-1).message.content, /This is a dry run/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /do not dispatch a task, edit files, run tests, or commit/);
+
+    await pi._recorded.commands['gsd-audit-fix'].handler('--source other-audit', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-audit-fix-input-error');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+    await pi._recorded.commands['gsd-audit-fix'].handler('--max 0', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-audit-fix-input-error');
   } finally {
     cleanup(cwd);
   }
