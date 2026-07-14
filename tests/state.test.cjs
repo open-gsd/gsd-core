@@ -1251,6 +1251,76 @@ describe('cmdStateRecordMetric (state record-metric)', () => {
     assert.ok(updated.includes('| Phase 2 P1 | 5min | 3 tasks | 4 files |'), 'new row should be appended into the existing table');
   });
 
+  // #2245/#2143: a live STATE.md's "## Performance Metrics" section also
+  // carries the "By Phase" velocity table (gsd-core/templates/state.md:48,
+  // `| Phase | Plans | Total | Avg/Plan |`), which the prior "first table in
+  // the section" targeting polluted with a mismatched per-plan row on EVERY
+  // plan completion (execute-plan.md:414 calls record-metric per-plan). The
+  // command must target ITS OWN `| Plan | Duration | Tasks | Files |` table
+  // specifically, self-creating one when the section exists but doesn't
+  // carry it yet.
+  test('#2245/#2143: record-metric does not pollute the By-Phase velocity table (targets its own metrics table)', () => {
+    const byPhaseFixture = [
+      '# Project State',
+      '',
+      '## Performance Metrics',
+      '',
+      '**Velocity:**',
+      '- Total plans completed: 0',
+      '- Average duration: 0 min',
+      '- Total execution time: 0.0 hours',
+      '',
+      '**By Phase:**',
+      '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| - | - | - | - |',
+      '',
+      '**Recent Trend:**',
+      '- Last 5 plans: none',
+      '- Trend: Stable',
+      '',
+      '*Updated after each plan completion*',
+      '',
+      '## Session Continuity',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), byPhaseFixture);
+
+    const result = runGsdTools('state record-metric --phase 1 --plan 1 --duration 5min --tasks 3 --files 4', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(!output.created, 'created must be absent/false — the section already existed');
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // (a) By-Phase table unchanged — header + placeholder row intact, and no
+    // metric row spliced in between the delimiter and the next blank line.
+    const byPhaseIdx = updated.indexOf('| Phase | Plans | Total | Avg/Plan |');
+    assert.ok(byPhaseIdx !== -1, 'By-Phase table header must still exist');
+    const afterHeader = updated.slice(byPhaseIdx);
+    const byPhaseBlock = afterHeader.slice(0, afterHeader.indexOf('\n\n'));
+    assert.ok(byPhaseBlock.includes('|-------|-------|-------|----------|'), 'By-Phase delimiter must be intact');
+    assert.ok(byPhaseBlock.includes('| - | - | - | - |'), 'By-Phase placeholder row must be intact');
+    assert.ok(!byPhaseBlock.includes('Phase 1 P1'), 'the per-plan row must NOT be spliced into the By-Phase table block');
+    assert.ok(!byPhaseBlock.includes('5min'), 'the per-plan duration must NOT appear in the By-Phase table block');
+
+    // (b) A dedicated `| Plan | Duration | Tasks | Files |` table now exists,
+    // containing the new row.
+    const metricsIdx = updated.indexOf('| Plan | Duration | Tasks | Files |');
+    assert.ok(metricsIdx !== -1, 'a Per-Plan Metrics table must now exist');
+    assert.ok(updated.includes('| Phase 1 P1 | 5min | 3 tasks | 4 files |'), 'the new metric row must be present in the Per-Plan Metrics table');
+
+    // (c) exactly ONE "## Performance Metrics" heading.
+    const headingMatches = updated.match(/^## Performance Metrics\s*$/gim) || [];
+    assert.strictEqual(headingMatches.length, 1, `exactly ONE "## Performance Metrics" heading expected, got ${headingMatches.length}:\n${updated}`);
+
+    // (d) Recent Trend block + footer preserved.
+    assert.ok(updated.includes('**Recent Trend:**'), 'Recent Trend block must be preserved');
+    assert.ok(updated.includes('*Updated after each plan completion*'), 'footer must be preserved');
+  });
+
   test('replaces None yet placeholder with first metric', () => {
     const noneYetFixture = [
       '# Project State',

@@ -548,36 +548,41 @@ function cmdStateRecordMetric(cwd: string, options: StateRecordMetricOptions, ra
     // regex.
     const metricsSection = collectSection(content, (h) => /^performance metrics$/i.test(h.text.trim()));
 
-    // Locate the header + delimiter rows by LINE, using the exact same
-    // splitTableRow/isDelimiterRow header/delimiter-shape checks
-    // `parseMarkdownTable` itself uses — deliberately NOT gated on
-    // `parseMarkdownTable(...).ok`, which additionally requires every DATA
-    // row's cell count to match the header. A single ragged sibling row (a
-    // hand-edited stray/extra pipe elsewhere in the table) used to fail that
-    // whole-table parse and fall through to the "section absent (or
-    // malformed)" scaffold branch below, appending a DUPLICATE "## Performance
-    // Metrics" section on every per-plan record-metric call — compounding on
-    // every execute-plan run (#2245 Blocker 2 parity with the other Phase-4
-    // ragged-tolerance fixes: updateTableCell / findTableStartOffset, neither
-    // of which requires the WHOLE table to parse before acting on one row).
-    // Only a genuinely absent header+delimiter pair (no table at all in the
-    // section) still falls through to the scaffold branch.
     const eol = metricsSection && /\r\n/.test(metricsSection.body) ? '\r\n' : '\n';
     const lines = metricsSection ? metricsSection.body.split(/\r?\n/) : [];
+
+    // Locate THIS command's OWN metrics table by its HEADER shape, using the
+    // exact same splitTableRow/isDelimiterRow header/delimiter-shape checks
+    // `parseMarkdownTable` uses. A live "## Performance Metrics" section
+    // (gsd-core/templates/state.md:39-56) also carries the "By Phase"
+    // velocity table (`| Phase | Plans | Total | Avg/Plan |`) — the prior
+    // "first table in the section" targeting spliced every per-plan row into
+    // THAT table instead, polluting it on EVERY plan completion
+    // (execute-plan.md:414 calls record-metric per-plan) (#2245/#2143).
+    // Matching the header cells to this command's own canonical
+    // `Plan | Duration | Tasks | Files` shape (case-insensitive/trimmed)
+    // finds the right table regardless of what else shares the section, and
+    // deliberately does NOT require `parseMarkdownTable(...).ok` (which
+    // additionally requires every DATA row's cell count to match the
+    // header) — a single ragged sibling row (a hand-edited stray/extra pipe)
+    // must not blind this scan (#2245 Blocker 2 parity with the other
+    // Phase-4 ragged-tolerance fixes: updateTableCell / findTableStartOffset).
+    const METRICS_HEADER = ['plan', 'duration', 'tasks', 'files'];
     let headerIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < lines.length - 1; i++) {
       const trimmed = lines[i].trim();
-      if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) { headerIdx = i; break; }
+      if (!trimmed.startsWith('|') || trimmed.indexOf('|', 1) === -1) continue;
+      const delimiterLine = lines[i + 1];
+      if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) continue;
+      const headerCells = splitTableRow(lines[i]);
+      const delimiterCells = splitTableRow(delimiterLine);
+      if (!isDelimiterRow(delimiterCells) || delimiterCells.length !== headerCells.length) continue;
+      const normalized = headerCells.map((cell) => cell.trim().toLowerCase());
+      const isMetricsHeader = normalized.length === METRICS_HEADER.length
+        && normalized.every((cell, idx) => cell === METRICS_HEADER[idx]);
+      if (isMetricsHeader) { headerIdx = i; break; }
     }
-    const delimiterLine = headerIdx === -1 ? undefined : lines[headerIdx + 1];
-    const headerCells = headerIdx === -1 ? [] : splitTableRow(lines[headerIdx]);
-    const delimiterCells = delimiterLine !== undefined && delimiterLine.trim().startsWith('|')
-      ? splitTableRow(delimiterLine)
-      : null;
-    const hasTable = headerIdx !== -1
-      && delimiterCells !== null
-      && isDelimiterRow(delimiterCells)
-      && delimiterCells.length === headerCells.length;
+    const hasTable = headerIdx !== -1;
 
     if (metricsSection && hasTable) {
       const delimiterIdx = headerIdx + 1;
@@ -587,7 +592,9 @@ function cmdStateRecordMetric(cwd: string, options: StateRecordMetricOptions, ra
       // following the delimiter counts as an existing row REGARDLESS of its
       // cell count matching the header — a ragged sibling row must never
       // blind this scan to the table's true last row (unlike
-      // `parsedTable.value.rows.length`, which this replaces).
+      // `parsedTable.value.rows.length`, which this replaces). Anchored to
+      // the METRICS table's OWN header/delimiter (`headerIdx` above), never
+      // the section's first table (#2245/#2143).
       let lastRowIdx = delimiterIdx;
       for (let i = delimiterIdx + 1; i < lines.length; i++) {
         if (!lines[i].trim().startsWith('|')) break;
@@ -626,15 +633,41 @@ function cmdStateRecordMetric(cwd: string, options: StateRecordMetricOptions, ra
       return replaceSection(content, metricsSection, newBody);
     }
 
+    if (metricsSection) {
+      // Section EXISTS but carries no metrics table of its own — e.g. a live
+      // STATE.md whose "## Performance Metrics" section holds only the
+      // By-Phase velocity table (gsd-core/templates/state.md:48). Self-heal
+      // by appending a fresh Per-Plan Metrics table to the END of the
+      // section body — every existing byte (By-Phase table, Recent Trend,
+      // footer) is preserved verbatim, and no second "## Performance
+      // Metrics" heading is introduced. The section already existed, so
+      // `created` stays false (#2245/#2143).
+      _recorded = true;
+      const newBody = metricsSection.body
+        + eol + '**Per-Plan Metrics:**'
+        + eol + eol
+        + '| Plan | Duration | Tasks | Files |'
+        + eol
+        + '|------|----------|-------|-------|'
+        + eol
+        + newRow
+        + eol;
+      return replaceSection(content, metricsSection, newBody);
+    }
+
     // Section absent (or malformed) — DWIM: auto-create canonical
     // ## Performance Metrics scaffold, then append the row. Matches state
-    // begin-phase / advance-plan DWIM behavior.
+    // begin-phase / advance-plan DWIM behavior. Header corrected to this
+    // command's own canonical shape (`Plan | Duration | Tasks | Files`) —
+    // the prior scaffold's `| Phase | Plan | Duration | Notes |` header
+    // matched neither the appended row's shape nor the canonical table
+    // above (#2245/#2143).
     const scaffold = [
       '',
       '## Performance Metrics',
       '',
-      '| Phase | Plan | Duration | Notes |',
-      '|-------|------|----------|-------|',
+      '| Plan | Duration | Tasks | Files |',
+      '|------|----------|-------|-------|',
       newRow,
       '',
     ].join('\n');
