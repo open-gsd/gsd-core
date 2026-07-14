@@ -86,14 +86,9 @@ for (const runtime of targets) {
   process.stdout.write(`[gen] ${runtime}: wrote ${Object.keys(actual).length} file hashes -> ${fixturePath}\n`);
 }
 
-// Regenerate the claude-local fixture (local scope, distinct legacy layout).
-const { configDir: localConfigDir, root: localRoot } = runMinimalInstall({ runtime: 'claude', scope: 'local' });
-let localActual;
-try {
-  localActual = buildParityManifest(localConfigDir, localRoot);
-} finally {
-  cleanup(localRoot);
-}
-const localFixturePath = path.join(FIXTURE_DIR, 'claude-local.json');
-fs.writeFileSync(localFixturePath, JSON.stringify(localActual, null, 2) + '\n', 'utf8');
-process.stdout.write(`[gen] claude-local: wrote ${Object.keys(localActual).length} file hashes -> ${localFixturePath}\n`);
+// NOTE: claude-local (scope: 'local') is NOT regenerated here because the local-
+// scope install embeds platform-varying node-runner paths in the installed .md
+// content that the root-replacement normalization does not fully neutralize.
+// Regenerating on macOS produces hashes that differ from Linux CI. Update the
+// claude-local fixture manually using the FAILURES.md +actual hashes from a
+// gsd-test run, or run UPDATE_GOLDEN=1 in CI (Linux) to recapture.
