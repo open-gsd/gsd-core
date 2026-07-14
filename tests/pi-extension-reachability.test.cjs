@@ -87,6 +87,12 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-eval-review'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ai-integration-phase'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ai-integration-phase'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-workstreams'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-autonomous'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-import'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-quick'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-fast'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -472,6 +478,63 @@ test('native AI integration command serializes shared contract writers', async (
     assert.match(pi._recorded.messages.at(-1).message.content, /native `ask`/);
     await pi._recorded.commands['gsd-ai-integration-phase'].handler('02 --auto', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ai-integration-input-error');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('remaining native workflow commands preserve operational gates', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-remaining-'));
+  try {
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-phase'].handler('--remove 2.1', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-phase');
+    assert.match(pi._recorded.messages.at(-1).message.content, /exact affected phase range/);
+    await pi._recorded.commands['gsd-phase'].handler('--insert 2', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-phase-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-workstreams'].handler('complete release-1', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Workstreams');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-workstreams');
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `ask` before `complete`/);
+    await pi._recorded.commands['gsd-workstreams'].handler('switch ../bad', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-workstreams-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-autonomous'].handler('--only 2 --interactive', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Autonomous');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-autonomous');
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /strictly in the discovered order/);
+    await pi._recorded.commands['gsd-autonomous'].handler('--only 2 --to 3', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-autonomous-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-import'].handler('--from imported-plan.md', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Import');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-import');
+    assert.match(pi._recorded.messages.at(-1).message.content, /BLOCKER gate/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-plan-checker/);
+    await pi._recorded.commands['gsd-import'].handler('--from ../outside.md', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-import-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-quick'].handler('--full update project metadata', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Quick Task');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-quick');
+    assert.match(pi._recorded.messages.at(-1).message.content, /Executor tasks.*isolated: true/);
+    await pi._recorded.commands['gsd-quick'].handler('status ../bad', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-quick-input-error');
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-fast'].handler('fix typo', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Fast Task');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-fast');
+    assert.match(pi._recorded.messages.at(-1).message.content, /at most three file edits/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /never spawn a task/);
   } finally {
     cleanup(cwd);
   }
