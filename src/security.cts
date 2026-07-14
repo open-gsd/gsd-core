@@ -364,7 +364,7 @@ export function sanitizeForDisplay(text: unknown): string {
 
   const protocolLeakPatterns = [
     /^\s*(?:assistant|user|system)\s+to=[^:\s]+:[^\n]+$/i,
-    /^\s*<\|(?:assistant|user|system)[^|]*\|>\s*$/i,
+    /^\s*<\|(?:assistant|user|system)[^|]*\|>\s*$/i, // allow-adhoc-markdown: not a GFM table-cell scan — matches `<|role|>` protocol-leak marker tokens (prompt-injection sanitization), a false-positive on the table-regex pipe+cell-class fingerprint
   ];
 
   sanitized = sanitized

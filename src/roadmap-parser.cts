@@ -391,7 +391,13 @@ function getMilestoneInfo(cwd: string): MilestoneInfo {
           const m = stateRaw.match(/^milestone:\s*(.+)/m);
           if (m) stateVersion = m[1].trim();
         }
-      } catch { /* intentionally empty */ }
+      } catch {
+        /* best-effort (#2245 audit): platformReadSync re-throws for a non-ENOENT
+         * failure (e.g. EACCES) reading STATE.md. Consulting STATE.md's
+         * `milestone:` field is an OPTIONAL enhancement here — on failure this
+         * function already falls back to ROADMAP-only heuristics below, the
+         * same fallback path taken when STATE.md simply doesn't exist. */
+      }
     }
 
     if (stateVersion) {
@@ -557,7 +563,14 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
         if (!/^999\b/.test(bm[1])) milestonePhaseNums.add(bm[1]);
       }
     }
-  } catch { /* intentionally empty */ }
+  } catch {
+    /* best-effort (#2245 audit): the real throw source is platformReadSync
+     * at the top of this try (re-throws for a non-ENOENT read failure). On
+     * any failure milestonePhaseNums stays empty, which below already
+     * degrades to the same pass-all filter this function returns when a
+     * ROADMAP genuinely has zero recognizable phase headings — a safe,
+     * non-corrupting (over-inclusive, never under-inclusive) degrade. */
+  }
 
   if (milestonePhaseNums.size === 0) {
     const passAll = (() => true) as unknown as MilestonePhaseFilter;

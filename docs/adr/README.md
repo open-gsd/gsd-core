@@ -69,6 +69,7 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [2143-markdown-table-and-mutation-consolidation.md](2143-markdown-table-and-mutation-consolidation.md) | Markdown table model, bounded mutation, and fail-loud consolidation (#1372 part 2) | Accepted |
 | [2164-statusline-scope-boundary.md](2164-statusline-scope-boundary.md) | Statusline draws its data boundary at local, read-only sources (no external/credentialed data) | Accepted |
 | [612-bracket-phase-id-convention.md](612-bracket-phase-id-convention.md) | Bracket phase-ID convention — lift the milestone into a `[PROJECT.MM]` prefix; terminal deprecation of M-NN | Proposed |
+| [2264-golden-parity-redesign.md](2264-golden-parity-redesign.md) | Redesign golden-install-parity: single-source manifest builder + split invariant | Proposed |
 
 ## Seam map
 
