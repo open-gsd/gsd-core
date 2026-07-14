@@ -597,7 +597,7 @@ Do NOT auto-invoke any further slash commands.
 
 ---
 
-**Route B: Milestone complete (all phases done)**
+**Route B: All phases complete (milestone ready to close)**
 
 **This route is only reached when:**
 - `is_last_phase: true` AND no other active workstreams exist (or flat mode)

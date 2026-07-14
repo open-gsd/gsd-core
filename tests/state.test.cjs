@@ -498,6 +498,7 @@ stopped_at: Plan 2 of Phase 3
       { input: 'Ready to plan', expected: 'planning' },
       { input: 'Phase complete — ready for verification', expected: 'verifying' },
       { input: 'Milestone complete', expected: 'completed' },
+      { input: 'All phases complete', expected: 'completed' },
     ];
 
     for (const { input, expected } of statusTests) {
@@ -1212,6 +1213,115 @@ describe('cmdStateRecordMetric (state record-metric)', () => {
     assert.ok(updated.includes('| Phase 1 P1 | 3min | 2 tasks | 3 files |'), 'existing row should still be present');
   });
 
+  // #2245 Blocker 2: a RAGGED sibling data row (a hand-edited stray/extra
+  // pipe) in the existing Performance Metrics table used to fail the
+  // whole-table `parseMarkdownTable` gate, which fell through to the
+  // "section absent (or malformed)" scaffold branch and appended a SECOND
+  // "## Performance Metrics" heading — compounding on every per-plan
+  // record-metric call. The append must be ragged-tolerant: it locates the
+  // table's last existing row and splices the new row after it WITHOUT
+  // requiring every sibling row to parse cleanly, and must never introduce a
+  // duplicate heading when a (possibly ragged) table already exists.
+  test('#2245 appends into a RAGGED existing table without duplicating the heading', () => {
+    const raggedFixture = [
+      '# Project State',
+      '',
+      '## Performance Metrics',
+      '',
+      '| Plan | Duration | Tasks | Files |',
+      '|------|----------|-------|-------|',
+      '| Phase 1 P1 | 3min | 2 tasks | 3 files |',
+      '| Phase 1 P2 | 4min | 3 tasks | 5 files | extra |',
+      '',
+      '## Session Continuity',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), raggedFixture);
+
+    const result = runGsdTools('state record-metric --phase 2 --plan 1 --duration 5min --tasks 3 --files 4', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(!output.created, 'created must be absent/false — an existing (ragged) section must not be treated as auto-created');
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    const headingMatches = updated.match(/^## Performance Metrics\s*$/gim) || [];
+    assert.strictEqual(headingMatches.length, 1, `exactly ONE "## Performance Metrics" heading expected, got ${headingMatches.length}:\n${updated}`);
+    assert.ok(updated.includes('| Phase 1 P2 | 4min | 3 tasks | 5 files | extra |'), 'existing ragged row must be preserved verbatim');
+    assert.ok(updated.includes('| Phase 1 P1 | 3min | 2 tasks | 3 files |'), 'existing clean row should still be present');
+    assert.ok(updated.includes('| Phase 2 P1 | 5min | 3 tasks | 4 files |'), 'new row should be appended into the existing table');
+  });
+
+  // #2245/#2143: a live STATE.md's "## Performance Metrics" section also
+  // carries the "By Phase" velocity table (gsd-core/templates/state.md:48,
+  // `| Phase | Plans | Total | Avg/Plan |`), which the prior "first table in
+  // the section" targeting polluted with a mismatched per-plan row on EVERY
+  // plan completion (execute-plan.md:414 calls record-metric per-plan). The
+  // command must target ITS OWN `| Plan | Duration | Tasks | Files |` table
+  // specifically, self-creating one when the section exists but doesn't
+  // carry it yet.
+  test('#2245/#2143: record-metric does not pollute the By-Phase velocity table (targets its own metrics table)', () => {
+    const byPhaseFixture = [
+      '# Project State',
+      '',
+      '## Performance Metrics',
+      '',
+      '**Velocity:**',
+      '- Total plans completed: 0',
+      '- Average duration: 0 min',
+      '- Total execution time: 0.0 hours',
+      '',
+      '**By Phase:**',
+      '',
+      '| Phase | Plans | Total | Avg/Plan |',
+      '|-------|-------|-------|----------|',
+      '| - | - | - | - |',
+      '',
+      '**Recent Trend:**',
+      '- Last 5 plans: none',
+      '- Trend: Stable',
+      '',
+      '*Updated after each plan completion*',
+      '',
+      '## Session Continuity',
+    ].join('\n') + '\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), byPhaseFixture);
+
+    const result = runGsdTools('state record-metric --phase 1 --plan 1 --duration 5min --tasks 3 --files 4', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.recorded, true, 'recorded should be true');
+    assert.ok(!output.created, 'created must be absent/false — the section already existed');
+
+    const updated = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+
+    // (a) By-Phase table unchanged — header + placeholder row intact, and no
+    // metric row spliced in between the delimiter and the next blank line.
+    const byPhaseIdx = updated.indexOf('| Phase | Plans | Total | Avg/Plan |');
+    assert.ok(byPhaseIdx !== -1, 'By-Phase table header must still exist');
+    const afterHeader = updated.slice(byPhaseIdx);
+    const byPhaseBlock = afterHeader.slice(0, afterHeader.indexOf('\n\n'));
+    assert.ok(byPhaseBlock.includes('|-------|-------|-------|----------|'), 'By-Phase delimiter must be intact');
+    assert.ok(byPhaseBlock.includes('| - | - | - | - |'), 'By-Phase placeholder row must be intact');
+    assert.ok(!byPhaseBlock.includes('Phase 1 P1'), 'the per-plan row must NOT be spliced into the By-Phase table block');
+    assert.ok(!byPhaseBlock.includes('5min'), 'the per-plan duration must NOT appear in the By-Phase table block');
+
+    // (b) A dedicated `| Plan | Duration | Tasks | Files |` table now exists,
+    // containing the new row.
+    const metricsIdx = updated.indexOf('| Plan | Duration | Tasks | Files |');
+    assert.ok(metricsIdx !== -1, 'a Per-Plan Metrics table must now exist');
+    assert.ok(updated.includes('| Phase 1 P1 | 5min | 3 tasks | 4 files |'), 'the new metric row must be present in the Per-Plan Metrics table');
+
+    // (c) exactly ONE "## Performance Metrics" heading.
+    const headingMatches = updated.match(/^## Performance Metrics\s*$/gim) || [];
+    assert.strictEqual(headingMatches.length, 1, `exactly ONE "## Performance Metrics" heading expected, got ${headingMatches.length}:\n${updated}`);
+
+    // (d) Recent Trend block + footer preserved.
+    assert.ok(updated.includes('**Recent Trend:**'), 'Recent Trend block must be preserved');
+    assert.ok(updated.includes('*Updated after each plan completion*'), 'footer must be preserved');
+  });
+
   test('replaces None yet placeholder with first metric', () => {
     const noneYetFixture = [
       '# Project State',
@@ -1807,6 +1917,45 @@ Progress: [..........] 0%
       'Progress field must be preserved in Current Position');
   });
 
+  test('#2245 F2: begin-phase does not clobber an H3 subsection nested under Current Position', () => {
+    // A prior revision swapped `locateCurrentPosition` (stops at ANY heading
+    // level >= 2) for `collectSection` with its default `levelBounded: true`
+    // (stops only at H1/H2), so a `### Notes` subsection under
+    // `## Current Position` was folded into the section body and the
+    // field-write regexes (which use the `m` flag and match ANY line start)
+    // clobbered a same-named line inside that subsection.
+    const stateMd = `# Project State
+
+## Current Position
+
+Phase: 1 (Setup) — EXECUTING
+Status: Executing Phase 1
+
+### Notes
+
+Plan: DO-NOT-TOUCH
+
+## Next Steps
+
+Do the thing.
+`;
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), stateMd);
+
+    const result = runGsdTools(
+      ['state', 'begin-phase', '--phase', '2', '--name', 'Foo', '--plans', '3'],
+      tmpDir,
+    );
+    assert.ok(result.success, `begin-phase failed: ${result.error}`);
+
+    const content = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
+    assert.ok(
+      content.includes('Plan: DO-NOT-TOUCH'),
+      `the ### Notes subsection must not be rewritten by the Current Position field regexes:\n${content}`,
+    );
+    assert.ok(/^## Next Steps/m.test(content), 'the ## Next Steps section must remain untouched');
+    assert.ok(/^Phase:.*EXECUTING/m.test(content), 'Phase line in Current Position should still update');
+  });
+
   test('advance-plan can update Status after begin-phase', () => {
     // Simulates the full workflow: begin-phase then advance through all plans
     const stateMd = `# Project State
@@ -1905,7 +2054,7 @@ describe('progress counters correct after plan execution (#1589)', () => {
     );
 
     // Trigger a STATE.md write (e.g. state update Status)
-    const result = runGsdTools('state update Status "Milestone complete"', tmpDir);
+    const result = runGsdTools('state update Status "All phases complete"', tmpDir);
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     // Read the frontmatter — percent must be derived from disk (4/4 = 100%), not from body "0%"
@@ -2148,7 +2297,7 @@ describe('updatePerformanceMetricsSection', () => {
     const afterFirst = fs.readFileSync(statePath, 'utf-8');
 
     // Reset state so we can complete again
-    let resetContent = afterFirst.replace(/Milestone complete|Ready to plan/, 'Executing Phase 5');
+    let resetContent = afterFirst.replace(/All phases complete|Ready to plan/, 'Executing Phase 5');
     resetContent = resetContent.replace(/Not started/, '1');
     fs.writeFileSync(statePath, resetContent);
 
