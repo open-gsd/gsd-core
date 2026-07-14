@@ -1654,12 +1654,15 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
                 '$1x$2',
               );
 
-              // Traceability row: | REQ-ID | Phase N | Pending|In Progress | ->
-              // ... Complete | — by column NAME via the markdown-table seam
-              // (ADR-2143 §7), matching the row by its Requirement cell
-              // (case-insensitive, mirroring the prior regex's 'i' flag).
+              // Traceability row: | <REQ-ID> | Phase N | Pending|In Progress | ->
+              // ... Complete | via the markdown-table seam (ADR-2143 §7). Match the
+              // row by its FIRST cell's value (the requirement-ID column) regardless
+              // of that column's HEADER name — real tables head it `REQ-ID`, others
+              // `Requirement` (#2769/#2203); this mirrors the prior regex's first-cell
+              // `\|\s*<id>\s*\|` anchor, not a by-name lookup. Object.values(row) is in
+              // header order, so [0] is the first column. Case-insensitive.
               const reqRowMatch = (row: Record<string, string>): boolean =>
-                (row['Requirement'] ?? '').trim().toLowerCase() === reqId.toLowerCase();
+                (Object.values(row)[0] ?? '').trim().toLowerCase() === reqId.toLowerCase();
               // Ragged-tolerant (#2245 Blocker 2): drive the write purely off
               // updateTableCell's own tolerant row scan — a DIFFERENT
               // requirement's row elsewhere in the same table having a

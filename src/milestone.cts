@@ -77,10 +77,14 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   // reads the table) still sees Pending while the CLI reported success.
   const tableUnmatched: string[] = [];
 
-  // A traceability table is present if the file has a "| Requirement | … |"
-  // header. A REQUIREMENTS.md with no such table is legitimate (mid-roadmap), so
-  // a missing row only counts as drift when a table actually exists.
-  const hasTable = /^\|\s*Requirement\s*\|/im.test(reqContent);
+  // A traceability table is present if the file has a requirement-ID column
+  // header: "Requirement", "Requirement ID", or "REQ-ID" (#2769/#2203) — kept
+  // in sync with the positional first-cell rowMatch/hasRow below so a
+  // REQ-ID-headed table (the real-world format) participates in the
+  // write-set and the #2140 drift check below, not just the "Requirement"
+  // case. A REQUIREMENTS.md with no such table is legitimate (mid-roadmap),
+  // so a missing row only counts as drift when a table actually exists.
+  const hasTable = /^\|\s*(?:Requirement(?:\s*ID)?|REQ[-\s]?ID)\s*\|/im.test(reqContent);
 
   // ADR-2143 §6 per-surface write-set, tracked PER requirement ID: a
   // multi-ID batch must not OR one ID's surface outcome into another's —
@@ -105,13 +109,15 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     const checkboxHit = afterCheckbox !== reqContent;
     if (checkboxHit) reqContent = afterCheckbox;
 
-    // Surface 2 — the traceability row: | REQ-ID | Phase N | Pending | → ... Complete |
-    // Matched/updated by column NAME via the markdown-table seam (ADR-2143 §7)
-    // — supersedes the prior ordinal-capture regex. Row match is case-
-    // insensitive (mirrors the prior regex's 'i' flag applying uniformly to
-    // the whole pattern, including the ID).
+    // Surface 2 — the traceability row: | <REQ-ID> | Phase N | Pending | → ... Complete |
+    // via the markdown-table seam (ADR-2143 §7) — supersedes the prior ordinal
+    // regex. Match the row by its FIRST cell's value (the requirement-ID column)
+    // regardless of that column's HEADER name — real tables head it `REQ-ID`,
+    // others `Requirement` (#2769/#2203); this mirrors the prior regex's first-cell
+    // `\|\s*<id>\s*\|` anchor. Object.values(row) is in header order so [0] is the
+    // first column. Case-insensitive (mirrors the prior regex's 'i' flag).
     const rowMatch = (row: Record<string, string>): boolean =>
-      (row['Requirement'] ?? '').trim().toLowerCase() === reqId.toLowerCase();
+      (Object.values(row)[0] ?? '').trim().toLowerCase() === reqId.toLowerCase();
     // Ragged-tolerant (#2245 Blocker 2): drive the write purely off
     // updateTableCell's own tolerant row scan — a DIFFERENT requirement's row
     // elsewhere in the same table having a mismatched cell count must never
@@ -141,8 +147,9 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     }
 
     // Coverage of the traceability surface for this ID (computed after any flip).
-    // hasRow keys on the ID's Requirement cell (by NAME) so a bare mention of
-    // the ID in a non-traceability table does not masquerade as a real row.
+    // hasRow keys on the ID's FIRST cell (the requirement-ID column, by position —
+    // see rowMatch above) so a bare mention of the ID in a non-traceability table
+    // does not masquerade as a real row.
     // Ragged-tolerant (#2245 Blocker 2): same reasoning as the write above — a
     // sibling row's raggedness must not blind this classification to a row
     // that genuinely exists. Probe via a no-op updateTableCell write (its own
