@@ -264,13 +264,12 @@ function parseCoverageMatrix(text) {
     const src = text.replace(/\r\n/g, '\n');
     // (1) fenced ```coverage JSON block takes precedence if present.
     // Case-insensitive info string (```coverage and ```Coverage are both legal CommonMark).
-    // allow-adhoc-markdown: extracting a NAMED ```coverage fence (extraction of one tagged block), not stripping all fences — stripFencedCode/extractTaggedBlocks do not cover named-fence extraction.
-    const fenceMatch = src.match(/```coverage\s*\n([\s\S]*?)\n```/i);
-    if (fenceMatch && fenceMatch[1]) {
+    const fenceBody = (0, markdown_sectionizer_cjs_1.extractFencedBlock)(src, 'coverage');
+    if (fenceBody) {
         out.format = 'json';
         let parsed;
         try {
-            parsed = JSON.parse(fenceMatch[1]);
+            parsed = JSON.parse(fenceBody);
         }
         catch {
             out.errors.push('fenced ```coverage block is not valid JSON');

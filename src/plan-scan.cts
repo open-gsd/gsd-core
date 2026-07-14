@@ -16,10 +16,12 @@ const { countMatchedSummaries } = coreUtils;
 // Excluded derivative files
 const PLAN_OUTLINE_RE = /-OUTLINE\.md$/i;
 const PLAN_PRE_BOUNCE_RE = /\.pre-bounce\.md$/i;
+const PLAN_REVIEW_RE = /-PLAN-REVIEW\.md$/i;
 
 function isRootPlanFile(fileName: string): boolean {
   if (PLAN_OUTLINE_RE.test(fileName)) return false;
   if (PLAN_PRE_BOUNCE_RE.test(fileName)) return false;
+  if (PLAN_REVIEW_RE.test(fileName)) return false;
   if (fileName.endsWith('-PLAN.md') || fileName === 'PLAN.md') return true;
   // A summary is never a plan. Reject summaries before the loose /PLAN/i
   // fallback so legacy `<N>-PLAN-<NN>-SUMMARY.md` names (which contain the

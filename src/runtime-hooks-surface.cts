@@ -49,7 +49,7 @@ const {
   isManagedHookBasename: (scriptPath: string, opts?: { surface?: string }) => boolean;
   isManagedHookCommand: (cmd: string | null | undefined, opts?: { surface?: string; includeLegacyAliases?: boolean; configDir?: string }) => boolean;
   projectLegacySettingsHookCommand: (opts: { absoluteRunner: string; scriptPath: string; scriptToken: string; runtime: string; platform: string }) => string | null;
-  projectManagedHookCommand: (opts: { absoluteRunner: string; scriptPath: string; runtime: string; platform: string }) => string | null;
+  projectManagedHookCommand: (opts: { absoluteRunner: string; scriptPath: string; runtime: string; platform: string; hookShell?: string }) => string | null;
   projectPortableHookBaseDir: (opts: { configDir: string; homeDir: string }) => string;
   projectCodexHookTomlCommand: (opts: { absoluteRunner: string; scriptPath: string; platform: string }) => string;
   shellHookOmitsBashRunner: (opts: { platform: string; runtime: string; isShellHook: boolean }) => boolean;
@@ -828,6 +828,7 @@ interface BuildHookCommandOpts {
   portableHooks?: boolean;
   platform?: string;
   runtime?: string;
+  hookShell?: string;
   env?: NodeJS.ProcessEnv;
   existsSync?: (p: string) => boolean;
 }
@@ -836,6 +837,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
   if (!opts) opts = {};
   const platform = opts.platform || process.platform;
   const runtime = opts.runtime || 'generic';
+  const hookShell = opts.hookShell;
   const isShellHook = hookName.endsWith('.sh');
 
   if (shellHookOmitsBashRunner({ platform, runtime, isShellHook })) {
@@ -863,6 +865,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
       scriptPath: `${portableBaseDir}/hooks/${hookName}`,
       runtime: opts.runtime || 'generic',
       platform,
+      hookShell,
     });
   }
 
@@ -872,6 +875,7 @@ function buildHookCommand(configDir: string, hookName: string, opts?: BuildHookC
     scriptPath: hooksPath,
     runtime,
     platform,
+    hookShell,
   });
 }
 

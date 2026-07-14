@@ -411,3 +411,45 @@ describe('searchPhaseInDir: direct filesystem search', () => {
     assert.strictEqual(result, null);
   });
 });
+
+// ─── #2237: ambiguous phase-directory collision ─────────────────────────────
+describe('#2237: ambiguous phase-directory collision', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
+
+  test('searchPhaseInDir returns ambiguous_matches when two dirs share phase number', () => {
+    tmpDir = createTempProject('gsd-pl-collision-');
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    // Two unrelated projects with same phase number
+    fs.mkdirSync(path.join(phasesDir, '04-alpha-feature'), { recursive: true });
+    fs.mkdirSync(path.join(phasesDir, '04-beta-feature'), { recursive: true });
+    const result = phaseLocator.searchPhaseInDir(phasesDir, '.planning/phases', '04');
+    assert.ok(result, 'should return a result (not null)');
+    assert.strictEqual(result.found, false, 'ambiguous result must not be "found"');
+    assert.ok(result.ambiguous_matches, 'must have ambiguous_matches');
+    assert.strictEqual(result.ambiguous_matches.length, 2);
+    assert.ok(result.ambiguous_matches.includes('04-alpha-feature'));
+    assert.ok(result.ambiguous_matches.includes('04-beta-feature'));
+  });
+
+  test('findPhaseInternal propagates ambiguous result', () => {
+    tmpDir = createTempProject('gsd-pl-collision-');
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    fs.mkdirSync(path.join(phasesDir, '05-gamma'), { recursive: true });
+    fs.mkdirSync(path.join(phasesDir, '05-delta'), { recursive: true });
+    const result = phaseLocator.findPhaseInternal(tmpDir, '5');
+    assert.ok(result, 'should return a result');
+    assert.strictEqual(result.found, false);
+    assert.ok(result.ambiguous_matches?.length >= 2);
+  });
+
+  test('single match still resolves normally (no false positive)', () => {
+    tmpDir = createTempProject('gsd-pl-collision-');
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    fs.mkdirSync(path.join(phasesDir, '03-only-phase'), { recursive: true });
+    const result = phaseLocator.searchPhaseInDir(phasesDir, '.planning/phases', '03');
+    assert.ok(result);
+    assert.strictEqual(result.found, true);
+    assert.ok(!result.ambiguous_matches, 'single match must not set ambiguous_matches');
+  });
+});

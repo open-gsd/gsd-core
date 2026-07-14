@@ -111,15 +111,23 @@ export function matchTableSchema(columns: string[]): { id: string; label: string
  * reverse of `escapeCell`'s `\`->`\\` then `|`->`\|` order below), so cell
  * values round-trip exactly — including literal backslashes.
  */
-function splitTableRow(line: string): string[] {
+export function splitTableRow(line: string): string[] {
   let stripped = line.trim();
   if (stripped.startsWith('|')) stripped = stripped.slice(1);
   if (stripped.endsWith('|')) stripped = stripped.slice(0, -1);
   return stripped.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\([\\|])/g, '$1'));
 }
 
-/** True when every delimiter cell matches GFM's `:?-{1,}:?` shape (spaces removed). */
-function isDelimiterRow(cells: string[]): boolean {
+/**
+ * True when every delimiter cell matches GFM's `:?-{1,}:?` shape (spaces
+ * removed). Exported (alongside `splitTableRow`) so callers that need their
+ * own ragged-tolerant header/delimiter detection — e.g. state.cts's
+ * `cmdStateRecordMetric` row-append, which must recognize an existing table
+ * without requiring every DATA row to also parse cleanly (#2245 Blocker 2) —
+ * reuse the exact same header/delimiter-shape check `parseMarkdownTable` uses,
+ * instead of re-deriving it and risking divergence.
+ */
+export function isDelimiterRow(cells: string[]): boolean {
   return cells.every((cell) => /^:?-{1,}:?$/.test(cell.replace(/\s+/g, '')));
 }
 
@@ -194,6 +202,419 @@ export function parseMarkdownTable(sectionText: string): Result<MarkdownTable> {
   return { ok: true, value: { columns, rows } };
 }
 
+// ─── updateTableCell (ADR-2143 §7 formatting-preserving cell write) ──────────
+
+/** One line of `text`, with its absolute start offset and original EOL length. */
+interface LineOffset {
+  line: string;
+  start: number;
+}
+
+/**
+ * Split `text` into lines exactly like `.split(/\r?\n/)` (bare `\r` is NOT a
+ * line break, matching `parseMarkdownTable`), tracking each line's absolute
+ * start offset in `text` so cell ranges can be computed relative to the
+ * ORIGINAL string, not the trimmed/relative line.
+ */
+function splitLinesWithOffsets(text: string): LineOffset[] {
+  const result: LineOffset[] = [];
+  let start = 0;
+  const re = /\r\n|\n/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    result.push({ line: text.slice(start, m.index), start });
+    start = m.index + m[0].length;
+  }
+  result.push({ line: text.slice(start), start });
+  return result;
+}
+
+/**
+ * Cell range within one row: `text.slice(start, end)` is the RAW cell text
+ * (untrimmed, still `\`-escaped) between its two delimiting `|` characters.
+ */
+interface CellRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Split one GFM table row LINE into raw cell ranges, absolute to the original
+ * `text` the line was sliced from (`lineStart` = that line's start offset).
+ * Mirrors `splitTableRow`'s trim + strip-leading/trailing-pipe + unescaped-pipe
+ * split EXACTLY, but returns character ranges instead of trimmed values, so a
+ * caller can splice a replacement into the original string byte-for-byte.
+ */
+function splitTableRowRanges(line: string, lineStart: number): CellRange[] {
+  const leftTrim = /^\s*/.exec(line)![0].length;
+  const rightTrim = /\s*$/.exec(line)![0].length;
+  let stripped = line.slice(leftTrim, line.length - rightTrim);
+  let strippedStart = lineStart + leftTrim;
+
+  if (stripped.startsWith('|')) {
+    stripped = stripped.slice(1);
+    strippedStart += 1;
+  }
+  if (stripped.endsWith('|')) {
+    stripped = stripped.slice(0, -1);
+  }
+
+  const cells: CellRange[] = [];
+  const re = /(?<!\\)\|/g;
+  let cellStartRel = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stripped)) !== null) {
+    cells.push({ start: strippedStart + cellStartRel, end: strippedStart + m.index });
+    cellStartRel = m.index + 1;
+  }
+  cells.push({ start: strippedStart + cellStartRel, end: strippedStart + stripped.length });
+  return cells;
+}
+
+/** Unescape one raw (still-`\`-escaped) cell/column-name span exactly like
+ * `splitTableRow`: trim, then reverse `\\` -> `\` and `\|` -> `|`. */
+function unescapeCellText(raw: string): string {
+  return raw.trim().replace(/\\([\\|])/g, '$1');
+}
+
+/**
+ * Surgically edit ONE table cell while preserving the table's exact byte
+ * formatting (ADR-2143 §7). Locates the first GFM table's header + delimiter
+ * row in `tableText` (own header/delimiter detection — deliberately does NOT
+ * gate on `parseMarkdownTable(tableText).ok`), finds the first DATA row where
+ * `match(row, index)` is true, and replaces ONLY that row's `column` cell's
+ * raw inner text (the span between its two delimiting `|` characters) — every
+ * other byte of `tableText` (other cells, padding, alignment, EOL style) is
+ * left BYTE-IDENTICAL. This is deliberately NOT a parse-then-render: a
+ * render pass would reformat padding/alignment/dates that mutation sites
+ * (e.g. `status.padEnd(11)`) depend on staying pinned.
+ *
+ * Ragged-tolerant by design (#2245 review Fix 2): each data row's
+ * `{colName:cellText}` record is built ONLY from the columns physically
+ * present in THAT row — a short row simply omits its trailing column names;
+ * an over-long row's extra trailing cells are ignored — so `match` is called
+ * with whatever partial record a ragged row yields. A single sibling row
+ * whose cell count doesn't match the header must never silently no-op the
+ * whole write (the prior `parseMarkdownTable(tableText).ok` gate failed the
+ * ENTIRE table — including an otherwise-well-formed target row — the moment
+ * ANY other row in the same table was ragged). A row that matches on content
+ * but is too short to physically contain `column` has no cell to splice
+ * into, so it cannot be selected; the scan continues past it.
+ *
+ * `newValue` is spliced in VERBATIM as the new raw cell span — it is the
+ * caller's responsibility to supply the fully-formatted text (including any
+ * leading/trailing padding needed to reproduce the table's existing column
+ * alignment, and to escape a literal `|` or `\` the value might contain via
+ * the same convention `splitTableRow`/`escapeCell` use elsewhere in this
+ * module). When `newValue` is a function, it receives the CURRENT (trimmed,
+ * unescaped) cell value — the same value that appears in `match`'s `row`
+ * argument — and must return the full literal replacement text. Returning
+ * the current value unchanged is a supported no-op-probe pattern for callers
+ * that need to know whether (and to what current value) a row matched
+ * without necessarily writing a new value.
+ *
+ * Returns `{ok:false, reason}` only for a genuinely absent/malformed table
+ * (no header line, or no valid delimiter row immediately below it), an
+ * unknown `column`, or zero rows satisfying `match` while physically
+ * containing `column` — never for a ragged sibling row.
+ */
+export function updateTableCell(
+  tableText: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+  column: string,
+  newValue: string | ((current: string) => string),
+): Result<string> {
+  const lines = splitLinesWithOffsets(tableText);
+
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return { ok: false, reason: 'no table found' };
+  }
+
+  const delimiterLine = lines[headerIdx + 1]?.line;
+  if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+
+  const headerRanges = splitTableRowRanges(lines[headerIdx].line, lines[headerIdx].start);
+  const columns = headerRanges.map((r) => unescapeCellText(tableText.slice(r.start, r.end)));
+
+  const delimiterCells = splitTableRow(delimiterLine);
+  if (!isDelimiterRow(delimiterCells)) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+  if (delimiterCells.length !== columns.length) {
+    return { ok: false, reason: 'delimiter/header column count mismatch' };
+  }
+
+  if (!columns.includes(column)) {
+    return { ok: false, reason: `unknown column: ${column}` };
+  }
+  const targetColIdx = columns.indexOf(column);
+
+  let selectedRange: CellRange | undefined;
+  let dataRowIndex = 0;
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (!trimmed.startsWith('|')) break;
+
+    const cellRanges = splitTableRowRanges(lines[i].line, lines[i].start);
+    const record: Record<string, string> = {};
+    const presentCount = Math.min(cellRanges.length, columns.length);
+    for (let c = 0; c < presentCount; c++) {
+      record[columns[c]] = unescapeCellText(tableText.slice(cellRanges[c].start, cellRanges[c].end));
+    }
+
+    if (targetColIdx < cellRanges.length && match(record, dataRowIndex)) {
+      selectedRange = cellRanges[targetColIdx];
+      break;
+    }
+    dataRowIndex += 1;
+  }
+
+  if (!selectedRange) {
+    return { ok: false, reason: 'no matching row' };
+  }
+
+  const currentValue = unescapeCellText(tableText.slice(selectedRange.start, selectedRange.end));
+  const replacement = typeof newValue === 'function' ? newValue(currentValue) : newValue;
+
+  // True no-op guard: a function `newValue` that returns `current` UNCHANGED
+  // (the documented no-op-probe pattern) must leave `tableText` genuinely
+  // byte-identical, padding included. `current` is already trimmed/unescaped,
+  // so naively splicing it back in would strip the raw cell's original
+  // leading/trailing padding — this returns the ORIGINAL text untouched
+  // instead whenever the callback's answer is "no change".
+  if (typeof newValue === 'function' && replacement === currentValue) {
+    return { ok: true, value: tableText };
+  }
+
+  return {
+    ok: true,
+    value: tableText.slice(0, selectedRange.start) + replacement + tableText.slice(selectedRange.end),
+  };
+}
+
+// ─── deleteTableRow (ADR-2143 §7 row-removal sibling of updateTableCell) ─────
+
+/**
+ * Surgically delete ONE whole table row while preserving every other byte of
+ * `tableText` (ADR-2143 §7, row-removal sibling of `updateTableCell`). Locates
+ * the first GFM table's header + delimiter row in `tableText` using the exact
+ * same self-contained, ragged-tolerant scan `updateTableCell` uses (own
+ * header/delimiter detection — does NOT gate on `parseMarkdownTable(tableText).ok`),
+ * finds the FIRST data row where `match(row, index)` is true, and splices out
+ * that row's entire LINE — including its trailing newline (`\r\n` or `\n`,
+ * whichever terminates it) — from `tableText`. Every other byte (header,
+ * delimiter, other rows, surrounding prose before/after the table, EOL style)
+ * is left BYTE-IDENTICAL.
+ *
+ * Ragged-tolerant by design, mirroring `updateTableCell` (#2245 review Fix 2):
+ * each data row's `{colName:cellText}` record is built ONLY from the columns
+ * physically present in THAT row — a sibling row whose cell count doesn't
+ * match the header must never abort the whole scan; `match` is simply called
+ * with whatever partial record a ragged row yields.
+ *
+ * Returns `{ok:false, reason}` for a genuinely absent/malformed table (no
+ * header line, or no valid delimiter row immediately below it) or zero rows
+ * satisfying `match` — never for a ragged sibling row.
+ */
+export function deleteTableRow(
+  tableText: string,
+  match: (row: Record<string, string>, index: number) => boolean,
+): Result<string> {
+  const lines = splitLinesWithOffsets(tableText);
+
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return { ok: false, reason: 'no table found' };
+  }
+
+  const delimiterLine = lines[headerIdx + 1]?.line;
+  if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+
+  const headerRanges = splitTableRowRanges(lines[headerIdx].line, lines[headerIdx].start);
+  const columns = headerRanges.map((r) => unescapeCellText(tableText.slice(r.start, r.end)));
+
+  const delimiterCells = splitTableRow(delimiterLine);
+  if (!isDelimiterRow(delimiterCells)) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+  if (delimiterCells.length !== columns.length) {
+    return { ok: false, reason: 'delimiter/header column count mismatch' };
+  }
+
+  let selectedLineIdx = -1;
+  let dataRowIndex = 0;
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (!trimmed.startsWith('|')) break;
+
+    const cellRanges = splitTableRowRanges(lines[i].line, lines[i].start);
+    const record: Record<string, string> = {};
+    const presentCount = Math.min(cellRanges.length, columns.length);
+    for (let c = 0; c < presentCount; c++) {
+      record[columns[c]] = unescapeCellText(tableText.slice(cellRanges[c].start, cellRanges[c].end));
+    }
+
+    if (match(record, dataRowIndex)) {
+      selectedLineIdx = i;
+      break;
+    }
+    dataRowIndex += 1;
+  }
+
+  if (selectedLineIdx === -1) {
+    return { ok: false, reason: 'no matching row' };
+  }
+
+  // Splice out the whole LINE including its trailing EOL: the next line's
+  // recorded `start` offset is already positioned right after whatever EOL
+  // (`\r\n` or `\n`) terminated the selected line (see `splitLinesWithOffsets`
+  // above) — when the selected row is the LAST line in `tableText` (no
+  // trailing EOL to preserve), fall back to the end of the string.
+  let rowStart = lines[selectedLineIdx].start;
+  let rowEnd: number;
+  if (selectedLineIdx + 1 < lines.length) {
+    rowEnd = lines[selectedLineIdx + 1].start;
+  } else {
+    // The selected row is the LAST line and has no trailing EOL: deleting from
+    // its `start` to end-of-string would strand the EOL that terminated the
+    // PREVIOUS line as a dangling newline. Back `rowStart` up over that
+    // preceding `\n` (and its `\r`, if any) so the table ends cleanly after the
+    // new last row.
+    rowEnd = tableText.length;
+    if (rowStart > 0 && tableText[rowStart - 1] === '\n') {
+      rowStart -= 1;
+      if (rowStart > 0 && tableText[rowStart - 1] === '\r') rowStart -= 1;
+    }
+  }
+
+  return {
+    ok: true,
+    value: tableText.slice(0, rowStart) + tableText.slice(rowEnd),
+  };
+}
+
+// ─── insertTableRow (ADR-2143 §7 row-insertion sibling of updateTableCell) ───
+
+/**
+ * Insert ONE new row into a GFM table while preserving every other byte of
+ * `tableText` (ADR-2143 §7, row-insertion sibling of `updateTableCell` /
+ * `deleteTableRow`). Locates the first table's header + delimiter row using
+ * the exact same self-contained, ragged-tolerant scan the other two use (own
+ * header/delimiter detection — does NOT gate on `parseMarkdownTable(tableText).ok`),
+ * builds the new row's cells in the table's ACTUAL header order — each column
+ * name is passed through `valueFor(column)`; a column for which `valueFor`
+ * returns `undefined` gets `fallback` (default `'-'`) — and splices it in
+ * immediately after the table's LAST existing data row (or immediately after
+ * the delimiter row when the table has zero data rows).
+ *
+ * Name-addressed and header-order-agnostic by construction: unlike a
+ * hardcoded positional literal (`| ${a} | ${b} | - | - |`), this never
+ * silently no-ops or mis-maps a value onto the wrong column when the header
+ * is reordered or a superset of the columns `valueFor` knows about (#2245
+ * audit sibling finding — the bug this helper replaces).
+ *
+ * EOL-preserving: the new row reuses whatever exact EOL bytes (`\r\n` or
+ * `\n`) already terminate the line it's inserted after, so a CRLF document
+ * stays CRLF and an LF document stays LF — never guessed or hardcoded. When
+ * the insertion point is at the very end of `tableText` with no following
+ * line (the table's last row has no trailing EOL of its own), the existing
+ * last row is terminated with the header/delimiter boundary's own EOL (so it
+ * gains a terminator, since it is no longer the last line) and the new row
+ * becomes the new EOL-less tail — mirroring `tableText`'s own convention of
+ * not forcing a trailing newline that wasn't already there.
+ *
+ * Escaping (F4 #2245 review): unlike `updateTableCell`, whose `newValue` is
+ * spliced in VERBATIM (caller-must-escape — see its doc comment above), every
+ * value returned by `valueFor` (and `fallback`) IS escaped internally here via
+ * `escapeCell` before being joined into the new row, exactly like
+ * `appendQuickTaskRow` below — a caller-supplied name containing a literal
+ * `|` or `\` cannot silently split the new row into extra columns. Callers do
+ * NOT need to pre-escape their values.
+ *
+ * Returns `{ok:false, reason}` only for a genuinely absent/malformed table
+ * (no header line, or no valid delimiter row immediately below it) — never
+ * for a ragged data row (mirrors `updateTableCell`/`deleteTableRow`).
+ */
+export function insertTableRow(
+  tableText: string,
+  valueFor: (column: string) => string | undefined,
+  fallback = '-',
+): Result<string> {
+  const lines = splitLinesWithOffsets(tableText);
+
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].line.trim();
+    if (trimmed.startsWith('|') && trimmed.indexOf('|', 1) !== -1) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) {
+    return { ok: false, reason: 'no table found' };
+  }
+
+  const delimiterLine = lines[headerIdx + 1]?.line;
+  if (delimiterLine === undefined || !delimiterLine.trim().startsWith('|')) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+  const delimiterCells = splitTableRow(delimiterLine);
+  if (!isDelimiterRow(delimiterCells)) {
+    return { ok: false, reason: 'missing delimiter row' };
+  }
+
+  const headerRanges = splitTableRowRanges(lines[headerIdx].line, lines[headerIdx].start);
+  const columns = headerRanges.map((r) => unescapeCellText(tableText.slice(r.start, r.end)));
+
+  // Header -> delimiter EOL, reused as the fallback terminator for the "insert
+  // point is at the absolute end of tableText" edge case below.
+  const headerToDelimiterEol = tableText.slice(
+    lines[headerIdx].start + lines[headerIdx].line.length,
+    lines[headerIdx + 1].start,
+  ) || '\n';
+
+  let lastLineIdx = headerIdx + 1; // delimiter row, when the table has zero data rows
+  for (let i = headerIdx + 2; i < lines.length; i++) {
+    if (!lines[i].line.trim().startsWith('|')) break;
+    lastLineIdx = i;
+  }
+
+  const newRow = `| ${columns.map((col) => escapeCell(valueFor(col) ?? fallback)).join(' | ')} |`;
+
+  if (lastLineIdx + 1 < lines.length) {
+    // A following line exists — insert the new row, reusing the EXACT EOL
+    // that already terminates the current last table line, so every other
+    // byte (including everything after the table) stays untouched.
+    const insertAt = lines[lastLineIdx + 1].start;
+    const eol = tableText.slice(lines[lastLineIdx].start + lines[lastLineIdx].line.length, insertAt);
+    return { ok: true, value: tableText.slice(0, insertAt) + newRow + eol + tableText.slice(insertAt) };
+  }
+
+  // The table's last row is also the last line of `tableText` (no trailing
+  // EOL). Terminate it now — it needs one, since it is no longer last — and
+  // append the new row as the new EOL-less tail.
+  return { ok: true, value: tableText + headerToDelimiterEol + newRow };
+}
+
 /**
  * Find the first table in `text` whose header matches `TABLE_SCHEMAS[schemaId]`,
  * scanning the WHOLE document (not just a named section). Returns `null` when
@@ -266,8 +687,18 @@ export function findTableWithColumns(text: string, required: string[]): Markdown
  * `description`) would otherwise corrupt the table (extra column / a fake
  * extra row) and get rejected by the now-fail-loud `parseMarkdownTable` as a
  * ragged row.
+ *
+ * Exported (F3/#2245 review) so callers of `updateTableCell` that build a
+ * replacement value by transforming the CURRENT (already-unescaped) cell
+ * text — e.g. phase.cts's Progress-ordinal renumber, which decrements the
+ * leading digit of a `Phase` cell like `3. Parser | Lexer` and splices the
+ * rest of the cell text back verbatim — can re-escape that value before
+ * returning it from the `newValue` callback, honoring `updateTableCell`'s
+ * caller-must-re-escape contract (see its doc comment above) instead of
+ * spliceing a raw, unescaped `|` back into the table and silently splitting
+ * the cell.
  */
-function escapeCell(value: string): string {
+export function escapeCell(value: string): string {
   return String(value)
     .replace(/\r?\n+/g, ' ')
     .replace(/\\/g, '\\\\') // escape the escape char FIRST (CodeQL js/incomplete-sanitization)

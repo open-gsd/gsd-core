@@ -22,6 +22,7 @@ const { findPhaseInternal } = phaseLocatorMod;
 import roadmapParserModule = require('./roadmap-parser.cjs');
 const { stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone } = roadmapParserModule;
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { updateTableCell } from './markdown-table.cjs';
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -365,24 +366,28 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     let hasContext = false;
     let hasResearch = false;
 
-    try {
-      const dirMatch = _phaseDirNames.find(d => phaseTokenMatches(d, normalized));
+    // DEAD catch removed (#2245 audit): _phaseDirNames.find(...) is a pure
+    // array lookup on an already-resolved string array, and
+    // countPhasePlansAndSummaries is itself fully defensive (its own
+    // readdirSync is self-guarded, and it delegates to scanPhasePlans, which
+    // never throws) — nothing in this block can throw, so the try/catch could
+    // never be triggered.
+    const dirMatch = _phaseDirNames.find(d => phaseTokenMatches(d, normalized));
 
-      if (dirMatch) {
-        const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch));
-        planCount = counts.planCount;
-        summaryCount = counts.summaryCount;
-        hasContext = counts.hasContext;
-        hasResearch = counts.hasResearch;
+    if (dirMatch) {
+      const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch));
+      planCount = counts.planCount;
+      summaryCount = counts.summaryCount;
+      hasContext = counts.hasContext;
+      hasResearch = counts.hasResearch;
 
-        if (summaryCount >= planCount && planCount > 0) diskStatus = 'complete';
-        else if (summaryCount > 0) diskStatus = 'partial';
-        else if (planCount > 0) diskStatus = 'planned';
-        else if (hasResearch) diskStatus = 'researched';
-        else if (hasContext) diskStatus = 'discussed';
-        else diskStatus = 'empty';
-      }
-    } catch { /* intentionally empty */ }
+      if (summaryCount >= planCount && planCount > 0) diskStatus = 'complete';
+      else if (summaryCount > 0) diskStatus = 'partial';
+      else if (planCount > 0) diskStatus = 'planned';
+      else if (hasResearch) diskStatus = 'researched';
+      else if (hasContext) diskStatus = 'discussed';
+      else diskStatus = 'empty';
+    }
 
     // Check ROADMAP checkbox status.
     // #3537: padding-tolerant fragment — the heading discovered above may use
@@ -466,6 +471,43 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
 
 // ─── cmdRoadmapUpdatePlanProgress ─────────────────────────────────────────────
 
+/**
+ * Scope a ROADMAP.md content string down to its "Progress table" writable
+ * slice, run `edit` against just that slice, then splice the result back into
+ * the original content (ADR-2143 §7). Layered scoping:
+ *   1. Milestone scope — everything after the LAST `</details>` close tag
+ *      (mirrors `replaceInCurrentMilestone`), so a same-numbered phase row in
+ *      an archived milestone is never touched.
+ *   2. Heading scope — within that milestone slice, the `## Progress` heading
+ *      section (up to the next `#`/`##` heading) when present, else the whole
+ *      milestone slice (mirrors phase-lifecycle.cjs's `deriveProgressFromRoadmap`
+ *      read-side scoping, #2012 decoy avoidance — a differently-headed table
+ *      sharing the same column names must not be picked up instead).
+ * `edit` always returns a string and never fails — a no-op edit (table/row not
+ * found within the scoped slice) simply returns its input unchanged, mirroring
+ * the prior regex `.replace()`'s no-match-is-a-no-op semantics.
+ */
+function editProgressTableSlice(content: string, edit: (scoped: string) => string): string {
+  const lastDetailsClose = content.lastIndexOf('</details>');
+  const milestoneOffset = lastDetailsClose === -1 ? 0 : lastDetailsClose + '</details>'.length;
+  const before = content.slice(0, milestoneOffset);
+  const milestoneSlice = content.slice(milestoneOffset);
+
+  const progressMatch = milestoneSlice.match(/^##[ \t]+Progress\b/im);
+  if (!progressMatch || progressMatch.index === undefined) {
+    return before + edit(milestoneSlice);
+  }
+
+  const headingOffset = progressMatch.index;
+  const beforeHeading = milestoneSlice.slice(0, headingOffset);
+  const fromHeading = milestoneSlice.slice(headingOffset);
+  const nextHeading = fromHeading.search(/\n#{1,2}[ \t]/);
+  const scoped = nextHeading >= 0 ? fromHeading.slice(0, nextHeading) : fromHeading;
+  const after = nextHeading >= 0 ? fromHeading.slice(nextHeading) : '';
+
+  return before + beforeHeading + edit(scoped) + after;
+}
+
 function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | undefined, raw: boolean): void {
   if (!phaseNum) {
     error('phase number required for roadmap update-plan-progress');
@@ -509,34 +551,48 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     let roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
     const phasePattern = phaseMarkdownRegexSource(phaseNum);
 
-    // Progress table row: update Plans/Status/Date columns (handles 4 or 5 column tables)
-    const tableRowPattern = new RegExp(
-      `^(\\|\\s*${phasePattern}\\.?\\s[^|]*(?:\\|[^\\n]*))$`,
-      'im'
-    );
-    roadmapContent = roadmapContent.replace(tableRowPattern, (fullRow) => {
-      const cells = fullRow.split('|').slice(1, -1); // drop leading/trailing empty from split
-      const dateShape = /^\d{4}-\d{2}-\d{2}$/;
-      if (cells.length === 5) {
-        // 5-col: Phase | Milestone | Plans | Status | Completed
-        cells[2] = ` ${summaryCount}/${planCount} `;
-        cells[3] = ` ${status.padEnd(11)}`;
-        // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
-        const existingDate5 = cells[4].trim();
-        cells[4] = isComplete
-          ? (dateShape.test(existingDate5) ? cells[4] : ` ${today} `)
-          : '  ';
-      } else if (cells.length === 4) {
-        // 4-col: Phase | Plans | Status | Completed
-        cells[1] = ` ${summaryCount}/${planCount} `;
-        cells[2] = ` ${status.padEnd(11)}`;
-        // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage)
-        const existingDate4 = cells[3].trim();
-        cells[3] = isComplete
-          ? (dateShape.test(existingDate4) ? cells[3] : ` ${today} `)
-          : '  ';
-      }
-      return '|' + cells.join('|') + '|';
+    // Progress table row: update Plans Complete/Status/Completed columns BY
+    // COLUMN NAME (handles 4- or 5-column RoadmapProgress tables regardless of
+    // Milestone-column presence) via the markdown-table seam (ADR-2143 §7) —
+    // supersedes the prior ordinal cells[]-index regex. Scoped to the current
+    // milestone's `## Progress` table (editProgressTableSlice above).
+    // #2245 Blocker 4: optional dot must be followed by whitespace-or-end, not
+    // dot-OR-whitespace-OR-end as alternatives — the prior form let a bare "."
+    // satisfy the whole lookahead, so completing phase "2" over-matched a
+    // decimal sub-phase row like "2.5 Extra". Matches "2", "2.", "2 Alpha";
+    // rejects "2.5 Extra" (replicates OLD's `\.?\s` intent on the now-TRIMMED
+    // cell value, where end-of-string is the trimmed equivalent of "no more
+    // characters after the optional dot").
+    const phaseCellRe = new RegExp(`^${phasePattern}\\.?(?:\\s|$)`, 'i');
+    const rowMatch = (row: Record<string, string>): boolean => phaseCellRe.test((row['Phase'] ?? '').trim());
+    const dateShape = /^\d{4}-\d{2}-\d{2}$/;
+
+    roadmapContent = editProgressTableSlice(roadmapContent, (scoped) => {
+      let text = scoped;
+
+      const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
+      if (plansResult.ok) text = plansResult.value;
+
+      const statusResult = updateTableCell(text, rowMatch, 'Status', ` ${status.padEnd(11)}`);
+      if (statusResult.ok) text = statusResult.value;
+
+      // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage).
+      // Ragged-tolerant (#2245 Blocker 2): probe the CURRENT Completed cell via
+      // a no-op updateTableCell write (its own tolerant row scan) rather than
+      // findTableWithColumns (which requires the WHOLE table to parse — a
+      // ragged SIBLING row elsewhere used to silently no-op this row's date
+      // stamp/clear too). The decision (write vs no-op) is folded into the
+      // newValue callback so a single updateTableCell call both reads and
+      // writes.
+      const completedResult = updateTableCell(text, rowMatch, 'Completed', (current) => {
+        if (isComplete) {
+          return dateShape.test(current.trim()) ? current : ` ${today} `;
+        }
+        return '  ';
+      });
+      if (completedResult.ok) text = completedResult.value;
+
+      return text;
     });
 
     // Update plan count in phase detail section.
