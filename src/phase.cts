@@ -109,8 +109,16 @@ function extractCanonicalPlanId(filename: string): string {
   // or a single-digit-plus-letter id ("3A"); a *bare* single digit is a slug word,
   // so "46-6-rs-…" is not paired into a "46-6" id while "3A-01" stays intact.
   const tokenRe = /^(?:\d{2,}[A-Z]?|\d[A-Z])(?:\.\d+)*$/i;
+  // #2232: the PAIRED plan component is a zero-padded continuation segment
+  // (exactly 2 digits), so a ≥3-digit slug word (a year) is not paired into a
+  // bogus "14-2026" id. The leading phase component keeps tokenRe's unbounded
+  // \d{2,} — phase numbers ≥100 are legitimate; only continuations are capped.
+  const planTokenRe = new RegExp(
+    `^(?:${phaseIdMod.PHASE_CONTINUATION_SEGMENT_SOURCE}[A-Z]?|\\d[A-Z])(?:\\.\\d+)*$`,
+    'i',
+  );
   const phaseIdx = parts.findIndex((p) => tokenRe.test(p));
-  if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && tokenRe.test(parts[phaseIdx + 1])) {
+  if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && planTokenRe.test(parts[phaseIdx + 1])) {
     return `${parts[phaseIdx]}-${parts[phaseIdx + 1]}`;
   }
   return base;

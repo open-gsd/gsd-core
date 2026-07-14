@@ -53,6 +53,25 @@ const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 // introduced outside this module without a `// phase-id-owner:` justification.
 const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 
+// #2232: the canonical CONTINUATION-segment grammar — a dash-separated segment
+// that extends a phase token (a zero-padded sub-phase or plan number, e.g. the
+// "01" in "02-01-setup"). getPhaseDirFromPhaseId writes these zero-padded to
+// exactly 2 digits, so the digit RUN of a genuine continuation is exactly 2:
+// #2043's `\d{2,}` (2-or-more) over-collected a slug word that merely leads
+// with ≥2 digits (a year: "14-2026-photos-…" yielded token "14-2026", so every
+// phase-locating verb reported the phase as missing). The `(?!\d)` guard caps
+// the run at 2 without anchoring what may follow, so call sites keep their own
+// trailing grammar (letter suffixes, dotted sub-phases, segment boundaries).
+// POLICY (locked by boundary tests): sub-phase/plan numbers ≥100 are out of the
+// dir-token grammar — the LEADING phase number stays unbounded (`\d+`), only
+// continuation segments are width-capped. Shared from here so the five #2043
+// call sites cannot drift independently (see scripts/lint-phase-id-drift.cjs).
+const PHASE_CONTINUATION_SEGMENT_SOURCE = '\\d{2}(?!\\d)';
+const PHASE_CONTINUATION_SEGMENT_PREFIX_RE = new RegExp(`^${PHASE_CONTINUATION_SEGMENT_SOURCE}`);
+function isPhaseContinuationSegment(seg: string): boolean {
+  return PHASE_CONTINUATION_SEGMENT_PREFIX_RE.test(seg);
+}
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -217,9 +236,11 @@ function extractPhaseToken(dirName: string): string {
 
   const segments = rest.split('-');
   const tokenSegments: string[] = [];
-  // #2043: distinguish a real (zero-padded, ≥2-digit) phase/sub-phase segment
-  // from a single-digit slug word. A pure-numeric leading segment ("46") only
-  // continues with ≥2-digit segments, so "46-6-rs-…" yields "46" (the "6" is the
+  // #2043: distinguish a real (zero-padded) phase/sub-phase segment from a
+  // single-digit slug word. A pure-numeric leading segment ("46") only
+  // continues with exactly-2-digit segments (#2232: a ≥3-digit run is a slug
+  // word such as a year — "14-2026-photos-…" yields "14", not "14-2026"), so
+  // "46-6-rs-…" yields "46" (the "6" is the
   // slug's first word), not "46-6". Milestone-prefixed ids like "M1-2" reach here
   // with "M1-" already stripped as a project-code prefix (see
   // PROJECT_CODE_PREFIX_CAPTURE_RE_I), so "2" is the leading segment and the same
@@ -239,7 +260,7 @@ function extractPhaseToken(dirName: string): string {
       } else {
         break;
       }
-    } else if (/^\d{2,}/.test(seg) || (firstLetterPrefixed && /^\d/.test(seg))) {
+    } else if (isPhaseContinuationSegment(seg) || (firstLetterPrefixed && /^\d/.test(seg))) {
       tokenSegments.push(seg);
     } else {
       break;
@@ -363,6 +384,8 @@ export = {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
+  PHASE_CONTINUATION_SEGMENT_SOURCE,
+  isPhaseContinuationSegment,
   stripProjectCodePrefix,
   normalizePhaseName,
   getMilestoneFromPhaseId,

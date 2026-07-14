@@ -575,12 +575,17 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
   }
 
   const roadmapUsesHyphenedIds = [...normalized].some(n => n.includes('-'));
-  // #2043: milestone-prefixed sub-phase components must be zero-padded (≥2 digits)
-  // — "-\d{2,}" instead of "-0*\d+" — so a single-digit slug word after the phase
+  // #2043: milestone-prefixed sub-phase components must be zero-padded — so a
+  // single-digit slug word after the phase
   // number (e.g. dir "46-6-rs-…") captures "46" and is not silently excluded from
-  // the milestone as a bogus "46-6" id.
+  // the milestone as a bogus "46-6" id. #2232: the continuation width is exactly 2
+  // (PHASE_CONTINUATION_SEGMENT_SOURCE), so a year-leading slug word (dir
+  // "14-2026-photos-…") captures "14" and is not excluded as a bogus "14-2026" id.
+  // Built via new RegExp (no /i — the [A-Za-z] letter class does real case handling).
   const numericRe = roadmapUsesHyphenedIds
-    ? /^0*(\d+(?:-\d{2,})*[A-Za-z]?(?:\.\d+)*)/
+    ? new RegExp(
+        `^0*(\\d+(?:-${phaseIdModule.PHASE_CONTINUATION_SEGMENT_SOURCE})*[A-Za-z]?(?:\\.\\d+)*)`,
+      )
     // phase-id-owner: the [A-Za-z] letter class does real case handling here — this regex carries NO /i flag; kept literal, not source-byte-equal to the canonical PHASE_NUMBER_TOKEN_SOURCE.
     : /^0*(\d+[A-Za-z]?(?:\.\d+)*)/;
 

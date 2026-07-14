@@ -239,6 +239,26 @@ describe('extractPhaseToken', () => {
     // Single-digit + letter-suffix phase id ("1A") is a real token, not a slug word.
     assert.strictEqual(phaseId.extractPhaseToken('1A-brain'), '1A');
   });
+
+  test('rejects a ≥3-digit slug word after a phase number (#2232)', () => {
+    // Roadmap phase name "2026 Photos & Performance" slugifies to
+    // "2026-photos-performance"; dir "14-2026-photos-performance" must yield
+    // token "14", not "14-2026" — the year is the slug's first word, not a
+    // sub-phase segment (the residual case #2043 scoped out).
+    assert.strictEqual(phaseId.extractPhaseToken('14-2026-photos-performance'), '14');
+    assert.ok(
+      phaseId.phaseTokenMatches('14-2026-photos-performance', phaseId.normalizePhaseName('14')),
+      'phase 14 must match its own dir despite the year-leading slug',
+    );
+    // Boundary by continuation-segment digit width (the locked policy: a
+    // continuation is EXACTLY the 2-digit zero-padded form the write side emits):
+    assert.strictEqual(phaseId.extractPhaseToken('46-6-rs'), '46'); // 1-digit: slug word (#2043)
+    assert.strictEqual(phaseId.extractPhaseToken('01-02-name'), '01-02'); // 2-digit: sub-phase
+    assert.strictEqual(phaseId.extractPhaseToken('05-100-slug'), '05'); // 3-digit: slug word (policy)
+    assert.strictEqual(phaseId.extractPhaseToken('14-2026-photos'), '14'); // 4-digit: year slug word
+    // Milestone-prefixed variant collides the same way.
+    assert.strictEqual(phaseId.extractPhaseToken('M1-14-2026-photos'), 'M1-14');
+  });
 });
 
 // ─── phaseTokenMatches ────────────────────────────────────────────────────────
