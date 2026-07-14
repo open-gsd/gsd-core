@@ -541,10 +541,15 @@ function completePhaseBody() {
 
 // A roadmap with a progress table: 3 of 5 phases Complete → deriveProgressFromRoadmap
 // returns { completedPhases: 3, totalPhases: 5 }.
+// ADR-2143 (epic #2143): deriveProgressFromRoadmap now resolves this table via the
+// markdown-table schema registry (TABLE_SCHEMAS.RoadmapProgress), which requires the
+// exact canonical header (gsd-core/templates/roadmap.md); the 2nd column is named
+// "Plans Complete" to match (its cell values here are unused free text, not M/N
+// counts — no test in this file asserts totalPlans).
 const ROADMAP_3_OF_5 = [
   '## Roadmap',
   '',
-  '| Phase | Title | Status | Completed |',
+  '| Phase | Plans Complete | Status | Completed |',
   '| --- | --- | --- | --- |',
   '| 1 | A | Complete | 2026-01-01 |',
   '| 2 | B | Complete | 2026-02-01 |',

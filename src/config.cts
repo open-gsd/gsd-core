@@ -774,6 +774,13 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
   const VALID_STATE_FORMATS = ['full', 'compact'];
   if (kp === 'statusline.state_format') assertEnumValue(parsedValue, val, VALID_STATE_FORMATS, 'statusline.state_format');
 
+  // statusline.show_git — boolean only
+  if (kp === 'statusline.show_git') {
+    if (typeof parsedValue !== 'boolean') {
+      error(`Invalid statusline.show_git '${val}'. Must be a boolean (true or false).`);
+    }
+  }
+
   // Fallow scope + profile enum validation (#3424)
   const VALID_FALLOW_SCOPES = ['phase', 'repo'];
   if (kp === 'code_quality.fallow.scope') assertEnumValue(parsedValue, val, VALID_FALLOW_SCOPES, 'code_quality.fallow.scope');

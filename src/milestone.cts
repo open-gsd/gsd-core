@@ -18,6 +18,8 @@ import { platformWriteSync, platformEnsureDir, execGit, retryRenameSync } from '
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
+import { writeSetComplete } from './write-set.cjs';
+import type { WriteSet } from './write-set.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
@@ -79,6 +81,18 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   // a missing row only counts as drift when a table actually exists.
   const hasTable = /^\|\s*Requirement\s*\|/im.test(reqContent);
 
+  // ADR-2143 §6 per-surface write-set, tracked PER requirement ID: a
+  // multi-ID batch must not OR one ID's surface outcome into another's —
+  // that is the exact #2140 class one level up (an ID whose traceability
+  // row is absent/unmatched must not have its partial write masked by a
+  // different ID in the same invocation that fully reconciled). Reported
+  // additively as `write_set` below — it does not change the existing
+  // marked_complete/already_complete/not_found/table_unmatched/updated
+  // computation, which stays byte-for-behaviour identical (#2140's tactical
+  // fix already surfaces the checkbox-only-partial-write case via
+  // table_unmatched; this only adds the structured ADR-2143 shape on top).
+  const writeSet: WriteSet = [];
+
   for (const reqId of reqIds) {
     const reqEscaped = escapeRegex(reqId);
 
@@ -95,6 +109,16 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     const afterTable = reqContent.replace(tablePattern, '$1 Complete $2');
     const tableHit = afterTable !== reqContent;
     if (tableHit) reqContent = afterTable;
+
+    // ADR-2143 §6 per-ID write-set entries: this ID's checkbox surface is
+    // always tracked; the traceability surface is tracked only when the file
+    // has a traceability table at all (same `hasTable` gate the existing
+    // required-surface logic below uses) — omitted entirely, not a false
+    // `applied:false`, when no table is required of this file.
+    writeSet.push({ requirement: reqId, surface: 'checkbox', applied: checkboxHit });
+    if (hasTable) {
+      writeSet.push({ requirement: reqId, surface: 'traceability', applied: tableHit });
+    }
 
     // Coverage of the traceability surface for this ID (computed after any flip).
     // hasRow keys on the ID + a second cell (`| ID | <phase> |`) so a bare mention
@@ -129,6 +153,17 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
     platformWriteSync(reqPath, reqContent);
   }
 
+  // ADR-2143 §6: `writeSet` above already carries one WriteOutcome per
+  // (requirement, surface) this invocation could have written to — per ID,
+  // not ORed across the batch. `write_set` and `write_set_complete` are
+  // additive: they do not replace or gate `updated` / `marked_complete` /
+  // `already_complete` / `not_found` / `table_unmatched`, which remain
+  // computed exactly as before (see #2140 note above — that fix already
+  // surfaces a checkbox-only partial write via `table_unmatched`;
+  // `write_set_complete` is a structured, ADR-2143-shaped read of the SAME
+  // per-surface, per-ID facts, `false` if ANY id's ANY required surface did
+  // not apply, since `writeSetComplete` requires EVERY entry to have
+  // applied, never an OR across surfaces OR across IDs).
   output(
     {
       updated: updated.length > 0,
@@ -137,6 +172,8 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
       not_found: notFound,
       table_unmatched: tableUnmatched,
       total: reqIds.length,
+      write_set: writeSet,
+      write_set_complete: writeSetComplete(writeSet),
     },
     raw,
     `${updated.length}/${reqIds.length} requirements marked complete`,

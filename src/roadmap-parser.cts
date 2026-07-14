@@ -13,6 +13,7 @@
  *   - ./phase-id.cjs        (escapeRegex, phaseMarkdownRegexSource)
  *   - ./planning-workspace.cjs (planningDir)
  *   - ./shell-command-projection.cjs (platformReadSync)
+ *   - ./markdown-sectionizer.cjs (tokenizeHeadings, stripTaggedBlocks, withSection)
  */
 
 import fs from 'node:fs';
@@ -32,7 +33,8 @@ const {
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir } = planningWorkspace;
 import { platformReadSync } from './shell-command-projection.cjs';
-import { tokenizeHeadings, stripTaggedBlocks } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripTaggedBlocks, withSection } from './markdown-sectionizer.cjs';
+import type { HeadingToken } from './markdown-sectionizer.cjs';
 
 // ─── Roadmap milestone scoping ───────────────────────────────────────────────
 
@@ -198,6 +200,49 @@ function replaceInCurrentMilestone(content: string, pattern: RegExp, replacement
   const before = content.slice(0, offset);
   const after = content.slice(offset);
   return before + after.replace(pattern, replacement);
+}
+
+/**
+ * Resolve a single phase's detail-section heading (`### Phase N: …`, any level
+ * 1–6, via the #2121 phase-id source) and run `edit` against ONLY that
+ * section's body. Delegates to `withSection` (markdown-sectionizer.cjs), so a
+ * per-phase ROADMAP edit is structurally bounded to that phase's own section —
+ * it cannot escape into a sibling phase, a shipped-milestone `<details>` block,
+ * or a backticked prose literal (ADR-2143 §4).
+ *
+ * `content` is expected to already be scoped to the current milestone's raw
+ * range(s) by the caller (see `currentMilestoneRawRanges`) — `withPhaseSection`
+ * composes with that milestone-level scoping rather than replacing it.
+ *
+ * The matched phase number must be delimited by whitespace, a colon, an
+ * open-paren tag, or end-of-heading — never a bare `\b`. A trailing `\b` sits
+ * between the last digit and a following `.` or letter, so it would let a
+ * query for phase `1` prefix-match a decimal sub-phase heading like
+ * `### Phase 1.1: Sub` or a distinct suffixed phase like `### Phase 1A: …`.
+ *
+ * The phase token must additionally anchor to the START of the heading text
+ * (after an optional leading `[tag]`, mirroring `findRoadmapPhaseInContent`
+ * below) — never merely appear anywhere in it. Without this anchor, a query
+ * for phase `1` would match a SIBLING phase whose own TITLE happens to
+ * mention "Phase 1" (e.g. `### Phase 3: Migrate off Phase 1 legacy pipeline`),
+ * and — because `collectSection` picks the first matching heading in document
+ * order — that sibling would be hijacked instead of the real Phase 1 section.
+ *
+ * The section body is bounded by `{ levelBounded: false }`: it ends at the
+ * next ATX heading of ANY level, not merely a heading at or above the phase
+ * heading's own level. Real ROADMAPs are not guaranteed to use a uniform
+ * phase-heading level, so a level-bounded stop could fold a deeper sibling
+ * heading (e.g. a `####` phase following a `###` phase) into this phase's
+ * body and let `edit` reach into it.
+ */
+function withPhaseSection(
+  content: string,
+  phaseId: unknown,
+  edit: (body: string) => string,
+): string {
+  const src = phaseMarkdownRegexSource(phaseId);
+  const headingRe = new RegExp(`^\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${src}(?=[\\s:(]|$)`, 'i');
+  return withSection(content, (h: HeadingToken) => headingRe.test(h.text), edit, { levelBounded: false });
 }
 
 // ─── Roadmap phase lookup ─────────────────────────────────────────────────────
@@ -650,4 +695,5 @@ export = {
   getMilestoneInfo,
   getMilestonePhaseFilter,
   currentMilestoneRawRanges,
+  withPhaseSection,
 };

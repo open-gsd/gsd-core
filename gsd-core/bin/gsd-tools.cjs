@@ -27,6 +27,12 @@
  *   list-todos [area]                  Count and enumerate pending todos
  *   list-seeds [status]                List captured seeds (optional status filter)
  *   verify-path-exists <path>          Check file/directory existence
+ *   quick-tasks-append --task <text>   Append a row to STATE.md's "Quick Tasks
+ *                                      Completed" table (schema-backed via
+ *                                      markdown-table.cjs; #2133/ADR-2143).
+ *                                      Fails loud (non-zero exit) on a missing
+ *                                      or unrecognized table instead of the old
+ *                                      awk NF-2 silent-skip guess.
  *   config-ensure-section              Initialize .planning/config.json
  *   history-digest                     Aggregate all SUMMARY.md data
  *   summary-extract <path> [--fields]  Extract structured data from SUMMARY.md
@@ -693,7 +699,7 @@ async function main() {
     'from-gsd2, frontmatter, gap-analysis, generate-claude-md, generate-claude-profile, ' +
     'generate-dev-preferences, generate-slug, graphify, history-digest, init, intel, ' +
     'capability, classify-confidence, git, learnings, list-seeds, list-todos, loop, milestone, package-legitimacy, phase, phase-plan-index, phases, profile-questionnaire, ' +
-    'profile-sample, progress, project-instruction-file, prompt-budget, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, smart-entry, state, ' +
+    'profile-sample, progress, project-instruction-file, prompt-budget, quick-tasks-append, requirements, research-plan, research-store, resolve-granularity, resolve-model, roadmap, scaffold, smart-entry, state, ' +
     'task, template, user-story, validate, verify, verify-path-exists, verify-summary, eval, workstream, worktree\n\n' +
     'Global flags:\n' +
     '  --raw              Emit raw output without post-processing\n' +
@@ -1210,6 +1216,59 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
     case 'verify-path-exists': {
       commands.cmdVerifyPathExists(cwd, args[1], raw);
+      break;
+    }
+
+    case 'quick-tasks-append': {
+      // #2133 / ADR-2143 §3,§7: schema-backed replacement for fast.md's inline
+      // `awk NF-2` Quick Tasks column arithmetic. Row construction is delegated
+      // to the pure appendQuickTaskRow (markdown-table.cjs); this case only
+      // handles the I/O (read STATE.md, resolve date/commit, write STATE.md).
+      const qtaArgs = args.slice(1);
+      const qtaTask = parseNamedArgs(qtaArgs, ['task']).task || args[1];
+      if (!qtaTask) {
+        error('quick-tasks-append requires --task <description> (or a positional description)', ERROR_REASON.USAGE);
+      }
+
+      const statePath = path.join(cwd, '.planning', 'STATE.md');
+      if (!fs.existsSync(statePath)) {
+        error(`quick-tasks-append: STATE.md not found at ${statePath}`, ERROR_REASON.USAGE);
+      }
+
+      const date = new Date().toISOString().slice(0, 10);
+      const { execGit } = require('./lib/shell-command-projection.cjs');
+      const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd });
+      const commit = hashResult.exitCode === 0 && hashResult.stdout ? hashResult.stdout : '—';
+
+      const { appendQuickTaskRow } = require('./lib/markdown-table.cjs');
+
+      // #2242 review fix: route the read -> mutate -> write cycle through
+      // state.readModifyWriteStateMd (lib/state.cjs) instead of a raw
+      // fs.readFileSync + fs.writeFileSync pair, so the whole read-modify-write
+      // is atomic under STATE.md's lockfile — closing the lost-update race a
+      // raw read/write pair left open (cf. #500/#905/#1230). This mirrors the
+      // pattern every other STATE.md-mutating case in state.cts uses (e.g.
+      // cmdStateAddBlocker, cmdStateAddDecision): a mutable outer variable
+      // captures the pure helper's side output, and a fail-loud reason throws
+      // ExitError from INSIDE the transform (readModifyWriteStateMd's finally
+      // still releases the lock before the throw propagates; the transform
+      // throws before returning new content, so nothing is ever written).
+      let mutation;
+      state.readModifyWriteStateMd(statePath, (content) => {
+        const result = appendQuickTaskRow(content, { description: qtaTask, date, commit });
+        if (!result.ok) {
+          // Mirrors fast.md's old "skip with a brief log" behaviour (#2133): this
+          // is an expected, recoverable condition (no table / unrecognized
+          // schema), not a hard crash. ExitError sets a non-zero exit code (so
+          // fast.md's `|| echo ...` fallback fires) without calling
+          // process.exit() directly — stdout stays flushed and untouched.
+          throw new ExitError(1, `⚠ quick-tasks-append: ${result.reason}`);
+        }
+        mutation = result.value;
+        return result.value.content;
+      }, cwd);
+
+      output({ ok: true, row: mutation.row, variant: mutation.variant }, raw, mutation.row);
       break;
     }
 

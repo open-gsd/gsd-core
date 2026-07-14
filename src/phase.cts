@@ -44,7 +44,7 @@ import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter, currentMilestoneRawRanges } = roadmapParserMod;
+const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter, currentMilestoneRawRanges, withPhaseSection } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -1479,6 +1479,12 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // inline / backticked prose literal cannot match. Milestone-scoped below
         // (mutateMilestonePhase) so a Backlog entry or a same-numbered shipped-
         // milestone phase cannot be flipped either.
+        // ADR-2143 §4 note: this is the phase-LIST checkbox — it lives in the
+        // milestone's `- [ ] Phase N: …` checklist, OUTSIDE any `### Phase N`
+        // detail section, so there is no section for withPhaseSection to bind
+        // to. Left as a milestone-slice-scoped regex (not migrated to the
+        // sectionizer seam); see planCountBodyPattern below for the sites that
+        // WERE migrated.
         const checkboxPattern = new RegExp(
           `^[ \\t]*(-\\s*\\[)[ ](\\]\\s*(?:\\*\\*)?\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][^\\n]*)`,
           'im',
@@ -1518,10 +1524,14 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           roadmapContent = roadmapContent.replace(tableRowPattern, updateProgressRow);
         }
 
-        const planCountPattern = new RegExp(
-          `(#{2,4}\\s*Phase\\s+${phaseEscaped}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
-          'i',
-        );
+        // ADR-2143 §4: the plan-count write is now routed through
+        // withPhaseSection (see mutateMilestonePhase below), which hands this
+        // pattern ONLY phase N's own detail-section body — so the pattern no
+        // longer needs its own `#{2,4}\s*Phase\s+N` anchor + skip-ahead-past-
+        // interior-headings lookahead; the section boundary itself confines
+        // the match (the #2067/#2200 boundary-crossing class is now
+        // structurally impossible for this site rather than regex-enforced).
+        const planCountBodyPattern = /(\*\*Plans:\*\*\s*)[^\n]+/i;
 
         const phaseInfoSummaries = phaseInfo['summaries'] as string[];
 
@@ -1534,17 +1544,25 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const mutateMilestonePhase = (slice: string): string => {
           let s = slice;
           s = s.replace(checkboxPattern, `$1x$2 (completed ${today})`);
-          s = s.replace(planCountPattern, `$1${summaryCount}/${planCount} plans complete`);
-          for (const summaryFile of phaseInfoSummaries) {
-            const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
-            if (!planId) continue;
-            const planEscaped = escapeRegex(planId);
-            const planCheckboxPattern = new RegExp(
-              `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
-              'i',
-            );
-            s = s.replace(planCheckboxPattern, '$1x$2');
-          }
+          // ADR-2143 §4: the plan-count write and the per-plan checkbox flips
+          // are both scoped to phase N's OWN detail section via
+          // withPhaseSection — the edit callback below only ever sees that
+          // section's body, so neither regex can escape into a sibling
+          // phase's section, a shipped milestone, or a Backlog entry.
+          s = withPhaseSection(s, phaseNum, (body) => {
+            let b = body.replace(planCountBodyPattern, `$1${summaryCount}/${planCount} plans complete`);
+            for (const summaryFile of phaseInfoSummaries) {
+              const planId = summaryFile.replace('-SUMMARY.md', '').replace('SUMMARY.md', '');
+              if (!planId) continue;
+              const planEscaped = escapeRegex(planId);
+              const planCheckboxPattern = new RegExp(
+                `(-\\s*\\[) (\\]\\s*(?:\\*\\*)?${planEscaped}(?:\\*\\*)?)`,
+                'i',
+              );
+              b = b.replace(planCheckboxPattern, '$1x$2');
+            }
+            return b;
+          });
           return s;
         };
 

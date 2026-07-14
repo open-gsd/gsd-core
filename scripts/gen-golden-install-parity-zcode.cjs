@@ -70,16 +70,12 @@ function cleanup(root) {
 const targets = process.argv.slice(2).length > 0 ? process.argv.slice(2) : Object.keys(RUNTIME_META);
 fs.mkdirSync(FIXTURE_DIR, { recursive: true });
 
-// Track the claude root so we can reuse it for the local layout fixture below.
-let claudeRoot = null;
-
 for (const runtime of targets) {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_META, runtime)) {
     process.stderr.write(`[gen] unknown runtime '${runtime}' (not in RUNTIME_META) — skipping\n`);
     continue;
   }
   const { configDir, root } = runMinimalInstall({ runtime, scope: 'global' });
-  if (runtime === 'claude') claudeRoot = root;
   let actual;
   try {
     actual = buildParityManifest(configDir, root);

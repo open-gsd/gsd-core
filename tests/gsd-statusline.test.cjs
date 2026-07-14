@@ -1601,3 +1601,280 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
     });
   });
 }
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Git segment (statusline.show_git)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { execFileSync } = require('node:child_process');
+  const { cleanup } = require('./helpers.cjs');
+  const statusline = require('../hooks/gsd-statusline.js');
+  const { parseGitStatus, buildGitSegment, readGitStatus, composeStatusline } = statusline;
+  const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
+
+  describe('config schema: statusline.show_git', () => {
+    test('registers statusline.show_git', () => {
+      assert.ok(
+        VALID_CONFIG_KEYS.has('statusline.show_git'),
+        'statusline.show_git must be in VALID_CONFIG_KEYS',
+      );
+    });
+  });
+
+  describe('parseGitStatus', () => {
+    test('returns null for non-string / missing branch header', () => {
+      assert.equal(parseGitStatus(null), null);
+      assert.equal(parseGitStatus(undefined), null);
+      assert.equal(parseGitStatus(''), null);
+      assert.equal(parseGitStatus('? some-file\n'), null);
+    });
+
+    test('parses a clean, in-sync branch', () => {
+      const text = [
+        '# branch.oid abc123',
+        '# branch.head main',
+        '# branch.upstream origin/main',
+        '# branch.ab +0 -0',
+        '',
+      ].join('\n');
+      assert.deepEqual(parseGitStatus(text), {
+        branch: 'main', ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0,
+      });
+    });
+
+    test('counts staged, unstaged, untracked, ahead, behind', () => {
+      const text = [
+        '# branch.oid abc123',
+        '# branch.head feat/x',
+        '# branch.upstream origin/feat/x',
+        '# branch.ab +2 -1',
+        '1 M. N... 100644 100644 100644 aaa bbb staged-only.txt',
+        '1 .M N... 100644 100644 100644 aaa bbb unstaged-only.txt',
+        '1 MM N... 100644 100644 100644 aaa bbb both.txt',
+        '2 R. N... 100644 100644 100644 aaa bbb R100 new.txt\told.txt',
+        '? untracked-1.txt',
+        '? untracked-2.txt',
+        '',
+      ].join('\n');
+      assert.deepEqual(parseGitStatus(text), {
+        branch: 'feat/x', ahead: 2, behind: 1, staged: 3, unstaged: 2, untracked: 2,
+      });
+    });
+
+    test('counts unmerged (conflict) entries as unstaged', () => {
+      const text = [
+        '# branch.head main',
+        'u UU N... 100644 100644 100644 100644 aaa bbb ccc conflict.txt',
+        '',
+      ].join('\n');
+      const info = parseGitStatus(text);
+      assert.equal(info.unstaged, 1);
+      assert.equal(info.staged, 0);
+    });
+
+    test('detached HEAD passes through as "(detached)"', () => {
+      const text = '# branch.head (detached)\n';
+      assert.equal(parseGitStatus(text).branch, '(detached)');
+    });
+
+    test('no upstream (no branch.ab line) leaves ahead/behind at 0', () => {
+      const text = '# branch.head local-only\n? new.txt\n';
+      const info = parseGitStatus(text);
+      assert.deepEqual([info.ahead, info.behind, info.untracked], [0, 0, 1]);
+    });
+  });
+
+  describe('buildGitSegment', () => {
+    const strip = (s) =>
+      // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences to assert on visible text
+      s.replace(/\x1b\[[0-9;]*m/g, '');
+
+    test('returns empty string for null info', () => {
+      assert.equal(buildGitSegment(null), '');
+      assert.equal(buildGitSegment({}), '');
+    });
+
+    test('clean repo renders branch with a check mark', () => {
+      const seg = buildGitSegment({ branch: 'main', ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0 });
+      assert.equal(strip(seg), ' │ main✓');
+    });
+
+    test('dirty repo renders each nonzero marker in order', () => {
+      const seg = buildGitSegment({ branch: 'feat/x', ahead: 2, behind: 1, staged: 3, unstaged: 2, untracked: 4 });
+      assert.equal(strip(seg), ' │ feat/x+3~2?4↑2↓1');
+    });
+
+    test('omits zero markers', () => {
+      const seg = buildGitSegment({ branch: 'main', ahead: 1, behind: 0, staged: 0, unstaged: 0, untracked: 0 });
+      assert.equal(strip(seg), ' │ main↑1');
+    });
+  });
+
+  describe('readGitStatus + parseGitStatus against a real repo', () => {
+    function makeGitRepo() {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-seg-'));
+      const run = (args) => execFileSync('git', ['-C', dir, ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+      });
+      run(['init', '-q', '-b', 'main']);
+      run(['config', 'user.email', 'test@test.invalid']);
+      run(['config', 'user.name', 'Test']);
+      return { dir, run };
+    }
+
+    test('non-repo directory yields null', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-seg-plain-'));
+      try {
+        assert.equal(parseGitStatus(readGitStatus(dir)), null);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    // Deterministic IO-failure injection (repo convention, cf. the fs
+    // monkeypatch in ensure-runtime-build.test.cjs): readGitStatus shares the
+    // one cached child_process module object, so replacing execFileSync here
+    // injects the failure without a real hang or oversized repo.
+    test('maxBuffer overflow degrades to null (segment absent)', () => {
+      const childProcess = require('node:child_process');
+      const original = childProcess.execFileSync;
+      childProcess.execFileSync = () => {
+        const err = new RangeError('stdout maxBuffer length exceeded');
+        err.code = 'ERR_CHILD_PROCESS_STDOUT_MAXBUFFER';
+        throw err;
+      };
+      try {
+        assert.equal(readGitStatus('/tmp'), null);
+      } finally {
+        childProcess.execFileSync = original;
+      }
+    });
+
+    test('spawn timeout degrades to null (segment absent)', () => {
+      const childProcess = require('node:child_process');
+      const original = childProcess.execFileSync;
+      childProcess.execFileSync = () => {
+        const err = new Error('spawnSync git ETIMEDOUT');
+        err.code = 'ETIMEDOUT';
+        err.errno = -110;
+        throw err;
+      };
+      try {
+        assert.equal(readGitStatus('/tmp'), null);
+      } finally {
+        childProcess.execFileSync = original;
+      }
+    });
+
+    test('fresh repo with an untracked file is counted', () => {
+      const { dir } = makeGitRepo();
+      try {
+        fs.writeFileSync(path.join(dir, 'new.txt'), 'hello');
+        const info = parseGitStatus(readGitStatus(dir));
+        assert.equal(info.branch, 'main');
+        assert.equal(info.untracked, 1);
+        assert.equal(info.staged, 0);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('staged and committed states are reflected', () => {
+      const { dir, run } = makeGitRepo();
+      try {
+        fs.writeFileSync(path.join(dir, 'a.txt'), '1');
+        run(['add', 'a.txt']);
+        let info = parseGitStatus(readGitStatus(dir));
+        assert.equal(info.staged, 1);
+        run(['commit', '-q', '-m', 'init']);
+        info = parseGitStatus(readGitStatus(dir));
+        assert.deepEqual(
+          [info.staged, info.unstaged, info.untracked], [0, 0, 0]);
+      } finally {
+        cleanup(dir);
+      }
+    });
+  });
+
+  describe('composeStatusline gitSuffix placement', () => {
+    test('git segment renders after the directory in end layout', () => {
+      const out = composeStatusline({
+        model: 'Claude', dirname: 'proj',
+        gitSuffix: ' │ main✓', ctx: ' CTX', lastCmdSuffix: ' │ last: /foo',
+      });
+      assert.ok(
+        out.includes('proj\x1b[0m │ main✓ CTX │ last: /foo'),
+        `expected dir → git → ctx → last-cmd order; got: ${out}`,
+      );
+    });
+    test('git segment renders after the directory in front layout', () => {
+      const out = composeStatusline({
+        model: 'Claude', dirname: 'proj',
+        gitSuffix: ' │ main✓', position: 'front',
+      });
+      assert.ok(out.endsWith('proj\x1b[0m │ main✓'), `got: ${out}`);
+    });
+    test('default (no gitSuffix) output is unchanged', () => {
+      const a = composeStatusline({ model: 'Claude', dirname: 'proj' });
+      const b = composeStatusline({ model: 'Claude', dirname: 'proj', gitSuffix: '' });
+      assert.equal(a, b);
+    });
+  });
+
+  describe('show_git e2e through the hook', () => {
+    const hookPath = path.join(__dirname, '..', 'hooks', 'gsd-statusline.js');
+
+    function runHook(dir) {
+      const payload = JSON.stringify({
+        model: { display_name: 'Claude' },
+        workspace: { current_dir: dir },
+        session_id: `test-git-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      });
+      let stdout = '';
+      try {
+        stdout = execFileSync(process.execPath, [hookPath], {
+          input: payload, encoding: 'utf8', timeout: 4000,
+        });
+      } catch (e) {
+        stdout = e.stdout || '';
+      }
+      // eslint-disable-next-line no-control-regex -- stripping ANSI SGR sequences from captured CLI output
+      return stdout.replace(/\x1b\[[0-9;]*m/g, '');
+    }
+
+    test('flag=true renders the branch segment', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-seg-e2e-'));
+      try {
+        execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'main']);
+        fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, '.planning', 'config.json'),
+          JSON.stringify({ statusline: { show_git: true } }),
+        );
+        const out = runHook(dir);
+        assert.ok(out.includes('│ main'), `expected branch segment; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('default (flag absent) has no git segment', () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-seg-e2e-'));
+      try {
+        execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'main']);
+        fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+        const out = runHook(dir);
+        assert.ok(!out.includes('│ main'), `expected no git segment; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+  });
+}
