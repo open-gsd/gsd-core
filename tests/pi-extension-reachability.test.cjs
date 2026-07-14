@@ -85,6 +85,8 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-mvp-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-eval-review'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-eval-review'].getArgumentCompletions, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-ai-integration-phase'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-ai-integration-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -446,6 +448,30 @@ test('native MVP and evaluation review commands preserve workflow gates', async 
     assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
     await pi._recorded.commands['gsd-eval-review'].handler('02 --auto', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-eval-review-input-error');
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native AI integration command serializes shared contract writers', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-ai-integration-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "02"\nstatus: planning\n---\n');
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '- [ ] **Phase 2: AI assistant**\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-ai-integration-phase'].handler('', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · AI Contract');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-ai-integration');
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-framework-selector/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-ai-researcher/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /strictly in order/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /must never use `Write` on AI-SPEC\.md/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `ask`/);
+    await pi._recorded.commands['gsd-ai-integration-phase'].handler('02 --auto', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ai-integration-input-error');
   } finally {
     cleanup(cwd);
   }
