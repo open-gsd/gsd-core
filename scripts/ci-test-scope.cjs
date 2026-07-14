@@ -155,14 +155,20 @@ const RULES = [
     // shipped to next undetected). Union semantics: this ADDS the parity guard on
     // top of each path's existing content-specific tests. Targeted lane only (the
     // golden test skips win32 by design), no fullMatrix.
-    // NOTE: intentionally NOT a blanket 'gsd-core/' prefix — that would also
-    // sweep in gsd-core/src/ and gsd-core/bin/lib/, which are NOT installer-
-    // emitted-as-is and would wrongly override the bug-408 unit-fallback
-    // contract (gsd-core/src/some-util.js must still fall back to ['unit']
-    // when no rule matches). Only the four subpaths the installer actually
-    // ships verbatim are listed here.
+    // NOTE: intentionally NOT a blanket 'gsd-core/' prefix, for two reasons:
+    // (1) gsd-core/bin/** is tsc-compiled runtime output — EXCLUDED_PREFIXES-
+    //     excluded from both manifests, and already covered by the 'installer and
+    //     package layout' rule (path.startsWith('gsd-core/bin/')) — so matching it
+    //     here would be pure noise; and
+    // (2) enumerating only the installer-shipped content subtrees preserves the
+    //     bug-408 unit-fallback contract: a gsd-core/ path that is NOT shipped
+    //     verbatim (the bug-408 test uses gsd-core/src/some-util.js) must still
+    //     fall back to ['unit'] when no rule matches.
+    // Listed: the four gsd-core content subtrees the installer ships verbatim
+    // (contexts, references, templates, workflows) + bin/shared/*.json data files.
+    // Verify against Object.keys(golden fixture) grouped by gsd-core/<subdir>.
     match: path =>
-      ['hooks/', 'commands/', 'agents/', 'skills/', 'gsd-core/workflows/', 'gsd-core/templates/', 'gsd-core/references/', 'scripts/changeset/', 'scripts/lib/'].some(p => path.startsWith(p)) ||
+      ['hooks/', 'commands/', 'agents/', 'skills/', 'gsd-core/workflows/', 'gsd-core/templates/', 'gsd-core/references/', 'gsd-core/contexts/', 'scripts/changeset/', 'scripts/lib/'].some(p => path.startsWith(p)) ||
       (path.startsWith('gsd-core/bin/shared/') && path.endsWith('.json')) ||
       ['scripts/fix-slash-commands.cjs', 'scripts/gen-capability-registry.cjs', 'scripts/gen-loop-host-contract.cjs'].includes(path),
     tests: [

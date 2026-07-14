@@ -15,6 +15,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 // buildParityManifest (and its exclusion constants) is the canonical single
@@ -22,7 +23,7 @@ const ROOT = path.resolve(__dirname, '..');
 // generator no longer keeps its own inline copy, which had drifted from the
 // test harness's copy (missing the realpath/`<HOME>` normalization) and
 // mis-generated the claude-local fixture (#2100).
-const { runMinimalInstall, RUNTIME_META, buildParityManifest } = require(path.join(ROOT, 'tests', 'helpers', 'install-shared.cjs'));
+const { runMinimalInstall, RUNTIME_META, buildParityManifest, BUILD_SCRIPT } = require(path.join(ROOT, 'tests', 'helpers', 'install-shared.cjs'));
 const FIXTURE_DIR = path.join(ROOT, 'tests', 'fixtures', 'golden-install-parity');
 
 function cleanup(root) {
@@ -37,6 +38,12 @@ function cleanup(root) {
 // With no args, regenerates ALL runtimes. With args, only the named runtimes.
 const targets = process.argv.slice(2).length > 0 ? process.argv.slice(2) : Object.keys(RUNTIME_META);
 fs.mkdirSync(FIXTURE_DIR, { recursive: true });
+
+// Build hooks/dist before capturing so fixtures are complete even in a clean
+// checkout (hooks/dist is gitignored + built; DEFECT.HOOKS-DIST-SCOPED-CI). The
+// test harness's before() hook does the same; without it a fresh checkout omits
+// every hooks/* path and this generator silently writes short fixtures.
+execFileSync(process.execPath, [BUILD_SCRIPT], { stdio: 'pipe' });
 
 for (const runtime of targets) {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_META, runtime)) {

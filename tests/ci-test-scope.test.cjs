@@ -590,13 +590,24 @@ describe('shipped install content (golden-parity drift guard, #2267)', () => {
   // one of those paths must additionally select golden-install-parity AND the
   // install-tree snapshot (union semantics: this rule ADDS to whatever
   // content-specific rule already matched the path).
+  // One path per prefix the rule handles — every installed-source dir the
+  // installer emits. gsd-core/contexts/ is the regression for the review miss
+  // (a real shipped dir that the initial enumeration omitted).
   const SHIPPED_PATHS = [
     'hooks/gsd-statusline.js', // exact #2266 regression
     'gsd-core/workflows/plan-phase.md',
+    'gsd-core/templates/config.json',
+    'gsd-core/references/ui-brand.md',
+    'gsd-core/contexts/dev.md', // regression: initially omitted from the rule
     'agents/gsd-planner.md',
     'commands/gsd/mempalace-capture.md',
     'skills/gsd-explore/SKILL.md',
     'gsd-core/bin/shared/model-catalog.json',
+    'scripts/changeset/lint.cjs',
+    'scripts/lib/cli-exit.cjs',
+    'scripts/fix-slash-commands.cjs',            // exact-match allowlist entry
+    'scripts/gen-capability-registry.cjs',       // exact-match allowlist entry
+    'scripts/gen-loop-host-contract.cjs',        // exact-match allowlist entry
   ];
 
   for (const file of SHIPPED_PATHS) {
@@ -622,6 +633,21 @@ describe('shipped install content (golden-parity drift guard, #2267)', () => {
     assert.ok(
       !result.targeted_tests.includes('tests/golden-install-parity.test.cjs'),
       `docs-only change must NOT select golden-install-parity, got: ${JSON.stringify(result.targeted_tests)}`,
+    );
+  });
+
+  test('non-shipped scripts/ file does NOT select golden-install-tree (allowlist is exact)', () => {
+    // The rule allowlists only 3 named scripts + scripts/changeset|lib/. A
+    // sibling script that is code but NOT installed verbatim must NOT pull in
+    // the install-tree snapshot — proving this is not a blanket 'scripts/'
+    // prefix that would re-run the golden on every script edit. Assert on
+    // golden-install-TREE (the rule's dedicated test), not parity: many scripts/
+    // paths legitimately select parity via the installer rule's
+    // path.includes('install') substring.
+    const result = scopeFor(['scripts/build-hooks.js']);
+    assert.ok(
+      !result.targeted_tests.includes('tests/golden-install-tree.test.cjs'),
+      `non-shipped script must NOT select golden-install-tree, got: ${JSON.stringify(result.targeted_tests)}`,
     );
   });
 });

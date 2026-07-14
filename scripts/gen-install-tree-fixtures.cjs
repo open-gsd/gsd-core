@@ -14,13 +14,14 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 // buildInstallTree (and the exclusion constants it reuses from
 // buildParityManifest) is the canonical single source of truth in
 // tests/helpers/install-shared.cjs (issue #2266/#2267) — this generator does
 // not keep its own inline copy of the walk/exclusion logic.
-const { runMinimalInstall, RUNTIME_META, buildInstallTree } = require(path.join(ROOT, 'tests', 'helpers', 'install-shared.cjs'));
+const { runMinimalInstall, RUNTIME_META, buildInstallTree, BUILD_SCRIPT } = require(path.join(ROOT, 'tests', 'helpers', 'install-shared.cjs'));
 const FIXTURE_DIR = path.join(ROOT, 'tests', 'fixtures', 'install-tree');
 
 function cleanup(root) {
@@ -35,6 +36,12 @@ function cleanup(root) {
 // With no args, regenerates ALL runtimes. With args, only the named runtimes.
 const targets = process.argv.slice(2).length > 0 ? process.argv.slice(2) : Object.keys(RUNTIME_META);
 fs.mkdirSync(FIXTURE_DIR, { recursive: true });
+
+// Build hooks/dist before capturing so fixtures are complete even in a clean
+// checkout (hooks/dist is gitignored + built; DEFECT.HOOKS-DIST-SCOPED-CI). The
+// test harness's before() hook does the same; without it a fresh checkout omits
+// every hooks/* path and this generator silently writes short fixtures.
+execFileSync(process.execPath, [BUILD_SCRIPT], { stdio: 'pipe' });
 
 for (const runtime of targets) {
   if (!Object.prototype.hasOwnProperty.call(RUNTIME_META, runtime)) {
