@@ -135,7 +135,13 @@ OPENCODE_CONFIG_DIR=~/.config/opencode-alt npx @opengsd/gsd-core@latest --openco
 
 ### Oh My Pi (OMP)
 
-OMP is a first-class global runtime. Install it through the standard installer:
+OMP is a first-class global runtime.
+Install OMP itself first and verify that its executable is available. GSD's installer installs the GSD integration, not the OMP host:
+
+```bash
+omp --version
+```
+Install its GSD integration through the standard installer:
 
 ```bash
 npx @opengsd/gsd-core@latest --omp --global
@@ -150,6 +156,8 @@ PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
 ```
 
 OMP is global-only. A local install is rejected because OMP does not discover project-local agent roots by default.
+After restart, OMP exposes native GSD slash commands such as `/gsd`, `/gsd-status`, and `/gsd-progress`; phase execution uses OMP's native `task` and job controls.
+
 
 #### Updating OMP
 
