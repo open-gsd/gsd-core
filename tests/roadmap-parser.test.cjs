@@ -1682,6 +1682,23 @@ describe('scanPhasePlans — ignored files', () => {
     const result = scanPhasePlans(dir);
     assert.strictEqual(result.planCount, 1, 'VERIFICATION files should not be plans');
   });
+
+  // #2252: *-PLAN-REVIEW.md is a review artifact, not an executable plan.
+  test('PLAN-REVIEW file is not counted as a plan (#2252)', () => {
+    const dir = phaseDir();
+    touch(dir, '42-01-PLAN.md', '42-PLAN-REVIEW.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'PLAN-REVIEW should not count as a plan');
+    assert.ok(result.planFiles.includes('42-01-PLAN.md'));
+    assert.ok(!result.planFiles.includes('42-PLAN-REVIEW.md'));
+  });
+
+  test('PLAN-REVIEW is excluded even with no real plans (#2252)', () => {
+    const dir = phaseDir();
+    touch(dir, '42-PLAN-REVIEW.md');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 0, 'a lone PLAN-REVIEW must not count as a plan');
+  });
 });
 
 // ---------------------------------------------------------------------------
