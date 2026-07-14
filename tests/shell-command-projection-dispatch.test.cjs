@@ -534,6 +534,67 @@ describe('bug #3413: Shell Command Projection Module uses runtime-aware hook pol
   });
 });
 
+describe('bug #2236: hookShell parameter routes PowerShell call operator', () => {
+  test('hookShell=powershell on Windows returns true for any runtime', () => {
+    assert.equal(
+      hookCommandNeedsPowerShellCallOperator({ platform: 'win32', runtime: 'claude', hookShell: 'powershell' }),
+      true,
+      'PowerShell hook shell must trigger the call operator regardless of runtime',
+    );
+    assert.equal(
+      hookCommandNeedsPowerShellCallOperator({ platform: 'win32', runtime: 'antigravity', hookShell: 'powershell' }),
+      true,
+    );
+  });
+
+  test('hookShell=bash (default) stays false — Git-Bash form preserved', () => {
+    assert.equal(
+      hookCommandNeedsPowerShellCallOperator({ platform: 'win32', runtime: 'claude', hookShell: 'bash' }),
+      false,
+    );
+    assert.equal(
+      hookCommandNeedsPowerShellCallOperator({ platform: 'win32', runtime: 'claude' }),
+      false,
+    );
+  });
+
+  test('formatHookCommandForRuntime prepends & when hookShell=powershell', () => {
+    const cmd = '"C:/Program Files/nodejs/node.exe" "C:/Users/me/.claude/hooks/gsd-context-monitor.js"';
+    assert.equal(
+      formatHookCommandForRuntime(cmd, { platform: 'win32', runtime: 'claude', hookShell: 'powershell' }),
+      `& ${cmd}`,
+    );
+  });
+
+  test('formatHookCommandForRuntime omits & when hookShell unset (backward compat)', () => {
+    const cmd = '"C:/Program Files/nodejs/node.exe" "C:/Users/me/.claude/hooks/gsd-context-monitor.js"';
+    assert.equal(
+      formatHookCommandForRuntime(cmd, { platform: 'win32', runtime: 'claude' }),
+      cmd,
+    );
+  });
+
+  test('buildHookCommand emits & prefix when hookShell=powershell', () => {
+    const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
+      platform: 'win32',
+      runtime: 'claude',
+      hookShell: 'powershell',
+    });
+    assert.ok(cmd, 'buildHookCommand should return a command');
+    assert.ok(cmd.startsWith('& '), `PowerShell hook command must start with '& ': ${cmd}`);
+  });
+
+  test('buildHookCommand omits & prefix when hookShell=bash (regression lock)', () => {
+    const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
+      platform: 'win32',
+      runtime: 'claude',
+      hookShell: 'bash',
+    });
+    assert.ok(cmd, 'buildHookCommand should return a command');
+    assert.equal(cmd.startsWith('& '), false, `Git-Bash hook command must NOT start with '& ': ${cmd}`);
+  });
+});
+
 describe('bug #3413: installer hook surfaces consume runtime-aware projection', () => {
   test('buildHookCommand emits shell-neutral Claude hook command on Windows', () => {
     const cmd = buildHookCommand('C:/Users/me/.claude', 'gsd-check-update.js', {
