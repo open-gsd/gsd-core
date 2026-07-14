@@ -60,6 +60,8 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-new-project'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-new-milestone'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-ship'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-code-review'].handler, 'function');
+  assert.equal(typeof pi._recorded.commands['gsd-debug'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-progress'].handler, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-resume-work'].handler, 'function');
   assert.equal(typeof pi._recorded.tools.gsd_invoke.execute, 'function');
@@ -142,6 +144,44 @@ test('native lifecycle commands preserve workflow gates and session ownership', 
 
     await pi._recorded.commands['gsd-new-project'].handler('invalid', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-new-project-input-error');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+  } finally {
+    cleanup(cwd);
+  }
+});
+
+test('native code review and debug commands preserve their workflow contracts', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-review-debug-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "02"\nstatus: executing\n---\n');
+    const pi = mockPi();
+    gsdPiExtension(pi);
+
+    await pi._recorded.commands['gsd-code-review'].handler('02 --depth=deep --files=pi/gsd.cjs,tests/pi-extension-reachability.test.cjs --auto', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · Review');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-code-review');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-code-review workflow/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `task`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-code-reviewer/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-code-fixer/);
+
+    await pi._recorded.commands['gsd-code-review'].handler('two --depth=deep', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-code-review-input-error');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
+
+    pi._recorded.sessionName = undefined;
+    await pi._recorded.commands['gsd-debug'].handler('--diagnose stale cache results', { cwd });
+    assert.equal(pi._recorded.sessionName, 'GSD · Debug');
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-debug');
+    assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, true);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-debug workflow/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /native `ask` tool/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /gsd-debug-session-manager/);
+
+    await pi._recorded.commands['gsd-debug'].handler('status ../invalid', { cwd });
+    assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-debug-input-error');
     assert.equal(pi._recorded.messages.at(-1).options.triggerTurn, false);
   } finally {
     cleanup(cwd);
@@ -643,6 +683,12 @@ test('the OMP agent installer projects native task and isolation guidance', () =
   assert.match(executor, /Do not call a hidden yield tool/);
   assert.match(executor, /IRC status request/);
   assert.match(executor, /\[gsd-task-result\] phase \{PHASE\}/);
+  const reviewer = fs.readFileSync(path.join(destination, 'gsd-code-reviewer.md'), 'utf8');
+  const debugManager = fs.readFileSync(path.join(destination, 'gsd-debug-session-manager.md'), 'utf8');
+  assert.match(reviewer, /OMP native orchestration/);
+  assert.match(debugManager, /OMP native orchestration/);
+  assert.match(reviewer, /native task instead/);
+  assert.match(debugManager, /native task instead/);
   const extensionDestination = path.join(destination, 'extensions', 'gsd-omp.ts');
   const extensionInstaller = path.resolve(__dirname, '..', 'pi', 'install-omp-extension.cjs');
   const extensionResult = spawnSync(process.execPath, [extensionInstaller, extensionDestination], { encoding: 'utf8' });
