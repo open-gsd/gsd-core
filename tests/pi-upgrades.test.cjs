@@ -24,6 +24,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const {
   extensionEventSurfaceFor,
@@ -169,6 +170,15 @@ test('getArgumentCompletions filters PI_COMMAND_FAMILIES by prefix and returns n
 
   const none = _internals.getArgumentCompletions('zzz-no-such-family-8675309');
   assert.equal(none, null);
+});
+
+test('Pi command completions cover every command advertised by gsd-tools', () => {
+  const cli = spawnSync(process.execPath, [path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs'), '--help'], { encoding: 'utf8' });
+  const usage = `${cli.stdout || ''}${cli.stderr || ''}`;
+  const commandList = usage.match(/Commands: ([\s\S]+?)\n\nGlobal flags:/);
+  assert.ok(commandList, 'gsd-tools help must expose its command catalog');
+  const canonical = commandList[1].replace(/\s+/g, ' ').split(', ').map((command) => command.trim()).filter(Boolean);
+  assert.deepEqual([..._internals.PI_COMMAND_FAMILIES].sort(), canonical.sort());
 });
 
 // -- fail-closed negotiation for pi -------------------------------------------
