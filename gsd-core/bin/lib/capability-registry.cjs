@@ -1928,7 +1928,7 @@ const capabilities = {
     "tier": "core",
     "requires": [],
     "engines": {
-      "gsd": ">=1.6.0"
+      "gsd": ">=1.7.0"
     },
     "runtime": {
       "configHome": {
@@ -1973,19 +1973,19 @@ const capabilities = {
       "extendedHookEvents": [],
       "hostIntegration": {
         "embeddingMode": "imperative",
-        "commandSurface": "slash-file",
+        "commandSurface": "slash-programmatic",
         "dispatch": {
           "namedDispatch": true,
-          "nested": "undocumented",
-          "maxDepth": "undocumented",
+          "nested": true,
+          "maxDepth": 2,
           "background": true,
           "subagentToolkit": "full",
           "backgroundDispatch": true
         },
-        "modelMode": "active",
+        "modelMode": "passive",
         "hookBus": "host",
         "stateIO": "filesystem",
-        "transport": "mcp",
+        "transport": "native-extension",
         "runtime": "bun"
       },
       "hostBehaviors": {
@@ -5067,7 +5067,7 @@ const runtimes = {
     "tier": "core",
     "requires": [],
     "engines": {
-      "gsd": ">=1.6.0"
+      "gsd": ">=1.7.0"
     },
     "runtime": {
       "configHome": {
@@ -5112,19 +5112,19 @@ const runtimes = {
       "extendedHookEvents": [],
       "hostIntegration": {
         "embeddingMode": "imperative",
-        "commandSurface": "slash-file",
+        "commandSurface": "slash-programmatic",
         "dispatch": {
           "namedDispatch": true,
-          "nested": "undocumented",
-          "maxDepth": "undocumented",
+          "nested": true,
+          "maxDepth": 2,
           "background": true,
           "subagentToolkit": "full",
           "backgroundDispatch": true
         },
-        "modelMode": "active",
+        "modelMode": "passive",
         "hookBus": "host",
         "stateIO": "filesystem",
-        "transport": "mcp",
+        "transport": "native-extension",
         "runtime": "bun"
       },
       "hostBehaviors": {

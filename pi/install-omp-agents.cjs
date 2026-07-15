@@ -17,8 +17,8 @@ const ompOrchestration = `
 
 This runtime's native task tool owns subagents, jobs, progress, cancellation, artifacts, and isolation. When a GSD workflow asks to spawn an Agent(...), dispatch a native task instead; never emulate a subagent with shell backgrounding or a hand-written worktree.
 
-- Use native task's real schema: set the top-level \`agent\`, shared \`context\`, and \`tasks[]\`; every task item needs a stable \`id\` (for example \`Phase02GapPlanner\`), \`role\`, \`description\`, and operator-facing \`assignment\`. For executor tasks add \`isolated: true\`; never invent \`name\` or per-item \`agent\`/\`task\` fields.
-- Run independent research, planning, verification, and review work as native task jobs. The OMP Job and Subagents panels are the live progress source. Never use \`irc wait\` for task completion: IRC is only for quick coordination. The parent MUST use \`job poll\` for the spawned native runtime IDs, and each task MUST finish its final response immediately after final verification so the native result is delivered.
+- Use native task's real batch schema: provide shared top-level \`context\` and \`tasks[]\`; every task item needs a stable \`name\` (for example \`Phase02GapPlanner\`), the per-item \`agent\` type, complete self-contained work in \`task\`, and \`isolated: true\` for executor work. Never put \`agent\` at the top level or invent \`id\`, \`role\`, \`description\`, or \`assignment\` fields.
+- Run independent research, planning, verification, and review work as native task jobs. The OMP Job and Subagents panels are the live progress source. Never use \`irc wait\` for task completion: IRC is only for quick coordination. Use \`job poll\` when the workflow is blocked on a wave barrier, and consume every spawned native result before advancing.
 - For executor work that writes repository files, set \`isolated: true\` when that field is available. OMP then provisions and cleans the isolated workspace. Never run git worktree yourself.
 - If isolated execution is unavailable, stop and report that execution cannot safely proceed. Never write executor changes into the primary checkout as a fallback.
 - Research, planning, review, and verification are read-only by default: do not request isolation merely to make them look parallel.
@@ -33,7 +33,7 @@ function ompResultProtocol(name) {
 
 The orchestrator reconciles native task results before it updates GSD tracking. Do not report a plan as complete until its required commits and SUMMARY.md have been written.
 
-End the native task's normal final response with exactly one result line, using the phase, plan, and task ID assigned by the orchestrator. Do not call a hidden yield tool; the native task runtime delivers the final response.
+End the native task's final report with exactly one result line, using the phase, plan, and task name assigned by the orchestrator. Then follow OMP's terminal \`yield\` protocol so the native task runtime delivers that report without reminder retries.
 
 \`\`\`text
 [gsd-task-result] phase {PHASE} plan {PLAN} task {TASK_ID} completed
@@ -52,20 +52,24 @@ function rewriteRuntimePaths(content, runtimeRoot) {
     .replace(/\$HOME\/\.claude\b/g, root);
 }
 
-function projectAgent(content, sourcePath, runtimeRoot) {
+function projectAgent(content, sourcePath, runtimeRoot, options = {}) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) throw new Error(`Missing YAML frontmatter: ${sourcePath}`);
 
   const [, frontmatter, rawBody] = match;
   const name = frontmatter.match(/^name:\s*(.+)$/m)?.[1]?.trim();
   const description = frontmatter.match(/^description:\s*(.+)$/m)?.[1]?.trim();
+  const sourceModel = frontmatter.match(/^model:\s*(.+)$/m)?.[1]?.trim();
   if (!name || !description) throw new Error(`Missing name or description: ${sourcePath}`);
+  const resolvedModel = options.resolveModel?.(name);
+  const model = typeof resolvedModel === 'string' && resolvedModel.trim() ? resolvedModel.trim() : sourceModel;
   const body = rewriteRuntimePaths(rawBody, runtimeRoot);
 
   return [
     '---',
     `name: ${name}`,
     `description: ${description}`,
+    ...(model ? [`model: ${JSON.stringify(model)}`] : []),
     `tools: ${ompTools}`,
     'spawns: "*"',
     '---',
@@ -76,14 +80,14 @@ function projectAgent(content, sourcePath, runtimeRoot) {
   ].join('\n');
 }
 
-function installOmpAgents(destinationDir, sourceDir = path.resolve(__dirname, '..', 'agents'), runtimeRoot = path.dirname(destinationDir)) {
+function installOmpAgents(destinationDir, sourceDir = path.resolve(__dirname, '..', 'agents'), runtimeRoot = path.dirname(destinationDir), options = {}) {
   fs.mkdirSync(destinationDir, { recursive: true });
   const staged = [];
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
     if (!entry.isFile() || !/^gsd-.*\.md$/.test(entry.name)) continue;
     const sourcePath = path.join(sourceDir, entry.name);
     const targetPath = path.join(destinationDir, entry.name);
-    fs.writeFileSync(targetPath, projectAgent(fs.readFileSync(sourcePath, 'utf8'), sourcePath, runtimeRoot));
+    fs.writeFileSync(targetPath, projectAgent(fs.readFileSync(sourcePath, 'utf8'), sourcePath, runtimeRoot, options));
     staged.push(targetPath);
   }
   return staged;

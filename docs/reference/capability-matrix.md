@@ -92,7 +92,7 @@ emission), so their extension-point and hook-kind cells are `—`.
 | `hermes` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `kilo` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `kimi` | runtime | core | `>=1.6.0` | — | — | first-party |
-| `omp` | runtime | core | `>=1.6.0` | — | — | first-party |
+| `omp` | runtime | core | `>=1.7.0` | — | — | first-party |
 | `opencode` | runtime | core | `>=1.6.0` | — | — | first-party |
 | `pi` | runtime | core | `>=1.7.0` | — | — | first-party |
 | `qwen` | runtime | core | `>=1.6.0` | — | — | first-party |

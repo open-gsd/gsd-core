@@ -24,8 +24,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   extensionEventSurfaceFor,
@@ -113,16 +115,24 @@ test('gsdPiExtension does NOT call registerProvider (GSD steers pi\'s existing a
 // handler ACTUALLY REGISTERED via pi.on('before_provider_request', ...) in
 // gsdPiExtension. This ties the bound handler (default tier = 'sonnet') to
 // the real model-catalog steering end-to-end.
-test('the ACTUALLY-REGISTERED before_provider_request handler steers to the default-tier model-catalog pi id', async () => {
+test('the ACTUALLY-REGISTERED before_provider_request handler is GSD-project scoped', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
   const boundHandler = pi._recorded.events['before_provider_request'][0];
   assert.equal(typeof boundHandler, 'function');
+  assert.equal(await boundHandler({ payload: {} }, { cwd: os.tmpdir() }), undefined);
 
-  const out = await boundHandler({ payload: {} }, { cwd: __dirname });
-  assert.ok(out, 'expected a modified payload, not undefined');
-  assert.equal(out.model, RUNTIME_PROFILE_MAP.pi.sonnet.model, 'the bound handler steers to the default (sonnet) tier\'s model-catalog pi id');
-  assert.equal(out.model, 'claude-sonnet-5');
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-pi-model-route-'));
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning'));
+    fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\nstatus: planning\n---\n');
+    const out = await boundHandler({ payload: {} }, { cwd });
+    assert.ok(out, 'expected a modified payload in a GSD project');
+    assert.equal(out.model, RUNTIME_PROFILE_MAP.pi.sonnet.model);
+    assert.equal(out.model, 'claude-sonnet-5');
+  } finally {
+    cleanup(cwd);
+  }
 });
 
 // -- (3) before_provider_request: active-model steering ----------------------

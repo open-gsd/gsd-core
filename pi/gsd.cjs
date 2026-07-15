@@ -106,35 +106,22 @@ function parseGsdCommandArgs(rawArgs) {
 
 
 /**
- * Build the `before_provider_request` handler that steers pi's model
- * selection to GSD's tier-resolved id (modelMode: 'active' per
- * capabilities/pi/capability.json). GSD does NOT call `pi.registerProvider` —
- * that registers a NEW model provider; GSD's job here is only to pick a
- * tier-appropriate id AMONG pi's EXISTING built-in anthropic models, so
- * registerProvider would be the wrong primitive (it would wrongly add a fake
- * provider instead of steering the real one).
+ * Build Pi's request-level model handler. OMP does not use this path: its
+ * native task agents receive their resolved GSD model in agent frontmatter at
+ * install time, which preserves per-agent profile and override semantics.
  *
- * v1 tier policy: GSD does not yet expose a per-turn/per-agent tier signal to
- * this event, so a conservative fixed default tier is used (parameterized —
- * default 'sonnet' — so a future richer signal, or a test, can override it).
+ * Pi has no named-dispatch agent surface, so its programmatic bridge keeps the
+ * fixed tier behavior. The registered handler is scoped to GSD projects so a
+ * globally installed extension never overrides ordinary Pi conversations.
  *
- * ASSUMPTION (flagged — verify against a live pi host): the event payload's
- * model field is named `model`, matching the anthropic-messages payload shape
- * (Context7-confirmed for the wire protocol; pi's own before_provider_request
- * event schema was not independently verifiable in this environment). If pi's
- * actual field name differs, this returns the WRONG key and pi's fail-open
- * default takes over only because bare-model-id mismatches degrade to
- * provider-level errors, not GSD-level ones — a discrepancy here needs a
- * live-host smoke test before shipping past this stage.
+ * Returning a replacement payload is the documented OMP/Pi
+ * `before_provider_request` contract. Any resolution or payload failure is
+ * fail-open and leaves the host-selected model unchanged.
  *
- * Fail-open: a resolution failure, a null/falsy resolved model, or a malformed
- * event payload returns `undefined`, leaving pi's model choice untouched. NEVER
- * replaces an unknown payload with a synthetic request body.
- *
- * @param {{ tier?: string }} [opts]
+ * @param {{ tier?: string, runtime?: string }} [opts]
  * @returns {(event: object, ctx: object) => Promise<object|undefined>}
  */
-function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
+function buildBeforeProviderRequestHandler({ tier = 'sonnet', runtime = 'pi' } = {}) {
   return async function onBeforeProviderRequest(event, ctx) {
     try {
       const effectiveCwd = (ctx && ctx.cwd) || process.cwd();
@@ -142,7 +129,7 @@ function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
       const { loadConfig } = require(path.join(GSD_CORE, 'bin', 'lib', 'config-loader.cjs'));
       const config = loadConfig(effectiveCwd);
       const overrides = (config && config.model_profile_overrides) || undefined;
-      const entry = resolveTierEntry({ runtime: 'pi', tier, overrides });
+      const entry = resolveTierEntry({ runtime, tier, overrides });
       const modelId = entry && typeof entry.model === 'string' && entry.model.length > 0 ? entry.model : null;
       if (!modelId) return undefined; // fail-open — leave pi's model untouched
       const basePayload = event && typeof event === 'object' ? event.payload : undefined;
@@ -217,13 +204,14 @@ function runHook(hookFile, payload, opts = {}) {
   });
 }
 
-module.exports = function gsdPiExtension(pi) {
+module.exports = function gsdPiExtension(pi, options = {}) {
   if (!pi || typeof pi !== 'object') {
     throw new TypeError('gsdPiExtension: pi ExtensionAPI is required');
   }
   if (!pi.zod) {
     throw new TypeError('gsdPiExtension: a Zod-capable ExtensionAPI is required');
   }
+  const runtime = options.runtime === 'omp' ? 'omp' : 'pi';
 
   const fs = require('node:fs');
   const path = require('node:path');
@@ -279,9 +267,12 @@ module.exports = function gsdPiExtension(pi) {
 
   function trackGsdTaskRequest(event, cwd) {
     const input = event?.input;
-    if (event?.toolName !== 'task' || typeof input?.agent !== 'string' || !input.agent.startsWith('gsd-')) return;
-    const tasks = Array.isArray(input.tasks) ? input.tasks : [];
-    const taskIds = tasks.flatMap((task) => typeof task?.id === 'string' && task.id ? [task.id] : []);
+    if (event?.toolName !== 'task' || !input || typeof input !== 'object') return;
+    const tasks = Array.isArray(input.tasks) ? input.tasks : [input];
+    const taskIds = tasks.flatMap((task) =>
+      typeof task?.agent === 'string' && task.agent.startsWith('gsd-') && typeof task?.name === 'string' && task.name
+        ? [task.name]
+        : []);
     if (!taskIds.length) return;
     for (const taskId of taskIds) taskIdsFor(cwd).add(taskId);
     if (typeof event.toolCallId === 'string' && event.toolCallId) taskCallsFor(cwd).set(event.toolCallId, taskIds);
@@ -1576,8 +1567,8 @@ Execute GSD phase \`${phaseCommand}\` end-to-end using the execute-phase workflo
 
 OMP dispatch contract:
 - This OMP contract takes precedence over runtime-specific \`Agent(...)\` or \`isolation="worktree"\` directions in execute-phase: on OMP, native \`task\` with \`isolated: true\` is the only valid isolated executor dispatch.
-- Use native \`task\` for every non-interactive executor dispatch. One plan is one task; independent plans in a wave are one task batch. Never use \`irc wait\` for task completion: IRC is coordination-only. Use \`job poll\` for the spawned native runtime IDs and consume the native task result before dispatching the next wave.
-- For a wave, call native \`task\` with its batch shape: top-level \`agent: "gsd-executor"\`, a shared \`context\`, and \`tasks\`. Each executor item has \`id: "Phase${phase}Plan{PLAN_COMPACT}Executor"\` (remove plan punctuation), \`role: "GSD plan executor"\`, an operator-facing \`description\`, the complete plan assignment in \`assignment\`, and \`isolated: true\`. Use these real task fields; never invent \`name\` or per-item \`agent\`/\`task\` fields.
+- Use native \`task\` for every non-interactive executor dispatch. One plan is one task; independent plans in a wave are one task batch. Never use \`irc wait\` for task completion: IRC is coordination-only. Use \`job poll\` for the spawned native runtime IDs and consume every native task result before dispatching the next wave.
+- For a wave, call native \`task\` with its batch shape: a shared top-level \`context\` and \`tasks[]\`. Each executor item has \`name: "Phase${phase}Plan{PLAN_COMPACT}Executor"\` (remove plan punctuation), \`agent: "gsd-executor"\`, the complete self-contained plan assignment in \`task\`, and \`isolated: true\`. Do not put \`agent\` at the top level and do not invent \`id\`, \`role\`, \`description\`, or \`assignment\` fields.
 - Every executor that writes repository files MUST request \`isolated: true\`. If isolated execution is unavailable, stop and report the blocked plan; never fall back to main-checkout writes or manual \`git worktree\` commands.
 - \`--interactive\` is the only sequential inline mode. All other executor work uses native task dispatch.
 - Native task completion is not a completion gate. Reconcile its \`[gsd-task-result]\` line, then require the existing SUMMARY.md, commit, merge, post-wave verification, and STATE.md updates before marking the plan complete.
@@ -3094,10 +3085,13 @@ OMP debugging contract:
     }
   });
 
-  pi.on('before_provider_request', async (event, ctx) => {
-    if (ctx?.model?.provider && ctx.model.provider !== 'anthropic') return undefined;
-    return buildBeforeProviderRequestHandler()(event, ctx);
-  });
+  if (runtime === 'pi') {
+    pi.on('before_provider_request', async (event, ctx) => {
+      if (!isGsdProject(ctx.cwd)) return undefined;
+      if (ctx?.model?.provider && ctx.model.provider !== 'anthropic') return undefined;
+      return buildBeforeProviderRequestHandler({ runtime })(event, ctx);
+    });
+  }
   pi.on('session_start', (_event, ctx) => {
     if (!isGsdProject(ctx.cwd)) return;
     scheduleOnboardingPrompt(ctx);

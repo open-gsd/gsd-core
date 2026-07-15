@@ -1331,14 +1331,15 @@ const READONLY_AGENT_DISALLOWED_TOOLS = {
  * relative to the user's project. When `targetDir` is null/undefined, only the
  * global defaults are consulted.
  *
- * Returns null if no `runtime` is configured (preserves prior behavior — only
- * model_overrides is embedded, no tier/reasoning-effort inference). Returns
- * null when `model_profile` is `inherit` so the literal alias passes through
- * unchanged.
+ * Returns null if no `runtime` is configured and no `runtimeOverride` is
+ * supplied. Installers for static-frontmatter runtimes may pass their runtime
+ * id explicitly so model profiles are resolved for the runtime being
+ * installed rather than for an unrelated project default. Returns null when
+ * `model_profile` is `inherit` so the host session model passes through.
  *
  * Returns { runtime, resolve(agentName) -> { model, reasoning_effort? } | null }
  */
-function readGsdRuntimeProfileResolver(targetDir = null) {
+function readGsdRuntimeProfileResolver(targetDir = null, runtimeOverride = null) {
   const homeDefaults = _readGsdConfigFile(
     path.join(os.homedir(), '.gsd', 'defaults.json'),
     '~/.gsd/defaults.json'
@@ -1369,6 +1370,7 @@ function readGsdRuntimeProfileResolver(targetDir = null) {
   // project, and vice versa.
   const merged = {
     runtime:
+      runtimeOverride ||
       (projectConfig && projectConfig.runtime) ||
       (homeDefaults && homeDefaults.runtime) ||
       null,
@@ -9925,7 +9927,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     } else {
       fs.mkdirSync(extensionsDir, { recursive: true });
       fs.copyFileSync(adapterSource, adapterTarget);
-      fs.writeFileSync(extensionTarget, 'import gsdPiExtension from "./gsd-omp.cjs";\n\nexport default gsdPiExtension;\n');
+      fs.writeFileSync(extensionTarget, 'import gsdPiExtension from "./gsd-omp.cjs";\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
       const sourceMarkerPath = path.join(targetDir, 'gsd-core', 'OMP-SOURCE.json');
       if (fs.existsSync(path.join(src, '.git'))) {
         fs.writeFileSync(sourceMarkerPath, JSON.stringify({ source: 'checkout', root: src }, null, 2) + '\n');
@@ -9936,7 +9938,13 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       installOmpSkills(path.join(targetDir, 'skills'), path.join(src, 'skills'));
       if (!isMinimalMode(_effectiveInstallMode)) {
         const { installOmpAgents } = require(path.join(src, 'pi', 'install-omp-agents.cjs'));
-        installOmpAgents(agentsDest, path.join(src, 'agents'), targetDir);
+        const modelOverrides = readGsdEffectiveModelOverrides(process.cwd());
+        const runtimeResolver = readGsdRuntimeProfileResolver(process.cwd(), 'omp');
+        installOmpAgents(agentsDest, path.join(src, 'agents'), targetDir, {
+          resolveModel(agentName) {
+            return modelOverrides?.[agentName] || runtimeResolver?.resolve(agentName)?.model || null;
+          },
+        });
       }
       if (verifyFileInstalled(adapterTarget, 'OMP adapter') && verifyFileInstalled(extensionTarget, 'OMP extension')) {
         console.log(`  ${green}✓${reset} Installed OMP extension`);

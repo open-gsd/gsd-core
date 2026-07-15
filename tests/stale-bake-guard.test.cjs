@@ -181,6 +181,12 @@ describe('stale-bake-guard.resolveAgentDir (env-var aware)', () => {
   test('kilo honors KILO_CONFIG_DIR (#2093)', () => {
     assert.equal(posix(resolveAgentDir('kilo', { env: { KILO_CONFIG_DIR: '/custom/ko' }, homedir: () => '/H' })), '/custom/ko/agents');
   });
+  test('omp default lands under ~/.omp/agent/agents', () => {
+    assert.equal(posix(resolveAgentDir('omp', { env: {}, homedir: () => '/H' })), '/H/.omp/agent/agents');
+  });
+  test('omp honors PI_CODING_AGENT_DIR', () => {
+    assert.equal(posix(resolveAgentDir('omp', { env: { PI_CODING_AGENT_DIR: '/custom/omp' }, homedir: () => '/H' })), '/custom/omp/agents');
+  });
   test('unsupported runtime → null', () => {
     assert.equal(resolveAgentDir('gemini', { env: {}, homedir: () => '/H' }), null);
   });
@@ -429,8 +435,8 @@ describe('stale-bake-guard parity with bin/install.js bake paths', () => {
     return;
   }
 
-  test('STATIC_FRONTMATTER_RUNTIMES is exactly codex + kilo + opencode (no silent drift)', () => {
-    assert.deepEqual([...STATIC_FRONTMATTER_RUNTIMES].sort(), ['codex', 'kilo', 'opencode']);
+  test('STATIC_FRONTMATTER_RUNTIMES covers every static model bake path', () => {
+    assert.deepEqual([...STATIC_FRONTMATTER_RUNTIMES].sort(), ['codex', 'kilo', 'omp', 'opencode']);
   });
 
   test('opencode converter bakes a model: line when modelOverride is provided', () => {
@@ -450,6 +456,13 @@ describe('stale-bake-guard parity with bin/install.js bake paths', () => {
       typeof out === 'string' && out.includes('model: anthropic/claude-sonnet-5'),
       'kilo converter no longer bakes modelOverride — STATIC_FRONTMATTER_RUNTIMES is stale vs bin/install.js',
     );
+  });
+
+  test('omp agent projection bakes the resolved model into frontmatter', () => {
+    const { projectAgent } = require('../pi/install-omp-agents.cjs');
+    const sample = '---\nname: gsd-executor\ndescription: x\ntools: Read\n---\nbody\n';
+    const out = projectAgent(sample, 'gsd-executor.md', '/runtime', { resolveModel: () => 'claude-opus-4-8' });
+    assert.match(out, /^model: "claude-opus-4-8"$/m);
   });
 
   test('kilo converter omits model: when no override (stale-bake fallback shape)', () => {

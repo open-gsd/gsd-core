@@ -6,7 +6,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const { createTempDir, cleanup } = require('./helpers.cjs');
+const { cleanup } = require('./helpers.cjs');
 
 
 const gsdPiExtension = require('../pi/gsd.cjs');
@@ -110,6 +110,34 @@ test('the OMP bridge registers command, tool, and lifecycle hooks', () => {
   assert.equal(typeof pi._recorded.commands['gsd-plan-phase'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.commands['gsd-verify-work'].getArgumentCompletions, 'function');
   assert.equal(typeof pi._recorded.events.session_shutdown, 'function');
+});
+
+test('the OMP runtime leaves the host model intact and routes task agents through frontmatter', () => {
+  const pi = mockPi();
+  gsdPiExtension(pi, { runtime: 'omp' });
+  assert.equal(pi._recorded.events.before_provider_request, undefined);
+});
+
+test('the OMP capability advertises the implemented native host contract', () => {
+  const capability = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'capabilities', 'omp', 'capability.json'), 'utf8'));
+  assert.equal(capability.engines.gsd, '>=1.7.0');
+  assert.deepEqual(capability.runtime.hostIntegration, {
+    embeddingMode: 'imperative',
+    commandSurface: 'slash-programmatic',
+    dispatch: {
+      namedDispatch: true,
+      nested: true,
+      maxDepth: 2,
+      background: true,
+      subagentToolkit: 'full',
+      backgroundDispatch: true,
+    },
+    modelMode: 'passive',
+    hookBus: 'host',
+    stateIO: 'filesystem',
+    transport: 'native-extension',
+    runtime: 'bun',
+  });
 });
 
 test('the /gsd command dispatches through the GSD CLI', async () => {
@@ -252,7 +280,7 @@ test('native specification and UI commands preserve their workflow contracts', a
     pi._recorded.sessionName = undefined;
     await pi._recorded.commands['gsd-ui-phase'].handler('', { cwd });
     assert.equal(pi._recorded.sessionName, 'GSD · Phase 02 · UI');
-    assert.match(pi._recorded.messages.at(-1).message.content, /UI phase \`02\`/);
+    assert.match(pi._recorded.messages.at(-1).message.content, /UI phase `02`/);
 
     await pi._recorded.commands['gsd-ui-phase'].handler('02 --unknown', { cwd });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-ui-input-error');
@@ -573,16 +601,16 @@ test('the native phase command injects a task-based execution contract', async (
   assert.match(pi._recorded.messages[0].message.content, /Use native `task`/);
   assert.match(pi._recorded.messages[0].message.content, /takes precedence over runtime-specific `Agent\(\.\.\.\)` or `isolation="worktree"` directions/);
   assert.match(pi._recorded.messages[0].message.content, /isolated: true/);
-  assert.match(pi._recorded.messages[0].message.content, /top-level `agent: "gsd-executor"`, a shared `context`, and `tasks`/);
+  assert.match(pi._recorded.messages[0].message.content, /shared top-level `context` and `tasks\[\]`/);
   assert.match(pi._recorded.messages[0].message.content, /agent: "gsd-executor"/);
-  assert.match(pi._recorded.messages[0].message.content, /id: "Phase05Plan\{PLAN_COMPACT\}Executor"/);
-  assert.match(pi._recorded.messages[0].message.content, /never invent `name` or per-item `agent`\/`task` fields/);
+  assert.match(pi._recorded.messages[0].message.content, /name: "Phase05Plan\{PLAN_COMPACT\}Executor"/);
+  assert.match(pi._recorded.messages[0].message.content, /complete self-contained plan assignment in `task`/);
+  assert.match(pi._recorded.messages[0].message.content, /Do not put `agent` at the top level/);
   assert.match(pi._recorded.messages[0].message.content, /never fall back to main-checkout writes or manual `git worktree` commands/i);
   assert.match(pi._recorded.messages[0].message.content, /uncommitted handoff/);
   assert.match(pi._recorded.messages[0].message.content, /create the plan's required commit in the parent checkout/);
   assert.match(pi._recorded.messages[0].message.content, /Never use `irc wait` for task completion/);
   assert.match(pi._recorded.messages[0].message.content, /Use `job poll`/);
-  assert.match(pi._recorded.messages[0].message.content, /spawned native runtime IDs/);
 
 
   await pi._recorded.commands['gsd-execute-phase'].handler('five', { cwd: path.resolve(__dirname, '..') });
@@ -1034,11 +1062,11 @@ test('the OMP agent installer projects native task and isolation guidance', () =
   assert.match(executor, /Never run git worktree yourself/);
   assert.match(executor, /OMP executor result protocol/);
   assert.match(executor, /Never use `irc wait` for task completion/);
-  assert.match(executor, /top-level `agent`, shared `context`, and `tasks\[\]`/);
-  assert.match(executor, /stable `id`/);
-  assert.match(executor, /never invent `name` or per-item `agent`\/`task` fields/);
-  assert.match(executor, /task ID assigned by the orchestrator/);
-  assert.match(executor, /Do not call a hidden yield tool/);
+  assert.match(executor, /shared top-level `context` and `tasks\[\]`/);
+  assert.match(executor, /stable `name`/);
+  assert.match(executor, /per-item `agent` type/);
+  assert.match(executor, /complete self-contained work in `task`/);
+  assert.match(executor, /terminal `yield` protocol/);
   assert.match(executor, /IRC status request/);
   assert.match(executor, /\[gsd-task-result\] phase \{PHASE\}/);
   const reviewer = fs.readFileSync(path.join(destination, 'gsd-code-reviewer.md'), 'utf8');
@@ -1054,6 +1082,7 @@ test('the OMP agent installer projects native task and isolation guidance', () =
   const extensionEntry = fs.readFileSync(extensionDestination, 'utf8');
   assert.match(extensionEntry, /import gsdPiExtension from/);
   assert.match(extensionEntry, /pi\/gsd\.cjs/);
+  assert.match(extensionEntry, /runtime: "omp"/);
 });
 
 test('the OMP development installer projects every GSD skill with runtime paths', () => {
@@ -1075,11 +1104,11 @@ test('the OMP development installer projects every GSD skill with runtime paths'
     assert.match(executeSkill, /<omp_native_execution>/);
     assert.match(executeSkill, /use `job poll`/);
     assert.match(executeSkill, /Never use `irc wait`/);
-    assert.match(executeSkill, /top-level `agent: "gsd-executor"`, shared `context`, and `tasks\[\]`/);
-    assert.match(executeSkill, /stable `id` such as `Phase\{PHASE\}Plan\{PLAN_COMPACT\}Executor`/);
-    assert.match(executeSkill, /Do not invent `name` or per-item `agent`\/`task` fields/);
-    assert.match(executeSkill, /Do not call a hidden yield tool/);
-    assert.match(executeSkill, /native runtime ID/);
+    assert.match(executeSkill, /shared top-level `context` and `tasks\[\]`/);
+    assert.match(executeSkill, /stable `name` such as `Phase\{PHASE\}Plan\{PLAN_COMPACT\}Executor`/);
+    assert.match(executeSkill, /`agent: "gsd-executor"`/);
+    assert.match(executeSkill, /complete self-contained plan assignment in `task`/);
+    assert.match(executeSkill, /terminal `yield` protocol/);
   } finally {
     cleanup(runtimeRoot);
   }
@@ -1092,12 +1121,13 @@ test('the generic installer creates a self-contained OMP runtime', () => {
     const result = spawnSync(process.execPath, [installer, '--omp', '--global', '--config-dir', destination], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
     assert.match(stripAnsi(result.stdout), /Installing for Oh My Pi/);
-    assert.equal(fs.readFileSync(path.join(destination, 'extensions', 'gsd-omp.ts'), 'utf8'), 'import gsdPiExtension from "./gsd-omp.cjs";\n\nexport default gsdPiExtension;\n');
+    assert.equal(fs.readFileSync(path.join(destination, 'extensions', 'gsd-omp.ts'), 'utf8'), 'import gsdPiExtension from "./gsd-omp.cjs";\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
     assert.ok(fs.existsSync(path.join(destination, 'extensions', 'gsd-omp.cjs')));
     assert.ok(fs.existsSync(path.join(destination, 'gsd-core', 'bin', 'gsd-tools.cjs')));
     const executor = fs.readFileSync(path.join(destination, 'agents', 'gsd-executor.md'), 'utf8');
     assert.match(executor, /OMP native orchestration/);
     assert.doesNotMatch(executor, /~\/\.claude\//);
+    assert.match(executor, /^model: "claude-[^"]+"$/m);
     const executeSkill = fs.readFileSync(path.join(destination, 'skills', 'gsd-execute-phase', 'SKILL.md'), 'utf8');
     assert.match(executeSkill, /<omp_native_execution>/);
     assert.match(executeSkill, /Native `task` is the executor primitive/);
@@ -1191,6 +1221,124 @@ test('the real OMP host loads the extension and serves native commands over RPC'
   }
 });
 
+test('the real OMP task host accepts the current batch schema and merges an isolated result', (t) => {
+  const omp = process.env.OMP_BIN || 'omp';
+  const probe = spawnSync(omp, ['--version'], { encoding: 'utf8' });
+  if (probe.error || probe.status !== 0) {
+    t.skip(`OMP host unavailable: ${probe.error?.message || `exit ${probe.status}`}`);
+    return;
+  }
+
+  const repoRoot = path.resolve(__dirname, '..');
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-task-e2e-'));
+  const projectRoot = path.join(fixtureRoot, 'project');
+  const runtimeRoot = path.join(fixtureRoot, 'runtime');
+  try {
+    fs.mkdirSync(path.join(projectRoot, '.planning'), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, '.planning', 'STATE.md'), '---\ncurrent_phase: "01"\nstatus: executing\n---\n');
+    fs.writeFileSync(path.join(projectRoot, 'README.txt'), 'fixture\n');
+    for (const command of [
+      ['init'],
+      ['config', 'user.email', 'e2e@example.test'],
+      ['config', 'user.name', 'OMP E2E'],
+      ['add', '.'],
+      ['commit', '-m', 'fixture'],
+    ]) {
+      const git = spawnSync('git', command, { cwd: projectRoot, encoding: 'utf8' });
+      assert.equal(git.status, 0, git.stderr);
+    }
+
+    const installer = path.join(repoRoot, 'bin', 'install.js');
+    const install = spawnSync(process.execPath, [installer, '--omp', '--global', '--config-dir', runtimeRoot], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    });
+    assert.equal(install.status, 0, install.stderr);
+
+    const overlayPath = path.join(fixtureRoot, 'omp-e2e-config.yml');
+    fs.writeFileSync(overlayPath, [
+      'async:',
+      '  enabled: false',
+      'task:',
+      '  batch: true',
+      '  isolation:',
+      '    mode: rcopy',
+      '    merge: patch',
+      '',
+    ].join('\n'));
+    const projectAgents = path.join(projectRoot, '.omp', 'agents');
+    fs.mkdirSync(projectAgents, { recursive: true });
+    fs.writeFileSync(path.join(projectAgents, 'gsd-executor.md'), [
+      '---',
+      'name: gsd-executor',
+      'description: Deterministic isolated task smoke executor.',
+      'tools: write',
+      'spawns: ""',
+      '---',
+      'Execute the assignment exactly. Use write for the requested file, verify it, then finish with',
+      '[gsd-task-result] phase 01 plan 01-01 task Phase01Plan0101Executor completed and call terminal yield.',
+      '',
+    ].join('\n'));
+
+    const prompt = [
+      'Call the native task tool exactly once using its batch schema.',
+      'Use shared context "OMP isolated task E2E" and one item with name "Phase01Plan0101Executor",',
+      'agent "gsd-executor", task "Create e2e-result.txt in the repository root containing exactly',
+      'omp-isolated-task-ok followed by a newline. Do not modify any other file.", and isolated true.',
+      'Do not create the file yourself. Wait for the task result, then report whether it completed.',
+    ].join(' ');
+    const result = spawnSync(omp, [
+      '--config', overlayPath,
+      '--print',
+      '--mode', 'json',
+      '--no-session',
+      '--no-skills',
+      '--no-rules',
+      '--auto-approve',
+      '--approval-mode', 'yolo',
+      '--max-time', '90s',
+      '--extension', path.join(runtimeRoot, 'extensions', 'gsd-omp.ts'),
+      '--cwd', projectRoot,
+      prompt,
+    ], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    if (result.status !== 0 && /No models available/.test(result.stderr || '')) {
+      t.skip('OMP host has no configured model');
+      return;
+    }
+    assert.equal(result.status, 0, result.stderr);
+
+    const frames = result.stdout.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+    const starts = frames.filter((frame) => frame.type === 'tool_execution_start' && frame.toolName === 'task');
+    assert.equal(starts.length, 1, 'expected exactly one native task call');
+    assert.deepEqual(Object.keys(starts[0].args).sort(), ['context', 'tasks']);
+    assert.deepEqual(starts[0].args.tasks.map(({ name, agent, isolated }) => ({ name, agent, isolated })), [{
+      name: 'Phase01Plan0101Executor',
+      agent: 'gsd-executor',
+      isolated: true,
+    }]);
+    assert.equal(typeof starts[0].args.tasks[0].task, 'string');
+    for (const staleField of ['id', 'role', 'description', 'assignment']) {
+      assert.equal(Object.hasOwn(starts[0].args.tasks[0], staleField), false);
+    }
+
+    const end = frames.find((frame) => frame.type === 'tool_execution_end' && frame.toolName === 'task');
+    assert.ok(end && !end.isError, 'native task must complete successfully');
+    const taskResult = end.result.details.results[0];
+    assert.equal(taskResult.id, 'Phase01Plan0101Executor');
+    assert.equal(taskResult.exitCode, 0);
+    assert.ok(taskResult.patchPath, 'isolated patch result must be present');
+    assert.match(JSON.stringify(taskResult.extractedToolData?.yield), /\[gsd-task-result\] phase 01 plan 01-01 task Phase01Plan0101Executor completed/);
+    assert.equal(fs.readFileSync(path.join(projectRoot, 'e2e-result.txt'), 'utf8'), 'omp-isolated-task-ok\n');
+  } finally {
+    cleanup(fixtureRoot);
+  }
+});
+
 test('the adapter persists checkpoints without adding a footer status', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
@@ -1231,7 +1379,7 @@ test('the adapter leaves native task activity to OMP', async () => {
   await pi._recorded.commands['gsd-execute-phase'].handler('04', ctx);
   const result = await pi._recorded.events.tool_call({
     toolName: 'task',
-    input: { tasks: [{ id: 'Phase04Plan0401Executor', role: 'GSD plan executor', description: 'Execute plan', assignment: 'Execute 04-01', isolated: true }] },
+    input: { context: 'Execute the selected plan.', tasks: [{ name: 'Phase04Plan0401Executor', agent: 'gsd-executor', task: 'Execute 04-01', isolated: true }] },
   }, ctx);
   assert.equal(result, undefined);
   assert.deepEqual(statuses, []);
@@ -1261,8 +1409,8 @@ test('running native tasks suppress stale recovery UI and block next routing', a
     await pi._recorded.events.tool_call({
       toolName: 'task',
       input: {
-        agent: 'gsd-code-reviewer',
-        tasks: [{ id: 'Phase04CodeReview', role: 'GSD reviewer', description: 'Review phase', assignment: 'Review phase 04' }],
+        context: 'Review the selected phase.',
+        tasks: [{ name: 'Phase04CodeReview', agent: 'gsd-code-reviewer', task: 'Review phase 04' }],
       },
     }, ctx);
     await pi._recorded.events.turn_end({}, ctx);
@@ -1295,16 +1443,16 @@ test('a rejected native task call releases only its tracked task batch', async (
       toolName: 'task',
       toolCallId: 'rejected-review',
       input: {
-        agent: 'gsd-code-reviewer',
-        tasks: [{ id: 'Phase04CodeReview', role: 'GSD reviewer', description: 'Review phase', assignment: 'Review phase 04' }],
+        context: 'Review the selected phase.',
+        tasks: [{ name: 'Phase04CodeReview', agent: 'gsd-code-reviewer', task: 'Review phase 04' }],
       },
     }, ctx);
     await pi._recorded.events.tool_call({
       toolName: 'task',
       toolCallId: 'surviving-review',
       input: {
-        agent: 'gsd-code-reviewer',
-        tasks: [{ id: 'Phase04SecondReview', role: 'GSD reviewer', description: 'Review follow-up', assignment: 'Review phase 04 follow-up' }],
+        context: 'Review the selected phase follow-up.',
+        tasks: [{ name: 'Phase04SecondReview', agent: 'gsd-code-reviewer', task: 'Review phase 04 follow-up' }],
       },
     }, ctx);
     await pi._recorded.commands['gsd-status'].handler('', { cwd });
@@ -1767,7 +1915,7 @@ test('an unresolved language dialog never blocks the session-start handler', asy
     ui: { select: () => (++promptCount === 1 ? selection : 'OMP interactive (recommended)') },
   })).then(() => { sessionStartResolved = true; });
 
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise(setImmediate);
   assert.equal(sessionStartResolved, true);
   resolveSelection('English');
   await sessionStart;

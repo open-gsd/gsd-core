@@ -4,4 +4,4 @@
  */
 const gsdPiExtension = require('./gsd.cjs');
 
-export default gsdPiExtension;
+export default (pi: unknown) => gsdPiExtension(pi, { runtime: 'omp' });

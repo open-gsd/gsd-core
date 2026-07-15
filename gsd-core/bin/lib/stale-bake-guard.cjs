@@ -25,17 +25,18 @@ const os = require('os');
 /**
  * Runtimes whose agent config is static frontmatter/TOML baked at install time.
  * MUST stay in sync with the bake paths in bin/install.js. The parity test in
- * tests/stale-bake-guard.test.cjs asserts this matches the runtimes that
- * actually emit a baked model: line id #2256 (opencode), #49/#2256 (codex),
- * and #2093 (kilo).
+ * tests/stale-bake-guard.test.cjs asserts each runtime actually emits a model.
+ * OMP is included because its task schema has no per-call model field; GSD
+ * therefore projects the resolved model into ~/.omp/agent/agents/*.md.
  */
-const STATIC_FRONTMATTER_RUNTIMES = Object.freeze(['codex', 'kilo', 'opencode']);
+const STATIC_FRONTMATTER_RUNTIMES = Object.freeze(['codex', 'kilo', 'omp', 'opencode']);
 
 /** Per-runtime `gsd install` flag, for the remediation hint in the warning. */
 const INSTALL_FLAG_BY_RUNTIME = Object.freeze({
   codex: '--codex',
   opencode: '--opencode',
   kilo: '--kilo',
+  omp: '--omp',
 });
 
 const _warnedKeys = new Set();
@@ -109,6 +110,10 @@ function resolveAgentDir(runtime, { env = process.env, homedir = os.homedir } = 
   }
   if (runtime === 'codex') {
     const base = (env.CODEX_HOME && String(env.CODEX_HOME).trim()) || path.join(homedir(), '.codex');
+    return path.join(base, 'agents');
+  }
+  if (runtime === 'omp') {
+    const base = (env.PI_CODING_AGENT_DIR && String(env.PI_CODING_AGENT_DIR).trim()) || path.join(homedir(), '.omp', 'agent');
     return path.join(base, 'agents');
   }
   return null;

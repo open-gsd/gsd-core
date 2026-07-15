@@ -155,9 +155,11 @@ To use a different OMP agent directory, set `PI_CODING_AGENT_DIR`:
 PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
 ```
 
-OMP is global-only. A local install is rejected because OMP does not discover project-local agent roots by default.
+OMP integration is global-only. A local GSD install is rejected because the managed extension, runtime CLI, agents, and skills belong to the active OMP agent home. OMP may still discover project-level `.omp` resources, which remain user-owned overlays rather than a second GSD runtime install.
 After restart, OMP exposes native GSD slash commands such as `/gsd`, `/gsd-status`, and `/gsd-progress`; phase execution uses OMP's native `task` and job controls. `/gsd-next` presents a clear action menu: run eligible initialization, recovery, and shipping preflight workflows directly; preview or defer a pending Next Up action; or dismiss an obsolete suggestion. Fresh-session actions remain explicitly confirmed, and all workflow safety gates still apply.
 For a normal in-project state, `/gsd-next` immediately starts the canonical progress flow when no higher-priority action is pending.
+
+OMP task calls do not accept an inline model field. GSD therefore resolves `model_overrides` first, then the active `model_profile` and `model_profile_overrides.omp` tier, and writes the resulting model into each projected OMP agent's frontmatter. After changing those model settings, rerun the OMP install/update command so the static agent files are refreshed; GSD warns when a project's model config is newer than the installed agents.
 
 For adapter development only, refresh the projected extension, agents, and skills from a source checkout:
 

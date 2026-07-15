@@ -77,6 +77,7 @@
   },
   "scripts": {
     "sync:launcher": "node scripts/sync-runtime-launcher.cjs",
+    "install:omp": "node pi/install-omp-extension.cjs && node pi/install-omp-agents.cjs && node pi/install-omp-skills.cjs",
     "check:env": "node scripts/check-env.cjs",
     "check:alias-drift": "node scripts/check-alias-drift.cjs",
     "check:identity-drift": "node scripts/lint-package-identity-drift.cjs",
