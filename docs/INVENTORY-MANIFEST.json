@@ -489,7 +489,8 @@
       "gsd-windsurf-pre-command.js",
       "gsd-windsurf-pre-write.js",
       "gsd-workflow-guard.js",
-      "gsd-worktree-path-guard.js"
+      "gsd-worktree-path-guard.js",
+      "gsd-write-guard.js"
     ]
   }
 }

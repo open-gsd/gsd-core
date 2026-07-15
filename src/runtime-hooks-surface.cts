@@ -1779,6 +1779,33 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
       console.warn(`  ${yellow}⚠${reset}  Skipped worktree path guard hook — gsd-worktree-path-guard.js not found at target`);
     }
 
+    // Configure PreToolUse hook for catastrophic-shrink protection (#2255, fix 3 of #973)
+    // Hard-blocks a whole-file Write that collapses a curated .planning/ artifact
+    // (ROADMAP.md, milestone roadmaps, STATE.md) far below its on-disk size.
+    // Escape hatch: GSD_ALLOW_PLANNING_SHRINK=1 (named in the block message).
+    const writeGuardCommand = isGlobal
+      ? buildHookCommand(targetDir, 'gsd-write-guard.js', hookOpts)
+      : localCmd('gsd-write-guard.js');
+    const hasWriteGuardHook = settings.hooks[preToolEvent].some((entry: HookGroup) =>
+      entry.hooks && entry.hooks.some((h: HookEntry) => referencesHook(h as Record<string, unknown>, 'gsd-write-guard'))
+    );
+    const writeGuardFile = path.join(targetDir, 'hooks', 'gsd-write-guard.js');
+    if (!hasWriteGuardHook && fs.existsSync(writeGuardFile) && writeGuardCommand) {
+      settings.hooks[preToolEvent].push({
+        matcher: 'Write',
+        hooks: [
+          {
+            type: 'command',
+            command: writeGuardCommand,
+            timeout: 5
+          }
+        ]
+      });
+      console.log(`  ${green}✓${reset} Configured write guard hook (catastrophic-shrink protection)`);
+    } else if (!hasWriteGuardHook && !fs.existsSync(writeGuardFile)) {
+      console.warn(`  ${yellow}⚠${reset}  Skipped write guard hook — gsd-write-guard.js not found at target`);
+    }
+
     // Configure commit validation hook (Conventional Commits enforcement, opt-in)
     const validateCommitCommand = isGlobal
       ? buildHookCommand(targetDir, 'gsd-validate-commit.sh', hookOpts)
@@ -2124,6 +2151,7 @@ function buildKimiHooksTomlBlock(targetDir: string, opts: { hookOpts: BuildHookC
     { event: 'PreToolUse', command: cmd('gsd-prompt-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
     { event: 'PreToolUse', command: cmd('gsd-read-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
     { event: 'PreToolUse', command: cmd('gsd-worktree-path-guard.js'), matcher: 'WriteFile|StrReplaceFile', timeout: 5 },
+    { event: 'PreToolUse', command: cmd('gsd-write-guard.js'), matcher: 'WriteFile', timeout: 5 },
     { event: 'PreToolUse', command: cmd('gsd-workflow-guard.js'), matcher: 'Shell|WriteFile|StrReplaceFile', timeout: 5 },
     { event: 'PreToolUse', command: cmd('gsd-validate-commit.sh'), matcher: 'Shell', timeout: 5 },
 

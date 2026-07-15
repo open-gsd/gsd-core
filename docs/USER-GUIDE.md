@@ -397,6 +397,7 @@ GSD generates markdown files that become LLM system prompts. This means any user
 
 - `gsd-prompt-guard.js` — Scans Write/Edit calls to `.planning/` for injection patterns (always active, advisory-only)
 - `gsd-workflow-guard.js` — Warns on file edits outside GSD workflow context (opt-in via `hooks.workflow_guard`)
+- `gsd-write-guard.js` — Hard-blocks a whole-file `Write` that catastrophically shrinks a curated `.planning/` artifact (`ROADMAP.md`, milestone roadmaps, `STATE.md`) below 40% of its on-disk line count; files under 40 lines are exempt. For a legitimate milestone reset or large deletion, bypass once with `GSD_ALLOW_PLANNING_SHRINK=1` (always active, blocking; #2255, fix 3 of #973)
 
 **CI Scanner:** `prompt-injection-scan.security.test.cjs` scans all agent, workflow, and command files for embedded injection vectors.
 
