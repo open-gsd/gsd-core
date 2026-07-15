@@ -20,7 +20,9 @@ const OMP_SKILL_BLOCKS = {
 - Never invoke \`git worktree\` yourself. OMP owns isolation setup and cleanup.
 </omp_native_execution>`,
   'gsd-progress': `<omp_artifact_handling>
-**OMP:** \`.planning/debug/\` and \`.planning/todos/pending/\` are optional. Their absence means zero active debug sessions and zero pending todo artifacts; do not emit an error or invoke Glob/Grep with either missing directory as its root. When checking optional artifacts, scan an existing \`.planning\` root and filter matching paths. A truncated summary glob may supply recent-work examples only; never use it to derive plan or summary counts.
+**OMP runtime CLI:** \`{{OMP_GSD_TOOLS}}\` is the only authoritative \`gsd-tools.cjs\` for this skill. Bind \`gsd_run() { node "{{OMP_GSD_TOOLS}}" "$@"; }\` before any query and use \`gsd_run\` throughout. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another installed runtime may own that executable.
+
+**OMP optional artifacts:** \`.planning/.continue-here.md\`, \`.planning/debug/\`, and \`.planning/todos/pending/\` are optional. Probe a path's existence before reading it. Absence means no checkpoint, zero active debug sessions, or zero pending todo artifacts; it is not an error. Do not invoke Glob/Grep with a missing directory as its root. When checking optional directories, scan an existing \`.planning\` root and filter matching paths. A truncated summary glob may supply recent-work examples only; never use it to derive plan or summary counts.
 </omp_artifact_handling>`,
 };
 
@@ -33,8 +35,9 @@ function projectSkillContent(content, runtimeRoot) {
   return content.replaceAll('~/.claude/gsd-core', runtimeGsdRoot);
 }
 
-function applyOmpSkillBlock(name, content) {
-  const block = OMP_SKILL_BLOCKS[name];
+function applyOmpSkillBlock(name, content, runtimeRoot) {
+  const template = OMP_SKILL_BLOCKS[name];
+  const block = template?.replaceAll('{{OMP_GSD_TOOLS}}', toPosixPath(path.join(runtimeRoot, 'gsd-core', 'bin', 'gsd-tools.cjs')));
   if (!block || content.includes(block)) return content;
   const marker = content.includes('<context>') ? '<context>' : '<process>';
   const index = content.indexOf(marker);
@@ -52,7 +55,7 @@ function installOmpSkills(skillsDir, sourceSkillsDir = path.resolve(__dirname, '
     if (!fs.existsSync(sourceSkillPath)) continue;
     const skillPath = path.join(skillsDir, entry.name, 'SKILL.md');
     const source = fs.readFileSync(sourceSkillPath, 'utf8');
-    const content = applyOmpSkillBlock(entry.name, projectSkillContent(source, runtimeRoot));
+    const content = applyOmpSkillBlock(entry.name, projectSkillContent(source, runtimeRoot), runtimeRoot);
     fs.mkdirSync(path.dirname(skillPath), { recursive: true });
     fs.writeFileSync(skillPath, content);
     installed.push(skillPath);

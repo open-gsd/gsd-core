@@ -2652,6 +2652,7 @@ OMP interaction contract:
     const tokens = parseCommandLine(input);
     if (tokens.length > 1 || (tokens.length && tokens[0] !== '--next')) return null;
     const mode = tokens[0] === '--next' ? ' --next' : '';
+    const runtimeTools = path.join(path.resolve(__dirname, '..'), 'gsd-core', 'bin', 'gsd-tools.cjs');
     return `# OMP native GSD progress
 
 Execute the gsd-progress workflow${mode} end-to-end.
@@ -2659,6 +2660,8 @@ Execute the gsd-progress workflow${mode} end-to-end.
 OMP progress contract:
 - For \`--next\`, delegate all routing to the canonical progress workflow. Do not re-derive phase routing in this adapter or bypass its Gates 1–3 and Route 0 incomplete-phase invariant.
 - Preserve the workflow's state inspection, safety gates, routing, and user-interaction rules. The native command is an entry point, not a replacement workflow.
+- Bind the workflow's \`gsd_run\` helper directly to \`${runtimeTools}\` and use it for every GSD query. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another runtime installation may own that executable.
+- Treat \`.planning/.continue-here.md\` as optional: probe its existence before any Read. A missing file passes Gate 1 and must not emit a tool error.
 - This message activates the \`gsd-progress\` skill workflow, not a \`gsd-tools\` CLI subcommand. Read \`skill://gsd-progress\`, then execute its selected workflow in this turn.
 - Do not call \`gsd_invoke\` to run this workflow. In particular, \`family: "gsd"\` is invalid; \`/gsd-progress\` is a native workflow entry point, not a \`gsd-tools\` family.
 `;
