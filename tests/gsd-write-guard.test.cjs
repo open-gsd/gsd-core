@@ -83,17 +83,18 @@ describe('gsd-write-guard.js: catastrophic shrink of curated artifacts', () => {
     assert.equal(r.status, 2, `expected exit 2, got ${r.status}; stdout: ${r.stdout}`);
     const out = JSON.parse(r.stdout);
     assert.equal(out.decision, 'block', 'must emit decision: block (hard-block, not advisory)');
-    assert.match(out.reason, /292 lines to 16/, 'reason must carry the concrete line counts');
+    assert.equal(out.oldLines, 292, 'typed oldLines field must carry the on-disk line count');
+    assert.equal(out.newLines, 16, 'typed newLines field must carry the payload line count');
   });
 
-  test('block message names the documented override (GSD_ALLOW_PLANNING_SHRINK)', () => {
+  test('block output names the documented override in the typed overrideEnvVar field', () => {
     fs.writeFileSync(roadmapPath, lines(292));
     const r = runHook(writePayload(roadmapPath, lines(16)));
     assert.equal(r.status, 2);
     const out = JSON.parse(r.stdout);
-    assert.match(
-      out.reason, /GSD_ALLOW_PLANNING_SHRINK=1/,
-      'the escape hatch must be named in the block message — an undocumented bypass gets bypassed with the blunt instrument instead'
+    assert.equal(
+      out.overrideEnvVar, 'GSD_ALLOW_PLANNING_SHRINK',
+      'the escape hatch must be named in the block output — an undocumented bypass gets bypassed with the blunt instrument instead'
     );
   });
 
@@ -118,6 +119,44 @@ describe('gsd-write-guard.js: catastrophic shrink of curated artifacts', () => {
     const r = runHook(writePayload(statePath, lines(5)));
     assert.equal(r.status, 2, `expected exit 2, got ${r.status}; stdout: ${r.stdout}`);
     assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+
+  test('non-ENOENT read error fails CLOSED — curated target unreadable blocks (exit 2)', () => {
+    // A directory at the curated path makes readFileSync throw EISDIR (or the
+    // platform's equivalent) — any non-ENOENT read error must block, not wave
+    // the Write through on a transient failure.
+    const dirAsRoadmap = path.join(planningDir, 'milestones', 'vX-ROADMAP.md');
+    fs.mkdirSync(dirAsRoadmap, { recursive: true });
+    const r = runHook(writePayload(dirAsRoadmap, lines(300)));
+    assert.equal(r.status, 2, `unreadable curated target must fail closed; stdout: ${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.equal(out.overrideEnvVar, 'GSD_ALLOW_PLANNING_SHRINK');
+    assert.notEqual(out.readError, undefined, 'typed readError field must carry the error code');
+  });
+
+  test('non-ENOENT read error still honors the documented override (fails open when set)', () => {
+    const dirAsRoadmap = path.join(planningDir, 'milestones', 'vY-ROADMAP.md');
+    fs.mkdirSync(dirAsRoadmap, { recursive: true });
+    const r = runHook(writePayload(dirAsRoadmap, lines(300)), { GSD_ALLOW_PLANNING_SHRINK: '1' });
+    assert.equal(r.status, 0, `override must bypass the fail-closed branch; stdout: ${r.stdout}`);
+  });
+
+  test('differently-cased path to a curated file is still guarded (case-insensitive FS bypass)', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    // On a case-insensitive filesystem (macOS/Windows default) this path IS
+    // ROADMAP.md; on a case-sensitive one it's a new file and ENOENT fails
+    // open — either way the pattern match itself must be case-insensitive,
+    // which this payload exercises via the resolved-path match.
+    const casedPath = path.join(planningDir, 'roadmap.MD');
+    const r = runHook(writePayload(casedPath, lines(16)));
+    if (fs.existsSync(casedPath) && fs.statSync(casedPath).size > 0) {
+      // case-insensitive FS: same real file — must block
+      assert.equal(r.status, 2, `case-variant Write to the same real file must block; stdout: ${r.stdout}`);
+    } else {
+      // case-sensitive FS: genuinely a new file — new-file Writes pass
+      assert.equal(r.status, 0, `stdout: ${r.stdout}`);
+    }
   });
 
   test('relative file_path resolves against the payload cwd — blocked', () => {
@@ -158,12 +197,20 @@ describe('gsd-write-guard.js: deliberately narrow trigger (no-op paths)', () => 
     assert.equal(r.status, 2, `40-line file collapsing to 15 (37.5%) must block; stdout: ${r.stdout}`);
   });
 
-  test('ratio boundary: exactly 40% of old passes; one line fewer blocks', () => {
+  test('above-floor file (41 lines) IS guarded — floor boundary from above', () => {
+    fs.writeFileSync(roadmapPath, lines(41));
+    const r = runHook(writePayload(roadmapPath, lines(15)));
+    assert.equal(r.status, 2, `41-line file collapsing to 15 (~36.6%) must block; stdout: ${r.stdout}`);
+  });
+
+  test('ratio boundary: exactly 40% of old passes; one line either side behaves', () => {
     fs.writeFileSync(roadmapPath, lines(100));
     const atThreshold = runHook(writePayload(roadmapPath, lines(40)));
     assert.equal(atThreshold.status, 0, `100 → 40 (exactly 40%) must pass; stdout: ${atThreshold.stdout}`);
     const belowThreshold = runHook(writePayload(roadmapPath, lines(39)));
     assert.equal(belowThreshold.status, 2, `100 → 39 (39%) must block; stdout: ${belowThreshold.stdout}`);
+    const aboveThreshold = runHook(writePayload(roadmapPath, lines(41)));
+    assert.equal(aboveThreshold.status, 0, `100 → 41 (41%) must pass; stdout: ${aboveThreshold.stdout}`);
   });
 
   test('creating a curated file that does not exist yet passes', () => {

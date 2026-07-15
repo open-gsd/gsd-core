@@ -56,10 +56,14 @@ const FLOOR_LINES = 40;
 
 // Curated .planning/ artifacts, matched against the resolved target path with
 // separators normalised to '/'. Deliberately a closed set (see header).
+// Case-insensitive: on the case-insensitive filesystems macOS and Windows
+// default to, a differently-cased path is the SAME real file — a Write to
+// '.planning/roadmap.md' clobbers ROADMAP.md while a case-sensitive match
+// waves it through.
 const CURATED_PATTERNS = [
-  /(?:^|\/)\.planning\/ROADMAP\.md$/,
-  /(?:^|\/)\.planning\/STATE\.md$/,
-  /(?:^|\/)\.planning\/milestones\/[^/]+-ROADMAP\.md$/,
+  /(?:^|\/)\.planning\/ROADMAP\.md$/i,
+  /(?:^|\/)\.planning\/STATE\.md$/i,
+  /(?:^|\/)\.planning\/milestones\/[^/]+-ROADMAP\.md$/i,
 ];
 
 // Count logical lines, ignoring a single trailing newline so that
@@ -112,11 +116,31 @@ process.stdin.on('end', () => {
     }
 
     // Only guard overwrites — creating a curated file fresh is fine.
+    // ENOENT alone fails open (no baseline to protect); any OTHER read error
+    // (EACCES, EISDIR, ELOOP, EMFILE, a Windows lock) fails CLOSED — a guard
+    // that waves a curated Write through on a transient read error is not
+    // "independent of per-agent tool config", it is a race away from #973.
     let onDisk;
     try {
       onDisk = fs.readFileSync(filePath, 'utf8');
-    } catch {
-      process.exit(0); // does not exist (or unreadable) — no baseline to protect
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        process.exit(0); // does not exist — new-file Write, nothing to clobber
+      }
+      const output = {
+        decision: 'block',
+        readError: err && err.code ? String(err.code) : 'UNKNOWN',
+        overrideEnvVar: 'GSD_ALLOW_PLANNING_SHRINK',
+        reason:
+          `Write guard: could not read '${filePath}' to compare against the pending ` +
+          `Write (${err && err.code ? err.code : 'unknown read error'}). ` +
+          `'${path.basename(filePath)}' is a curated planning artifact, so this guard ` +
+          `fails closed rather than risk a blind overwrite. Retry once the file is ` +
+          `readable, or — if this overwrite is intentional — re-run with the ` +
+          `environment variable GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
+      };
+      process.stdout.write(JSON.stringify(output));
+      process.exit(2);
     }
 
     const oldLines = countLines(onDisk);
@@ -131,8 +155,14 @@ process.stdin.on('end', () => {
     }
 
     const pct = Math.round((newLines / oldLines) * 100);
+    // Typed fields (oldLines/newLines/overrideEnvVar) ride alongside the
+    // free-form reason so consumers — including this repo's tests — never
+    // have to regex the prose (CONTRIBUTING.md: no raw text matching).
     const output = {
       decision: 'block',
+      oldLines,
+      newLines,
+      overrideEnvVar: 'GSD_ALLOW_PLANNING_SHRINK',
       reason:
         `Write guard: this Write would shrink '${filePath}' from ${oldLines} lines to ` +
         `${newLines} (${pct}% of current). '${path.basename(filePath)}' is a curated planning ` +
