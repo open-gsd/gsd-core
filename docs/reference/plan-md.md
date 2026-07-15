@@ -144,7 +144,7 @@ References source files the executor needs to read. Includes project-level plann
 
 ### `<tasks>`
 
-Contains one or more `<task>` elements. Every task element must carry `<name>`, `<files>`, `<read_first>`, `<action>`, `<verify>`, `<acceptance_criteria>`, and `<done>` for `type="auto"` tasks.
+Contains one or more `<task>` elements. Every task element must carry `<name>`, `<files>`, `<read_first>`, `<action>`, `<verify>`, `<acceptance_criteria>`, and `<done>` for `type="auto"` and `type="tracer"` tasks.
 
 ---
 
@@ -153,6 +153,7 @@ Contains one or more `<task>` elements. Every task element must carry `<name>`, 
 | Type | Use | Autonomy |
 |---|---|---|
 | `auto` | Everything the executor can do independently. | Fully autonomous. |
+| `tracer` | The leading thin end-to-end slice a plan starts with by default (tracer-first) — production-quality, wired through every layer, with a real end-to-end `<verify>`. | Fully autonomous; after committing, the executor runs the tracer's `<verify>` as an early integration gate — autonomous runs halt on failure before expansion, interactive runs present a `checkpoint:human-verify`. |
 | `checkpoint:human-verify` | Visual or functional verification that requires a human to look at a running UI or service. | Pauses execution; presents to the developer; resumes on approval. |
 | `checkpoint:decision` | Implementation choices that arose during execution and require the developer's input. | Pauses execution; presents options; resumes on selection. |
 | `checkpoint:human-action` | Truly unavoidable manual steps (account creation, hardware interaction). Used sparingly. | Pauses execution; resumes on confirmation. |
