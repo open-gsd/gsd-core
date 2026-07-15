@@ -1,5 +1,5 @@
 ---
 type: Added
-pr: 0
+pr: 2301
 ---
 **A blocking catastrophic-shrink guard now protects curated `.planning/` artifacts from whole-file `Write` clobbers** — the new `PreToolUse` hook `gsd-write-guard.js` compares the pending `Write` payload against the file on disk and hard-blocks (`decision: 'block'`, exit 2) when the payload would collapse `ROADMAP.md`, a milestone roadmap (`.planning/milestones/*-ROADMAP.md`), or `STATE.md` below 40% of its current line count (files under 40 lines are exempt). This is fix 3 of #973 — the only defense independent of per-agent tool config: fixes 1 and 2 (PR #989) are instructions to a model and protect only audited agents, and #973 records an agent reading the existing advisory and reasoning past it while destroying three milestones of roadmap history. Legitimate milestone resets bypass the guard with `GSD_ALLOW_PLANNING_SHRINK=1`, named in the block message. Registered on the Claude plugin surface, the settings-json runtimes, Kimi, and the OpenCode/Kilo plugin buses. Resolves #2255.
