@@ -1,32 +1,31 @@
-# Planner — MVP Mode (Vertical Slice Strategy)
+# Planner — Tracer-First Decomposition (Vertical Slices)
 
-> Loaded by `gsd-planner` only when `MVP_MODE=true`. Standard horizontal-layer planning rules continue to apply for all other phases.
+> Loaded by `gsd-planner` for the **default** tracer-first decomposition: every phase LEADS with one thin end-to-end `type="tracer"` slice, then expansion tasks. `--no-tracer` (`TRACER_MODE=false`) restores standard horizontal-layer planning. The MVP enrichment (user-story framing) and Walking Skeleton mode apply *on top* when `MVP_MODE=true` / `WALKING_SKELETON=true`.
 
 ## Core Rule
 
 **Decompose by feature slice, not by technical layer.** Every task must move the user-facing capability forward. After each task, a real user can click through more of the feature than they could before.
 
-**Forbidden** in MVP mode:
+**Forbidden** under tracer-first:
 - "Create the database schema" as a standalone task
 - "Build the API layer" as a standalone task
 - "Wire up the UI" as a final integration task
 
-**Required** in MVP mode:
-- The first non-test task produces a working end-to-end path. Stubs are allowed for non-critical branches; the happy path must be real.
-- Each subsequent task either adds a new slice OR refines an existing slice (validation, error states, edge cases).
-- The phase goal is framed as a user story: "**As a** [user], **I want to** [do X], **so that** [Y]."
+**Required** under tracer-first:
+- The leading `tracer` task produces a working end-to-end path — production-quality, not a prototype. Stubs are allowed ONLY where they can later be filled without an architectural change; the happy path must be real.
+- Each subsequent expansion task either adds a new slice OR refines an existing slice (validation, error states, edge cases).
+- *(MVP enrichment, `MVP_MODE=true`)* The phase goal is framed as a user story: "**As a** [user], **I want to** [do X], **so that** [Y]."
 
 ## Task Order Pattern
 
 For a feature `F`:
 
-1. **Failing end-to-end test** for the happy path of `F`.
-2. **Thinnest viable slice** — UI form → API endpoint → DB read/write — that makes the test pass. Hard-coded values, missing validation, no error states are fine here.
-3. **Real data layer** — replace any stubs from Task 2 with real queries.
-4. **Validation + error states** — invalid input, network failure, empty states.
-5. **Production polish** — loading indicators, edge cases, accessibility checks.
+1. **Tracer slice** — the thinnest end-to-end path (UI form → API endpoint → DB read/write), wired through every layer with a real runnable `<verify>`. This task is always `type="tracer"`; production-quality, not a prototype; stubs only where later-fillable without an architectural change. Under `--tdd` it *also* starts red — its first move is a failing end-to-end test for the happy path of `F`.
+2. **Real data layer** — replace any stubs from the tracer with real queries.
+3. **Validation + error states** — invalid input, network failure, empty states.
+4. **Production polish** — loading indicators, edge cases, accessibility checks.
 
-Tasks 3-5 are not always all needed; gate by the phase's acceptance criteria.
+Tasks 2-4 are not always all needed; gate by the phase's acceptance criteria.
 
 ## Walking Skeleton Mode (`WALKING_SKELETON=true`)
 
