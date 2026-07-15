@@ -104,42 +104,6 @@ function parseGsdCommandArgs(rawArgs) {
   };
 }
 
-/**
- * Best-effort TypeBox schema for gsd_invoke's `parameters`, falling back to a
- * plain JSON-Schema object when the `typebox` package is unavailable (it is
- * NOT a gsd-core dependency — pi's own ExtensionAPI contract expects TypeBox,
- * but nothing in this repo installs it). TypeBox schemas ARE JSON Schema, so
- * the fallback object is structurally equivalent for hosts that accept plain
- * JSON Schema; this is a best-effort shim for the flat-file extension case.
- * @returns {object}
- */
-function buildGsdInvokeParameters() {
-  try {
-    const typebox = require('typebox');
-    const Type = typebox && typebox.Type;
-    if (Type) {
-      return Type.Object({
-        family: Type.String(),
-        subcommand: Type.Optional(Type.String()),
-        args: Type.Optional(Type.Array(Type.String())),
-      });
-    }
-  } catch {
-    // typebox is not installed in this environment — fall through.
-  }
-  process.stderr.write(
-    'gsd: typebox unavailable — gsd_invoke "parameters" falling back to a plain JSON-schema object.\n',
-  );
-  return {
-    type: 'object',
-    properties: {
-      family: { type: 'string' },
-      subcommand: { type: 'string' },
-      args: { type: 'array', items: { type: 'string' } },
-    },
-    required: ['family'],
-  };
-}
 
 /**
  * Build the `before_provider_request` handler that steers pi's model
