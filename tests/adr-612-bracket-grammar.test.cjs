@@ -92,6 +92,21 @@ describe('bracket grammar: full 5-tuple parse (ADR §1 acceptance)', () => {
   });
 });
 
+// ─── 3+-digit numeric width (re-review Minor 1) ─────────────────────────────
+// The fast-check generators below (numArb) span 1–999 so the round-trip and
+// disk↔display properties genuinely exercise 3+-digit tokens; this concrete
+// case pins the reviewer's hand-traced example deterministically. A 3+-digit
+// milestone must survive pad2() un-truncated, carry no leading zero, and match
+// CANONICAL_NUMERIC_RE's `[1-9]\d{2,}` branch inside toDir.
+describe('bracket grammar: 3+-digit milestone width (re-review Minor 1)', () => {
+  test("'[GSD.100] 05' round-trips, renders, and toDirs without truncation", () => {
+    const id = core.parsePhaseId('[GSD.100] 05');
+    assert.deepStrictEqual(id, { project: 'GSD', milestone: '100', phase: '05' });
+    assert.strictEqual(core.renderPhaseId(id), '[GSD.100] 05');
+    assert.strictEqual(core.toDir(id, 'feature'), 'GSD.100-05-feature');
+  });
+});
+
 // ─── Strict-reject: parsePhaseId rejects non-canonical input (review B1) ────
 // render(parse(x)) === x must hold for every WELL-FORMED display string
 // (ADR-612 Decision 4). A permissive match that accepts unpadded numbers or
@@ -394,7 +409,12 @@ const slugArb = fc
   .array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')), { minLength: 1, maxLength: 8 })
   .map((cs) => cs.join(''))
   .filter((s) => /[a-z]/.test(s));
-const numArb = fc.integer({ min: 1, max: 99 });
+// Spans 1–999 so the property domain genuinely includes 3+-digit milestone/
+// phase/subphase/plan tokens (re-review Minor 1). pad2() passes a ≥3-digit
+// value through unchanged (no truncation) and it carries no leading zero, so
+// both the render round-trip and CANONICAL_NUMERIC_RE's dedicated `[1-9]\d{2,}`
+// branch (exercised via toDir in the bijection property) hold at that width.
+const numArb = fc.integer({ min: 1, max: 999 });
 const optNumArb = fc.option(numArb, { nil: undefined });
 
 describe('bracket grammar — properties (fast-check)', () => {
@@ -437,17 +457,24 @@ describe('bracket grammar — properties (fast-check)', () => {
   // ever feeds parsePhaseId a string produced by p2()-padding, so it cannot
   // exercise the rejection path at all. This property starts from a KNOWN
   // canonical display string and applies one structural mutation — stripping
-  // a pad, doubling the bracket/phase separator space, over-padding a field,
-  // or adding stray whitespace — asserting parsePhaseId throws on every one.
-  // numArb is restricted to 1-9 here so `p2()` always actually pads (e.g.
-  // '05', not '42'); otherwise the "unpad" mutation could regenerate the same
-  // canonical string, making the mutation a no-op instead of a genuine probe.
+  // a pad (milestone, phase, OR subphase), doubling the bracket/phase separator
+  // space, over-padding a field, or adding stray whitespace — asserting
+  // parsePhaseId throws on every one. The milestone/phase/subphase integers are
+  // restricted to 1-9 here so `p2()` always actually pads (e.g. '05', not '42');
+  // otherwise the "unpad" mutation could regenerate the same canonical string,
+  // making the mutation a no-op instead of a genuine probe. `includeSub` (a
+  // generated boolean) decides whether the canonical carries a `.SS` subphase;
+  // the subphase-pad mutations (re-review Minor 2) force one in so there is
+  // always a `.SS` to mutate, while the non-subphase mutations keep their
+  // original no-subphase coverage whenever `includeSub` is false.
   const singleDigitArb = fc.integer({ min: 1, max: 9 });
   const mutationArb = fc.constantFrom(
     'unpad-milestone',
     'unpad-phase',
+    'unpad-subphase',
     'overpad-milestone',
     'overpad-phase',
+    'overpad-subphase',
     'double-space',
     'leading-space',
     'trailing-space',
@@ -455,32 +482,49 @@ describe('bracket grammar — properties (fast-check)', () => {
 
   test('non-canonical mutations of a canonical display string are always rejected', () => {
     fc.assert(
-      fc.property(projectArb, singleDigitArb, singleDigitArb, mutationArb, (proj, mm, pp, mutation) => {
-        const mmP = p2(mm);
-        const ppP = p2(pp);
-        const canonical = `[${proj}.${mmP}] ${ppP}`;
-        let mutated;
-        switch (mutation) {
-          case 'unpad-milestone': mutated = `[${proj}.${mm}] ${ppP}`; break;
-          case 'unpad-phase': mutated = `[${proj}.${mmP}] ${pp}`; break;
-          case 'overpad-milestone': mutated = `[${proj}.0${mmP}] ${ppP}`; break;
-          case 'overpad-phase': mutated = `[${proj}.${mmP}] 0${ppP}`; break;
-          case 'double-space': mutated = `[${proj}.${mmP}]  ${ppP}`; break;
-          case 'leading-space': mutated = ` ${canonical}`; break;
-          case 'trailing-space': mutated = `${canonical} `; break;
-          default: throw new Error(`unreachable mutation: ${mutation}`);
-        }
-        // Sanity: every mutation above must actually change the string, or
-        // the property would (correctly) fail to throw and falsely indict
-        // the implementation instead of the generator.
-        if (mutated === canonical) return false;
-        try {
-          core.parsePhaseId(mutated);
-          return false; // did not throw — the mutation slipped through
-        } catch {
-          return true;
-        }
-      }),
+      fc.property(
+        projectArb,
+        singleDigitArb,
+        singleDigitArb,
+        singleDigitArb,
+        fc.boolean(),
+        mutationArb,
+        (proj, mm, pp, ss, includeSub, mutation) => {
+          const mmP = p2(mm);
+          const ppP = p2(pp);
+          const ssP = p2(ss);
+          const isSubMutation = mutation === 'unpad-subphase' || mutation === 'overpad-subphase';
+          // A subphase-pad mutation needs a `.SS` to act on, so force one in for
+          // those cases; otherwise the generated boolean decides, preserving the
+          // original no-subphase mutation coverage.
+          const hasSub = includeSub || isSubMutation;
+          const subCanon = hasSub ? `.${ssP}` : '';
+          const canonical = `[${proj}.${mmP}] ${ppP}${subCanon}`;
+          let mutated;
+          switch (mutation) {
+            case 'unpad-milestone': mutated = `[${proj}.${mm}] ${ppP}${subCanon}`; break;
+            case 'unpad-phase': mutated = `[${proj}.${mmP}] ${pp}${subCanon}`; break;
+            case 'unpad-subphase': mutated = `[${proj}.${mmP}] ${ppP}.${ss}`; break;
+            case 'overpad-milestone': mutated = `[${proj}.0${mmP}] ${ppP}${subCanon}`; break;
+            case 'overpad-phase': mutated = `[${proj}.${mmP}] 0${ppP}${subCanon}`; break;
+            case 'overpad-subphase': mutated = `[${proj}.${mmP}] ${ppP}.0${ssP}`; break;
+            case 'double-space': mutated = `[${proj}.${mmP}]  ${ppP}${subCanon}`; break;
+            case 'leading-space': mutated = ` ${canonical}`; break;
+            case 'trailing-space': mutated = `${canonical} `; break;
+            default: throw new Error(`unreachable mutation: ${mutation}`);
+          }
+          // Sanity: every mutation above must actually change the string, or
+          // the property would (correctly) fail to throw and falsely indict
+          // the implementation instead of the generator.
+          if (mutated === canonical) return false;
+          try {
+            core.parsePhaseId(mutated);
+            return false; // did not throw — the mutation slipped through
+          } catch {
+            return true;
+          }
+        },
+      ),
     );
   });
 });
