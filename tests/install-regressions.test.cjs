@@ -37,7 +37,7 @@ try {
   else process.env.GSD_TEST_MODE = savedTestMode;
 }
 
-const { install, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
+const { install, mergeClaudePermissions, GSD_CLAUDE_ALLOW_PERMISSIONS, GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS, GSD_CLAUDE_DENY_PERMISSIONS, rewriteLegacyManagedNodeHookCommands, resolveNodeRunner } = installExports || {};
 
 const {
   installRuntimeArtifacts,
@@ -394,22 +394,26 @@ describe('mergeClaudePermissions (#768): fresh settings object', () => {
       'permissions.allow must contain Bash(npx gsd-core *)');
   });
 
-  test('includes planning path entries in allow', () => {
+  test('includes planning path entries in allow (#2278: Edit, not Write)', () => {
     const settings = {};
     mergeClaudePermissions(settings);
     assert.ok(settings.permissions.allow.includes('Read(.planning/*)'),
       'permissions.allow must contain Read(.planning/*)');
-    assert.ok(settings.permissions.allow.includes('Write(.planning/*)'),
-      'permissions.allow must contain Write(.planning/*)');
+    assert.ok(settings.permissions.allow.includes('Edit(.planning/*)'),
+      'permissions.allow must contain Edit(.planning/*)');
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'permissions.allow must NOT contain the unmatched Write(.planning/*) form (#2278)');
   });
 
-  test('includes STATE.md entries in allow', () => {
+  test('includes STATE.md entries in allow (#2278: Edit, not Write)', () => {
     const settings = {};
     mergeClaudePermissions(settings);
     assert.ok(settings.permissions.allow.includes('Read(STATE.md)'),
       'permissions.allow must contain Read(STATE.md)');
-    assert.ok(settings.permissions.allow.includes('Write(STATE.md)'),
-      'permissions.allow must contain Write(STATE.md)');
+    assert.ok(settings.permissions.allow.includes('Edit(STATE.md)'),
+      'permissions.allow must contain Edit(STATE.md)');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'permissions.allow must NOT contain the unmatched Write(STATE.md) form (#2278)');
   });
 
   test('includes .env denial entries in deny', () => {
@@ -492,6 +496,115 @@ describe('mergeClaudePermissions (#768): non-destructive merge', () => {
       // Must not throw
       assert.doesNotThrow(() => mergeClaudePermissions(bad),
         `mergeClaudePermissions must not throw on: ${JSON.stringify(bad)}`);
+    }
+  });
+});
+
+// ─── #2278 — Claude Code has no standalone `Write` permission gate; the
+// pre-populated allow-rules must use `Edit(pattern)`, and a merge against an
+// existing install must retire the stale unmatched `Write(...)` forms.
+describe('mergeClaudePermissions (#2278): legacy Write(...) → Edit(...) migration', () => {
+  test('GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS is exported and lists the stale Write(...) forms', () => {
+    assert.ok(Array.isArray(GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS),
+      'GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS must be an array');
+    assert.deepStrictEqual(
+      [...GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS].sort(),
+      ['Write(.planning/*)', 'Write(STATE.md)'].sort(),
+      'GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS must contain exactly the retired Write(...) forms'
+    );
+  });
+
+  test('fresh/empty settings: allow ends with Edit(...) forms, never Write(...)', () => {
+    const settings = {};
+    mergeClaudePermissions(settings);
+    assert.ok(settings.permissions.allow.includes('Edit(.planning/*)'),
+      'fresh merge must add Edit(.planning/*)');
+    assert.ok(settings.permissions.allow.includes('Edit(STATE.md)'),
+      'fresh merge must add Edit(STATE.md)');
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'fresh merge must never add Write(.planning/*)');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'fresh merge must never add Write(STATE.md)');
+  });
+
+  test('existing install with legacy Write(...) entries: migrated to Edit(...), user entries untouched', () => {
+    const settings = {
+      permissions: {
+        allow: ['Write(.planning/*)', 'Write(STATE.md)', 'Bash(git *)'],
+        deny: ['WebSearch'],
+      },
+    };
+    mergeClaudePermissions(settings);
+
+    // Stale legacy forms must be gone.
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'legacy Write(.planning/*) must be removed by merge');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'legacy Write(STATE.md) must be removed by merge');
+
+    // Replaced by the working Edit(...) forms.
+    assert.ok(settings.permissions.allow.includes('Edit(.planning/*)'),
+      'Edit(.planning/*) must be present after migration');
+    assert.ok(settings.permissions.allow.includes('Edit(STATE.md)'),
+      'Edit(STATE.md) must be present after migration');
+
+    // Unrelated user-added entries must survive untouched.
+    assert.ok(settings.permissions.allow.includes('Bash(git *)'),
+      'unrelated user allow entry must survive migration');
+    assert.ok(settings.permissions.deny.includes('WebSearch'),
+      'unrelated user deny entry must survive migration');
+  });
+
+  test('mixed state: settings.allow containing BOTH legacy and current forms simultaneously collapses to exactly one Edit(...) each', () => {
+    const settings = {
+      permissions: {
+        allow: ['Write(.planning/*)', 'Edit(.planning/*)', 'Write(STATE.md)', 'Edit(STATE.md)', 'Bash(git *)'],
+        deny: [],
+      },
+    };
+    mergeClaudePermissions(settings);
+
+    // Legacy forms must be gone.
+    assert.ok(!settings.permissions.allow.includes('Write(.planning/*)'),
+      'legacy Write(.planning/*) must be removed even when Edit(.planning/*) was already present');
+    assert.ok(!settings.permissions.allow.includes('Write(STATE.md)'),
+      'legacy Write(STATE.md) must be removed even when Edit(STATE.md) was already present');
+
+    // Current forms must appear exactly once (no duplicate from the pre-existing entry).
+    assert.strictEqual(
+      settings.permissions.allow.filter((e) => e === 'Edit(.planning/*)').length,
+      1,
+      'Edit(.planning/*) must appear exactly once, not duplicated'
+    );
+    assert.strictEqual(
+      settings.permissions.allow.filter((e) => e === 'Edit(STATE.md)').length,
+      1,
+      'Edit(STATE.md) must appear exactly once, not duplicated'
+    );
+
+    // Unrelated user entry must survive.
+    assert.ok(settings.permissions.allow.includes('Bash(git *)'),
+      'unrelated user allow entry must survive the mixed-state migration');
+  });
+
+  test('idempotent: repeated merge produces no dupes and never re-adds legacy entries', () => {
+    const settings = {
+      permissions: {
+        allow: ['Write(.planning/*)', 'Write(STATE.md)'],
+        deny: [],
+      },
+    };
+    mergeClaudePermissions(settings);
+    mergeClaudePermissions(settings);
+    mergeClaudePermissions(settings);
+
+    for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
+      const count = settings.permissions.allow.filter((e) => e === entry).length;
+      assert.strictEqual(count, 1, `allow entry "${entry}" must appear exactly once after repeated merges`);
+    }
+    for (const legacy of GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS) {
+      assert.ok(!settings.permissions.allow.includes(legacy),
+        `legacy entry "${legacy}" must never reappear after repeated merges`);
     }
   });
 });
@@ -634,6 +747,56 @@ describe('mergeClaudePermissions (#768): end-to-end install writes permissions t
       'user Bash(git *) allow entry must survive uninstall');
     assert.ok(deny.includes('WebSearch'),
       'user WebSearch deny entry must survive uninstall');
+  });
+
+  test('#2278: uninstall removes GSD entries in both legacy Write(...) and current Edit(...) form', (t) => {
+    const root = createTempDir('gsd-claude-perm-uninstall-legacy-');
+    t.after(() => cleanup(root));
+
+    const spawnOpts = {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: root, USERPROFILE: root },
+    };
+
+    // Install first (writes the current Edit(...) forms).
+    const r1 = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root],
+      spawnOpts,
+    );
+    assert.strictEqual(r1.status, 0, `install failed: ${r1.stderr}`);
+
+    // Simulate a pre-fix install that still carries the stale Write(...)
+    // forms alongside the current Edit(...) forms and a user entry.
+    const settingsPath = path.join(root, 'settings.json');
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    settings.permissions.allow.push('Write(.planning/*)', 'Write(STATE.md)', 'Bash(git *)');
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+
+    // Uninstall
+    const r2 = spawnSync(
+      process.execPath,
+      [INSTALL_SCRIPT, '--claude', '--global', '--config-dir', root, '--uninstall'],
+      spawnOpts,
+    );
+    assert.strictEqual(r2.status, 0, `uninstall failed: ${r2.stderr}`);
+
+    const afterUninstall = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const allow = afterUninstall.permissions?.allow ?? [];
+
+    // Both legacy and current GSD-owned forms must be removed.
+    assert.ok(!allow.includes('Write(.planning/*)'),
+      'legacy Write(.planning/*) entry must be removed by uninstall');
+    assert.ok(!allow.includes('Write(STATE.md)'),
+      'legacy Write(STATE.md) entry must be removed by uninstall');
+    assert.ok(!allow.includes('Edit(.planning/*)'),
+      'current Edit(.planning/*) entry must be removed by uninstall');
+    assert.ok(!allow.includes('Edit(STATE.md)'),
+      'current Edit(STATE.md) entry must be removed by uninstall');
+
+    // User entry must survive.
+    assert.ok(allow.includes('Bash(git *)'),
+      'user Bash(git *) allow entry must survive uninstall');
   });
 });
 

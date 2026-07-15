@@ -886,9 +886,9 @@ Since v1.3.1, the installer pre-populates `~/.claude/settings.json` (or
     "allow": [
       "Bash(npx gsd-core *)",
       "Read(.planning/*)",
-      "Write(.planning/*)",
+      "Edit(.planning/*)",
       "Read(STATE.md)",
-      "Write(STATE.md)"
+      "Edit(STATE.md)"
     ],
     "deny": [
       "Read(.env)",
