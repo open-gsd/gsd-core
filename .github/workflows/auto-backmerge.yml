@@ -141,6 +141,16 @@ jobs:
             echo "dropped_oneline=" >> "$GITHUB_OUTPUT"
           fi
 
+      # The version bump below fires the `version` npm lifecycle hook, which runs
+      # gen-capability-registry.cjs. That validator lazily require()s the built
+      # gsd-core/bin/lib/capability-ledger.cjs (a build:lib output, gitignored);
+      # when it is absent the bounded fragment reader falls back to a fail-closed
+      # stub and every capability fragment reports "could not be read", failing
+      # the sync. Build the ledger first so fragments materialize.
+      - name: Install dependencies and build (required by the version-sync hook)
+        if: steps.check.outputs.next_exists == 'true'
+        run: npm ci --silent && npm run build:lib
+
       - name: Sync next's version to main's released version
         if: steps.check.outputs.next_exists == 'true'
         run: |
