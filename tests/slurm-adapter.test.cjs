@@ -2,9 +2,12 @@
 process.env.GSD_TEST_MODE = '1';
 
 // Refinements for issue #1164 (PR #1998 follow-up):
-// - A: document the execute:wave:post choice (wave:pre is declared but not
-//      dispatched by execute-phase.md; wiring it is a core-loop change #1164
-//      puts out of scope).
+// - A: document the execute:wave:post choice (at the time of #1164, wave:pre
+//      was declared but not dispatched by execute-phase.md; wiring it was a
+//      core-loop change #1164 put out of scope. #2285 later wired wave:pre —
+//      see gsd-core/workflows/execute-phase.md step 2.75 and the
+//      claude-orchestration capability, which moved to wave:pre for that
+//      reason).
 // - B: external_job.artifact_dir is now consumed by the adapter (was declared
 //      but unused).
 // - C: external_job.submit_timeout_ms / poll_timeout_ms are now read from

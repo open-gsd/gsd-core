@@ -475,6 +475,105 @@ describe('emitWorkflowScript', () => {
   });
 });
 
+// ─── 3.5. Per-plan use_worktree (#2772 / #2285 finding 1) ─────────────────────
+//
+// The Workflow backend must NEVER force worktree isolation on a plan the
+// inline path (execute-phase.md step 2.5's USE_WORKTREES_FOR_PLAN) keeps out
+// of worktrees — e.g. a submodule-touching plan, where the executor commit
+// protocol cannot correctly handle submodule commits inside an isolated
+// worktree. `use_worktree` is the per-plan signal that threads that decision
+// into the emitted script.
+
+describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)', () => {
+  test('[happy] use_worktree omitted (default) -> isolation: "worktree" (backward-compatible default)', () => {
+    const r = emitWorkflowScript(singleWaveManifest());
+    assert.strictEqual(r.ok, true);
+    assert.match(r.script, /agent\("Implement the foo module", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
+  });
+
+  test('[happy] use_worktree: true explicit -> isolation: "worktree" (same as default)', () => {
+    const r = emitWorkflowScript({
+      phaseDir: '.p', runId: 'r',
+      waves: [{ id: 'w1', plans: [{ id: 'p1', brief: 'b', files_modified: ['a.cts'], use_worktree: true }] }],
+    });
+    assert.strictEqual(r.ok, true);
+    assert.match(r.script, /agent\("b", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
+  });
+
+  test('[negative] use_worktree: false -> isolation OMITTED entirely for that plan', () => {
+    const r = emitWorkflowScript({
+      phaseDir: '.p', runId: 'r',
+      waves: [{ id: 'w1', plans: [{ id: 'p1', brief: 'submodule plan', files_modified: ['vendor/lib.c'], use_worktree: false }] }],
+    });
+    assert.strictEqual(r.ok, true);
+    assert.match(r.script, /agent\("submodule plan", \{ agentType: "gsd-executor" \}\)/);
+    assert.ok(!/agent\("submodule plan"[^)]*isolation/.test(r.script), 'isolation must not appear for this plan\'s agent() call');
+  });
+
+  test('[happy] mixed wave: one worktree plan + one non-worktree plan in the SAME parallel() batch — each carries its own isolation independently', () => {
+    const r = emitWorkflowScript({
+      phaseDir: '.p', runId: 'r',
+      waves: [{ id: 'w1', plans: [
+        { id: 'p1', brief: 'normal plan', files_modified: ['src/a.ts'] },
+        { id: 'p2', brief: 'submodule plan', files_modified: ['vendor/b.c'], use_worktree: false },
+      ] }],
+    });
+    assert.strictEqual(r.ok, true);
+    // Both plans have disjoint files_modified -> coalesce into ONE parallel() stage.
+    assert.strictEqual(r.summary.stagesByWave[0].length, 1, 'non-overlapping plans share one stage');
+    assert.match(r.script, /agent\("normal plan", \{ agentType: "gsd-executor", isolation: "worktree" \}\)/);
+    assert.match(r.script, /agent\("submodule plan", \{ agentType: "gsd-executor" \}\)/);
+    assert.ok(!/agent\("submodule plan"[^)]*isolation/.test(r.script), 'the submodule plan must never gain isolation from being batched with a worktree plan');
+  });
+
+  test('[negative] use_worktree with a non-boolean value -> ok:false (strict typing, no silent coercion)', () => {
+    const r = emitWorkflowScript({
+      phaseDir: '.p', runId: 'r',
+      waves: [{ id: 'w1', plans: [{ id: 'p1', brief: 'b', files_modified: ['a.cts'], use_worktree: 'false' }] }],
+    });
+    assert.strictEqual(r.ok, false);
+    assert.match(r.reason, /use_worktree/);
+  });
+
+  test('property: use_worktree never flips to isolation:"worktree" when explicitly false, across random plan shapes', () => {
+    fc.assert(fc.property(
+      fc.array(
+        fc.record({
+          id: fc.integer({ min: 0, max: 999 }).map((n) => 'p' + n),
+          brief: fc.string({ minLength: 1, maxLength: 20 }).filter((s) => !/[\r\n"\\]/.test(s)),
+          useWorktree: fc.boolean(),
+        }),
+        { minLength: 1, maxLength: 4 },
+      ).filter((plans) => new Set(plans.map((p) => p.id)).size === plans.length), // unique ids
+      (planSpecs) => {
+        const waves = [{
+          id: 'w1',
+          plans: planSpecs.map((p, i) => ({
+            id: p.id,
+            brief: p.brief,
+            files_modified: ['src/file' + i + '.cts'], // disjoint -> no overlap-driven staging noise
+            use_worktree: p.useWorktree,
+          })),
+        }];
+        const r = emitWorkflowScript({ phaseDir: '.p', runId: 'r', waves });
+        assert.strictEqual(r.ok, true);
+        for (const p of planSpecs) {
+          const briefEsc = JSON.stringify(p.brief);
+          const idx = r.script.indexOf('agent(' + briefEsc + ',');
+          assert.ok(idx !== -1, 'agent() call for plan must exist');
+          const lineEnd = r.script.indexOf('\n', idx);
+          const line = r.script.slice(idx, lineEnd === -1 ? undefined : lineEnd);
+          if (p.useWorktree === false) {
+            assert.ok(!line.includes('isolation'), 'use_worktree:false must never carry isolation');
+          } else {
+            assert.ok(line.includes('isolation: "worktree"'), 'use_worktree:true must carry isolation: "worktree"');
+          }
+        }
+      },
+    ));
+  });
+});
+
 // ─── 4. Capability declaration validation ─────────────────────────────────────
 
 describe('capability declaration (capabilities/claude-orchestration/capability.json)', () => {
@@ -520,16 +619,19 @@ describe('capability declaration (capabilities/claude-orchestration/capability.j
     assert.strictEqual(slice.default, 'auto');
   });
 
-  test('registers at WIRED points only (execute:wave:post, plan:post)', () => {
+  test('registers at WIRED points only (execute:wave:pre, plan:post)', () => {
     const cap = loadCap();
     const points = cap.contributions.map((c) => c.point);
     for (const p of points) {
       assert.ok(
-        ['discuss:pre', 'discuss:post', 'plan:pre', 'plan:post', 'execute:post', 'execute:wave:post', 'verify:post', 'ship:pre', 'ship:post'].includes(p),
+        ['discuss:pre', 'discuss:post', 'plan:pre', 'plan:post', 'execute:pre', 'execute:wave:pre', 'execute:post', 'verify:post', 'ship:pre', 'ship:post'].includes(p),
         'contribution point ' + p + ' must be a wired point',
       );
     }
-    assert.ok(points.includes('execute:wave:post'), 'registers the execute wave hook');
+    // #2285: the dispatch-backend selector moved from execute:wave:post (fires
+    // AFTER the wave already dispatched inline — too late to select a backend)
+    // to execute:wave:pre (fires BEFORE step 3's Agent() dispatch).
+    assert.ok(points.includes('execute:wave:pre'), 'registers the pre-wave dispatch-selector hook');
     assert.ok(points.includes('plan:post'), 'declares plan:* ownership for ultraplan (criterion 5)');
   });
 
@@ -563,13 +665,21 @@ describe('registry integration', () => {
     assert.strictEqual(registry.configSchema['claude_orchestration.execution_backend'].default, 'auto');
   });
 
-  test('byLoopPoint[execute:wave:post].contributions includes our capability', () => {
+  test('byLoopPoint[execute:wave:pre].contributions includes our capability (#2285)', () => {
+    const { capMap } = loadAndValidate(new Set());
+    const registry = buildRegistry(capMap);
+    const contribs = registry.byLoopPoint['execute:wave:pre'].contributions;
+    const ours = contribs.find((c) => c.capId === 'claude-orchestration');
+    assert.ok(ours, 'our execute:wave:pre contribution is registered');
+    assert.strictEqual(ours.into, 'executor');
+  });
+
+  test('byLoopPoint[execute:wave:post] no longer carries our contribution (#2285 moved it to wave:pre)', () => {
     const { capMap } = loadAndValidate(new Set());
     const registry = buildRegistry(capMap);
     const contribs = registry.byLoopPoint['execute:wave:post'].contributions;
     const ours = contribs.find((c) => c.capId === 'claude-orchestration');
-    assert.ok(ours, 'our execute:wave:post contribution is registered');
-    assert.strictEqual(ours.into, 'executor');
+    assert.strictEqual(ours, undefined, 'claude-orchestration must not remain at execute:wave:post');
   });
 
   test('committed registry is in sync (gen-capability-registry --check)', () => {

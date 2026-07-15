@@ -34,9 +34,13 @@ gate. It is blocked-on-nothing now that the ADR-857 capability system is release
 - **`role: feature`**, `runtimeCompat.supported: ["claude"]`, `tier: full`.
 - **`activationKey: claude_orchestration.enabled`** — default `false`. Nothing
   changes until you opt in.
-- Registers at two **wired** loop points: `execute:wave:post` (into the executor)
+- Registers at two **wired** loop points: `execute:wave:pre` (into the executor)
   and `plan:post` (into the planner). Both are `onError: skip` and gated by the
-  `enabled` key.
+  `enabled` key. The dispatch-backend selector fires at `execute:wave:pre` — the
+  seam that runs immediately BEFORE a wave's agents are dispatched — because a
+  selector fired *after* a wave already dispatched inline (the original
+  `execute:wave:post` placement, [#2285]) is structurally too late to change how
+  dispatch happens.
 
 ## How it decides whether to activate
 
@@ -62,14 +66,19 @@ Workflow backend activates only when *every* gate passes; any miss degrades to
 | GSD concept | Workflow primitive |
 |---|---|
 | Wave | `parallel()` stage barrier |
-| Plan | `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree' })` |
+| Plan (`use_worktree` not `false`) | `agent(brief, { agentType: 'gsd-executor', isolation: 'worktree' })` |
+| Plan (`use_worktree: false`) | `agent(brief, { agentType: 'gsd-executor' })` (no isolation) |
 | `files_modified` overlap | forces the plans into separate sequential stages |
 | Phase run id | `resumeFromRunId("<id>")` |
 | Phase token cap | `budget(<tokens>)` |
 
-Because the emitted script composes the **same** `gsd-executor` agent and
-**worktree isolation** the inline path uses, it produces the same `SUMMARY.md`
-artifacts and commits — the only difference is the execution vehicle.
+Because the emitted script composes the **same** `gsd-executor` agent the
+inline path uses, with worktree isolation applied **per plan** from the
+manifest's `use_worktree` field, it produces the same `SUMMARY.md` artifacts
+and commits — the only difference is the execution vehicle. `use_worktree`
+mirrors execute-phase.md step 2.5's per-plan submodule safety gate exactly: a
+plan that touches a submodule path is never forced into worktree isolation,
+whichever backend dispatches it ([#2772]).
 
 ## The fallback contract
 
@@ -92,3 +101,5 @@ own runtime gate continues to no-op on non-Claude runtimes.
 
 [#853]: https://github.com/open-gsd/gsd-core/issues/853
 [#1143]: https://github.com/open-gsd/gsd-core/issues/1143
+[#2772]: https://github.com/open-gsd/gsd-core/issues/2772
+[#2285]: https://github.com/open-gsd/gsd-core/issues/2285
