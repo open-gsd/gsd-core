@@ -163,7 +163,7 @@ Write these documents to {codebase_dir}/:
 - STACK.md - Languages, runtime, frameworks, dependencies, configuration
 - INTEGRATIONS.md - External APIs, databases, auth providers, webhooks
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set every date stamp in the documents (the Analysis Date line, the analysis/audit footer, and any <!-- refreshed --> header) to {date}, OVERWRITING any existing date from a prior run; do not rely on the [YYYY-MM-DD] placeholder still being present. NEVER guess the date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -189,7 +189,7 @@ Write these documents to {codebase_dir}/:
 - ARCHITECTURE.md - Pattern, layers, data flow, abstractions, entry points
 - STRUCTURE.md - Directory layout, key locations, naming conventions
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set every date stamp in the documents (the Analysis Date line, the analysis/audit footer, and any <!-- refreshed --> header) to {date}, OVERWRITING any existing date from a prior run; do not rely on the [YYYY-MM-DD] placeholder still being present. NEVER guess the date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -215,7 +215,7 @@ Write these documents to {codebase_dir}/:
 - CONVENTIONS.md - Code style, naming, patterns, error handling
 - TESTING.md - Framework, structure, mocking, coverage
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set every date stamp in the documents (the Analysis Date line, the analysis/audit footer, and any <!-- refreshed --> header) to {date}, OVERWRITING any existing date from a prior run; do not rely on the [YYYY-MM-DD] placeholder still being present. NEVER guess the date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -240,7 +240,7 @@ Analyze this codebase for technical debt, known issues, and areas of concern.
 Write this document to {codebase_dir}/:
 - CONCERNS.md - Tech debt, bugs, security, performance, fragile areas
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set every date stamp in the documents (the Analysis Date line, the analysis/audit footer, and any <!-- refreshed --> header) to {date}, OVERWRITING any existing date from a prior run; do not rely on the [YYYY-MM-DD] placeholder still being present. NEVER guess the date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
