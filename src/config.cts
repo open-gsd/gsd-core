@@ -91,6 +91,46 @@ const SCHEMA_DEFAULTS: Record<string, unknown> = {
   'git.create_tag': true,
 };
 
+/**
+ * Resolve a schema-level default for an absent key (#2256). Checks the legacy
+ * hardcoded SCHEMA_DEFAULTS first, then the capability-registry configSchema
+ * default — the same registry default the runtime's capability-activation
+ * resolver (resolveConfigKey Level 4, capability-activation.cts) already honors,
+ * so `query config-get` can no longer disagree with the runtime about an absent
+ * key's effective value.
+ */
+function resolveSchemaDefault(cwd: string, kp: string): { found: boolean; value: unknown } {
+  if (Object.prototype.hasOwnProperty.call(SCHEMA_DEFAULTS, kp)) {
+    return { found: true, value: SCHEMA_DEFAULTS[kp] };
+  }
+  const capSchema = getCapabilityConfigSchema(cwd);
+  if (capSchema && typeof capSchema === 'object'
+      && Object.prototype.hasOwnProperty.call(capSchema, kp)) {
+    const entry = capSchema[kp];
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const def = (entry as Record<string, unknown>)['default'];
+      if (def !== undefined) return { found: true, value: def };
+    }
+  }
+  return { found: false, value: undefined };
+}
+
+/**
+ * Emit a schema-resolved default (#2256), applying the same secret-masking
+ * invariant the found-key path applies. getCapabilityConfigSchema is a
+ * federated, third-party-extensible surface (ADR-1244) — a future key-name
+ * collision with a secret key must not leak a declared default in plaintext.
+ * Centralizing emission here means masking can't be missed at a call site.
+ */
+function emitResolvedDefault(kp: string, value: unknown, raw: boolean): void {
+  if (isSecretKey(kp)) {
+    const masked = maskSecret(value as Parameters<typeof maskSecret>[0]);
+    output(masked, raw, masked);
+    return;
+  }
+  output(value, raw, String(value));
+}
+
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
 function validateKnownConfigKeyPath(keyPath: string): void {
@@ -910,14 +950,11 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
     if (fs.existsSync(configPath)) {
       config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
     } else if (hasDefault) {
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      output(defaultValue, raw, String(defaultValue));
-      return;
-    } else if (Object.prototype.hasOwnProperty.call(SCHEMA_DEFAULTS, kp)) {
-      const def = SCHEMA_DEFAULTS[kp];
-      output(def, raw, String(def));
+      emitResolvedDefault(kp, defaultValue, raw);
       return;
     } else {
+      const sd = resolveSchemaDefault(cwd, kp);
+      if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
       error('No config.json found at ' + configPath, ERROR_REASON.CONFIG_NO_FILE);
     }
   } catch (err) {
@@ -930,26 +967,29 @@ function cmdConfigGet(cwd: string, keyPath: string | undefined, raw: boolean, de
   let current: unknown = config;
   for (const key of keys) {
     if (current === undefined || current === null || typeof current !== 'object') {
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      if (hasDefault) { output(defaultValue, raw, String(defaultValue)); return; }
-      if (Object.prototype.hasOwnProperty.call(SCHEMA_DEFAULTS, kp)) {
-        const def = SCHEMA_DEFAULTS[kp];
-        output(def, raw, String(def));
-        return;
-      }
+      if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
+      const sd = resolveSchemaDefault(cwd, kp);
+      if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
       error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
     }
-    current = (current as Record<string, unknown>)[key];
+    // Own-property gate: bracket access on a plain object walks the
+    // prototype chain, so an unqualified `current[key]` would resolve
+    // '__proto__' / 'constructor' / 'hasOwnProperty' (and other
+    // Object.prototype members) to their inherited values instead of
+    // correctly reporting them as absent. hasOwnProperty.call only
+    // returns true for a key JSON.parse actually assigned as data on
+    // this object (including a literal "__proto__" JSON key, which
+    // JSON.parse defines as an own data property, not the accessor) —
+    // never for something inherited from the prototype chain.
+    current = Object.prototype.hasOwnProperty.call(current, key)
+      ? (current as Record<string, unknown>)[key]
+      : undefined;
   }
 
   if (current === undefined) {
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    if (hasDefault) { output(defaultValue, raw, String(defaultValue)); return; }
-    if (Object.prototype.hasOwnProperty.call(SCHEMA_DEFAULTS, kp)) {
-      const def = SCHEMA_DEFAULTS[kp];
-      output(def, raw, String(def));
-      return;
-    }
+    if (hasDefault) { emitResolvedDefault(kp, defaultValue, raw); return; }
+    const sd = resolveSchemaDefault(cwd, kp);
+    if (sd.found) { emitResolvedDefault(kp, sd.value, raw); return; }
     error(`Key not found: ${kp}`, ERROR_REASON.CONFIG_KEY_NOT_FOUND);
   }
 
