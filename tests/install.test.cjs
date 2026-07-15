@@ -573,6 +573,20 @@ describe('uninstall skills cleanup — hermes', () => {
 
 // ─── Section 4: No Claude references leak into non-Claude runtimes ────────────
 
+// #2284(b): a `<runtime_compatibility>...</runtime_compatibility>` block (e.g.
+// execute-phase.md/plan-phase.md's "**Subagent spawning is runtime-specific:**"
+// table) INTENTIONALLY retains "Claude Code" as a COMPARISON-RUNTIME LABEL —
+// "- **Claude Code:** Uses `Agent(subagent_type=..., ...)`" documents how
+// Claude Code behaves for a reader on ANY installed runtime; it is never a
+// host-self-reference the install is supposed to rebrand away. Strip these
+// blocks before the leak scan below so that legitimate retention doesn't trip
+// the "zero Claude references" invariant — everything OUTSIDE a
+// `runtime_compatibility` block is still held to zero, so an actual leaked
+// self-reference elsewhere in the file still fails this test.
+function stripRuntimeCompatibilityBlocks(content) {
+  return content.replace(/<runtime_compatibility>[\s\S]*?<\/runtime_compatibility>/g, '');
+}
+
 for (const runtime of ['hermes', 'qwen']) {
   describe(`no Claude references leak into ${runtime} install`, () => {
     let tmpDir;
@@ -628,7 +642,9 @@ for (const runtime of ['hermes', 'qwen']) {
         path.basename(f) !== 'CHANGELOG.md'
       );
       const leaks = allFiles.filter(f => {
-        const c = fs.readFileSync(f, 'utf8');
+        // #2284(b): exempt `<runtime_compatibility>` comparison-table content
+        // — see the exemption's rationale above the `for` loop.
+        const c = stripRuntimeCompatibilityBlocks(fs.readFileSync(f, 'utf8'));
         return /\bCLAUDE\.md\b/.test(c) || /\bClaude Code\b/.test(c) || /\.claude\//.test(c);
       }).map(f => path.relative(tmpDir, f));
       assert.strictEqual(leaks.length, 0, `Leaking: ${leaks.join(', ')}`);
