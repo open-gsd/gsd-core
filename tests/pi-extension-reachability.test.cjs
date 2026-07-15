@@ -1106,14 +1106,20 @@ test('the generic installer creates a self-contained OMP runtime', () => {
     assert.match(progressSkill, /truncated summary glob may supply recent-work examples only/);
     const { extensionEventSurfaceFor } = require('../gsd-core/bin/lib/host-integration.cjs');
     assert.deepEqual(extensionEventSurfaceFor('pi'), [
-      'session_start', 'project_trust', 'resources_discover', 'input',
-      'before_agent_start', 'agent_start', 'message_start', 'message_update',
-      'message_end', 'turn_start', 'context', 'before_provider_request',
-      'after_provider_response', 'tool_execution_start', 'tool_execution_update',
-      'tool_execution_end', 'tool_call', 'tool_result', 'turn_end', 'agent_end',
-      'session_before_switch', 'session_shutdown', 'session_before_fork',
-      'session_info_changed', 'session_before_compact', 'session_compact',
-      'session_before_tree', 'session_tree', 'thinking_level_select', 'model_select',
+      'resources_discover', 'session_start',
+      'session_before_switch', 'session_switch',
+      'session_before_branch', 'session_branch',
+      'session_before_compact', 'session.compacting', 'session_compact',
+      'session_shutdown', 'session_before_tree', 'session_tree',
+      'context', 'before_provider_request', 'after_provider_response',
+      'before_agent_start', 'agent_start', 'agent_end', 'session_stop',
+      'turn_start', 'turn_end', 'message_start', 'message_update', 'message_end',
+      'tool_execution_start', 'tool_execution_update', 'tool_execution_end',
+      'auto_compaction_start', 'auto_compaction_end',
+      'auto_retry_start', 'auto_retry_end', 'ttsr_triggered', 'todo_reminder',
+      'goal_updated', 'credential_disabled', 'input',
+      'tool_approval_requested', 'tool_approval_resolved',
+      'tool_call', 'tool_result', 'user_bash', 'user_python',
     ]);
     const { loadUpdateContext } = require('../gsd-core/bin/lib/update-context.cjs');
     assert.deepEqual(loadUpdateContext({ env: { PI_CODING_AGENT_DIR: destination }, preferredConfigDir: destination, preferredRuntime: 'omp' }), {
