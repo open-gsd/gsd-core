@@ -392,6 +392,22 @@ function formatGsdStateCompact(s) {
   return parts.join(' \u00b7 ');
 }
 
+// --- Model name --------------------------------------------------------------
+
+/**
+ * Collapse the verbose " (… context)" model-name suffix Claude Code sends for
+ * long-context sessions (e.g. "Sonnet 4.5 (1M context)") to a compact badge
+ * (" (1M)"). The signal is preserved; the width isn't. Tolerant by design
+ * (issue #2160 approval condition): any trailing parenthesized token ending
+ * in "context" is collapsed — a future "(500K context)" becomes "(500K)"
+ * rather than silently no-opping. The token's own casing is preserved.
+ * Any other display name passes through unchanged.
+ */
+function compactModelName(name) {
+  if (typeof name !== 'string') return name;
+  return name.replace(/\s*\(([^)]+?)\s+(?:context|ctx)\)$/i, ' ($1)');
+}
+
 // --- Git segment (opt-in) ------------------------------------------------------
 //
 // Opt-in via `statusline.show_git: true` in .planning/config.json. Renders the
@@ -482,7 +498,7 @@ function runStatusline() {
   clearTimeout(stdinTimeout);
   try {
     const data = JSON.parse(input);
-    const model = data.model?.display_name || 'Claude';
+    const model = compactModelName(data.model?.display_name || 'Claude');
     const dir = data.workspace?.current_dir || process.cwd();
     const session = data.session_id || '';
     const remaining = data.context_window?.remaining_percentage;
@@ -741,6 +757,7 @@ module.exports = {
   formatTokens,
   contextTokenSuffix,
   shortGsdStatus, formatGsdStateCompact,
+  compactModelName,
   readGitStatus, parseGitStatus, buildGitSegment,
 };
 
@@ -749,7 +766,7 @@ module.exports = {
  * testing without feeding stdin. Returns the rendered string.
  */
 function renderStatusline(data) {
-  const model = data.model?.display_name || 'Claude';
+  const model = compactModelName(data.model?.display_name || 'Claude');
   const dir = data.workspace?.current_dir || process.cwd();
   const dirname = path.basename(dir);
 
