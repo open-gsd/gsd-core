@@ -9927,7 +9927,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     } else {
       fs.mkdirSync(extensionsDir, { recursive: true });
       fs.copyFileSync(adapterSource, adapterTarget);
-      fs.writeFileSync(extensionTarget, 'import gsdPiExtension from "./gsd-omp.cjs";\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
+      fs.writeFileSync(extensionTarget, 'import { createRequire } from "node:module";\n\nconst require = createRequire(import.meta.url);\nconst gsdPiExtension = require("./gsd-omp.cjs");\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
       const sourceMarkerPath = path.join(targetDir, 'gsd-core', 'OMP-SOURCE.json');
       if (fs.existsSync(path.join(src, '.git'))) {
         fs.writeFileSync(sourceMarkerPath, JSON.stringify({ source: 'checkout', root: src }, null, 2) + '\n');

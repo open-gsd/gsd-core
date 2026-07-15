@@ -1080,7 +1080,8 @@ test('the OMP agent installer projects native task and isolation guidance', () =
   const extensionResult = spawnSync(process.execPath, [extensionInstaller, extensionDestination], { encoding: 'utf8' });
   assert.equal(extensionResult.status, 0, extensionResult.stderr);
   const extensionEntry = fs.readFileSync(extensionDestination, 'utf8');
-  assert.match(extensionEntry, /import gsdPiExtension from/);
+  assert.match(extensionEntry, /createRequire\(import\.meta\.url\)/);
+  assert.match(extensionEntry, /gsdPiExtension = require\(/);
   assert.match(extensionEntry, /pi\/gsd\.cjs/);
   assert.match(extensionEntry, /runtime: "omp"/);
 });
@@ -1121,7 +1122,7 @@ test('the generic installer creates a self-contained OMP runtime', () => {
     const result = spawnSync(process.execPath, [installer, '--omp', '--global', '--config-dir', destination], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
     assert.match(stripAnsi(result.stdout), /Installing for Oh My Pi/);
-    assert.equal(fs.readFileSync(path.join(destination, 'extensions', 'gsd-omp.ts'), 'utf8'), 'import gsdPiExtension from "./gsd-omp.cjs";\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
+    assert.equal(fs.readFileSync(path.join(destination, 'extensions', 'gsd-omp.ts'), 'utf8'), 'import { createRequire } from "node:module";\n\nconst require = createRequire(import.meta.url);\nconst gsdPiExtension = require("./gsd-omp.cjs");\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
     assert.ok(fs.existsSync(path.join(destination, 'extensions', 'gsd-omp.cjs')));
     assert.ok(fs.existsSync(path.join(destination, 'gsd-core', 'bin', 'gsd-tools.cjs')));
     const executor = fs.readFileSync(path.join(destination, 'agents', 'gsd-executor.md'), 'utf8');
@@ -1194,7 +1195,7 @@ test('the real OMP host loads the extension and serves native commands over RPC'
       '--no-session',
       '--no-skills',
       '--no-rules',
-      '--extension', runtimeRoot,
+      `--extension=${path.join(runtimeRoot, 'extensions', 'gsd-omp.ts')}`,
       '--cwd', cwd,
     ], {
       cwd,
@@ -1297,7 +1298,7 @@ test('the real OMP task host accepts the current batch schema and merges an isol
       '--auto-approve',
       '--approval-mode', 'yolo',
       '--max-time', '90s',
-      '--extension', path.join(runtimeRoot, 'extensions', 'gsd-omp.ts'),
+      `--extension=${path.join(runtimeRoot, 'extensions', 'gsd-omp.ts')}`,
       '--cwd', projectRoot,
       prompt,
     ], {
@@ -1594,9 +1595,11 @@ test('status and next surface native task recovery until completion', async () =
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-task-recovery-'));
   fs.mkdirSync(path.join(cwd, '.planning'));
   fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({ response_language: 'English' }));
-  fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), '---\ncurrent_phase: "05"\nstatus: executing\n---\n\n## Current Position\n\nStatus: Continue execution\n');
+  const currentState = '---\ncurrent_phase: "05"\nstatus: executing\n---\n\n## Current Position\n\nStatus: Continue execution\n';
+  fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), currentState);
   const failed = { phase: 5, plan: '05-08', task: 'Phase05Plan0508Executor', status: 'failed' };
-  fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([failed]));
+  const historicalFailure = { phase: 4, plan: '04-21', task: 'Phase04Plan0421Executor', status: 'failed' };
+  fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([historicalFailure, failed]));
   fs.writeFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), JSON.stringify({
     label: 'Stale verification continuation',
     command: '/gsd-verify-work 05',
@@ -1620,6 +1623,13 @@ test('status and next surface native task recovery until completion', async () =
   await pi._recorded.commands['gsd-status'].handler('', { cwd });
   assert.match(pi._recorded.messages.at(-1).message.content, /Native task recovery: Phase 05 \/ plan 05-08 \/ task Phase05Plan0508Executor: failed/);
   assert.match(pi._recorded.messages.at(-1).message.content, /Recovery command: \/gsd-execute-phase 05/);
+  assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /Phase 04/);
+
+  fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), currentState.replace('"05"', '"05.1"'));
+  await pi._recorded.commands['gsd-status'].handler('', { cwd });
+  assert.match(pi._recorded.messages.at(-1).message.content, /Phase 04/);
+  assert.match(pi._recorded.messages.at(-1).message.content, /Phase 05/);
+  fs.writeFileSync(path.join(cwd, '.planning', 'STATE.md'), currentState);
 
   const selections = [];
   await pi._recorded.commands['gsd-next'].handler('', {
@@ -1636,7 +1646,7 @@ test('status and next surface native task recovery until completion', async () =
   assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');
   assert.match(pi._recorded.messages.at(-1).message.content, /GSD action: `gsd-execute-phase`/);
 
-  fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([{ ...failed, status: 'completed' }]));
+  fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([historicalFailure, { ...failed, status: 'completed' }]));
   await pi._recorded.commands['gsd-status'].handler('', { cwd });
   assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /Native task recovery/);
 });

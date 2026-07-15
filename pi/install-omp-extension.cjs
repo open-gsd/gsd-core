@@ -15,5 +15,5 @@ const destination = process.argv[2]
   : path.join(process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.omp', 'agent'), 'extensions', 'gsd-omp.ts');
 
 fs.mkdirSync(path.dirname(destination), { recursive: true });
-fs.writeFileSync(destination, `import gsdPiExtension from ${JSON.stringify(sourcePath)};\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n`);
+fs.writeFileSync(destination, `import { createRequire } from "node:module";\n\nconst require = createRequire(import.meta.url);\nconst gsdPiExtension = require(${JSON.stringify(sourcePath)});\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n`);
 process.stdout.write(JSON.stringify({ destination, sourcePath }) + '\n');

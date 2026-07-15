@@ -793,8 +793,11 @@ module.exports = function gsdPiExtension(pi, options = {}) {
   }
 
   function nativeTaskRecovery(cwd) {
+    const phaseToken = String(stateSnapshot(cwd)?.phase || '').trim();
+    const currentPhase = /^\d+$/.test(phaseToken) && Number(phaseToken) > 0 ? Number(phaseToken) : null;
     const failures = readTaskResults(cwd).filter((entry) =>
       Number.isInteger(entry?.phase) && entry.phase > 0 &&
+      (currentPhase === null || entry.phase === currentPhase) &&
       typeof entry.plan === 'string' && entry.plan &&
       typeof entry.task === 'string' && entry.task &&
       ['failed', 'cancelled'].includes(entry.status));
