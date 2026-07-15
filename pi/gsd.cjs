@@ -197,13 +197,14 @@ function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
  * tool call so a hook failure cannot disable Pi.
  * @param {string} hookFile  filename under hooks/, e.g. "gsd-context-monitor.js"
  * @param {object} payload
- * @param {{ timeout?: number, cwd?: string }} [opts]
+ * @param {{ timeout?: number, cwd?: string, spawnChild?: typeof spawn }} [opts]
  * @returns {Promise<{ stdout: string, exitCode: number, timedOut: boolean }>}
  */
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(ENGINE_ROOT, 'hooks', hookFile);
   if (!fs.existsSync(hookPath)) return Promise.resolve({ stdout: '', exitCode: 0, timedOut: false });
   const timeout = opts.timeout || 8000;
+  const spawnChild = opts.spawnChild || spawn;
   return new Promise((resolve) => {
     let child;
     let stdout = '';
@@ -219,7 +220,7 @@ function runHook(hookFile, payload, opts = {}) {
       resolve({ stdout: stdout.trim(), exitCode, timedOut });
     };
     try {
-      child = spawn(process.execPath, [hookPath], {
+      child = spawnChild(process.execPath, [hookPath], {
         cwd: opts.cwd || process.cwd(),
         stdio: ['pipe', 'pipe', 'ignore'],
         windowsHide: true,
@@ -236,7 +237,12 @@ function runHook(hookFile, payload, opts = {}) {
     timeoutTimer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGTERM');
-      killTimer = setTimeout(() => child.kill('SIGKILL'), 250);
+      killTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+        // A child that never reports close/error must not leave the tool call
+        // pending forever. Its hook verdict is deliberately fail-open.
+        finish();
+      }, 250);
     }, timeout);
     try {
       child.stdin.end(JSON.stringify(payload || {}));
@@ -3212,4 +3218,5 @@ module.exports._internals = {
   PI_COMMAND_FAMILIES,
   getArgumentCompletions,
   buildBeforeProviderRequestHandler,
+  runHook,
 };

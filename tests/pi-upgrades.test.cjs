@@ -24,6 +24,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { spawnSync } = require('node:child_process');
 
 const {
@@ -157,6 +158,27 @@ test('before_provider_request leaves malformed payloads untouched', async () => 
     const result = await handler({ payload }, { cwd: __dirname });
     assert.equal(result, undefined, `payload ${String(payload)} must fail open`);
   }
+});
+
+test('runHook resolves fail-open when its terminated child never emits close or error', async () => {
+  const child = new EventEmitter();
+  const signals = [];
+  child.stdout = new EventEmitter();
+  child.stdout.setEncoding = () => {};
+  child.stdin = new EventEmitter();
+  child.stdin.end = () => {};
+  child.kill = (signal) => { signals.push(signal); return true; };
+
+  let deadline;
+  const result = await Promise.race([
+    _internals.runHook('gsd-context-monitor.js', {}, { timeout: 1, spawnChild: () => child }),
+    new Promise((resolve) => { deadline = setTimeout(() => resolve(null), 500); }),
+  ]);
+  clearTimeout(deadline);
+
+  assert.notEqual(result, null, 'the timeout fallback must settle without a child close/error event');
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
 });
 
 // -- getArgumentCompletions returns family suggestions -----------------------
