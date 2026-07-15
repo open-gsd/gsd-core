@@ -13,7 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 
 // Resolve the GSD engine tree (the dir holding gsd-core/ + hooks/).
 // Works across dev (<root>/pi/gsd.cjs → <root>) and installed layouts.
@@ -191,35 +191,60 @@ function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
 }
 
 /**
- * Bounded subprocess bridge to GSD's Claude Code hook scripts. Mirrors
- * .opencode/plugins/gsd-core.js's `runHook` (SUBPROCESS-REUSE): spawns
- * `node <hooks/hookFile>` with the payload piped to stdin, on a bounded
- * timeout. NEVER throws — a missing hook file, a spawn error, or a timeout
- * all degrade to a silent-allow result so a hook problem can never block pi.
+ * Bounded asynchronous subprocess bridge to GSD's Claude Code hook scripts.
+ * Hook checks still gate their own tool call, but never block OMP's event loop.
+ * Missing hooks, spawn errors, malformed input, and timeouts silently allow the
+ * tool call so a hook failure cannot disable Pi.
  * @param {string} hookFile  filename under hooks/, e.g. "gsd-context-monitor.js"
  * @param {object} payload
  * @param {{ timeout?: number, cwd?: string }} [opts]
- * @returns {{ stdout: string, exitCode: number, timedOut: boolean }}
+ * @returns {Promise<{ stdout: string, exitCode: number, timedOut: boolean }>}
  */
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(ENGINE_ROOT, 'hooks', hookFile);
-  if (!fs.existsSync(hookPath)) return { stdout: '', exitCode: 0, timedOut: false };
+  if (!fs.existsSync(hookPath)) return Promise.resolve({ stdout: '', exitCode: 0, timedOut: false });
   const timeout = opts.timeout || 8000;
-  let result;
-  try {
-    result = spawnSync(process.execPath, [hookPath], {
-      input: JSON.stringify(payload || {}),
-      encoding: 'utf8',
-      timeout,
-      cwd: opts.cwd || process.cwd(),
-      windowsHide: true,
-    });
-  } catch {
-    return { stdout: '', exitCode: 0, timedOut: false };
-  }
-  const stdout = (result && typeof result.stdout === 'string') ? result.stdout.trim() : '';
-  const exitCode = (result && result.status != null) ? result.status : 0;
-  return { stdout, exitCode, timedOut: !!(result && result.signal === 'SIGTERM') };
+  return new Promise((resolve) => {
+    let child;
+    let stdout = '';
+    let timedOut = false;
+    let settled = false;
+    let timeoutTimer;
+    let killTimer;
+    const finish = (exitCode = 0) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      resolve({ stdout: stdout.trim(), exitCode, timedOut });
+    };
+    try {
+      child = spawn(process.execPath, [hookPath], {
+        cwd: opts.cwd || process.cwd(),
+        stdio: ['pipe', 'pipe', 'ignore'],
+        windowsHide: true,
+      });
+    } catch {
+      finish();
+      return;
+    }
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stdin.on('error', () => {});
+    child.on('error', () => finish());
+    child.on('close', (code) => finish(code ?? 0));
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      killTimer = setTimeout(() => child.kill('SIGKILL'), 250);
+    }, timeout);
+    try {
+      child.stdin.end(JSON.stringify(payload || {}));
+    } catch {
+      child.kill('SIGTERM');
+      finish();
+    }
+  });
 }
 
 module.exports = function gsdPiExtension(pi) {
@@ -1146,7 +1171,7 @@ module.exports = function gsdPiExtension(pi) {
     };
   }
 
-  function preToolHookOutcome(event, ctx) {
+  async function preToolHookOutcome(event, ctx) {
     if (!isGsdProject(ctx.cwd)) return { advisories: [] };
     const toolName = claudeToolName(event?.toolName);
     const toolInput = claudeToolInput(event?.input);
@@ -1157,7 +1182,7 @@ module.exports = function gsdPiExtension(pi) {
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'Bash') hookFiles.push('gsd-workflow-guard.js');
     const advisories = [];
     for (const hookFile of hookFiles) {
-      const outcome = hookOutcome(runHook(hookFile, payload, { timeout: 5000, cwd: ctx.cwd }));
+      const outcome = hookOutcome(await runHook(hookFile, payload, { timeout: 5000, cwd: ctx.cwd }));
       if (!outcome) continue;
       if (outcome.block) return outcome;
       if (!outcome.advisory) continue;
@@ -3170,7 +3195,7 @@ OMP debugging contract:
     if (taskWaitBlock) return { block: true, reason: taskWaitBlock };
     const nativePhaseBlock = nativePhaseWriteBlock(event, ctx.cwd);
     if (nativePhaseBlock) return { block: true, reason: nativePhaseBlock };
-    const hookResult = preToolHookOutcome(event, ctx);
+    const hookResult = await preToolHookOutcome(event, ctx);
     if (hookResult.block) return { block: true, reason: hookResult.reason };
     await queueHookAdvisories(hookResult.advisories);
     return undefined;
