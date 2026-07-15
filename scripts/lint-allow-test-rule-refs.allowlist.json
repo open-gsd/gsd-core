@@ -99,7 +99,6 @@
   "tests/mcp-tool-inheritance.test.cjs :: source-text-is-the-product",
   "tests/milestone-summary.test.cjs :: source-text-is-the-product",
   "tests/milestone.test.cjs :: source-text-is-the-product",
-  "tests/milestone.test.cjs :: structural-regression-guard",
   "tests/model-catalog-runtime-defaults.test.cjs :: source-text-is-the-product",
   "tests/next-safety-gates.test.cjs :: source-text-is-the-product",
   "tests/next-up-clear-order.test.cjs :: source-text-is-the-product",

@@ -770,6 +770,10 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     }
   }
 
+  // Statusline GSD-state format enum validation
+  const VALID_STATE_FORMATS = ['full', 'compact'];
+  if (kp === 'statusline.state_format') assertEnumValue(parsedValue, val, VALID_STATE_FORMATS, 'statusline.state_format');
+
   // statusline.show_git — boolean only
   if (kp === 'statusline.show_git') {
     if (typeof parsedValue !== 'boolean') {

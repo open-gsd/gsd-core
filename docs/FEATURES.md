@@ -171,6 +171,17 @@
   - [MemPalace Memory Capability](#145-mempalace-memory-capability)
   - [Spec-Phase Prohibition Probe](#146-spec-phase-prohibition-probe)
   - [Capability Management Command](#147-capability-management-command)
+  - [Smart Entry Launcher](#148-smart-entry-launcher)
+- [v1.7.0 Features](#v170-features)
+  - [Embeddable Orchestration System (Host-Integration Interface)](#149-embeddable-orchestration-system-host-integration-interface)
+  - [Discoverability Registries](#150-discoverability-registries)
+  - [Companion MCP Server](#151-companion-mcp-server)
+  - [Statusline Token Count & Git Segment](#152-statusline-token-count--git-segment)
+  - [Model Catalog Advances](#153-model-catalog-advances)
+  - [Claude Orchestration Capability (BETA)](#154-claude-orchestration-capability-beta)
+  - [External-Job Capability](#155-external-job-capability)
+  - [API-Coverage Gate](#156-api-coverage-gate)
+  - [State Rebuild & Configurable Graph Path](#157-state-rebuild--configurable-graph-path)
 
 ---
 
@@ -3256,3 +3267,89 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 **Reference:** [Smart Entry Design](superpowers/specs/2026-06-27-gsd-smart-entry-design.md)
 
 ---
+
+## v1.7.0 Features
+
+> These are features new to **@opengsd/gsd-core 1.7.0** (the current release line: 1.0.0 → 1.2.0 → … → 1.6.1 → 1.7.0). The preceding `v1.27`–`v1.43.0` sections use the retired get-shit-done-cc / get-shit-done-redux feature numbering and are not gsd-core releases — see [Legacy Release Notes](RELEASE-NOTES-LEGACY.md).
+
+### 149. Embeddable Orchestration System (Host-Integration Interface)
+
+**Purpose:** Express every host integration against one public, versioned contract (ADR-1239 Phase A, #1690) instead of bespoke per-host wiring, so onboarding a new host becomes additive descriptor work.
+
+**Behavior:** The interface exposes six interface points (`command`, `dispatch`, `model`, `hooks`, `state`, `artifact`), eight negotiated axes, and a `PROTOCOL_VERSION` handshake that negotiates down to `min(host, engine)`. In 1.7.0, 14 runtimes were migrated onto the interface via imperative adapters (OpenCode #2087, Cursor #2089, Cline #2090, Hermes #2091, Qwen #2092, Kilo #2093, Trae #2094, Kimi #2095, Antigravity #2096, Augment #2097), a declarative adapter (Codex #2088), plus full lifecycle-hook wiring for CodeBuddy (#2098), GitHub Copilot (#2099), and Windsurf (#2100). Descriptors gained an `extensionEvents` vocabulary (#1946), and `/gsd:surface` now reproduces a runtime's agent output byte-for-byte from the installer's descriptors (#1575).
+
+**New runtimes:** ZCode (Z.ai — Agentic Development Environment for GLM-5.2, #1925), pi (`npx @opengsd/gsd-core --pi`, #2102), and a repo-local VS Code extension driven through the adapter (#2103). The retired Gemini CLI now redirects to Antigravity CLI, its official successor (#1928).
+
+**Reference:** [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) · [Host-Integration Interface](reference/host-integration-interface.md) · [Interface versioning policy](explanation/interface-versioning-policy.md)
+
+---
+
+### 150. Discoverability Registries
+
+**Purpose:** Two non-endorsing catalogs for third-party extensions (#2182).
+
+**Behavior:** The **Community Capability Registry** (#2188) lists third-party Feature Capabilities installed with `gsd capability install`; the **EoS Registry** (#2193) lists third-party host integrations built on the ADR-1239 interface. Every entry embeds a live release badge and links to a GitHub Discussion. Registration is a documentation PR, regenerated with `npm run gen:registry`.
+
+**Reference:** [GSD Registries](registries/README.md)
+
+---
+
+### 151. Companion MCP Server
+
+**Command:** `gsd-mcp-server`
+
+**Purpose:** A companion MCP server exposing GSD over stdio JSON-RPC 2.0, covering interface points 1 and 5 (#1681).
+
+**Behavior:** OpenCode installs auto-register it as `mcp.gsd` (#1682). OpenCode also gained the `opencode-subset` hook dialect plus `session.idle` handling (#1682) and now runs GSD's lifecycle safety hooks — prompt-injection guard, read-before-edit guard, and injection scanner (#1923).
+
+---
+
+### 152. Statusline Token Count & Git Segment
+
+**Purpose:** Opt-in statusline additions surfacing more session context.
+
+**Behavior:** An absolute token count on the context meter (#2161) and a git branch + working-state segment (#2163), both opt-in. A companion opt-in **compact GSD-state format** condenses the GSD state segment (#2162).
+
+**Configuration:** `statusline.*`
+
+---
+
+### 153. Model Catalog Advances
+
+**Purpose:** Refresh the default model tiers and how models are surfaced.
+
+**Behavior:** Codex/OpenAI defaults advance to the **GPT-5.6 family (Sol / Terra / Luna)** (#2122); the verbose `(1M context)` model suffix collapses to a compact `(1M)` badge (#2160). GSD warns when model config changes without re-running the installer on static-frontmatter runtimes such as Codex and OpenCode (#1688).
+
+**Reference:** [Configuration](CONFIGURATION.md) · [Configure model profiles](how-to/configure-model-profiles.md)
+
+---
+
+### 154. Claude Orchestration Capability (BETA)
+
+**Purpose:** A default-off, BETA, Claude-only capability that adopts Claude Code's Workflow tool for parallel sub-agent orchestration (#1143).
+
+**Reference:** [The Claude orchestration capability](explanation/claude-orchestration-capability.md)
+
+---
+
+### 155. External-Job Capability
+
+**Purpose:** A default-off capability that externalizes long-running compute as asynchronous external jobs, e.g. SLURM submission (#1165).
+
+**Configuration:** `external_job.submit_timeout_ms`, `external_job.poll_timeout_ms`, `external_job.artifact_dir` (#1164)
+
+---
+
+### 156. API-Coverage Gate
+
+**Command:** `/gsd:verify-work`
+
+**Purpose:** A phase that integrates an external API, SDK, or service can no longer seal verification without a decided coverage matrix (#1562).
+
+---
+
+### 157. State Rebuild & Configurable Graph Path
+
+**Behavior:** A new `gsd-tools state rebuild` subcommand re-derives `STATE.md` from source (#1830). The new `graphify.graph_path` setting makes the knowledge-graph location configurable, so a single umbrella graph can serve several projects (#1825).
+
+**Configuration:** `graphify.graph_path`

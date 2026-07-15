@@ -1366,6 +1366,298 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
 
 
 // ────────────────────────────────────────────────────────────────────────
+// Compact GSD-state format (statusline.state_format)
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+  const statusline = require('../hooks/gsd-statusline.js');
+  const { shortGsdStatus, formatGsdStateCompact, formatGsdState } = statusline;
+  const { VALID_CONFIG_KEYS } = require('../gsd-core/bin/lib/config-schema.cjs');
+
+  describe('config schema: statusline.state_format', () => {
+    test('registers statusline.state_format', () => {
+      assert.ok(
+        VALID_CONFIG_KEYS.has('statusline.state_format'),
+        'statusline.state_format must be in VALID_CONFIG_KEYS',
+      );
+    });
+    // Direct config-set write-path coverage, mirroring the sibling
+    // context_position tests (the ENUM_KEYS matrix covers only the JSON
+    // coercion-bypass shapes, not the plain-string paths).
+    test('config-set accepts "compact" and rejects an invalid plain string', () => {
+      const tmpDir = createTempProject();
+      try {
+        const ok = runGsdTools(['config-set', 'statusline.state_format', 'compact'], tmpDir);
+        assert.ok(ok.success, ok.error);
+        const bad = runGsdTools(['config-set', 'statusline.state_format', 'tiny'], tmpDir);
+        assert.equal(bad.success, false, 'invalid enum value must be rejected');
+        assert.ok(
+          /statusline\.state_format|Invalid/i.test(bad.error),
+          `stderr must reference key or "Invalid"; got: ${bad.error}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    });
+  });
+
+  describe('shortGsdStatus', () => {
+    test('returns null for empty input', () => {
+      assert.equal(shortGsdStatus(null), null);
+      assert.equal(shortGsdStatus(''), null);
+      assert.equal(shortGsdStatus(undefined), null);
+    });
+    test('paused — the canonical stuck state — wins and renders uppercase (#2162 condition)', () => {
+      assert.equal(shortGsdStatus('paused — waiting on credentials'), 'PAUSED');
+      assert.equal(shortGsdStatus('stopped by user'), 'PAUSED');
+    });
+    test('collapses lifecycle narratives to canonical keywords via normalizeStateStatus', () => {
+      assert.equal(shortGsdStatus('Executing phase 7 of the parser milestone'), 'executing');
+      assert.equal(shortGsdStatus('Ready to plan next phase'), 'planning');
+      assert.equal(shortGsdStatus('Discussing scope with user'), 'discussing');
+      assert.equal(shortGsdStatus('Verifying UAT criteria'), 'verifying');
+      assert.equal(shortGsdStatus('Work complete'), 'completed');
+    });
+    test('matches the canonical vocabulary exactly — no drift from normalizeStateStatus', () => {
+      const { normalizeStateStatus } = require('../gsd-core/bin/lib/state-document.cjs');
+      for (const canonical of ['discussing', 'planning', 'executing', 'verifying', 'completed', 'paused']) {
+        const rendered = shortGsdStatus(canonical);
+        const expected = canonical === 'paused' ? 'PAUSED' : canonical;
+        assert.equal(rendered, expected);
+        assert.equal(normalizeStateStatus(canonical, null), canonical,
+          `canonical vocabulary changed upstream: ${canonical}`);
+      }
+    });
+    test('unknown shapes fall back to the first word, capped at 16 chars', () => {
+      assert.equal(shortGsdStatus('reticulating splines'), 'reticulating');
+      assert.equal(shortGsdStatus('supercalifragilisticexpialidocious state'), 'supercalifragili');
+    });
+    test('16-char cap boundary: limit-1 / limit / limit+1', () => {
+      assert.equal(shortGsdStatus('x'.repeat(15)), 'x'.repeat(15));
+      assert.equal(shortGsdStatus('x'.repeat(16)), 'x'.repeat(16));
+      assert.equal(shortGsdStatus('x'.repeat(17)), 'x'.repeat(16));
+    });
+  });
+
+  describe('formatGsdStateCompact', () => {
+    test('renders version · phase/total · status', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v1.12', phaseNum: '7', phaseTotal: '12',
+        status: 'Executing phase 7 — building the parser',
+      });
+      assert.equal(out, 'v1.12 · P7/12 · executing');
+    });
+    test('prefers lifecycle active_phase over body phase number', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v2.0', activePhase: '4.5', phaseNum: '4', status: 'executing',
+      });
+      assert.equal(out, 'v2.0 · P4.5 · executing');
+    });
+    test('paused state renders uppercase in the compact line', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v2.0', activePhase: '4.5', status: 'paused — waiting on review',
+      });
+      assert.equal(out, 'v2.0 · P4.5 · PAUSED');
+    });
+    test('milestone completion renders "complete"', () => {
+      assert.equal(formatGsdStateCompact({ milestone: 'v2.0', percent: '100' }), 'v2.0 · complete');
+      assert.equal(
+        formatGsdStateCompact({ milestone: 'v2.0', completedPhases: '5', totalPhases: '5' }),
+        'v2.0 · complete');
+    });
+    test('scene exclusivity: an in-flight phase wins over milestone-complete', () => {
+      // Non-atomic STATE.md edits can leave active_phase populated alongside
+      // percent=100 — the compact format must mirror formatGsdState's
+      // if/else-chain precedence (Scene 1 beats Scene 3), never render both.
+      const state = {
+        milestone: 'v2.0', activePhase: '4.5', percent: '100', status: 'executing',
+      };
+      assert.equal(formatGsdStateCompact(state), 'v2.0 · P4.5 · executing');
+      const full = formatGsdState(state);
+      assert.ok(!/(complete)/.test(full) || !/4\.5/.test(full),
+        `full format must not co-render phase and complete either; got: ${full}`);
+      // The legacy body-phase shape (phaseNum, no activePhase) does NOT hold
+      // completion back — formatGsdState reaches Scene 3 on percent=100
+      // regardless of phaseNum, and compact must agree (#2175 re-review Major).
+      const legacyDone = { milestone: 'v2.0', phaseNum: '5', phaseTotal: '5', percent: '100', status: 'verifying' };
+      assert.equal(formatGsdStateCompact(legacyDone), 'v2.0 · P5/5 · complete');
+      assert.ok(formatGsdState(legacyDone).includes('milestone complete'),
+        'parity: full format must render Scene 3 for the same input');
+    });
+    test('parity: both renderers agree on completion for the same input', () => {
+      // Feed identical state objects to both renderers and require they agree
+      // on whether the milestone reads as complete — the drift guard for the
+      // parallel rendering surfaces.
+      const cases = [
+        { milestone: 'v2.0', percent: '100' },
+        { milestone: 'v2.0', phaseNum: '5', phaseTotal: '5', percent: '100', status: 'verifying' },
+        { milestone: 'v2.0', completedPhases: '5', totalPhases: '5' },
+        { milestone: 'v2.0', activePhase: '4.5', percent: '100', status: 'executing' },
+        { milestone: 'v1.9', percent: '40', status: 'executing', phaseNum: '2', phaseTotal: '5' },
+      ];
+      for (const s of cases) {
+        const fullDone = formatGsdState(s).includes('milestone complete');
+        const compactDone = / complete$|^complete$/.test(formatGsdStateCompact(s));
+        assert.equal(compactDone, fullDone,
+          `completion parity diverged for ${JSON.stringify(s)}`);
+      }
+    });
+    test('idle with queued next action renders "next <action> <phases>"', () => {
+      const out = formatGsdStateCompact({
+        milestone: 'v2.0', nextAction: 'execute-phase', nextPhases: ['4.5', '4.6'],
+      });
+      assert.equal(out, 'v2.0 · next execute-phase 4.5/4.6');
+    });
+    test('empty state renders empty string', () => {
+      assert.equal(formatGsdStateCompact({}), '');
+    });
+    test('drops the milestone name and progress bar the full format shows', () => {
+      const state = {
+        milestone: 'v1.9', milestoneName: 'Code Quality', percent: '40',
+        status: 'executing', phaseNum: '2', phaseTotal: '5',
+      };
+      const full = formatGsdState(state);
+      const compact = formatGsdStateCompact(state);
+      assert.ok(full.includes('Code Quality'), `full keeps name; got: ${full}`);
+      assert.ok(!compact.includes('Code Quality'), `compact drops name; got: ${compact}`);
+      assert.ok(!compact.includes('█'), `compact drops bar; got: ${compact}`);
+    });
+  });
+
+  describe('state_format via renderStatusline', () => {
+    function makeProject(stateFormat) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'state-fmt-'));
+      fs.mkdirSync(path.join(dir, '.planning'), { recursive: true });
+      if (stateFormat !== undefined) {
+        fs.writeFileSync(
+          path.join(dir, '.planning', 'config.json'),
+          JSON.stringify({ statusline: { state_format: stateFormat } }),
+        );
+      }
+      fs.writeFileSync(path.join(dir, '.planning', 'STATE.md'), [
+        '---',
+        'milestone: v1.9',
+        'milestone_name: Code Quality',
+        'status: executing',
+        '---',
+        '',
+        'Phase: 2 of 5 (parser-rewrite)',
+        '',
+      ].join('\n'));
+      return dir;
+    }
+
+    test('compact format drops the milestone name', () => {
+      const dir = makeProject('compact');
+      try {
+        const out = statusline.renderStatusline({
+          model: { display_name: 'Claude' },
+          workspace: { current_dir: dir },
+        });
+        assert.ok(out.includes('v1.9 · P2/5 · executing'), `expected compact state; got: ${out}`);
+        assert.ok(!out.includes('Code Quality'), `expected no milestone name; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('default (key absent) keeps the full format unchanged', () => {
+      const dir = makeProject(undefined);
+      try {
+        const out = statusline.renderStatusline({
+          model: { display_name: 'Claude' },
+          workspace: { current_dir: dir },
+        });
+        assert.ok(out.includes('Code Quality'), `expected full format; got: ${out}`);
+      } finally {
+        cleanup(dir);
+      }
+    });
+
+    test('explicit "full" matches the default rendering', () => {
+      const dirDefault = makeProject(undefined);
+      const dirFull = makeProject('full');
+      try {
+        const input = (dir) => ({
+          model: { display_name: 'Claude' },
+          workspace: { current_dir: dir },
+        });
+        const a = statusline.renderStatusline(input(dirDefault));
+        const b = statusline.renderStatusline(input(dirFull));
+        // Same STATE.md content → same rendered middle segment (the trailing
+        // directory basename differs per temp dir, so compare with it removed)
+        assert.equal(
+          a.replace(path.basename(dirDefault), ''),
+          b.replace(path.basename(dirFull), ''));
+      } finally {
+        cleanup(dirDefault);
+        cleanup(dirFull);
+      }
+    });
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
+// Compact 1M model badge
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { test, describe } = require('node:test');
+  const assert = require('node:assert/strict');
+  const statusline = require('../hooks/gsd-statusline.js');
+  const { compactModelName } = statusline;
+
+  describe('compactModelName', () => {
+    test('collapses "(1M context)" to "(1M)"', () => {
+      assert.equal(compactModelName('Sonnet 4.5 (1M context)'), 'Sonnet 4.5 (1M)');
+    });
+    test('is case-insensitive on "context" and preserves the token case', () => {
+      assert.equal(compactModelName('Opus 4.6  (1m CONTEXT)'), 'Opus 4.6 (1m)');
+    });
+    test('tolerates future window sizes (#2160 approval condition)', () => {
+      assert.equal(compactModelName('Sonnet 5 (500K context)'), 'Sonnet 5 (500K)');
+      assert.equal(compactModelName('Opus 5 (2M context)'), 'Opus 5 (2M)');
+    });
+    test('handles the abbreviated "ctx" variant (#2160 approval condition)', () => {
+      assert.equal(compactModelName('Sonnet 4.5 (1M ctx)'), 'Sonnet 4.5 (1M)');
+      assert.equal(compactModelName('Opus 5 (2M CTX)'), 'Opus 5 (2M)');
+    });
+    test('leaves non-context parentheticals untouched', () => {
+      assert.equal(compactModelName('Sonnet 5 (beta)'), 'Sonnet 5 (beta)');
+      assert.equal(compactModelName('Opus 4 (deprecated)'), 'Opus 4 (deprecated)');
+    });
+    test('leaves ordinary names unchanged', () => {
+      assert.equal(compactModelName('Claude'), 'Claude');
+      assert.equal(compactModelName('Sonnet 4.5'), 'Sonnet 4.5');
+    });
+    test('only matches the suffix position', () => {
+      assert.equal(
+        compactModelName('(1M context) Special'), '(1M context) Special');
+    });
+    test('passes non-strings through', () => {
+      assert.equal(compactModelName(undefined), undefined);
+      assert.equal(compactModelName(null), null);
+    });
+  });
+
+  describe('renderStatusline uses the compact badge', () => {
+    test('rendered output carries (1M), not (1M context)', () => {
+      const out = statusline.renderStatusline({
+        model: { display_name: 'Sonnet 4.5 (1M context)' },
+        workspace: { current_dir: require('node:os').tmpdir() },
+      });
+      assert.ok(out.includes('Sonnet 4.5 (1M)'), `expected compact badge; got: ${out}`);
+      assert.ok(!out.includes('(1M context)'), `expected no verbose suffix; got: ${out}`);
+    });
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────
 // Git segment (statusline.show_git)
 // ────────────────────────────────────────────────────────────────────────
 {

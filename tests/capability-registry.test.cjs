@@ -5952,6 +5952,7 @@ const ENUM_KEYS = [
   { key: 'workflow.human_verify_mode',           member: 'mid-flight' },
   { key: 'workflow.context_guard_mode',          member: 'off'        },
   { key: 'statusline.context_position',          member: 'front'      },
+  { key: 'statusline.state_format',              member: 'compact'    },
   { key: 'code_quality.fallow.scope',            member: 'phase'      },
   { key: 'code_quality.fallow.profile',          member: 'standard'   },
   { key: 'plan_review.source_grounding_authority', member: 'grep'     },
