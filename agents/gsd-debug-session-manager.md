@@ -272,9 +272,22 @@ If user selects 3: proceed to Step 4 with fix = "not applied".
 
 ## Step 4: Return Compact Summary
 
+**Non-terminal early stop — check this FIRST.** Before returning any summary below, ask: is your own turn/context budget exhausted while the debugger (`gsd-debugger`) is still investigating — i.e. you have NOT reached `DEBUG COMPLETE`, a user-chosen `ABANDONED`, or exhausted the `INVESTIGATION INCONCLUSIVE` options? If so, do NOT fabricate a `DEBUG SESSION COMPLETE` or `ABANDONED` summary to fit this shape. Return the non-terminal marker instead:
+
+```markdown
+## CONTINUE_REQUIRED
+
+**Session:** {debug_file_path}
+**Status:** {status from frontmatter, e.g. investigating}
+**Next action:** {next_action from Current Focus}
+**Reason:** session-manager turn/context budget exhausted — investigation still in progress
+```
+
+`CONTINUE_REQUIRED` is distinct from both terminal shapes below AND from `## CHECKPOINT REACHED` (Step 3d): a `CHECKPOINT REACHED` is a genuine user-input/approval checkpoint that already correctly pauses via `AskUserQuestion` before looping back to Step 3 — it is not returned to the orchestrator. `CONTINUE_REQUIRED` is emitted only when no checkpoint is pending and the loop simply cannot proceed further in this turn. The orchestrator resumes by re-spawning this agent with the SAME `slug`/`debug_file_path` — the on-disk checkpoint at `.planning/debug/{slug}.md` (its `status` and `next_action`) is the source of truth for where to pick up. Never return control to the user as if the session were complete when it is not.
+
 Read the resolved (or current) debug file to extract final Resolution values.
 
-Return compact summary:
+Return compact summary (terminal — investigation resolved):
 
 ```markdown
 ## DEBUG SESSION COMPLETE
@@ -287,7 +300,7 @@ Return compact summary:
 **Specialist review:** {specialist_hint used, or "none"}
 ```
 
-If the session was abandoned by user choice, return:
+If the session was abandoned by user choice, return (terminal — user stopped):
 
 ```markdown
 ## DEBUG SESSION COMPLETE
@@ -311,5 +324,6 @@ If the session was abandoned by user choice, return:
 - [ ] Specialist dispatch executed when specialist_dispatch_enabled and hint maps to a skill
 - [ ] TDD gate applied when tdd_mode=true and ROOT CAUSE FOUND
 - [ ] Loop continues until DEBUG COMPLETE, ABANDONED, or user stops
+- [ ] Non-terminal `CONTINUE_REQUIRED` (not a fabricated terminal summary) returned when the manager's own turn/context budget is exhausted mid-investigation
 - [ ] Compact summary returned (at most 2K tokens)
 </success_criteria>
