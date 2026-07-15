@@ -21,6 +21,7 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 const { cleanup } = require('./helpers.cjs');
 const fc = require('fast-check');
+const { CLAUDE_AGENT_ALIASES } = require('../gsd-core/bin/lib/model-resolver.cjs');
 
 // #2153 follow-up: ensure hooks/dist/ exists before any install integration
 // test runs. The Codex install path copies hook files from hooks/dist/, which
@@ -526,11 +527,12 @@ tools: Read, Grep, Glob
 
   // ─── #2310: never leak an Anthropic-flavored model into the Codex .toml ─────
 
-  test('translates a bare GSD tier alias in model_overrides to a Codex model (#2310)', () => {
-    for (const [alias, expected] of [['opus', 'gpt-5.6-sol'], ['sonnet', 'gpt-5.6-terra'], ['haiku', 'gpt-5.6-luna']]) {
+  test('omits a bare GSD tier alias in model_overrides (Codex passive/session-only) (#2310)', () => {
+    // ADR-1239: Codex is a passive/session-only model host. A tier alias cannot be
+    // honored per-agent, so it is dropped and the agent inherits the session model (no 400).
+    for (const alias of ['opus', 'sonnet', 'haiku', 'fable']) {
       const result = generateCodexAgentToml('gsd-executor', sampleAgent, { 'gsd-executor': alias });
-      assert.ok(result.includes(`model = "${expected}"`), `${alias} must translate to ${expected}`);
-      assert.ok(!result.includes(`model = "${alias}"`), `bare alias "${alias}" must never be the Codex model`);
+      assert.ok(!/^model = /m.test(result), `alias "${alias}" must be omitted (no model pinned)`);
     }
   });
 
@@ -569,6 +571,29 @@ tools: Read, Grep, Glob
     assert.ok(result.includes('model = "gpt-5.6-sol"'), 'a real gpt-* override must still pass through unchanged');
   });
 
+  test('gates a provider-namespaced anthropic/claude-* model from the runtime-resolver path (#2310 review)', () => {
+    // Catalog assigns anthropic/claude-* to opencode/hermes/kilo. A mixed-runtime config
+    // (runtime: opencode) + Codex install resolves those; they must NOT reach the .toml.
+    const runtimeResolver = { runtime: 'opencode', resolve: () => ({ model: 'anthropic/claude-opus-4-8' }) };
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, null, runtimeResolver);
+    assert.ok(!/claude/i.test(result.split('\n').find((l) => /^model = /.test(l)) || ''), 'no claude-bearing model may be emitted');
+    assert.ok(!/^model = /m.test(result), 'anthropic/claude-* is gated out → no model pinned');
+  });
+
+  test('omits a provider-namespaced anthropic/claude-* model_overrides pin (#2310 review)', () => {
+    const result = generateCodexAgentToml('gsd-executor', sampleAgent, { 'gsd-executor': 'anthropic/claude-sonnet-5' });
+    assert.ok(!result.includes('claude'), 'anthropic/claude-* must be omitted, never emitted');
+    assert.ok(!/^model = /m.test(result), 'no model pinned');
+  });
+
+  test('every canonical Claude tier alias is omitted (single-source guard, #2310 review)', () => {
+    // Iterates the CANONICAL set so a future alias is covered automatically (no divergence).
+    for (const alias of CLAUDE_AGENT_ALIASES) {
+      const result = generateCodexAgentToml('gsd-executor', sampleAgent, { 'gsd-executor': alias });
+      assert.ok(!/^model = /m.test(result), `canonical alias "${alias}" must be omitted`);
+    }
+  });
+
   test('drops the fable alias (Claude Agent alias with no Codex mapping) (#2310)', () => {
     const result = generateCodexAgentToml('gsd-executor', sampleAgent, { 'gsd-executor': 'fable' });
     assert.ok(!result.includes('model = "fable"'), 'fable must never be emitted as the Codex model');
@@ -576,13 +601,19 @@ tools: Read, Grep, Glob
   });
 
   test('property: no model_overrides value ever yields an Anthropic-flavored Codex model (#2310)', () => {
-    fc.assert(fc.property(fc.string(), (v) => {
+    const anthropicish = fc.oneof(
+      fc.constantFrom('opus', 'sonnet', 'haiku', 'fable'),
+      fc.string().map((s) => `claude-${s}`),
+      fc.string().map((s) => `anthropic/claude-${s}`),
+      fc.string().map((s) => `us.anthropic.claude-${s}`),
+      fc.string(),
+    );
+    fc.assert(fc.property(anthropicish, (v) => {
       const result = generateCodexAgentToml('gsd-executor', sampleAgent, { 'gsd-executor': v });
       const m = result.split('\n').find((l) => /^model = /.test(l));
       if (!m) return true; // no model pinned is always safe
-      // The emitted model must never be a bare GSD alias or a claude-* id.
-      return !/^model = "(opus|sonnet|haiku|fable)"$/.test(m) && !/^model = "claude-/.test(m);
-    }), { numRuns: 300 });
+      return !/claude/i.test(m) && !/^model = "(opus|sonnet|haiku|fable)"$/.test(m);
+    }), { numRuns: 400 });
   });
 
   // ─── #774: service_tier / model_verbosity for light-tier agents ───────────────

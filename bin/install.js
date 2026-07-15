@@ -375,6 +375,7 @@ const {
 } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
 const {
   resolveTierEntry: gsdResolveTierEntry,
+  CLAUDE_AGENT_ALIASES,
 } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2071 — install-time effort resolution (readGsdEffectiveEffortConfig /
@@ -4005,39 +4006,18 @@ purpose: ${toSingleLine(description)}
   return `${cleanFrontmatter}\n\n${roleHeader}\n${body}`;
 }
 
-// #2310 — Anthropic/Claude Agent-tool aliases: never valid Codex models. opus/
-// sonnet/haiku are the GSD model-profile tiers; `fable` is the extra Claude
-// Agent-tool alias (#1133). Canonical source: CLAUDE_AGENT_ALIASES in
-// src/model-resolver.cts — keep in sync. `fable` has no codex tier entry, so
-// _translateModelOverrideForCodex returns null for it (dropped) and the guard
-// still blocks it on the runtime-resolver path.
-const _ANTHROPIC_TIER_ALIASES = new Set(['opus', 'sonnet', 'haiku', 'fable']);
-
 /**
- * #2310 — True if `model` is an Anthropic-flavored value that must never appear as
- * a Codex agent `.toml` `model`: a bare GSD tier alias (opus/sonnet/haiku) or a
- * Claude model id (claude-*). Codex/ChatGPT rejects these.
+ * #2310 — True if `model` is an Anthropic-flavored value that must never appear as a
+ * Codex agent `.toml` `model`. Two forms: (a) a bare Claude Agent-tool tier alias
+ * (opus/sonnet/haiku/fable — the canonical CLAUDE_AGENT_ALIASES, imported from
+ * src/model-resolver.cts so it can't diverge); (b) any Claude model id in any provider
+ * namespacing — `claude-*`, `anthropic/claude-*`, `us.anthropic.claude-*` (the forms the
+ * catalog assigns to opencode/hermes/kilo, reachable on a Codex .toml via the runtime-
+ * resolver path). No OpenAI/Codex model id contains "claude", so a case-insensitive
+ * substring test is a safe, exhaustive guard for (b). Codex/ChatGPT rejects all of these.
  */
 function _isAnthropicFlavoredModel(model) {
-  return typeof model === 'string' && (_ANTHROPIC_TIER_ALIASES.has(model) || model.startsWith('claude-'));
-}
-
-/**
- * #2310 — Translate a per-agent `model_overrides` value into a Codex-valid model
- * id, or null to signal "drop it" (caller warns + falls through to the runtime
- * resolver / Codex default). A bare GSD tier alias resolves through the Codex tier
- * map (sonnet -> gpt-5.6-terra); a Claude id (claude-*) is meaningless on Codex ->
- * null; any other value is assumed to be a real Codex/OpenAI model id and passed
- * through verbatim (preserves the #2256 model_overrides contract).
- */
-function _translateModelOverrideForCodex(value) {
-  if (typeof value !== 'string' || value === '') return null;
-  if (_ANTHROPIC_TIER_ALIASES.has(value)) {
-    const entry = gsdResolveTierEntry({ runtime: 'codex', tier: value, overrides: null });
-    return entry && entry.model ? entry.model : null;
-  }
-  if (value.startsWith('claude-')) return null;
-  return value;
+  return typeof model === 'string' && (CLAUDE_AGENT_ALIASES.has(model) || model.toLowerCase().includes('claude'));
 }
 
 // #2310 — dedupe stderr warnings so repeated agent emits don't spam (mirrors the
@@ -4089,22 +4069,27 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // model_overrides is respected on Codex (which uses static TOML, not inline
   // Task() model parameters). See #2256.
   // Precedence: per-agent model_overrides > runtime-aware tier resolution (#2517).
-  // #2310 — a Codex .toml `model` MUST be a real Codex/OpenAI model id. A bare GSD
-  // tier alias (opus/sonnet/haiku) or a Claude id (claude-*) supplied via
-  // model_overrides is Anthropic-flavored and 400s on a ChatGPT-account Codex
-  // ("The 'sonnet' model is not supported when using Codex with a ChatGPT account").
-  // Translate a tier alias through the Codex tier map (sonnet -> gpt-5.6-terra);
-  // guard everything else so an Anthropic value can never reach the .toml (mirrors
-  // the Claude-side model_overrides guard, #2041).
+  // #2310 — a Codex .toml `model` MUST be a real Codex/OpenAI model id. Codex is a
+  // passive/session-only model host (ADR-1239): GSD cannot reliably route per-agent
+  // tiers, and a bare GSD/Claude tier alias (opus/sonnet/haiku/fable) or a claude-*
+  // id 400s on a ChatGPT-account Codex ("The 'sonnet' model is not supported when
+  // using Codex with a ChatGPT account"). So: embed ONLY an explicit real-Codex
+  // model pin from model_overrides; omit anything Anthropic-flavored so the agent
+  // inherits the always-available session model. (Removing the runtime-resolver
+  // per-tier embedding below is the ADR-2310 passive-posture epic.)
   const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
   let pinnedModel = null;
   if (rawModelOverride) {
-    pinnedModel = _translateModelOverrideForCodex(rawModelOverride);
-    if (!pinnedModel) _warnCodexModelOverrideDropped(resolvedName, rawModelOverride);
+    if (typeof rawModelOverride === 'string' && rawModelOverride && !_isAnthropicFlavoredModel(rawModelOverride)) {
+      pinnedModel = rawModelOverride;   // explicit real-Codex model pin → embed verbatim (#2256)
+    } else {
+      _warnCodexModelOverrideDropped(resolvedName, rawModelOverride);   // alias/claude-* → omit
+    }
   }
   if (!pinnedModel && runtimeResolver) {
     // #2517 — runtime-aware tier resolution. Embeds Codex-native model + reasoning_effort
     // from RUNTIME_PROFILE_MAP / model_profile_overrides for the configured tier.
+    // (Superseded on the default path by the ADR-2310 passive-posture epic.)
     const entry = runtimeResolver.resolve(resolvedName) || runtimeResolver.resolve(agentName);
     if (entry?.model) pinnedModel = entry.model;
   }
