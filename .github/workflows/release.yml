@@ -507,7 +507,10 @@ jobs:
     needs: [validate-version, install-smoke-finalize]
     if: inputs.action == 'finalize'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Matches the rc job's budget: `npm ci` + `npm run test:coverage:unit` now
+    # exceeds 10m as the unit suite grows, so a 10m cap cancels the job mid-test
+    # before tag/publish. 30m gives the same headroom rc already relies on.
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
