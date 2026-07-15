@@ -99,8 +99,8 @@ PI_CODING_AGENT_DIR=~/.omp-alt/agent npx @opengsd/gsd-core@latest --omp --global
 ```
 
 OMP 集成仅支持全局安装。GSD 会拒绝本地安装，因为受管理的 extension、runtime CLI、agents 与 skills 属于当前 OMP agent home。OMP 仍可发现项目级 `.omp` 资源；这些资源属于用户维护的覆盖层，而不是第二套 GSD runtime 安装。
-重启后，OMP 会提供 `/gsd`、`/gsd-status`、`/gsd-progress` 等原生 GSD slash command；阶段执行会使用 OMP 原生的 `task` 与 job 控制。`/gsd-next` 会提供清晰的动作菜单：直接运行符合条件的初始化、恢复和发布前检查 workflow；预览、延后待处理的 Next Up 动作；或放弃过期建议。需要新 session 的动作仍须明确确认，所有 workflow 安全门保持有效。
-在普通项目状态下，如果没有更高优先级的待处理动作，`/gsd-next` 会立即启动该受控推进流程。
+重启后，OMP 会提供 `/gsd`、`/gsd-progress` 等原生 GSD slash command；阶段执行会使用 OMP 原生的 `task` 与 job 控制。`/gsd-progress --next` 会提供清晰的动作菜单：直接运行符合条件的初始化、恢复和发布前检查 workflow；预览、延后待处理的 Next Up 动作；或放弃过期建议。需要新 session 的动作仍须明确确认，所有 workflow 安全门保持有效。
+在普通项目状态下，如果没有更高优先级的待处理动作，`/gsd-progress --next` 会立即启动该受控推进流程。
 
 OMP 的 task 调用不接受内联 model 字段。因此，GSD 会先解析 `model_overrides`，再解析当前 `model_profile` 与 `model_profile_overrides.omp` 层级，并把最终模型写入每个 OMP agent 的 frontmatter。修改这些模型设置后，请重新执行 OMP 安装或升级命令以刷新静态 agent 文件；如果项目模型配置比已安装 agents 更新，GSD 会给出警告。
 

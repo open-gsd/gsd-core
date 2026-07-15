@@ -8898,7 +8898,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
 
   if (_hostBehaviors(runtime).localInstallDeferred && !isGlobal) {
     const runtimeLabel = runtime === 'omp' ? 'Oh My Pi' : runtime;
-    console.log(`  ${yellow}⚠${reset} ${runtimeLabel} local install is not supported.`);
+    console.log(`  ${yellow}⚠${reset} ${runtimeLabel} local install is deferred because it is not supported.`);
     console.log(`      No ${getDirName(runtime)}/ artifacts were written.`);
     return {
       runtime,
@@ -11406,7 +11406,7 @@ const runtimeMap = {
   '18': 'omp'
 };
 const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kilo', 'opencode', 'omp', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
-const ALL_RUNTIMES_OPTION = '18';
+const ALL_RUNTIMES_OPTION = '19';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.
@@ -11432,7 +11432,7 @@ function buildRuntimePromptText() {
   ${cyan}16${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
   ${cyan}17${reset}) ZCode        ${dim}(~/.zcode)${reset}
   ${cyan}18${reset}) Oh My Pi     ${dim}(~/.omp/agent)${reset}
-  ${cyan}18${reset}) All
+  ${cyan}19${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;
@@ -11443,7 +11443,7 @@ function buildRuntimePromptText() {
  * Pure function — exported so tests can verify split/dedupe/fallback behavior.
  *  - Accepts comma- and/or whitespace-separated choices
  *  - Deduplicates while preserving order
- *  - Maps option 18 ("All") to every runtime
+ *  - Maps option 19 ("All") to every runtime
  *  - Falls back to ['claude'] when nothing valid is selected
  */
 function parseRuntimeInput(answer) {

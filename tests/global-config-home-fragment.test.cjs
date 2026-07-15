@@ -8,7 +8,7 @@
  * (install.js ~514-543) into one table — ADR-1239 Phase B / #1679, AC2 slice 2.
  *
  * Invariants pinned here:
- *   1. Each of the 13 table runtimes returns its exact verbatim source fragment
+ *   1. Each table runtime returns its exact verbatim source fragment
  *      (byte-identical to the prior chain — golden install parity asserts the
  *      generated hook output is unchanged).
  *   2. claude + unknown + empty fall back to the default "'.claude'" fragment.
@@ -36,6 +36,7 @@ const GOLDEN_FRAGMENT_MAP = {
   copilot:   "'.copilot'",
   opencode:  "'.config', 'opencode'",
   kilo:      "'.config', 'kilo'",
+  omp:       "'.omp', 'agent'",
   codex:     "'.codex'",
   cursor:    "'.cursor'",
   windsurf:  "'.windsurf'",
@@ -55,8 +56,7 @@ const GOLDEN_FRAGMENT_MAP = {
 // vscode (#2103) is extension-distributed with no file-projected config home at
 // all — getGlobalConfigHomeFragment is never invoked for it (no install surface).
 const SPECIAL_CASED = new Set(['claude', 'antigravity', 'vscode']);
-
-test('getGlobalConfigHomeFragment: golden map matches for all 13 table runtimes', () => {
+test('getGlobalConfigHomeFragment: golden map matches for all table runtimes', () => {
   for (const [id, expected] of Object.entries(GOLDEN_FRAGMENT_MAP)) {
     const actual = getGlobalConfigHomeFragment(id);
     assert.strictEqual(

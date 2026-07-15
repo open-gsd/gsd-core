@@ -39,6 +39,7 @@ const RUNTIME_INSTALL_CONTRACTS = {
   // dead hook scripts or the CommonJS package.json marker.
   kilo: { surface: 'flat-command', settings: false, packageJson: false },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
+  omp: { surface: 'omp-native', settings: false, packageJson: false },
   // #2102 Stage 1/2: pi is a PLUGIN-ONLY install (hostBehaviors.pluginOnlyInstall)
   // for commands/agents/skills — NO commands/, agents/, or skills/ dir. pi's
   // /gsd command is registered programmatically by the native extension
@@ -313,6 +314,13 @@ function assertFreshInstallContract(runtime, targetDir) {
       false,
       `${runtime} should NOT install a skills/ dir (plugin-only)`
     );
+  } else if (contract.surface === 'omp-native') {
+    assert.ok(
+      fs.existsSync(path.join(targetDir, 'extensions', 'gsd-omp.ts')) &&
+      fs.existsSync(path.join(targetDir, 'extensions', 'gsd-omp.cjs')),
+      'omp should install both native extension entry points'
+    );
+    assertHasGsdDirectory(targetDir, 'skills');
   } else if (contract.surface === 'commands-gsd') {
     assert.ok(
       listDirNames(targetDir, path.join('commands', 'gsd')).length > 0,

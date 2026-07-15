@@ -50,7 +50,7 @@ const PI_COMMAND_FAMILIES = Object.freeze([
   'list-todos', 'loop', 'migrate-config', 'milestone', 'normalize-test-command',
   'package-legitimacy', 'phase', 'phase-plan-index', 'phases', 'pr-subrepo',
   'profile-questionnaire', 'profile-sample', 'progress', 'project-instruction-file',
-  'prompt-budget', 'requirements', 'research-plan', 'research-store',
+  'prompt-budget', 'quick-tasks-append', 'requirements', 'research-plan', 'research-store',
   'resolve-granularity', 'resolve-model', 'roadmap', 'scaffold', 'smart-entry',
   'state', 'task', 'template', 'user-story', 'validate', 'verify',
   'verify-path-exists', 'verify-summary', 'workstream', 'worktree',
