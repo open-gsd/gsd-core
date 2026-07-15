@@ -168,14 +168,27 @@ const DEFAULT_RUNTIME = 'claude';
 const GSD_CLAUDE_ALLOW_PERMISSIONS = Object.freeze([
   'Bash(npx gsd-core *)',
   'Read(.planning/*)',
-  'Write(.planning/*)',
+  'Edit(.planning/*)',
   'Read(STATE.md)',
-  'Write(STATE.md)',
+  'Edit(STATE.md)',
 ]);
 const GSD_CLAUDE_DENY_PERMISSIONS = Object.freeze([
   'Read(.env)',
   'Read(.env.*)',
   'Read(.secrets)',
+]);
+// #2278 — Stale allow-rule forms from before the fix. Claude Code has no
+// standalone `Write` permission gate: file-editing tools (Write/Edit/
+// NotebookEdit) are gated collectively via `Edit(pattern)`. The original
+// `Write(.planning/*)` / `Write(STATE.md)` entries were therefore silently
+// unmatched (never granted anything) and Claude Code additionally surfaces a
+// session-start warning about unmatched permission rules. This list lets
+// mergeClaudePermissions and uninstall cleanup retire those stale entries on
+// existing installs while the current GSD_CLAUDE_ALLOW_PERMISSIONS above
+// carries the working `Edit(...)` forms.
+const GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS = Object.freeze([
+  'Write(.planning/*)',
+  'Write(STATE.md)',
 ]);
 
 /**
@@ -184,6 +197,12 @@ const GSD_CLAUDE_DENY_PERMISSIONS = Object.freeze([
  * Additive and idempotent: existing allow/deny entries are preserved; GSD
  * entries are appended only if not already present. No other permission sub-keys
  * (ask, disableBypassPermissionsMode, etc.) are touched.
+ *
+ * Migration (#2278): before adding the current GSD_CLAUDE_ALLOW_PERMISSIONS,
+ * any stale GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS entry (e.g. the unmatched
+ * `Write(...)` forms from before the fix) is removed from permissions.allow,
+ * so existing installs end up with the working `Edit(...)` forms instead of
+ * both the dead legacy entry and its replacement sitting side by side.
  *
  * Defensive: if settings is not a plain object, returns immediately without
  * throwing. If permissions.allow / permissions.deny exist but are not arrays
@@ -204,6 +223,10 @@ function mergeClaudePermissions(settings) {
   if (!Array.isArray(settings.permissions.deny)) {
     settings.permissions.deny = [];
   }
+
+  settings.permissions.allow = settings.permissions.allow.filter(
+    (e) => !GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS.includes(e)
+  );
 
   for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
     if (!settings.permissions.allow.includes(entry)) {
@@ -7591,8 +7614,11 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       let permissionsModified = false;
       if (Array.isArray(settings.permissions.allow)) {
         const before = settings.permissions.allow.length;
+        // #2278 — filter against the union of the current allow-rule forms
+        // AND the retired legacy forms, so uninstall still cleans up
+        // pre-fix installs that still carry the stale `Write(...)` entries.
         settings.permissions.allow = settings.permissions.allow.filter(
-          (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e)
+          (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e) && !GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS.includes(e)
         );
         if (settings.permissions.allow.length !== before) {
           permissionsModified = true;
@@ -12157,6 +12183,7 @@ module.exports = {
     // #768 — Claude Code permissions pre-population
     mergeClaudePermissions,
     GSD_CLAUDE_ALLOW_PERMISSIONS,
+    GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS,
     GSD_CLAUDE_DENY_PERMISSIONS,
     GSD_CODEX_MARKER,
     CODEX_AGENT_SANDBOX,
