@@ -20,7 +20,7 @@ const OMP_SKILL_BLOCKS = {
 - Never invoke \`git worktree\` yourself. OMP owns isolation setup and cleanup.
 </omp_native_execution>`,
   'gsd-progress': `<omp_artifact_handling>
-**OMP runtime CLI:** \`{{OMP_GSD_TOOLS}}\` is the only authoritative \`gsd-tools.cjs\` for this skill. Bind \`gsd_run() { node "{{OMP_GSD_TOOLS}}" "$@"; }\` before any query and use \`gsd_run\` throughout. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another installed runtime may own that executable.
+**OMP runtime CLI:** \`{{OMP_GSD_TOOLS}}\` is the only authoritative \`gsd-tools.cjs\` for this skill. Bind \`gsd_run() { GSD_RUNTIME=omp node "{{OMP_GSD_TOOLS}}" "$@"; }\` before any query and use \`gsd_run\` throughout. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another installed runtime may own that executable. Preserve \`GSD_RUNTIME=omp\` on every direct runtime CLI invocation so command formatting, agent discovery, and capability resolution stay OMP-scoped.
 
 **OMP optional artifacts:** \`.planning/.continue-here.md\`, \`.planning/debug/\`, and \`.planning/todos/pending/\` are optional. Probe a path's existence before reading it. Absence means no checkpoint, zero active debug sessions, or zero pending todo artifacts; it is not an error. Do not invoke Glob/Grep with a missing directory as its root. When checking optional directories, scan an existing \`.planning\` root and filter matching paths. A truncated summary glob may supply recent-work examples only; never use it to derive plan or summary counts.
 </omp_artifact_handling>`,

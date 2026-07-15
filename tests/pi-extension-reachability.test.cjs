@@ -585,6 +585,7 @@ test('native progress delegates next-step routing to the canonical workflow', as
   assert.match(pi._recorded.messages.at(-1).message.content, /Do not call `gsd_invoke`/);
   assert.match(pi._recorded.messages.at(-1).message.content, /`family: "gsd"` is invalid/);
   assert.match(pi._recorded.messages.at(-1).message.content, /Never invoke bare `gsd-tools`/);
+  assert.match(pi._recorded.messages.at(-1).message.content, /set `GSD_RUNTIME=omp`/);
   assert.match(pi._recorded.messages.at(-1).message.content, /probe its existence before any Read/);
 
   await pi._recorded.commands['gsd-progress'].handler('--auto', { cwd: path.resolve(__dirname, '..') });
@@ -1116,6 +1117,7 @@ test('the OMP development installer projects every GSD skill with runtime paths'
     const runtimeTools = path.join(runtimeRoot, 'gsd-core', 'bin', 'gsd-tools.cjs').split(path.sep).join('/');
     assert.ok(progressSkill.includes(`\`${runtimeTools}\``));
     assert.match(progressSkill, /Never invoke bare `gsd-tools`/);
+    assert.match(progressSkill, /GSD_RUNTIME=omp node/);
     assert.match(progressSkill, /Probe a path's existence before reading it/);
   } finally {
     cleanup(runtimeRoot);
