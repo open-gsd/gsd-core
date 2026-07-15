@@ -1,6 +1,6 @@
 'use strict';
 /**
- * phase-continuation-parity.test.cjs — DEFECT.GENERATIVE-FIX parity gate (#2232)
+ * continuation-grammar-parity.test.cjs — DEFECT.GENERATIVE-FIX parity gate (#2232)
  *
  * Proves that the phase-token CONTINUATION-segment grammar has a single owner
  * (`phase-id.cjs: PHASE_CONTINUATION_SEGMENT_SOURCE` / `isPhaseContinuationSegment`)
