@@ -293,7 +293,7 @@ When the `Agent` tool is unavailable, perform codebase mapping sequentially in t
 
 **IMPORTANT:** Do NOT use `browser_subagent`, `Explore`, or any browser-based tool. Use only file system tools (Read, Bash, Write, Grep, Glob, list_dir, view_file, grep_search, or equivalent tools available in your runtime).
 
-**IMPORTANT:** Use `{date}` from init context for all `[YYYY-MM-DD]` date placeholders in documents. NEVER guess the date.
+**IMPORTANT:** Use `{date}` from init context for every date stamp in the documents (the Analysis Date line, the analysis/audit footer, and any `<!-- refreshed -->` header), and OVERWRITE any existing date when updating a document that already has one. Do not rely on the `[YYYY-MM-DD]` placeholder still being present. NEVER guess the date.
 
 **SCOPE:** When `${PATH_SCOPE_HINT}` is non-empty (i.e. `--paths` was supplied), restrict every pass below to the validated path prefixes in `${SCOPED_PATHS}`. Do NOT scan files outside those prefixes. When `${PATH_SCOPE_HINT}` is empty, perform a full-repo scan.
 

@@ -175,7 +175,7 @@ Write document(s) to `.planning/codebase/` using the templates below.
 **Document naming:** UPPERCASE.md (e.g., STACK.md, ARCHITECTURE.md)
 
 **Template filling:**
-1. Replace `[YYYY-MM-DD]` with the date provided in your prompt (the `Today's date:` line). NEVER guess or infer the date — always use the exact date from the prompt.
+1. Set every date stamp to the date provided in your prompt (the `Today's date:` line): the `**Analysis Date:**` line, the `*<Type> analysis: ...*` footer, and any `<!-- refreshed: ... -->` header. Do this whether the document is new (still showing the `[YYYY-MM-DD]` placeholder) or already exists with a concrete date from a previous run. On an update, OVERWRITE the old date; never preserve it. NEVER guess or infer the date; always use the exact date from the prompt.
 2. Replace `[Placeholder text]` with findings from exploration
 3. If something is not found, use "Not detected" or "Not applicable"
 4. Always include file paths with backticks
