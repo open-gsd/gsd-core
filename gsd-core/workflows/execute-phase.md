@@ -115,7 +115,7 @@ fi
 ```
 `isolation="worktree"` is a Claude-Code-specific agent primitive; no other runtime can honor it (Codex maps subagents to `spawn_agent`, others prohibit or omit worktree binding). Failing closed prevents main-checkout edits while the workflow believes agents are isolated.
 
-If the project uses git submodules, worktree isolation is unsafe **only when a plan touches a submodule path** — the executor commit protocol cannot correctly handle submodule commits inside isolated worktrees. The previous behavior unconditionally disabled worktree isolation whenever `.gitmodules` existed, which penalised every plan in a submodule project even when the plan was nowhere near a submodule. Compute submodule paths once and intersect them per-plan with the plan's declared `files_modified` frontmatter.
+If the project uses git submodules, worktree isolation is unsafe **only when a plan touches a submodule path** — the executor commit protocol cannot correctly handle submodule commits inside isolated worktrees. Compute submodule paths once and intersect them per-plan with the plan's declared `files_modified` frontmatter.
 
 ```bash
 # Parse submodule paths from .gitmodules once (empty if no .gitmodules).
@@ -276,12 +276,6 @@ checkpoints between tasks. The user can review, modify, or redirect work at any 
    e. **After plan complete:** Show results, commit, create SUMMARY.md, then present next plan.
 
 3. After all plans: proceed to verification (same as normal mode).
-
-**Benefits of interactive mode:**
-- No subagent overhead — dramatically lower token usage
-- User catches mistakes early — saves costly verification cycles
-- Maintains GSD's planning/tracking structure
-- Best for: small phases, bug fixes, verification gaps, learning GSD
 
 **Skip to handle_branching step** (interactive plans execute inline after grouping).
 </step>
@@ -553,13 +547,21 @@ increases monotonically across waves. `{status}` is `complete` (success),
    ```
 
    - Bad: "Executing terrain generation plan"
-   - Good: "Procedural terrain generator using Perlin noise — creates height maps, biome zones, and collision meshes. Required before vehicle physics can interact with ground."
+   - Good: "Procedural terrain generator using Perlin noise — creates height maps and biome zones. Required before vehicle physics."
 
 2.5. **Per-plan worktree decision (run for each plan in this wave BEFORE its dispatch):**
 
    Read and execute `gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md` for each plan. It extracts `PLAN_FILES` from the plan's JSON, intersects against `SUBMODULE_PATHS` (with normalization, bidirectional matching, and glob-prefix handling), and sets `USE_WORKTREES_FOR_PLAN` to `false` when the plan touches a submodule path. Append `plan_id` to a `WAVE_WORKTREE_PLANS` accumulator when `USE_WORKTREES_FOR_PLAN != false`.
 
    The dispatch branches in step 3 below MUST gate on `USE_WORKTREES_FOR_PLAN` for the current plan, not on the project-level `USE_WORKTREES`.
+
+2.75. **Execute:wave:pre capability dispatch:**
+
+   ```bash
+   WAVE_PRE_HOOKS_JSON=$(gsd_run loop render-hooks execute:wave:pre --raw)
+   ```
+
+   If a contribution's `activeHooks` entry provides an alternate wave dispatch, follow it instead of step 3's inline loop; otherwise proceed to step 3.
 
 3. **Spawn executor agents:**
 

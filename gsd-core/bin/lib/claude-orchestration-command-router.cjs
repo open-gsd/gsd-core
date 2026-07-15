@@ -22,7 +22,20 @@
  *   emit-workflow --waves <path> --run-id <id> [--phase-dir <dir>] [--budget <n>]
  *       Reads a wave/plan manifest JSON file and emits the generated Workflow
  *       script + summary. The manifest shape matches emitWorkflowScript's input:
- *       { waves: [{ id, plans: [{ id, brief, files_modified: string[] }] }] }.
+ *       { waves: [{ id, plans: [{ id, brief, files_modified: string[], use_worktree?: boolean }] }] }.
+ *       `use_worktree` defaults to true; pass `false` for a plan the inline path
+ *       (execute-phase.md step 2.5) would also keep out of worktree isolation
+ *       (submodule-touching plans — #2772 / #2285 finding 1).
+ *
+ *   resolve-wave-dispatch --waves <path> --run-id <id> [--runtime <id>]
+ *       [--agent-sdk-version <ver>] [--no-nested-dispatch] [--phase-dir <dir>]
+ *       [--budget <n>]
+ *       #2285 — the single composed seam a PRE-wave dispatch-backend selector
+ *       (`execute:wave:pre`) uses: resolves detect-backend + emit-workflow in
+ *       ONE call. Emits { backend: 'inline'|'workflow', reason, script?, summary? }.
+ *       Fail-closed identically to detect-backend/emit-workflow individually —
+ *       any gate miss, or an emit failure on a malformed --waves manifest,
+ *       resolves to 'inline' with no script.
  */
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
@@ -36,30 +49,26 @@ const core = require("./claude-orchestration.cjs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const configLoader = require("./config-loader.cjs");
 const { output } = io;
-const { detectWorkflowBackend, emitWorkflowScript } = core;
+const { detectWorkflowBackend, emitWorkflowScript, resolveWaveDispatch } = core;
 const CAPABLE_HOST = { dispatch: { nested: true, background: true } };
 function usage(error) {
-    error('Usage: gsd-tools claude-orchestration <detect-backend|emit-workflow> [...]\n' +
+    error('Usage: gsd-tools claude-orchestration <detect-backend|emit-workflow|resolve-wave-dispatch> [...]\n' +
         '  detect-backend [--runtime <id>] [--agent-sdk-version <ver>] [--no-nested-dispatch]\n' +
-        '  emit-workflow --waves <path> --run-id <id> [--phase-dir <dir>] [--budget <n>]');
+        '  emit-workflow --waves <path> --run-id <id> [--phase-dir <dir>] [--budget <n>]\n' +
+        '  resolve-wave-dispatch --waves <path> --run-id <id> [--runtime <id>] [--agent-sdk-version <ver>] [--no-nested-dispatch] [--phase-dir <dir>] [--budget <n>]');
 }
 function argValue(args, flag) {
     const i = args.indexOf(flag);
     return i !== -1 && i + 1 < args.length ? args[i + 1] : undefined;
 }
 /**
- * Detect whether the Workflow backend should activate for the current/given
- * runtime. Reads `claude_orchestration.*` from the project config; runtime and
- * SDK version come from flags (the orchestrator already knows these) or env.
+ * Resolve the `claude_orchestration.*` config slice from the project config
+ * (federated keys are merged by loadConfig as a nested object), flattened into
+ * the dotted-key shape `detectWorkflowBackend`/`resolveWaveDispatch` expect. A
+ * config read failure degrades to an empty slice — it must not break the core
+ * loop. Shared by `detect-backend` and `resolve-wave-dispatch`.
  */
-function cmdDetectBackend(args, cwd, raw) {
-    const runtimeId = argValue(args, '--runtime') || process.env['GSD_RUNTIME'] || 'unknown';
-    const agentSdkVersion = argValue(args, '--agent-sdk-version');
-    const noNested = args.includes('--no-nested-dispatch');
-    const hostIntegration = noNested ? { dispatch: { nested: false, background: true } } : CAPABLE_HOST;
-    // Resolve the claude_orchestration.* slice from the project config (federated
-    // keys are merged by loadConfig as a nested object). A config read failure
-    // degrades to inline — it must not break the core loop.
+function resolveFlatClaudeOrchestrationConfig(cwd) {
     let claudeSlice = {};
     try {
         const loaded = configLoader.loadConfig(cwd);
@@ -71,11 +80,56 @@ function cmdDetectBackend(args, cwd, raw) {
     catch {
         claudeSlice = {};
     }
-    // Flatten the nested slice into the dotted-key shape detectWorkflowBackend expects.
     const flatConfig = {};
     for (const k of Object.keys(claudeSlice)) {
         flatConfig['claude_orchestration.' + k] = claudeSlice[k];
     }
+    return flatConfig;
+}
+/**
+ * Resolve `--runtime`/`--agent-sdk-version`/`--no-nested-dispatch` into the
+ * `{ runtimeId, hostIntegration, agentSdkVersion }` triple both `detect-backend`
+ * and `resolve-wave-dispatch` pass to the pure detection seam.
+ */
+function resolveDetectionArgs(args) {
+    const runtimeId = argValue(args, '--runtime') || process.env['GSD_RUNTIME'] || 'unknown';
+    const agentSdkVersion = argValue(args, '--agent-sdk-version');
+    const noNested = args.includes('--no-nested-dispatch');
+    const hostIntegration = noNested ? { dispatch: { nested: false, background: true } } : CAPABLE_HOST;
+    return { runtimeId, hostIntegration, agentSdkVersion };
+}
+/**
+ * Read and parse a `--waves <path>` manifest file.
+ *
+ * #2285 finding 2: a real read/parse failure (`ok:false`) is DISTINCT from a
+ * manifest that parsed fine but has no top-level `waves` key (`ok:true, waves:
+ * undefined`) — collapsing both into the same sentinel made the missing-key
+ * case exit 0 with ZERO output (fail-silent), breaking the "exit 0 => parseable
+ * JSON verdict" contract callers rely on. Only the `ok:false` (read/parse threw)
+ * case calls `error(...)` and should short-circuit the caller; `ok:true` with a
+ * missing/malformed `waves` value must flow through to `emitWorkflowScript`'s
+ * own validation (matching how `{"waves": null}` already behaves) so the caller
+ * emits an explicit, non-empty verdict instead of silently doing nothing.
+ */
+function readWavesManifest(wavesPath, error) {
+    try {
+        const content = node_fs_1.default.readFileSync(node_path_1.default.resolve(wavesPath), 'utf8');
+        const parsed = JSON.parse(content);
+        return { ok: true, waves: parsed['waves'] };
+    }
+    catch (e) {
+        error('could not read/parse --waves file "' + wavesPath + '": ' + (e instanceof Error ? e.message : String(e)));
+        return { ok: false };
+    }
+}
+/**
+ * Detect whether the Workflow backend should activate for the current/given
+ * runtime. Reads `claude_orchestration.*` from the project config; runtime and
+ * SDK version come from flags (the orchestrator already knows these) or env.
+ */
+function cmdDetectBackend(args, cwd, raw) {
+    const { runtimeId, hostIntegration, agentSdkVersion } = resolveDetectionArgs(args);
+    const flatConfig = resolveFlatClaudeOrchestrationConfig(cwd);
     const result = detectWorkflowBackend({ runtimeId, hostIntegration, config: flatConfig, agentSdkVersion });
     output(result, raw);
 }
@@ -95,22 +149,15 @@ function cmdEmitWorkflow(args, _cwd, raw, error) {
         error('emit-workflow requires --run-id <id>');
         return;
     }
-    let waves;
-    try {
-        const content = node_fs_1.default.readFileSync(node_path_1.default.resolve(wavesPath), 'utf8');
-        const parsed = JSON.parse(content);
-        waves = parsed['waves'];
-    }
-    catch (e) {
-        error('emit-workflow: could not read/parse --waves file "' + wavesPath + '": ' + (e instanceof Error ? e.message : String(e)));
-        return;
-    }
+    const read = readWavesManifest(wavesPath, (msg) => error('emit-workflow: ' + msg));
+    if (!read.ok)
+        return; // read/parse failure — error() already surfaced it loudly above
     const budgetTokens = budgetRaw !== undefined ? parseInt(budgetRaw, 10) : undefined;
     const budget = (typeof budgetTokens === 'number' && !Number.isNaN(budgetTokens)) ? budgetTokens : undefined;
     const result = emitWorkflowScript({
         phaseDir,
         runId,
-        waves: waves,
+        waves: read.waves,
         budgetTokens: budget,
     });
     if (!result.ok) {
@@ -118,6 +165,44 @@ function cmdEmitWorkflow(args, _cwd, raw, error) {
         return;
     }
     output({ script: result.script, summary: result.summary }, raw);
+}
+/**
+ * #2285 — the single composed seam a PRE-wave dispatch-backend selector
+ * (`execute:wave:pre`) uses: resolves `detect-backend` + `emit-workflow` in
+ * ONE call via `resolveWaveDispatch`. Emits
+ * `{ backend: 'inline'|'workflow', reason, script?, summary? }`.
+ */
+function cmdResolveWaveDispatch(args, cwd, raw, error) {
+    const wavesPath = argValue(args, '--waves');
+    const runId = argValue(args, '--run-id');
+    const phaseDir = argValue(args, '--phase-dir') || '.planning/phases/current';
+    const budgetRaw = argValue(args, '--budget');
+    if (!wavesPath) {
+        error('resolve-wave-dispatch requires --waves <path>');
+        return;
+    }
+    if (!runId) {
+        error('resolve-wave-dispatch requires --run-id <id>');
+        return;
+    }
+    const read = readWavesManifest(wavesPath, (msg) => error('resolve-wave-dispatch: ' + msg));
+    if (!read.ok)
+        return; // read/parse failure — error() already surfaced it loudly above
+    const { runtimeId, hostIntegration, agentSdkVersion } = resolveDetectionArgs(args);
+    const flatConfig = resolveFlatClaudeOrchestrationConfig(cwd);
+    const budgetTokens = budgetRaw !== undefined ? parseInt(budgetRaw, 10) : undefined;
+    const budget = (typeof budgetTokens === 'number' && !Number.isNaN(budgetTokens)) ? budgetTokens : undefined;
+    const result = resolveWaveDispatch({
+        runtimeId,
+        hostIntegration,
+        config: flatConfig,
+        agentSdkVersion,
+        phaseDir,
+        runId,
+        waves: read.waves,
+        budgetTokens: budget,
+    });
+    output(result, raw);
 }
 function routeClaudeOrchestrationCommand(opts) {
     const { args, cwd, raw, error } = opts;
@@ -128,6 +213,9 @@ function routeClaudeOrchestrationCommand(opts) {
     }
     else if (subcommand === 'emit-workflow') {
         cmdEmitWorkflow(args, cwd, raw, error);
+    }
+    else if (subcommand === 'resolve-wave-dispatch') {
+        cmdResolveWaveDispatch(args, cwd, raw, error);
     }
     else {
         usage(error);
