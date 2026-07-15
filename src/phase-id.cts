@@ -184,6 +184,20 @@ function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | und
 // project_code shape shared with OPTIONAL_PROJECT_CODE_PREFIX_SOURCE), not the
 // ADR §1 illustration's `[A-Z]{1,6}`, so that every project_code the config
 // permits (digits / underscore / >6 chars) parses.
+//
+// Strict-reject posture (ADR-612 Decision 4's `render(parse(x)) === x`
+// contract, held exactly): parsePhaseId accepts ONLY the canonical form of
+// each branch — unpadded numbers, over-padded numbers, and multi-space or
+// stray leading/trailing whitespace are all rejected rather than silently
+// normalized, so two distinct input strings can never parse to the same
+// tuple while one of them fails to round-trip. toDir mirrors this on the
+// write side: every interpolated PhaseId field is validated (PhaseId is a
+// structural type — nothing forces callers through parsePhaseId, so a hand-
+// built id must not be able to smuggle a path-traversal segment onto disk),
+// and the slug must sanitize to a non-empty, non-all-digit token (an empty
+// slug would leave a dangling trailing hyphen; an all-digit slug is
+// string-indistinguishable from the plan grammar's trailing tail and would
+// silently break the disk↔identity bijection on read-back).
 type PhaseId = {
   project: string;     // 'GSD'
   milestone: string;   // '02'  (zero-padded, from the bracket/dir prefix)
@@ -195,14 +209,30 @@ type PhaseId = {
 const pad2 = (n: string): string => String(parseInt(n, 10)).padStart(2, '0');
 
 function parsePhaseId(input: string): PhaseId {
-  const str = String(input).trim();
+  // No .trim(): the match anchors (`^`...`$`) then reject leading/trailing
+  // whitespace outright, folding that case into the same "not a bracket
+  // phase id" rejection below rather than needing its own check.
+  const str = String(input);
 
-  // Display form: [PROJECT.MM] PP[.SS][-LL]
+  // Display form: [PROJECT.MM] PP[.SS][-LL]. The match itself stays
+  // permissive on purpose (it will happily match an unpadded number or a
+  // multi-space run) — canonicality is enforced UNIFORMLY below via the
+  // render round-trip (ADR-612 Decision 4) rather than by hand-tuning every
+  // numeric / whitespace sub-pattern, so a field added later inherits the
+  // check for free instead of needing its own regex micro-surgery.
   const disp = str.match(/^\[([A-Z][A-Z0-9_]*)\.(\d+)\]\s+(\d+)(?:\.(\d+))?(?:-(\d+))?$/);
   if (disp) {
     const id: PhaseId = { project: disp[1], milestone: pad2(disp[2]), phase: pad2(disp[3]) };
     if (disp[4] !== undefined) id.subphase = pad2(disp[4]);
     if (disp[5] !== undefined) id.plan = pad2(disp[5]);
+    // Canonicality by construction: re-render the parsed id and require
+    // byte-equality with the input. This rejects unpadded ('[GSD.5] 5'),
+    // over-padded ('[GSD.005] 05'), and multi-space-separated ('[GSD.02]  05')
+    // variants uniformly, without special-casing any one of them — the emit
+    // path (renderPhaseId) is the single source of truth for "canonical".
+    if (renderPhaseId(id) !== str) {
+      throw new Error(`parsePhaseId: not canonical: ${JSON.stringify(input)}`);
+    }
     return id;
   }
 
@@ -211,16 +241,34 @@ function parsePhaseId(input: string): PhaseId {
   if (dir) {
     const id: PhaseId = { project: dir[1], milestone: pad2(dir[2]), phase: pad2(dir[3]) };
     if (dir[4] !== undefined) id.subphase = pad2(dir[4]);
-    // Trailing segment: a pure-integer tail is the plan; anything else is a slug
-    // (dropped from the tuple — it is not an identity dimension).
-    if (dir[5] !== undefined && /^\d+$/.test(dir[5])) id.plan = pad2(dir[5]);
+    // Trailing segment: a pure-integer tail is the plan; anything else is a
+    // slug (dropped from the tuple — it is not an identity dimension). The
+    // plan tail participates in the canonicality check below; the slug tail
+    // is read-tolerant pass-through (a slug is not an identity dimension) and
+    // is exempt from it.
+    const tail = dir[5];
+    const tailIsPlan = tail !== undefined && /^\d+$/.test(tail);
+    if (tailIsPlan) id.plan = pad2(tail);
+
+    // Canonicality by construction, mirroring the display branch: rebuild the
+    // exact dir/token string this id would emit and require it match the
+    // input verbatim. Rejects unpadded milestone/phase ('GSD.2-5') and
+    // unpadded plan tails ('GSD.02-05-1') without special-casing either.
+    const sub = id.subphase ? `.${id.subphase}` : '';
+    const tailOut = tail === undefined ? '' : tailIsPlan ? `-${pad2(tail)}` : `-${tail}`;
+    const canonical = `${id.project}.${id.milestone}-${id.phase}${sub}${tailOut}`;
+    if (canonical !== str) {
+      throw new Error(`parsePhaseId: not canonical: ${JSON.stringify(input)}`);
+    }
     return id;
   }
 
-  // Ambiguous / bare tokens (e.g. `02-04`, `05`, `2-01`) match neither branch:
-  // reject rather than guess a tuple (ADR-612 conservative default). The
-  // rejection lives ONLY in this new parser — normalizePhaseName and every other
-  // legacy reader keep accepting those tokens unchanged.
+  // Ambiguous / bare tokens (e.g. `02-04`, `05`, `2-01`) match neither branch,
+  // as does a display/dir form carrying leading/trailing whitespace (the
+  // anchors never match it): reject rather than guess a tuple (ADR-612
+  // conservative default). The rejection lives ONLY in this new parser —
+  // normalizePhaseName and every other legacy reader keep accepting those
+  // tokens unchanged.
   throw new Error(`parsePhaseId: not a bracket phase id: ${JSON.stringify(input)}`);
 }
 
@@ -230,11 +278,50 @@ function renderPhaseId(id: PhaseId): string {
   return `[${id.project}.${id.milestone}] ${id.phase}${sub}${plan}`;
 }
 
+// PhaseId is a structural type: nothing forces a caller through parsePhaseId,
+// so toDir cannot trust project/milestone/phase/subphase are already
+// canonical — each is validated below against the exact shape parsePhaseId
+// itself would ever produce, closing off a hand-built id as a path-traversal
+// vector. PROJECT_ID_RE mirrors the parser's `[A-Z][A-Z0-9_]*` grammar;
+// CANONICAL_NUMERIC_RE mirrors pad2()'s output shape — exactly 2 digits, or
+// 3+ digits with no leading zero.
+const PROJECT_ID_RE = /^[A-Z][A-Z0-9_]*$/;
+const CANONICAL_NUMERIC_RE = /^(?:\d{2}|[1-9]\d{2,})$/;
+
 function toDir(id: PhaseId, slug: string): string {
+  if (!PROJECT_ID_RE.test(id.project)) {
+    throw new Error(`toDir: invalid project: ${JSON.stringify(id.project)}`);
+  }
+  if (!CANONICAL_NUMERIC_RE.test(id.milestone)) {
+    throw new Error(`toDir: invalid milestone: ${JSON.stringify(id.milestone)}`);
+  }
+  if (!CANONICAL_NUMERIC_RE.test(id.phase)) {
+    throw new Error(`toDir: invalid phase: ${JSON.stringify(id.phase)}`);
+  }
+  if (id.subphase !== undefined && !CANONICAL_NUMERIC_RE.test(id.subphase)) {
+    throw new Error(`toDir: invalid subphase: ${JSON.stringify(id.subphase)}`);
+  }
+  // A non-string slug (e.g. an omitted second argument) must not be silently
+  // coerced by String(...) into the literal token 'undefined'/'null' on disk.
+  if (typeof slug !== 'string') {
+    throw new Error(`toDir: slug must be a string: ${JSON.stringify(slug)}`);
+  }
+
   const sub = id.subphase ? `.${id.subphase}` : '';
   // Slug guard: the slug becomes an on-disk path segment, so collapse it to a
   // safe lowercase token — never a path separator or `..` traversal.
-  const safeSlug = String(slug).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const safeSlug = slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  // A slug that sanitizes to nothing (e.g. '!!!') would otherwise emit a
+  // dangling trailing hyphen.
+  if (!safeSlug) {
+    throw new Error(`toDir: slug sanitizes to empty: ${JSON.stringify(slug)}`);
+  }
+  // An all-digit slug (e.g. '2026') is string-indistinguishable from the
+  // parsePhaseId dir branch's plan tail, so it would re-parse as a plan, not
+  // a slug — silently breaking the disk↔identity bijection on read-back.
+  if (/^\d+$/.test(safeSlug)) {
+    throw new Error(`toDir: slug must not be all-digit: ${JSON.stringify(slug)}`);
+  }
   return `${id.project}.${id.milestone}-${id.phase}${sub}-${safeSlug}`;
 }
 
