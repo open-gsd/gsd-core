@@ -11,6 +11,7 @@ const os = require('os');
 const childProcess = require('child_process');
 const { isSemverNewer } = require('../gsd-core/bin/lib/semver-compare.cjs');
 const { PACKAGE_NAME, updateCacheFileName } = require('../gsd-core/bin/lib/package-identity.cjs');
+const { normalizeStateStatus } = require('../gsd-core/bin/lib/state-document.cjs');
 
 // --- Config + last-command readers ------------------------------------------
 
@@ -319,6 +320,78 @@ function contextTokenSuffix(currentUsage) {
   return total > 0 ? ` (${formatTokens(total)})` : '';
 }
 
+// --- Compact state format (opt-in) ---------------------------------------------
+
+/**
+ * Collapse GSD's free-text status (often a multi-sentence narrative) to a
+ * single keyword, built on the canonical normalizer (#2162 approval
+ * condition): normalizeStateStatus() in state-document.cjs owns the status
+ * vocabulary (discussing / planning / executing / verifying / completed /
+ * paused) so the two can't drift. "paused" — the canonical stuck state — is
+ * uppercased to PAUSED, the one state worth shouting about. Statuses the
+ * normalizer passes through unrecognized fall back to their first word,
+ * capped at 16 chars so a rogue STATE.md can't blow up the line.
+ * Returns null for empty input.
+ */
+const CANONICAL_STATUSES = ['discussing', 'planning', 'executing', 'verifying', 'completed', 'paused'];
+
+function shortGsdStatus(status) {
+  if (!status) return null;
+  const norm = normalizeStateStatus(status, null);
+  if (CANONICAL_STATUSES.includes(norm)) {
+    return norm === 'paused' ? 'PAUSED' : norm;
+  }
+  // Unrecognized free text passes through normalizeStateStatus verbatim —
+  // fall back to the first word, capped.
+  const first = String(norm).trim().split(/[\s\u2014\u2013-]+/)[0] || '';
+  return first ? first.slice(0, 16) : null;
+}
+
+/**
+ * Compact alternative to formatGsdState, selected via
+ * `statusline.state_format: "compact"`:
+ *
+ *   "v1.12 · P7/12 · executing"     (phase active)
+ *   "v2.0 · P4.5 · BLOCKED"         (no total known)
+ *   "v2.0 · complete"               (milestone done)
+ *   "v2.0 · next execute-phase 4.5" (idle with a queued action)
+ *
+ * Drops the milestone name and progress bar — the biggest width costs in the
+ * default format — and collapses narrative statuses via shortGsdStatus().
+ * The default "full" format is untouched.
+ */
+function formatGsdStateCompact(s) {
+  const parts = [];
+
+  if (s.milestone) parts.push(s.milestone);
+
+  const phaseId = s.activePhase || s.phaseNum;
+  if (phaseId) {
+    parts.push(s.phaseTotal ? `P${phaseId}/${s.phaseTotal}` : `P${phaseId}`);
+  }
+
+  // Scene exclusivity mirrors formatGsdState's if/else chain: an in-flight
+  // phase (Scene 1, gated on activePhase ONLY — the legacy phaseNum shape
+  // still completes) wins over milestone-complete (Scene 3), even if a
+  // non-atomic STATE.md edit leaves percent=100 alongside a lifecycle phase.
+  const done = !s.activePhase && (Number(s.percent) === 100 ||
+    (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases));
+
+  if (done) {
+    parts.push('complete');
+  } else {
+    const st = shortGsdStatus(s.status);
+    if (st) {
+      parts.push(st);
+    } else if (!phaseId && s.nextAction) {
+      const phasesStr = (s.nextPhases && s.nextPhases.length > 0) ? s.nextPhases.join('/') : '';
+      parts.push(`next ${s.nextAction}${phasesStr ? ' ' + phasesStr : ''}`);
+    }
+  }
+
+  return parts.join(' \u00b7 ');
+}
+
 // --- Model name --------------------------------------------------------------
 
 /**
@@ -529,8 +602,9 @@ function runStatusline() {
       }
     }
 
-    // GSD state (milestone · status · phase) — shown when no todo task
-    const gsdStateStr = task ? '' : formatGsdState(readGsdState(dir) || {});
+    // GSD state (milestone · status · phase) — shown when no todo task.
+    // Format resolved below once config is read (statusline.state_format).
+    let gsdStateStr = '';
 
     // GSD update available?
     // Read only the per-package shared cache file (#607). The legacy
@@ -558,6 +632,7 @@ function runStatusline() {
     // Failure here must never break the statusline — wrap the entire lookup.
     let lastCmdSuffix = '';
     let position = 'end';
+    let stateFormat = 'full';
     let gitSuffix = '';
     try {
       if (getConfigValue(cfg, 'statusline.show_last_command') === true) {
@@ -569,11 +644,17 @@ function runStatusline() {
       }
       const cfgPos = getConfigValue(cfg, 'statusline.context_position');
       if (cfgPos != null) position = cfgPos;
+      if (getConfigValue(cfg, 'statusline.state_format') === 'compact') stateFormat = 'compact';
       if (getConfigValue(cfg, 'statusline.show_git') === true) {
         gitSuffix = buildGitSegment(parseGitStatus(readGitStatus(dir)));
       }
     } catch (e) {
       // Never break the statusline on config/transcript/git errors
+    }
+
+    if (!task) {
+      const state = readGsdState(dir) || {};
+      gsdStateStr = stateFormat === 'compact' ? formatGsdStateCompact(state) : formatGsdState(state);
     }
 
     // Output
@@ -675,6 +756,7 @@ module.exports = {
   evaluateUpdateCache,
   formatTokens,
   contextTokenSuffix,
+  shortGsdStatus, formatGsdStateCompact,
   compactModelName,
   readGitStatus, parseGitStatus, buildGitSegment,
 };
@@ -690,6 +772,7 @@ function renderStatusline(data) {
 
   let lastCmdSuffix = '';
   let position = 'end';
+  let stateFormat = 'full';
   let gitSuffix = '';
   try {
     const cfg = readGsdConfig(dir);
@@ -701,12 +784,14 @@ function renderStatusline(data) {
     }
     const cfgPos = getConfigValue(cfg, 'statusline.context_position');
     if (cfgPos != null) position = cfgPos;
+    if (getConfigValue(cfg, 'statusline.state_format') === 'compact') stateFormat = 'compact';
     if (getConfigValue(cfg, 'statusline.show_git') === true) {
       gitSuffix = buildGitSegment(parseGitStatus(readGitStatus(dir)));
     }
   } catch (e) { /* swallow */ }
 
-  const gsdStateStr = formatGsdState(readGsdState(dir) || {});
+  const state = readGsdState(dir) || {};
+  const gsdStateStr = stateFormat === 'compact' ? formatGsdStateCompact(state) : formatGsdState(state);
   const middle = gsdStateStr ? `\x1b[2m${gsdStateStr}\x1b[0m` : null;
   return composeStatusline({ model, ctx: '', middle, dirname, lastCmdSuffix, gitSuffix, position });
 }
