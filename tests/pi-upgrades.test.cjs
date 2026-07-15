@@ -144,6 +144,14 @@ test('before_provider_request given a tier that resolves to null returns undefin
   assert.equal(result, undefined);
 });
 
+test('before_provider_request leaves malformed payloads untouched', async () => {
+  const handler = _internals.buildBeforeProviderRequestHandler({ tier: 'sonnet' });
+  for (const payload of [undefined, null, 'not-a-request', 42, []]) {
+    const result = await handler({ payload }, { cwd: __dirname });
+    assert.equal(result, undefined, `payload ${String(payload)} must fail open`);
+  }
+});
+
 // -- getArgumentCompletions returns family suggestions -----------------------
 
 test('getArgumentCompletions filters PI_COMMAND_FAMILIES by prefix and returns null when empty', () => {

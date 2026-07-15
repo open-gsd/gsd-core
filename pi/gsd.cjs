@@ -163,9 +163,9 @@ function buildGsdInvokeParameters() {
  * provider-level errors, not GSD-level ones — a discrepancy here needs a
  * live-host smoke test before shipping past this stage.
  *
- * Fail-open: any resolution failure (or a null/falsy resolved model — e.g. an
- * unrecognized tier) returns `undefined`, leaving pi's model choice untouched.
- * NEVER returns a payload with a missing/empty model id.
+ * Fail-open: a resolution failure, a null/falsy resolved model, or a malformed
+ * event payload returns `undefined`, leaving pi's model choice untouched. NEVER
+ * replaces an unknown payload with a synthetic request body.
  *
  * @param {{ tier?: string }} [opts]
  * @returns {(event: object, ctx: object) => Promise<object|undefined>}
@@ -181,9 +181,8 @@ function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
       const entry = resolveTierEntry({ runtime: 'pi', tier, overrides });
       const modelId = entry && typeof entry.model === 'string' && entry.model.length > 0 ? entry.model : null;
       if (!modelId) return undefined; // fail-open — leave pi's model untouched
-      const basePayload = (event && typeof event === 'object' && event.payload && typeof event.payload === 'object')
-        ? event.payload
-        : {};
+      const basePayload = event && typeof event === 'object' ? event.payload : undefined;
+      if (!basePayload || typeof basePayload !== 'object' || Array.isArray(basePayload)) return undefined;
       return { ...basePayload, model: modelId };
     } catch {
       return undefined; // fail-open on any resolution error
