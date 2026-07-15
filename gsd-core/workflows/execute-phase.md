@@ -440,13 +440,11 @@ A prior `Agent(isolation="worktree")` dispatch can silently leave the orchestrat
 cwd inside an agent worktree (or a subdirectory of one). Every subsequent
 orchestrator-side git call would then target the wrong tree — this is how a wrong-base
 merge nearly shipped ~1000 files. Resolve the *worktree root* (so a subdirectory cwd
-cannot skew the check) and refuse if it is an agent worktree. The discriminator is the
-per-agent branch namespace `(worktree-)agent-*` (`agent-<id>` current, `worktree-agent-<id>`
-legacy — both accepted, #1995), NOT the `.claude/worktrees/` path: the
-orchestrator may itself be legitimately invoked from a feature worktree under
-`.claude/worktrees/`, so a path-substring refusal would break legitimate runs. Do NOT
-pin to `git worktree list`'s first entry — that is the main worktree, the wrong target
-when the orchestrator legitimately runs from a feature worktree.
+cannot skew the check) and refuse if it is an agent worktree. The discriminator: per-agent
+branch namespace `(worktree-)?agent-*` (`agent-<id>`/legacy `worktree-agent-<id>`, #1995) —
+NOT the `.claude/worktrees/` path, since the orchestrator may itself legitimately run from a
+feature worktree there and a path-substring refusal would break legitimate runs. Do NOT
+pin to `git worktree list`'s first entry — that is the main worktree, not this one.
 
 ```bash
 ORCHESTRATOR_WT=$(git rev-parse --show-toplevel 2>/dev/null) || {
