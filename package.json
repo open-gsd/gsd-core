@@ -90,6 +90,7 @@
     "gen:plugin-skills": "node scripts/gen-plugin-skills.cjs --write",
     "gen:capability-registry": "node scripts/gen-capability-registry.cjs --write",
     "gen:registry": "node scripts/gen-registry.cjs --write",
+    "gen:golden": "node scripts/gen-golden-install-parity-zcode.cjs && node scripts/gen-install-tree-fixtures.cjs",
     "validate:registry": "node scripts/validate-registry.cjs",
     "prepack": "npm run build:lib",
     "prepare": "npm run build:lib",
