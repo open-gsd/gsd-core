@@ -78,17 +78,23 @@ If you want this granularity applied permanently, set it in config — see [CONF
 
 ---
 
-## Plan vertical feature slices instead of horizontal layers
+## Tracer-first slices (the default) and opting out
 
-**If you want tasks organised as thin end-to-end slices** (UI → API → DB per feature) rather than by technical layer:
+**By default, every plan leads with a `tracer` task** — the thinnest end-to-end slice (UI → API → DB) that touches every layer the phase modifies, wired and verified before any expansion task. A tracer is production-quality, not a throwaway prototype (see the `tracer bullet` glossary entry in `CONTEXT.md`). This proves the architecture early instead of discovering an integration dead-end after ten committed layers.
+
+To opt out and plan horizontal layers (the legacy default):
+
+```bash
+/gsd-plan-phase 1 --no-tracer
+```
+
+`--mvp` layers MVP enrichment on top of tracer-first — it frames the phase goal as a user story and, on Phase 1 of a new project with no prior phase summaries, also produces `SKELETON.md` (a Walking Skeleton covering project scaffold, routing, one real DB read/write, one real UI interaction, and dev deployment):
 
 ```bash
 /gsd-plan-phase 1 --mvp
 ```
 
-On Phase 1 of a new project with no prior phase summaries, `--mvp` also produces `SKELETON.md` — a Walking Skeleton covering project scaffold, routing, one real DB read/write, one real UI interaction, and dev deployment.
-
-You can persist MVP mode for a phase without the flag by adding `**Mode:** mvp` to that phase's entry in ROADMAP.md.
+You can persist MVP enrichment for a phase without the flag by adding `**Mode:** mvp` to that phase's entry in ROADMAP.md.
 
 ---
 
