@@ -365,7 +365,176 @@ function parseUatItems(content: string): UatItem[] {
       items.push(item);
     }
   }
+  items.push(...parseGapsItems(content));
   return items;
+}
+
+// ─── parseGapsItems ───────────────────────────────────────────────────────────
+
+/**
+ * Extract unresolved entries from a UAT file's `## Gaps` section (#2286).
+ *
+ * `## Gaps` records open findings as a YAML-lite bullet list (see
+ * `templates/UAT.md`'s `## Gaps` block: `- truth: "..."` followed by indented
+ * continuation lines `status:` / `reason:` / `severity:` / `test:` / etc.,
+ * and — for `artifacts:` / `missing:` — a further-nested `- ` sub-list).
+ * `parseUatItems`'s `### N.` test-block regex never looks at this section at
+ * all, so a UAT file whose only outstanding findings live in `## Gaps` was
+ * silently invisible — the false-negative this fix addresses.
+ *
+ * Reuses the existing `collectSection` seam (already used elsewhere in this
+ * file for `## Current Test` / `## Tests`) to locate the section. Field
+ * extraction is deliberately NOT done via `iterateBullets`: that seam folds
+ * every continuation line onto ONE space-joined `text` string per bullet,
+ * which erases line boundaries — a `key:` scan against that flattened text
+ * matches the FIRST `key:`-shaped substring anywhere, including one that
+ * happens to appear inside an EARLIER field's own quoted free-text value
+ * (e.g. `truth: "The status: resolved workflow should trigger"` — a real
+ * `status: failed` on the next line would never be reached, silently
+ * DROPPING a genuinely open gap — the exact false-negative class #2286
+ * exists to fix, so the fix must not reintroduce it). `splitGapsEntries` /
+ * `extractGapEntryFields` below instead walk the section PER LINE and only
+ * recognise a field at the START of its own (trimmed) line, so a `key:`
+ * embedded inside another field's quoted value can never be mistaken for a
+ * field declaration.
+ *
+ * Every entry whose `status` is present and NOT `resolved` (case-insensitive)
+ * is surfaced — mirroring the "ignore passing/resolved" convention already
+ * used for `### N.` test blocks (`result: pass` is never surfaced) and the
+ * VERIFICATION table-row PASS/resolved skip (`hasPassResult`, below). An
+ * entry with NO parseable `status:` field is surfaced too, as `result:
+ * 'unknown'` — #2286 is a false-NEGATIVE bug, and a `## Gaps` entry only
+ * exists to record an outstanding finding (a template-conformant RESOLVED
+ * entry always carries an explicit `status: resolved`); a garbled or
+ * non-conformant entry is far more likely to be an unresolved finding whose
+ * `status:` line failed to parse than a genuinely resolved one, so the
+ * fail-safe direction is to surface it rather than silently drop it.
+ */
+function parseGapsItems(content: string): UatItem[] {
+  const gapsSection = collectSection(
+    content,
+    (h) => /^gaps$/i.test(h.text) && h.level === 2,
+    { levelBounded: true },
+  );
+  if (!gapsSection) return [];
+
+  const items: UatItem[] = [];
+
+  for (const entryLines of splitGapsEntries(gapsSection.body)) {
+    const fields = extractGapEntryFields(entryLines);
+    const rawStatus = fields.status;
+    if (rawStatus && rawStatus.toLowerCase() === 'resolved') continue;
+    // Fail-safe: missing/garbled status surfaces as 'unknown' rather than
+    // being dropped (see doc comment above).
+    const status = rawStatus || 'unknown';
+
+    const truth = fields.truth;
+    const reason = fields.reason;
+    const testNum = fields.test;
+
+    const item: UatItem = {
+      name: truth || rawGapEntryText(entryLines),
+      result: status,
+      category: categorizeItem(status, reason, undefined),
+    };
+    if (testNum && /^\d+$/.test(testNum)) item.test = parseInt(testNum, 10);
+    if (reason) item.reason = reason;
+    items.push(item);
+  }
+
+  return items;
+}
+
+/**
+ * Split a `## Gaps` section body into per-entry line groups on TOP-LEVEL
+ * `- ` bullet openers.
+ *
+ * The indentation of the FIRST bullet line encountered establishes the
+ * "top-level" indent for the whole section; any subsequent `- `-opening line
+ * at that same indent (or shallower) starts a NEW entry, while everything
+ * more deeply indented — field continuation lines (`  status: ...`) AND
+ * nested sub-lists (`    - src/foo.ts` under `  artifacts:`) — is folded into
+ * the CURRENT entry. This keeps a `artifacts:`/`missing:` sub-list's `- `
+ * items from being mis-split into spurious standalone entries (#2286 review
+ * LOW finding).
+ *
+ * Lines before the first bullet (e.g. the `<!-- YAML format ... -->` comment
+ * the template emits) are discarded. An empty/whitespace-only section body
+ * (heading present, no bullets) returns `[]`.
+ */
+function splitGapsEntries(sectionBody: string): string[][] {
+  const lines = sectionBody.split('\n');
+  const entries: string[][] = [];
+  let current: string[] | null = null;
+  let baseIndent: number | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\r$/, '');
+    const bulletMatch = line.match(/^(\s*)-\s/);
+    if (bulletMatch) {
+      const indent = bulletMatch[1].length;
+      if (baseIndent === null) baseIndent = indent;
+      if (indent <= baseIndent) {
+        if (current) entries.push(current);
+        current = [line];
+        continue;
+      }
+    }
+    if (current) current.push(line);
+    // else: pre-first-bullet content (e.g. the template's HTML comment) — discarded.
+  }
+  if (current) entries.push(current);
+
+  return entries;
+}
+
+/**
+ * Extract `key: value` fields from one Gaps entry's lines, anchored to the
+ * START of each (bullet-marker-stripped, trimmed) line — never scanning the
+ * REST of a line, so a colon-bearing phrase inside a quoted `truth`/`reason`
+ * value is never misread as a field declaration (see `parseGapsItems`'s doc
+ * comment for the false-negative this specifically guards against).
+ *
+ * Recognises a double-quoted value (`truth: "..."`, stripped of its wrapping
+ * quotes — the value may itself contain any character, including `:`) or a
+ * bare value (`status: open`, `test: 2`, `artifacts: []`) taken verbatim.
+ * The FIRST occurrence of a given key wins (top-level fields always precede
+ * any nested sub-list content in the template's field ordering); later
+ * `key:`-shaped nested-list content is captured, if it parses as one, but
+ * never overrides an already-seen top-level field.
+ */
+function extractGapEntryFields(entryLines: string[]): Record<string, string> {
+  const fields: Record<string, string> = {};
+  const fieldLineRe = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/;
+
+  entryLines.forEach((rawLine, idx) => {
+    const line = rawLine.replace(/\r$/, '');
+    // Strip ONLY the entry-opening bullet marker (idx 0); a bullet marker on
+    // a later line belongs to a nested sub-list and is handled by
+    // `splitGapsEntries` already folding it in — it is not itself a field
+    // line unless it independently matches `key: value` after stripping.
+    const bulletStripped = line.match(/^(\s*)-\s+(.*)$/);
+    const content = idx === 0 && bulletStripped ? bulletStripped[2] : line.trim();
+
+    const m = fieldLineRe.exec(content);
+    if (!m) return;
+    const key = m[1];
+    let value = m[2].trim();
+    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in fields)) fields[key] = value;
+  });
+
+  return fields;
+}
+
+/** Fallback display text for a Gaps entry with no parseable `truth:` field. */
+function rawGapEntryText(entryLines: string[]): string {
+  return entryLines
+    .map((l, i) => (i === 0 ? l.replace(/^(\s*)-\s+/, '') : l.trim()))
+    .join(' ')
+    .trim();
 }
 
 // ─── parseVerificationItems ───────────────────────────────────────────────────
@@ -373,6 +542,26 @@ function parseUatItems(content: string): UatItem[] {
 function parseVerificationItems(content: string, status: string): UatItem[] {
   const items: UatItem[] = [];
   if (status === 'human_needed') {
+    // #2286: the frontmatter's structured `human_verification:` YAML array
+    // (extractFrontmatter) is the PRIMARY source of truth when present and
+    // non-empty — it fully bypasses the body-shape scan below, so a file
+    // whose frontmatter declares the array doesn't require any particular
+    // `## Human Verification` body shape at all. An absent or empty array
+    // (length 0) falls back to the body scan unchanged.
+    const frontmatter = extractFrontmatter(content);
+    const humanVerification = frontmatter.human_verification;
+    if (Array.isArray(humanVerification) && humanVerification.length > 0) {
+      humanVerification.forEach((entry, idx) => {
+        items.push({
+          test: idx + 1,
+          name: normalizeHumanVerificationEntry(entry),
+          result: 'human_needed',
+          category: 'human_uat',
+        });
+      });
+      return items;
+    }
+
     // Use the seam to locate the ## Human Verification section (ADR-1372 T5).
     const hvSection = collectSection(
       content,
@@ -459,10 +648,73 @@ function parseVerificationItems(content: string, status: string): UatItem[] {
           });
         }
       }
+
+      // #2286: fall back to the `### N. <label>` heading + bold-led paragraph
+      // shape (the canonical form emitted by `templates/verification-report.md`
+      // — `### 1. {Test Name}` followed by `**Test:** ... **Expected:** ...
+      // **Why human:** ...`), which the table/bullet/numbered per-line scan
+      // above never recognises (a `###`-prefixed line matches none of those
+      // three patterns). Uses the same `tokenizeHeadings` seam
+      // `parseFirstPendingTest` already uses for `### N.` sub-headings,
+      // applied here to the Human Verification section body. Runs in
+      // addition to (a union with) the scan above — the two shapes don't
+      // collide, so this only adds items a `###` heading page would have
+      // silently produced zero for.
+      const hvSubHeadings = tokenizeHeadings(hvSection.body).filter(
+        (h) => h.level === 3 && /^\d+\.\s+/.test(h.text),
+      );
+      for (let i = 0; i < hvSubHeadings.length; i += 1) {
+        const current = hvSubHeadings[i];
+        const next = hvSubHeadings[i + 1];
+        const block = next
+          ? hvSection.body.slice(current.offset, next.offset)
+          : hvSection.body.slice(current.offset);
+        const bodyAfterHeading = block.slice(block.indexOf('\n') + 1);
+        // Require a bold-led paragraph body (`**Test:** ...`) to distinguish
+        // a genuine verification item from an unrelated numbered heading.
+        if (!/^\s*\*\*/.test(bodyAfterHeading)) continue;
+
+        const headingParts = current.text.match(/^(\d+)\.\s+(.+)$/);
+        if (!headingParts) continue;
+        items.push({
+          test: parseInt(headingParts[1], 10),
+          name: headingParts[2].trim(),
+          result: 'human_needed',
+          category: 'human_uat',
+        });
+      }
     }
   }
   // gaps_found items are already handled by plan-phase --gaps pipeline
   return items;
+}
+
+/**
+ * Normalize a single `human_verification:` frontmatter array entry (#2286)
+ * into a display-ready name.
+ *
+ * #2286 review (LOW finding): `extractFrontmatter`'s generic array-item
+ * parser (`src/frontmatter.cts`, the `line.trim().startsWith('- ')` branch)
+ * has NO notion of nested key/value objects — regardless of whether the
+ * source YAML was authored as `- test: "..."` (an implied-but-unsupported
+ * shorthand) or `- "plain string"`, it ALWAYS pushes the raw post-`- ` text
+ * (with only a single layer of wrapping quotes stripped) as a plain string.
+ * There is therefore no reliable signal here to distinguish a genuine
+ * `key: value`-shaped pseudo-field from a legitimate plain string that
+ * itself happens to start with a word and a colon (e.g. `"Confirm: the
+ * button responds"`). A prior version of this function stripped a leading
+ * `word:` prefix on the assumption it was always a flattened nested-object
+ * key — that assumption is false, and it silently truncated real plain-string
+ * content. No such stripping is applied: any residual wrapping-quote noise
+ * left by `extractFrontmatter`'s own (anchor-only) quote handling is cleaned
+ * up, and everything else is preserved verbatim.
+ */
+function normalizeHumanVerificationEntry(raw: unknown): string {
+  if (typeof raw !== 'string') {
+    return raw === null || raw === undefined ? '' : JSON.stringify(raw);
+  }
+  const s = raw.trim().replace(/^["']+|["']+$/g, '').trim();
+  return s || raw.trim();
 }
 
 // ─── categorizeItem ───────────────────────────────────────────────────────────

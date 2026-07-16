@@ -25,7 +25,8 @@
       "router": "routeClaudeOrchestrationCommand",
       "subcommands": [
         "detect-backend",
-        "emit-workflow"
+        "emit-workflow",
+        "resolve-wave-dispatch"
       ]
     }
   ],
@@ -55,10 +56,10 @@
   "steps": [],
   "contributions": [
     {
-      "point": "execute:wave:post",
+      "point": "execute:wave:pre",
       "into": "executor",
       "fragment": {
-        "path": "fragments/execute-wave-post.md"
+        "path": "fragments/execute-wave-pre.md"
       },
       "produces": [],
       "consumes": [

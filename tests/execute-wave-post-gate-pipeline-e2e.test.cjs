@@ -629,17 +629,29 @@ describe('F. Real registry execute:wave:post shape — guard against accidental 
       `ui.safety-gate onError must be 'halt'; got ${uiGate.onError}`);
   });
 
-  test('[happy] real registry: execute:wave:post has no steps and 3 contributions (claude-orchestration executor + external-job executor + mempalace capture-problems)', () => {
+  test('[happy] real registry: execute:wave:post has no steps and 2 contributions (external-job executor + mempalace capture-problems)', () => {
     const point = realRegistry.byLoopPoint['execute:wave:post'];
     assert.strictEqual(point.steps.length, 0,
       `execute:wave:post steps must be empty; got ${point.steps.length}`);
-    // #1143: claude-orchestration registers an execute:wave:post contribution
-    // providing the Workflow-tool backend guidance (default-off, claude-only).
-    assert.strictEqual(point.contributions.length, 3,
-      `execute:wave:post must have 3 contributions (claude-orchestration + external-job + mempalace); got ${point.contributions.length}`);
+    // #2285: claude-orchestration's dispatch-backend-selector contribution moved
+    // from execute:wave:post to execute:wave:pre — wave:post fires AFTER the
+    // wave already dispatched inline, too late to select a dispatch backend.
+    assert.strictEqual(point.contributions.length, 2,
+      `execute:wave:post must have 2 contributions (external-job + mempalace); got ${point.contributions.length}`);
     const capIds = point.contributions.map(c => c.capId).sort();
-    assert.deepStrictEqual(capIds, ['claude-orchestration', 'external-job', 'mempalace'],
-      `execute:wave:post contributions must be claude-orchestration + external-job + mempalace; got ${capIds.join(',')}`);
+    assert.deepStrictEqual(capIds, ['external-job', 'mempalace'],
+      `execute:wave:post contributions must be external-job + mempalace; got ${capIds.join(',')}`);
+  });
+
+  test('[happy] real registry: execute:wave:pre has 1 contribution (claude-orchestration dispatch-backend selector, #2285)', () => {
+    const point = realRegistry.byLoopPoint['execute:wave:pre'];
+    assert.strictEqual(point.steps.length, 0,
+      `execute:wave:pre steps must be empty; got ${point.steps.length}`);
+    assert.strictEqual(point.contributions.length, 1,
+      `execute:wave:pre must have 1 contribution (claude-orchestration); got ${point.contributions.length}`);
+    const capIds = point.contributions.map(c => c.capId).sort();
+    assert.deepStrictEqual(capIds, ['claude-orchestration'],
+      `execute:wave:pre contributions must be claude-orchestration; got ${capIds.join(',')}`);
   });
 
 });
