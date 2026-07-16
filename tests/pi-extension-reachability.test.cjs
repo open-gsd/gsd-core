@@ -2080,6 +2080,23 @@ test('status and next surface native task recovery until completion', async () =
   fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([historicalFailure, { ...failed, status: 'completed' }]));
   await pi._recorded.commands['gsd-status'].handler('', { cwd });
   assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /Native task recovery/);
+
+  const phaseDir = path.join(cwd, '.planning', 'phases', '05-recovery-fixture');
+  fs.mkdirSync(phaseDir, { recursive: true });
+  fs.writeFileSync(path.join(phaseDir, '05-08-PLAN.md'), '# Plan 08\n');
+  fs.writeFileSync(path.join(phaseDir, '05-08-SUMMARY.md'), '# Summary 08\n');
+  fs.writeFileSync(path.join(phaseDir, '05-09-PLAN.md'), '# Plan 09\n');
+  fs.writeFileSync(path.join(phaseDir, '05-09-SUMMARY.md'), '# Summary 09\n');
+  const shortPlanFailure = { phase: 5, plan: '09', task: 'Execute05-09', status: 'failed' };
+  fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([historicalFailure, failed, shortPlanFailure]));
+  await pi._recorded.commands['gsd-status'].handler('', { cwd });
+  assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /Native task recovery/);
+
+  const unresolvedRepair = { phase: 5, plan: 'repair-auth', task: 'RepairAuth', status: 'failed' };
+  fs.writeFileSync(path.join(cwd, '.planning', '.omp-task-results.json'), JSON.stringify([failed, shortPlanFailure, unresolvedRepair]));
+  await pi._recorded.commands['gsd-status'].handler('', { cwd });
+  assert.match(pi._recorded.messages.at(-1).message.content, /plan repair-auth \/ task RepairAuth: failed/);
+  assert.doesNotMatch(pi._recorded.messages.at(-1).message.content, /plan 05-08|plan 09/);
 });
 
 test('the widget and status summary surface resumable checkpoints', async () => {

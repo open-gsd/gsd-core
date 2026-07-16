@@ -1077,14 +1077,60 @@ module.exports = function gsdPiExtension(pi, options = {}) {
     return parts.join(' · ');
   }
 
+  function canonicalPlanArtifactId(value) {
+    const text = String(value ?? '').trim();
+    return /^\d+$/.test(text) ? String(Number.parseInt(text, 10)) : null;
+  }
+
+  function phaseArtifactInventory(cwd, phaseValue) {
+    const phase = normalizePhaseId(phaseValue);
+    if (!phase) return null;
+    const phasesPath = path.join(cwd, '.planning', 'phases');
+    try {
+      const phaseDirectory = fs.readdirSync(phasesPath, { withFileTypes: true })
+        .find((entry) => entry.isDirectory() && entry.name.startsWith(`${phase}-`));
+      if (!phaseDirectory) return null;
+      const artifacts = fs.readdirSync(path.join(phasesPath, phaseDirectory.name));
+      const escapedPhase = escapeRegExp(phase);
+      const planPattern = new RegExp(`^${escapedPhase}-(\\d+)-PLAN\\.md$`);
+      const summaryPattern = new RegExp(`^${escapedPhase}-(\\d+)-SUMMARY\\.md$`);
+      const planIds = new Set(artifacts.flatMap((name) => {
+        const planId = canonicalPlanArtifactId(planPattern.exec(name)?.[1]);
+        return planId ? [planId] : [];
+      }));
+      const completedIds = new Set(artifacts.flatMap((name) => {
+        const planId = canonicalPlanArtifactId(summaryPattern.exec(name)?.[1]);
+        return planId && planIds.has(planId) ? [planId] : [];
+      }));
+      return planIds.size > 0 ? { planIds, completedIds } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function taskResultPlanArtifactId(phaseValue, planValue) {
+    const phase = normalizePhaseId(phaseValue);
+    if (!phase) return null;
+    const plan = String(planValue ?? '').trim();
+    const direct = canonicalPlanArtifactId(plan);
+    if (direct) return direct;
+    const match = new RegExp(`^${escapeRegExp(phase)}-(\\d+)$`).exec(plan);
+    return canonicalPlanArtifactId(match?.[1]);
+  }
+
   function nativeTaskRecovery(cwd) {
     const currentPhase = normalizePhaseId(stateSnapshot(cwd)?.phase);
-    const failures = readTaskResults(cwd).filter((entry) =>
-      normalizePhaseId(entry?.phase) &&
-      (currentPhase === null || entry.phase === currentPhase) &&
-      typeof entry.plan === 'string' && entry.plan &&
-      typeof entry.task === 'string' && entry.task &&
-      ['failed', 'cancelled'].includes(entry.status));
+    const completedPlanIds = phaseArtifactInventory(cwd, currentPhase)?.completedIds;
+    const failures = readTaskResults(cwd).filter((entry) => {
+      const phase = normalizePhaseId(entry?.phase);
+      const planId = taskResultPlanArtifactId(phase, entry?.plan);
+      return phase &&
+        (currentPhase === null || phase === currentPhase) &&
+        typeof entry.plan === 'string' && entry.plan &&
+        typeof entry.task === 'string' && entry.task &&
+        ['failed', 'cancelled'].includes(entry.status) &&
+        !(planId && completedPlanIds?.has(planId));
+    });
     if (!failures.length) return null;
     return { failures, command: `/gsd-execute-phase ${failures[0].phase}` };
   }
@@ -1115,26 +1161,10 @@ module.exports = function gsdPiExtension(pi, options = {}) {
   }
 
   function phaseArtifactProgress(cwd, state) {
-    const phase = normalizePhaseId(state?.phase);
-    if (!phase) return null;
-    const phasesPath = path.join(cwd, '.planning', 'phases');
-    try {
-      const phaseDirectory = fs.readdirSync(phasesPath, { withFileTypes: true })
-        .find((entry) => entry.isDirectory() && entry.name.startsWith(`${phase}-`));
-      if (!phaseDirectory) return null;
-      const artifacts = fs.readdirSync(path.join(phasesPath, phaseDirectory.name));
-      const escapedPhase = escapeRegExp(phase);
-      const planPattern = new RegExp(`^${escapedPhase}-(\\d+)-PLAN\\.md$`);
-      const summaryPattern = new RegExp(`^${escapedPhase}-(\\d+)-SUMMARY\\.md$`);
-      const planIds = new Set(artifacts.map((name) => planPattern.exec(name)?.[1]).filter(Boolean));
-      const completedIds = new Set(artifacts
-        .map((name) => summaryPattern.exec(name)?.[1])
-        .filter((planId) => planId && planIds.has(planId)));
-      return planIds.size > 0 ? { plans: planIds.size, summaries: completedIds.size } : null;
-    } catch {
-      return null;
-    }
+    const inventory = phaseArtifactInventory(cwd, state?.phase);
+    return inventory ? { plans: inventory.planIds.size, summaries: inventory.completedIds.size } : null;
   }
+
 
   function discussablePhaseOptions(cwd) {
     let roadmap;
