@@ -14,6 +14,34 @@ function readWorkflow(relativePath) {
   return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
 }
 
+// Comment-stripped view of a workflow, for assertions about CODE STRUCTURE.
+// These files document their own rationale, so prose routinely names the very
+// symbols a positional assertion looks for (e.g. "...and core.setFailed never
+// runs"). Matching raw source makes such an assertion measure the comment
+// rather than the call — the #2331 ordering test did exactly that and failed
+// against correct code. Drop whole-line YAML (`#`) and JS (`//`) comments so
+// positional checks see only executable text.
+function readWorkflowCode(relativePath) {
+  return readWorkflow(relativePath)
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      return t !== '' && !t.startsWith('#') && !t.startsWith('//');
+    })
+    .join('\n');
+}
+
+// True when the verdict call sits AFTER the comment-posting catch block — i.e.
+// a thrown/403'd comment cannot skip the gate (#2331). Takes comment-stripped
+// code. Extracted so the predicate itself can be exercised against a known-bad
+// sample below; a presence-only check would pass on the inverted arrangement.
+function verdictSurvivesCommentFailure(code) {
+  const catchWarning = code.indexOf('Could not post');
+  const verdict = code.indexOf('core.setFailed(');
+  if (catchWarning === -1 || verdict === -1) return false;
+  return verdict > catchWarning;
+}
+
 function assertMaintainerSkip(source) {
   assert.ok(
     source.includes(MAINTAINER_SKIP_EXPR),
@@ -84,16 +112,17 @@ describe('PR policy workflow maintainer carve-outs', () => {
       assert.match(workflow, /\btry\s*\{/);
       assert.match(workflow, /catch\s*\(err\)\s*\{[\s\S]*?core\.warning/);
 
-      // Assert the ORDER, not just the presence: core.setFailed must appear
-      // AFTER the catch block's core.warning. If the verdict were moved inside
-      // the try, it would textually precede the catch — which is exactly the
-      // regression this locks. Presence-only assertions pass either way.
-      const catchWarning = workflow.indexOf('Could not post');
-      const verdict = workflow.indexOf('core.setFailed');
-      assert.ok(catchWarning !== -1, 'expected the catch-block core.warning');
-      assert.ok(verdict !== -1, 'expected a core.setFailed verdict');
-      assert.ok(
-        verdict > catchWarning,
+      // Assert the ORDER, not just the presence: the verdict must appear AFTER
+      // the catch block's core.warning. If it were moved inside the try, it
+      // would textually precede the catch — exactly the regression this locks.
+      // Presence-only assertions pass either way.
+      //
+      // Read the comment-stripped view: these workflows' own prose names
+      // `core.setFailed` while explaining the bug, and matching raw source made
+      // this assertion compare a comment instead of the call.
+      assert.equal(
+        verdictSurvivesCommentFailure(readWorkflowCode(file)),
+        true,
         'core.setFailed must sit AFTER the catch block, not inside the try — ' +
           'otherwise a thrown comment error skips the verdict (#2331)'
       );
@@ -119,6 +148,52 @@ describe('PR policy workflow maintainer carve-outs', () => {
       assert.match(workflow, new RegExp(`\\\\\`\\$\\{${varName}\\}`));
     });
   }
+
+  test('the verdict-ordering predicate rejects the inversion it exists to catch', () => {
+    // Non-vacuity: prove the guard fails on the bad arrangement, not just that
+    // it passes on the current (good) one.
+    const good = [
+      'try {',
+      '  await github.rest.issues.createComment({});',
+      '} catch (err) {',
+      '  core.warning(`Could not post the comment (${err.status}).`);',
+      '}',
+      "core.setFailed('nope');",
+    ].join('\n');
+    const inverted = [
+      'try {',
+      '  await github.rest.issues.createComment({});',
+      "  core.setFailed('nope');", // <-- swallowed by the catch
+      '} catch (err) {',
+      '  core.warning(`Could not post the comment (${err.status}).`);',
+      '}',
+    ].join('\n');
+
+    assert.equal(verdictSurvivesCommentFailure(good), true);
+    assert.equal(verdictSurvivesCommentFailure(inverted), false);
+    // Missing either half is not a pass.
+    assert.equal(verdictSurvivesCommentFailure("core.setFailed('x');"), false);
+    assert.equal(verdictSurvivesCommentFailure('core.warning(`Could not post`);'), false);
+  });
+
+  test('readWorkflowCode strips prose that would confuse a positional assertion', () => {
+    // The exact trap that made the first cut of the ordering test fail against
+    // correct code: these workflows name `core.setFailed` in their own comments,
+    // before the call, so a raw-source indexOf compares the comment.
+    const raw = readWorkflow('.github/workflows/pr-title-validator.yml');
+    const code = readWorkflowCode('.github/workflows/pr-title-validator.yml');
+
+    assert.ok(
+      raw.indexOf('core.setFailed') < raw.indexOf('Could not post'),
+      'precondition: raw source mentions core.setFailed in prose before the catch'
+    );
+    assert.ok(
+      code.indexOf('core.setFailed(') > code.indexOf('Could not post'),
+      'comment-stripped code puts the real call after the catch'
+    );
+    assert.doesNotMatch(code, /^\s*#/m, 'no YAML comment lines survive');
+    assert.doesNotMatch(code, /^\s*\/\//m, 'no JS comment lines survive');
+  });
 
   test('the backtick sanitizer actually neutralizes the inline-code breakout', () => {
     // Behavioral check of the transform the workflows apply, rather than only
