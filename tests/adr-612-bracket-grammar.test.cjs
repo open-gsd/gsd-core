@@ -528,3 +528,53 @@ describe('bracket grammar — properties (fast-check)', () => {
     );
   });
 });
+
+// ─── the #2232 reconciliation, generatively ─────────────────────────────────
+// BRACKET_PHASE_TOKEN_SOURCE is the READ side; toDir is the EMIT side. The
+// example tables pin specific strings, but the contract that actually matters
+// is metamorphic and spans the pair: for every id the emit path can produce,
+// the read path must collect exactly that id's numeric run — no more (the
+// #2232 over-collection) and no less (the under-collection a verbatim
+// exactly-2 cap would cause at 3+-digit widths). Tying the two together means a
+// future change to either side fails here rather than drifting silently, which
+// is the whole point of consuming the single-owner seam.
+describe('bracket grammar — read/emit agreement on the token run (#2232)', () => {
+  // A slug whose FIRST WORD is a >=3-digit number — the #2232 bug class itself
+  // (roadmap phase "2026 Photos & Performance" → slug "2026-photos-…"). The
+  // existing slugArb generates a single [a-z0-9] word and so can never produce
+  // this shape; the collision only exists when a digit-run sits at a segment
+  // boundary. Bounded at >=100 because a 2-digit first word is genuinely
+  // ambiguous against a canonical plan — the seam's known, accepted limit,
+  // identical on the M-NN path.
+  const numberLeadingSlugArb = fc
+    .tuple(
+      fc.integer({ min: 100, max: 9999 }),
+      fc.array(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')), { minLength: 1, maxLength: 6 }),
+    )
+    .map(([lead, word]) => `${lead}-${word.join('')}`);
+
+  test('a number-leading slug never bleeds into the token run', () => {
+    fc.assert(
+      fc.property(projectArb, numArb, numArb, optNumArb, numberLeadingSlugArb, (proj, mm, pp, ss, slug) => {
+        const display = `[${proj}.${p2(mm)}] ${p2(pp)}${ss !== undefined ? '.' + p2(ss) : ''}`;
+        const id = core.parsePhaseId(display);
+        const dir = core.toDir(id, slug);
+
+        // The run the emit path actually wrote, independent of the read regex.
+        const expectedRun = `${p2(mm)}-${p2(pp)}${ss !== undefined ? '.' + p2(ss) : ''}`;
+
+        // The read path, applied the way a PR-2 reader would: strip the
+        // `{CODE}.` prefix, then collect the run with the exported source.
+        const runInput = dir.slice(`${proj}.`.length);
+        const collected = runInput.match(new RegExp(`^${core.BRACKET_PHASE_TOKEN_SOURCE}`))?.[0];
+        if (collected !== expectedRun) return false;
+
+        // And the strict parser agrees the slug is a slug, not a plan — the
+        // #2232 failure mode was the reader and the parser disagreeing about
+        // where the identity ends.
+        const back = core.parsePhaseId(dir);
+        return back.phase === p2(pp) && back.milestone === p2(mm) && back.plan === undefined;
+      }),
+    );
+  });
+});
