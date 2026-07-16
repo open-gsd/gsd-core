@@ -32,7 +32,8 @@ echo "$ARGUMENTS" | grep -q '\-\-ollama' && REVIEWER_FLAGS="$REVIEWER_FLAGS --ol
 echo "$ARGUMENTS" | grep -q '\-\-lm-studio' && REVIEWER_FLAGS="$REVIEWER_FLAGS --lm-studio"
 echo "$ARGUMENTS" | grep -q '\-\-llama-cpp' && REVIEWER_FLAGS="$REVIEWER_FLAGS --llama-cpp"
 echo "$ARGUMENTS" | grep -q '\-\-all' && REVIEWER_FLAGS="$REVIEWER_FLAGS --all"
-if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi
+# Do NOT default REVIEWER_FLAGS to --codex here. When empty, step 1.6 either
+# falls through to review.default_reviewers (via gsd-review) or applies --codex.
 
 MAX_CYCLES=$(echo "$ARGUMENTS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
 if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
@@ -59,6 +60,23 @@ Enable it with:
   gsd config-set workflow.plan_review_convergence true
 
 Then re-run: /gsd:plan-review-convergence {PHASE}
+```
+
+## 1.6. Default reviewer resolution (after gsd_run is available)
+
+When no explicit reviewer flags were provided, respect `review.default_reviewers`
+instead of unconditionally forcing `--codex` (which would always win gsd-review's
+flag precedence and skip configured defaults / reviewer instances).
+
+```bash
+if [ -z "$REVIEWER_FLAGS" ]; then
+  DEFAULT_REVIEWERS_COUNT=$(gsd_run query config-get review.default_reviewers 2>/dev/null | jq 'if type=="array" then length else 0 end' 2>/dev/null)
+  if [ "${DEFAULT_REVIEWERS_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+    : # leave REVIEWER_FLAGS empty — gsd-review applies review.default_reviewers itself
+  else
+    REVIEWER_FLAGS="--codex"
+  fi
+fi
 ```
 
 ## 2. Initialize

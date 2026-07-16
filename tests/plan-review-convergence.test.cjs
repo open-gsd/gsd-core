@@ -118,6 +118,13 @@ describe('plan-review-convergence command source (#2306)', () => {
     );
   });
 
+  test('command documents bare-invocation fallback to review.default_reviewers (#2315)', () => {
+    assert.ok(
+      command.includes('review.default_reviewers'),
+      'command must document that bare invocation uses review.default_reviewers when configured (#2315)'
+    );
+  });
+
   test('command documents the workflow.plan_review_convergence config key', () => {
     assert.ok(
       command.includes('workflow.plan_review_convergence') ||
@@ -150,6 +157,49 @@ describe('plan-review-convergence workflow: initialization (#2306)', () => {
     assert.ok(
       workflow.includes('PLAN CONVERGENCE') || workflow.includes('Plan Convergence'),
       'workflow must display a startup banner'
+    );
+  });
+});
+
+// ─── Workflow: default reviewer resolution (#2315) ─────────────────────────
+
+describe('plan-review-convergence workflow: default reviewer resolution (#2315)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+  test('step 1 does not unconditionally force --codex when no reviewer flags match', () => {
+    // The early parse block must leave REVIEWER_FLAGS empty so step 1.6 can
+    // honor review.default_reviewers. Detect the old bug pattern:
+    //   if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi
+    // appearing BEFORE the default_reviewers config-get.
+    const step1End = workflow.indexOf('## 1.5.');
+    assert.ok(step1End > 0, 'workflow must have step 1.5');
+    const step1 = workflow.slice(0, step1End);
+    assert.equal(
+      /if \[ -z "\$REVIEWER_FLAGS" \]; then REVIEWER_FLAGS="--codex"; fi/.test(step1),
+      false,
+      'step 1 must not force REVIEWER_FLAGS=--codex before config resolution (#2315)'
+    );
+  });
+
+  test('workflow resolves empty REVIEWER_FLAGS via review.default_reviewers after gsd_run is available', () => {
+    assert.ok(
+      workflow.includes('review.default_reviewers'),
+      'workflow must read review.default_reviewers when no reviewer flags are set (#2315)'
+    );
+    assert.ok(
+      workflow.includes('DEFAULT_REVIEWERS_COUNT'),
+      'workflow must compute DEFAULT_REVIEWERS_COUNT from review.default_reviewers (#2315)'
+    );
+  });
+
+  test('workflow still defaults to --codex when review.default_reviewers is empty', () => {
+    // After the default_reviewers gate, empty config must still set --codex
+    const resolutionIdx = workflow.indexOf('DEFAULT_REVIEWERS_COUNT');
+    assert.ok(resolutionIdx > 0, 'must contain DEFAULT_REVIEWERS_COUNT resolution block');
+    const after = workflow.slice(resolutionIdx);
+    assert.ok(
+      after.includes('REVIEWER_FLAGS="--codex"'),
+      'when default_reviewers is empty, workflow must still default REVIEWER_FLAGS to --codex (#2315)'
     );
   });
 });

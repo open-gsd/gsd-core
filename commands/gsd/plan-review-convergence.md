@@ -40,7 +40,7 @@ Replaces gsd-plan-phase's internal gsd-plan-checker with external AI reviewers (
 Phase number: extracted from $ARGUMENTS (required)
 
 **Flags:**
-- `--codex` — Use Codex CLI as reviewer (default if no reviewer specified)
+- `--codex` — Use Codex CLI as reviewer (default if no reviewer specified and `review.default_reviewers` is unset/empty)
 - `--gemini` — Use Gemini CLI as reviewer
 - `--claude` — Use Claude CLI as reviewer (separate session)
 - `--opencode` — Use OpenCode as reviewer
@@ -49,6 +49,8 @@ Phase number: extracted from $ARGUMENTS (required)
 - `--llama-cpp` — Use local llama.cpp server as reviewer (OpenAI-compatible, default host `http://localhost:8080`; configure model via `review.models.llama_cpp`)
 - `--all` — Use all available CLIs and running local model servers
 - `--max-cycles N` — Maximum replan→review cycles (default: 3)
+
+**Bare invocation (no reviewer flags):** Uses `review.default_reviewers` when configured; otherwise defaults to `--codex`. Explicit reviewer flags always override the config.
 
 **Feature gate:** This command requires `workflow.plan_review_convergence=true`. Enable with:
 `gsd config-set workflow.plan_review_convergence true`
