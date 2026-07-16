@@ -2,6 +2,7 @@
   ".gsd-profile": "0e716a5fef4e6dc1",
   ".gsd/defaults.json": "560664b045e645cb",
   "extensions/gsd.cjs": "619cec0af9cfdadf",
+  "gsd-core/.gsd-runtime": "94e95f0bb38f8e0f",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/ensure-runtime-build.cjs": "51bc64467ab30f62",

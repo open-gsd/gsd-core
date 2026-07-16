@@ -10,7 +10,9 @@
  * epic #1267; callers import resolvers from model-resolver.cjs directly.
  *
  * Dependencies (leaf modules only):
- *   - node:fs / node:path (stdlib, not currently needed — included for future use)
+ *   - node:fs / node:path (read the per-install .gsd-runtime marker + project config for the #2297 omit gate)
+ *   - ./runtime-name-policy.cjs (resolveRuntimeNameFromCandidates — canonicalize the active runtime)
+ *   - ./planning-workspace.cjs  (planningDir — workstream/project-aware project-config path)
  *   - ./config-loader.cjs    (loadConfig)
  *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
  *   - ./model-profiles.cjs   (MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier)
@@ -29,6 +31,98 @@ import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 
 import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS } from './model-catalog.cjs';
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { resolveRuntimeNameFromCandidates } from './runtime-name-policy.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningWorkspaceMod = require('./planning-workspace.cjs');
+const { planningDir } = planningWorkspaceMod;
+
+// ─── #2297: per-install runtime identity for the resolve_model_ids:"omit" gate ─
+//
+// The installer writes `resolve_model_ids:"omit"` into the SHARED
+// ~/.gsd/defaults.json for every runtime that lacks native model aliases (#1156).
+// Because that file is machine-wide, a non-Claude install would otherwise poison
+// a Claude no-project resolution into returning '' — silently defeating Claude's
+// adaptive tier aliases. The "omit" must therefore apply only when a runtime that
+// genuinely lacks native aliases is the one resolving.
+//
+// In a no-project session there is no `.planning/config.json` (so config.runtime
+// is null) and GSD_RUNTIME is not exported by gsd-core, so the only reliable
+// current-runtime signal is the per-install marker the installer co-locates next
+// to VERSION at <install>/gsd-core/.gsd-runtime (this file's dir is
+// <install>/gsd-core/bin/lib). Precedence for the gate: project config.runtime →
+// GSD_RUNTIME env (manual/CI override + test seam) → install marker → 'claude'.
+//
+// `claude` is currently the ONLY runtime with nativeModelAliases:true; a
+// registry-parity test guards this set so a future alias-capable runtime fails
+// loudly here instead of silently omitting.
+const RUNTIMES_WITH_NATIVE_ALIASES: ReadonlySet<string> = new Set(['claude']);
+
+let _installMarkerCache: string | null | undefined;
+function readInstallRuntimeMarker(): string | null {
+  if (_installMarkerCache !== undefined) return _installMarkerCache;
+  try {
+    const markerPath = path.join(__dirname, '..', '..', '.gsd-runtime');
+    const raw = fs.readFileSync(markerPath, 'utf8').trim();
+    _installMarkerCache = raw || null;
+  } catch {
+    // No marker: dev/source tree, or an install predating #2297. Fall through to
+    // the 'claude' default (keeps tier aliases — never worse than the bug).
+    _installMarkerCache = null;
+  }
+  return _installMarkerCache;
+}
+
+// Test seams for the install-marker rung (the dev/source tree has no marker, so
+// the file read always bottoms out at 'claude' — these let tests exercise the
+// third precedence rung and reset the module-level cache between cases).
+function _setInstallRuntimeMarkerForTests(value: string | null): void {
+  _installMarkerCache = value;
+}
+function _resetInstallRuntimeMarkerCacheForTests(): void {
+  _installMarkerCache = undefined;
+}
+
+// The runtime whose install is actually resolving, canonicalized so an alias or
+// case variant (e.g. "claude-code"/"Claude") cannot defeat the native-alias
+// check below (#2297 review). Precedence mirrors resolveRuntime()
+// (runtime-slash.cts): GSD_RUNTIME env → project config.runtime → per-install
+// .gsd-runtime marker → 'claude'.
+function resolveActiveRuntime(config: Record<string, unknown>): string {
+  return resolveRuntimeNameFromCandidates(
+    process.env['GSD_RUNTIME'],
+    config['runtime'],
+    readInstallRuntimeMarker(),
+  ) || 'claude';
+}
+
+// Did the PROJECT's own config (root `.planning/config.json` or the active
+// workstream/project override) explicitly set resolve_model_ids to "omit"?
+// Project config takes precedence over the shared ~/.gsd/defaults.json (#2297
+// out-of-scope guard + #2517 finding #4): an explicit project "omit" is honored
+// regardless of runtime, whereas an "omit" that came only from the global
+// defaults is ignored by native-alias runtimes. Workstream/project-scope aware
+// via planningDir (mirrors loadConfig's precedence: workstream value wins over
+// root); a plain read avoids loadConfig's normalization side effects.
+function projectExplicitlySetsOmit(cwd: string): boolean {
+  const wsDir = planningDir(cwd);
+  const rootDir = path.join(cwd, '.planning');
+  const layers = wsDir === rootDir ? [rootDir] : [wsDir, rootDir]; // workstream > root
+  for (const dir of layers) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf8')) as Record<string, unknown>;
+      const value = parsed?.['resolve_model_ids'];
+      // First layer that sets the key wins (matches loadConfig's deep-merge
+      // precedence). A layer that omits the key falls through to the next.
+      if (value !== undefined) return value === 'omit';
+    } catch {
+      // Absent/unreadable layer — try the next.
+    }
+  }
+  return false;
+}
 
 // ─── Model alias resolution ───────────────────────────────────────────────────
 
@@ -277,8 +371,18 @@ function resolveModelInternal(cwd: string, agentType: string): string {
     if (entry?.model) return entry.model;
   }
 
-  // 4. resolve_model_ids: "omit"
-  if (config['resolve_model_ids'] === 'omit') {
+  // 4. resolve_model_ids: "omit" — runtime-aware (#2297). Honor "omit" when the
+  // PROJECT explicitly set it (user intent — project config wins, #2517 finding
+  // #4) OR when the active runtime genuinely lacks native model aliases. Only a
+  // native-alias runtime (Claude) ignores an "omit" that came solely from the
+  // SHARED ~/.gsd/defaults.json — the #2297 poisoning fix — and falls through to
+  // its tier aliases below. Active runtime: GSD_RUNTIME → config.runtime → the
+  // per-install .gsd-runtime marker → 'claude' (canonicalized).
+  // NOTE: a non-Claude runtime that HAS a populated runtime-tier map already
+  // returned its own model id at step 3 above, before this gate — for those the
+  // explicit-project-omit honoring here is moot (step 3 wins, by #2517 design).
+  if (config['resolve_model_ids'] === 'omit'
+      && (projectExplicitlySetsOmit(cwd) || !RUNTIMES_WITH_NATIVE_ALIASES.has(resolveActiveRuntime(config)))) {
     return '';
   }
 
@@ -292,7 +396,11 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   if (tier === 'inherit') return 'inherit';
   const alias = tier;
 
-  if (config['resolve_model_ids']) {
+  // Only the explicit `true` opt-in materializes full model IDs (#1569). Guard
+  // against the loose-truthy check catching a "omit" that a native-alias runtime
+  // ignored above (#2297): "omit" must fall through to the tier ALIAS here, not
+  // be materialized into a full ID Claude's Agent tool cannot spawn.
+  if (config['resolve_model_ids'] === true) {
     return (MODEL_ALIAS_MAP as Record<string, string>)[alias!] || alias!;
   }
 
@@ -578,6 +686,8 @@ export = {
   resolveModelInternal,
   _resetModelPolicyWarningCacheForTests,
   _resetModelOverrideWarningCacheForTests,
+  _setInstallRuntimeMarkerForTests,
+  _resetInstallRuntimeMarkerCacheForTests,
   VALID_GRANULARITIES,
   resolveGranularityInternal,
   assertValidGranularityOverride,

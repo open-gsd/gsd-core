@@ -141,6 +141,7 @@
   "agents/gsd-verifier.md",
   "agents/gsd-verifier.toml",
   "config.toml",
+  "gsd-core/.gsd-runtime",
   "gsd-core/VERSION",
   "gsd-core/bin/check-latest-version.cjs",
   "gsd-core/bin/ensure-runtime-build.cjs",

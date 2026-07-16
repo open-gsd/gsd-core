@@ -106,6 +106,7 @@
   "commands/gsd-verify-work.md": "86a42f859bc26dd6",
   "commands/gsd-workspace.md": "5c40114e6af87e3d",
   "commands/gsd-workstreams.md": "112660ceb663c750",
+  "gsd-core/.gsd-runtime": "0e49decc490cf91d",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/ensure-runtime-build.cjs": "2525f1ae8b086828",

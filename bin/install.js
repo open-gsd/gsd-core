@@ -10880,6 +10880,22 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     failures.push('VERSION');
   }
 
+  // #2297: write a per-install runtime marker co-located with VERSION at
+  // <install>/gsd-core/.gsd-runtime. It gives resolveModelInternal a reliable
+  // "which runtime owns THIS install" signal in a no-project session (config.runtime
+  // is null and GSD_RUNTIME is not exported), so the shared ~/.gsd/defaults.json
+  // resolve_model_ids:"omit" policy (written below for non-alias runtimes only)
+  // applies ONLY when a non-alias runtime is actually resolving — a Claude session
+  // reads its own marker and keeps its tier aliases instead of inheriting another
+  // runtime's install-order-dependent "omit". See src/model-resolver.cts.
+  const runtimeMarkerDest = path.join(targetDir, 'gsd-core', '.gsd-runtime');
+  fs.writeFileSync(runtimeMarkerDest, `${runtime}\n`);
+  if (verifyFileInstalled(runtimeMarkerDest, '.gsd-runtime')) {
+    console.log(`  ${green}✓${reset} Wrote runtime marker (.gsd-runtime: ${runtime})`);
+  } else {
+    failures.push('.gsd-runtime');
+  }
+
   // Reusable: copy hooks/dist/ + hooks/lib/ into destRootDir, writing the
   // CommonJS package.json marker alongside them. Used below for the generic
   // configDir install path (guarded by hostBehaviors.skipSharedHooksInstall),
