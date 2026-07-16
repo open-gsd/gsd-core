@@ -80,6 +80,45 @@ function isOverrideSet() {
   return typeof v === 'string' && v !== '' && v !== '0' && v.toLowerCase() !== 'false';
 }
 
+// #2304: Kimi's native hook bus delivers Kimi's tool vocabulary in the payload
+// (Write → WriteFile, Edit/MultiEdit → StrReplaceFile) while the [[hooks]]
+// matcher is registered pre-translated (runtime-hooks-surface.cts
+// buildKimiHooksTomlBlock) — so without normalizing the payload too, the
+// matcher fires but the tool_name check below exits 0 and the guard is dormant
+// on Kimi. The tool_input field names differ as well (kimi-cli
+// src/kimi_cli/tools/file/{write,replace}.py): WriteFile takes `path`/`content`,
+// StrReplaceFile takes `path` + `edit: Edit | list[Edit]` with `old`/`new` —
+// kimi-cli's hooks/events.py forwards tool_input verbatim, so both layers need
+// mapping. Accepts bare and module-qualified ('kimi_cli.tools.file:WriteFile')
+// names; unknown names fall through untouched. Inlined per guard (not
+// hooks/lib/): hook scripts are staged as standalone files, and a sibling
+// require is a staging dependency that can fail silently.
+const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit' };
+function normalizeKimiPayload(data) {
+  const raw = data.tool_name;
+  if (typeof raw !== 'string') return data;
+  const mapped = KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)];
+  if (!mapped) return data;
+  data.tool_name = mapped;
+  const input = data.tool_input;
+  if (input && typeof input === 'object') {
+    if (input.file_path === undefined && typeof input.path === 'string') {
+      input.file_path = input.path;
+    }
+    const edits = Array.isArray(input.edit) ? input.edit
+      : (input.edit && typeof input.edit === 'object') ? [input.edit] : [];
+    if (edits.length) {
+      if (input.old_string === undefined && edits[0].old !== undefined) {
+        input.old_string = String(edits[0].old);
+      }
+      if (input.new_string === undefined) {
+        input.new_string = edits.map((e) => String(e.new ?? '')).join('\n');
+      }
+    }
+  }
+  return data;
+}
+
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
 process.stdin.setEncoding('utf8');
@@ -87,7 +126,7 @@ process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
-    const data = JSON.parse(input);
+    const data = normalizeKimiPayload(JSON.parse(input));
 
     // Only whole-file Write is catastrophic-by-construction; Edit/MultiEdit
     // replace bounded spans and are out of scope by design (#2255).
@@ -140,6 +179,8 @@ process.stdin.on('end', () => {
           `environment variable GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
       };
       process.stdout.write(JSON.stringify(output));
+      // Kimi feeds stderr (not stdout) back to the model on exit 2.
+      process.stderr.write(output.reason);
       process.exit(2);
     }
 
@@ -175,6 +216,8 @@ process.stdin.on('end', () => {
     };
 
     process.stdout.write(JSON.stringify(output));
+    // Kimi feeds stderr (not stdout) back to the model on exit 2.
+    process.stderr.write(output.reason);
     process.exit(2);
   } catch {
     // Silent fail — never block valid tool calls due to hook errors

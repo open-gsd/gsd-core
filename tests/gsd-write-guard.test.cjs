@@ -258,3 +258,72 @@ describe('gsd-write-guard.js: deliberately narrow trigger (no-op paths)', () => 
     assert.equal(r.stdout, '');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// #2304 — Kimi tool vocabulary engages the guard
+// Payload shapes mirror kimi-cli's actual tool schemas
+// (src/kimi_cli/tools/file/write.py): WriteFile takes `path`/`content`,
+// not Claude's `file_path`. See PR #2326 for the sibling guards.
+// ────────────────────────────────────────────────────────────────────────
+
+describe('#2304: Kimi tool vocabulary engages the write guard', () => {
+  test('Kimi WriteFile catastrophic shrink is BLOCKED like Write', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    const r = runHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'WriteFile',
+      tool_input: { path: roadmapPath, content: lines(16) },
+    });
+    assert.equal(r.status, 2, `Kimi WriteFile shrink must be blocked. Got ${r.status}; stdout: ${r.stdout}`);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.decision, 'block');
+    assert.equal(out.oldLines, 292);
+    assert.equal(out.newLines, 16);
+  });
+
+  test('module-qualified kimi_cli.tools.file:WriteFile is recognized', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    const r = runHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'kimi_cli.tools.file:WriteFile',
+      tool_input: { path: roadmapPath, content: lines(16) },
+    });
+    assert.equal(r.status, 2, `qualified Kimi WriteFile shrink must be blocked. Got ${r.status}; stdout: ${r.stdout}`);
+    assert.equal(JSON.parse(r.stdout).decision, 'block');
+  });
+
+  test('block reason reaches stderr (Kimi feeds stderr back to the model on exit 2)', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    const r = runHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'WriteFile',
+      tool_input: { path: roadmapPath, content: lines(16) },
+    });
+    assert.equal(r.status, 2);
+    assert.ok(r.stderr.includes('GSD_ALLOW_PLANNING_SHRINK'),
+      `stderr must carry the block reason incl. the override name. Got: ${r.stderr}`);
+  });
+
+  test('Kimi StrReplaceFile stays exempt (Edit-class, out of scope by design)', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    const r = runHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'StrReplaceFile',
+      tool_input: { path: roadmapPath, edit: { old: 'line 1', new: 'line one' } },
+    });
+    assert.equal(r.status, 0, 'StrReplaceFile normalizes to Edit, which the guard exempts by design (#2255)');
+    assert.equal(r.stdout, '');
+  });
+
+  test('Kimi WriteFile of a non-curated path stays exempt', () => {
+    const otherPath = path.join(projectDir, 'notes.md');
+    fs.writeFileSync(otherPath, lines(300));
+    const r = runHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'WriteFile',
+      tool_input: { path: otherPath, content: lines(5) },
+    });
+    assert.equal(r.status, 0);
+    assert.equal(r.stdout, '');
+  });
+});
