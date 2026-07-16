@@ -99,6 +99,7 @@
   "agents/subagents/gsd-user-profiler.yaml",
   "agents/subagents/gsd-verifier.md",
   "agents/subagents/gsd-verifier.yaml",
+  "gsd-core/.gsd-runtime",
   "gsd-core/VERSION",
   "gsd-core/bin/check-latest-version.cjs",
   "gsd-core/bin/ensure-runtime-build.cjs",

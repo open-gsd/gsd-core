@@ -105,6 +105,7 @@
   "commands/gsd-verify-work.md",
   "commands/gsd-workspace.md",
   "commands/gsd-workstreams.md",
+  "gsd-core/.gsd-runtime",
   "gsd-core/VERSION",
   "gsd-core/bin/check-latest-version.cjs",
   "gsd-core/bin/ensure-runtime-build.cjs",

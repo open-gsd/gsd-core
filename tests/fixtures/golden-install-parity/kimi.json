@@ -99,6 +99,7 @@
   "agents/subagents/gsd-user-profiler.yaml": "645826a29d079159",
   "agents/subagents/gsd-verifier.md": "699f62763424ac68",
   "agents/subagents/gsd-verifier.yaml": "2d2bd6b37626f382",
+  "gsd-core/.gsd-runtime": "cb556f5d5cee2779",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/ensure-runtime-build.cjs": "51bc64467ab30f62",

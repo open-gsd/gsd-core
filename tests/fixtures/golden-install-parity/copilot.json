@@ -36,6 +36,7 @@
   "agents/gsd-user-profiler.agent.md": "ae16a248e18dd42b",
   "agents/gsd-verifier.agent.md": "87a8e3238e838a39",
   "copilot-instructions.md": "1fb04111759f1645",
+  "gsd-core/.gsd-runtime": "d0bcfb0a7f01f8c9",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/ensure-runtime-build.cjs": "ea841e2865248e74",

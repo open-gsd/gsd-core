@@ -34,6 +34,7 @@
   "agents/gsd-ui-researcher.md",
   "agents/gsd-user-profiler.md",
   "agents/gsd-verifier.md",
+  "gsd-core/.gsd-runtime",
   "gsd-core/VERSION",
   "gsd-core/bin/check-latest-version.cjs",
   "gsd-core/bin/ensure-runtime-build.cjs",

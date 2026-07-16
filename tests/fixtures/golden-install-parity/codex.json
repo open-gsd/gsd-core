@@ -141,6 +141,7 @@
   "agents/gsd-verifier.md": "4ac4b860e2504374",
   "agents/gsd-verifier.toml": "8ed9fb961409e894",
   "config.toml": "b5f627b42f060910",
+  "gsd-core/.gsd-runtime": "243b0dc9b847e66c",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/ensure-runtime-build.cjs": "51bc64467ab30f62",
