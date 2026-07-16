@@ -40,7 +40,7 @@ import { requireSafePath, sanitizeForDisplay } from './security.cjs';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type UatResult = string;
-type UatCategory = 'server_blocked' | 'device_needed' | 'build_needed' | 'third_party' | 'blocked' | 'skipped_unresolved' | 'pending' | 'human_uat' | 'unknown';
+type UatCategory = 'server_blocked' | 'device_needed' | 'build_needed' | 'third_party' | 'blocked' | 'skipped_unresolved' | 'pending' | 'human_uat' | 'unknown' | 'deferred';
 
 interface UatItem {
   test?: number;
@@ -57,7 +57,7 @@ interface UatFileResult {
   phase_dir: string;
   file: string;
   file_path: string;
-  type: 'uat' | 'verification';
+  type: 'uat' | 'verification' | 'deferred';
   status: string;
   items: UatItem[];
 }
@@ -127,6 +127,30 @@ function cmdAuditUat(cwd: string, raw: boolean): void {
             items,
           });
         }
+      }
+    }
+
+    // Process deferred-items.md (#2287) — the SCOPE BOUNDARY convention
+    // (agents/gsd-executor.md) has the executor log out-of-scope discoveries
+    // to this file; nothing previously read it back. Surface every
+    // UNRESOLVED entry (see parseDeferredItems for the resolved/unresolved
+    // parsing rule) as a 'deferred'-typed result, keeping deferred-items.md
+    // itself the single source of truth — no duplicate pending-todo entry
+    // required.
+    const deferredFile = 'deferred-items.md';
+    if (files.includes(deferredFile)) {
+      const content = fs.readFileSync(path.join(phaseDir, deferredFile), 'utf-8');
+      const items = parseDeferredItems(content);
+      if (items.length > 0) {
+        results.push({
+          phase: phaseNum,
+          phase_dir: dir,
+          file: deferredFile,
+          file_path: toPosixPath(path.relative(cwd, path.join(phaseDir, deferredFile))),
+          type: 'deferred',
+          status: 'unresolved',
+          items,
+        });
       }
     }
   }
@@ -445,6 +469,62 @@ function parseGapsItems(content: string): UatItem[] {
   return items;
 }
 
+// ─── parseDeferredItems ────────────────────────────────────────────────────────
+
+/**
+ * Extract unresolved entries from a phase directory's `deferred-items.md`
+ * (#2287) — the SCOPE BOUNDARY convention `agents/gsd-executor.md` instructs
+ * the executor to follow: "Log out-of-scope discoveries to `deferred-items.md`
+ * in the phase directory". Nothing previously read this file back, so a
+ * deferred entry was permanently invisible outside the phase directory.
+ *
+ * The writer convention (unchanged by this fix, per the issue's stated
+ * out-of-scope) emits a plain bullet list, typically under a `## Deferred
+ * Items` heading (see the issue's own reproduction fixture), one entry per
+ * top-level `- ` line with optional indented continuation lines. There is no
+ * mandated heading text, so if no `## Deferred Items`-shaped level-2 heading
+ * is found, the WHOLE file is scanned as the entry list — fail-safe, so an
+ * agent writing a differently-headed (or headless) deferred-items.md still
+ * has its entries surfaced rather than silently skipped.
+ *
+ * Reuses the same per-line field/entry-splitting seams as `parseGapsItems`
+ * (`splitGapsEntries`, `extractGapEntryFields`, `rawGapEntryText`) — an entry
+ * is RESOLVED only when it carries an explicit `status: resolved` field
+ * (case-insensitive), mirroring the established Gaps convention so a human or
+ * follow-up agent can mark a deferred item done in place, keeping
+ * `deferred-items.md` the single source of truth (no duplicate
+ * `.planning/todos/pending/*.md` entry required). Every other entry —
+ * including one with no `status:` field at all — is UNRESOLVED and is
+ * surfaced.
+ */
+function parseDeferredItems(content: string): UatItem[] {
+  const deferredSection = collectSection(
+    content,
+    (h) => /^deferred\s+items$/i.test(h.text) && h.level === 2,
+    { levelBounded: true },
+  );
+  const sectionBody = deferredSection ? deferredSection.body : content;
+
+  const items: UatItem[] = [];
+
+  for (const entryLines of splitGapsEntries(sectionBody)) {
+    const fields = extractGapEntryFields(entryLines);
+    const rawStatus = fields.status;
+    if (rawStatus && rawStatus.toLowerCase() === 'resolved') continue;
+
+    const text = rawGapEntryText(entryLines);
+    if (!text) continue;
+
+    items.push({
+      name: text,
+      result: 'unresolved',
+      category: 'deferred',
+    });
+  }
+
+  return items;
+}
+
 /**
  * Split a `## Gaps` section body into per-entry line groups on TOP-LEVEL
  * `- ` bullet openers.
@@ -747,4 +827,5 @@ export = {
   cmdRenderCheckpoint,
   parseCurrentTest,
   buildCheckpoint,
+  parseDeferredItems,
 };
