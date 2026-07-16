@@ -200,9 +200,23 @@ function mapToolInput(args) {
  * @param {string} [opts.cwd]         working directory for the child
  * @returns {{ stdout: string, exitCode: number, timedOut: boolean }}
  */
+const warnedMissingHooks = new Set();
+
 function runHook(hookFile, payload, opts = {}) {
   const hookPath = path.join(HOOKS_DIR, hookFile);
   if (!fs.existsSync(hookPath)) {
+    // A missing guard script means the guard is silently NOT enforced — the
+    // exact failure mode of #2305 (plugin staged, hooks bundle not). Never
+    // break the tool call (the adapter's design contract), but never be
+    // silent about it either: warn loudly, once per hook file.
+    if (!warnedMissingHooks.has(hookFile)) {
+      warnedMissingHooks.add(hookFile);
+      console.error(
+        `[gsd-core] hook script missing: ${hookPath} — ${hookFile} is NOT ` +
+          "enforced. The GSD install may be incomplete; reinstall (or run " +
+          "/gsd-update) to restage the hooks/ bundle.",
+      );
+    }
     return { stdout: "", exitCode: 0, timedOut: false };
   }
   const timeout = opts.timeout ?? 8000;
