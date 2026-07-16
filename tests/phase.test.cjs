@@ -555,6 +555,24 @@ describe('phase-plan-index command', () => {
     assert.ok(output.warning === undefined, 'truly empty dir must not emit a warning');
   });
 
+  test('phase dir whose slug leads with a year still resolves and indexes plans (#2232)', () => {
+    // Roadmap phase name "2026 Photos & Performance" → dir
+    // "14-2026-photos-performance". extractPhaseToken over-collected the year
+    // into the token ("14-2026"), so phase-plan-index reported plans: [] while
+    // the plans existed on disk.
+    const phaseDir = path.join(tmpDir, '.planning', 'phases', '14-2026-photos-performance');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '14-01-PLAN.md'), '---\nwave: 1\n---\n');
+    fs.writeFileSync(path.join(phaseDir, '14-02-PLAN.md'), '---\nwave: 1\n---\n');
+
+    const result = runGsdTools('phase-plan-index 14', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.plans.length, 2, 'plans found despite year-leading slug');
+    assert.ok(output.warning === undefined, `canonical plans must not warn, got: ${output.warning}`);
+  });
+
   // #2893 — when the planner produces filenames that don't match the canonical
   // `{padded_phase}-{NN}-PLAN.md` contract, the executor used to silently see
   // plan_count: 0 with no signal. Now the response must include a `warning`

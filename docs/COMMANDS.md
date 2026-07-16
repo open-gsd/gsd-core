@@ -211,8 +211,9 @@ Research, plan, and verify a phase.
 | `--validate` | Run state validation before planning begins |
 | `--bounce` | Run external plan bounce validation after planning (uses `workflow.plan_bounce_script`) |
 | `--skip-bounce` | Skip plan bounce even if enabled in config |
-| `--mvp` | Vertical MVP mode — planner organizes tasks as feature slices (UI→API→DB) instead of horizontal layers. On Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` (Walking Skeleton). Can be persisted on a phase via `**Mode:** mvp` in ROADMAP.md, which applies `--mvp` automatically without the flag. |
-| `--tdd` | TDD mode — planner applies `type: tdd` to eligible behavior-adding tasks so each begins with a failing test. Composable with `--mvp`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts red-green. |
+| `--mvp` | MVP enrichment on top of the default tracer-first ordering — frames the phase goal as a user story and, on Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` (Walking Skeleton). Vertical slicing is now the default (see `--no-tracer`); `--mvp` no longer turns it on. Can be persisted on a phase via `**Mode:** mvp` in ROADMAP.md, which applies `--mvp` automatically without the flag. |
+| `--no-tracer` | Opt out of the default **tracer-first** decomposition and plan horizontal layers (the legacy default). By default every plan leads with one production-quality end-to-end `tracer` slice that the executor verifies before any expansion task. |
+| `--tdd` | TDD mode — planner applies `type: tdd` to eligible behavior-adding tasks so each begins with a failing test. Composable with `--mvp`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts red-green. The leading `tracer` task also starts red under `--tdd`. |
 | `--granularity <coarse\|standard\|fine>` | Override the planning granularity for this invocation, ignoring config. Valid values: `coarse`, `standard`, `fine`. Takes precedence over `granularities.planning`, top-level `granularity`, and `planning.granularity` config. |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists

@@ -264,6 +264,7 @@ Track: `outstanding_debt` — `summary.total_items` from the audit.
 |-------|------|-------|
 | {phase} | {filename} | {pending_count} pending, {skipped_count} skipped, {blocked_count} blocked |
 | {phase} | {filename} | human_needed — {count} items |
+| {phase} | {filename} | {unresolved_count} deferred items |
 
 Review: `/gsd:audit-uat ${GSD_WS}` — full cross-phase audit
 Resume testing: `/gsd:verify-work {phase} ${GSD_WS}` — retest specific phase
@@ -675,7 +676,7 @@ If `--forensic` IS present: after the standard report and routing suggestion hav
 
 ## Forensic Integrity Audit
 
-Running 6 deep checks against project state...
+Running 7 deep checks against project state...
 
 Run each check in order. For each check, emit ✓ (pass) or ⚠ (warning) with concrete evidence when a problem is found.
 
@@ -748,11 +749,24 @@ Emit:
 - ✓ `Working tree clean` — if no modified files outside `.planning/`
 - ⚠ `Uncommitted changes in source files` — list up to 10 file paths
 
+**Check 7 — Unresolved deferred items**
+
+Glob every phase directory's SCOPE BOUNDARY log (executor writes out-of-scope discoveries here per `agents/gsd-executor.md`):
+```bash
+ls .planning/phases/*/deferred-items.md 2>/dev/null || true
+```
+
+For each `deferred-items.md` found, read its entries (bullet list, one entry per top-level `- ` line, continuation lines indented beneath it). An entry is RESOLVED only if it carries an explicit `status: resolved` field (case-insensitive) on one of its lines; every other entry — including one with no `status:` field at all — is UNRESOLVED and must be surfaced (fail-safe: never silently drop a possibly-open item).
+
+Emit:
+- ✓ `No unresolved deferred items` — if no `deferred-items.md` files exist, or every entry in every file is `status: resolved`
+- ⚠ `Unresolved deferred items found` — list each file's phase directory and its unresolved entry text (max 5 per file, truncated at 80 chars)
+
 ---
 
-After all 6 checks, display the verdict:
+After all 7 checks, display the verdict:
 
-**If all 6 checks passed:**
+**If all 7 checks passed:**
 ```
 ### Verdict: CLEAN
 
@@ -773,6 +787,7 @@ Then for each failed check, add a concrete next action:
 - Check 4 (memory pending): `Review the flagged memory entries and resolve or clear them`
 - Check 5 (blocking todos): `Complete the operational steps in .planning/todos/pending/ before continuing`
 - Check 6 (uncommitted code): `Commit or stash the uncommitted changes before advancing`
+- Check 7 (unresolved deferred items): `Address each deferred item and mark it status: resolved in its deferred-items.md, or fold it into the roadmap`
 - Check 1 (STATE inconsistency): `Run /gsd:verify-work ${PHASE} ${GSD_WS} to reconcile state`
 </step>
 

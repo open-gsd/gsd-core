@@ -55,7 +55,7 @@ points.
 | `ai-integration` | feature | full | `>=1.6.0` | `plan:pre`, `verify:pre` | step, contribution, gate | first-party |
 | `assumption-delta` | feature | full | `>=1.6.0` | `plan:pre` | contribution | first-party |
 | `audit` | feature | full | `>=1.6.0` | — | — | first-party |
-| `claude-orchestration` | feature | full | `>=1.7.0` | `plan:post`, `execute:wave:post` | contribution | first-party |
+| `claude-orchestration` | feature | full | `>=1.7.0` | `plan:post`, `execute:wave:pre` | contribution | first-party |
 | `code-review` | feature | full | `>=1.6.0` | `execute:post` | step | first-party |
 | `drift` | feature | full | `>=1.6.0` | `plan:pre`, `execute:wave:post` | gate | first-party |
 | `external-job` | feature | full | `>=1.7.0` | `plan:post`, `execute:wave:post` | contribution | first-party |

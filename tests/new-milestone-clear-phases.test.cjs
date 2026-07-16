@@ -14,6 +14,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
+const { writeState } = require('./fixtures/index.cjs');
 
 describe('phases clear command', () => {
   let tmpDir;
@@ -243,6 +244,229 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
   });
 });
 
+// ─── #2288: --archive-version override ──────────────────────────────────────
+
+describe('phases clear: archive-version override (#2288)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('override wins over live milestone state (new-milestone switches STATE before phases.clear)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v2.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v2.0\n---\n\n# State\n');
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm --archive-version v1.0', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.cleared, 1, 'should report 1 directory cleared');
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'phase history should archive under the OLD (override) version'
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v2.0-phases')),
+      'phase history must NOT be misfiled under the live-read NEW version'
+    );
+  });
+
+  test('no override falls back to live milestone version (no behavior change)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v2.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v2.0\n---\n\n# State\n');
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v2.0-phases', '01-foundation')),
+      'without an override, the live-read milestone version should still be used'
+    );
+  });
+
+  test('override with unchanged version (boundary: old === new)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v3.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v3.0\n---\n\n# State\n');
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm --archive-version v3.0', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v3.0-phases', '01-foundation')),
+      'override equal to the live version should archive normally'
+    );
+  });
+
+  test('override omitted with no ROADMAP uses getMilestoneInfo default (no-override path unchanged)', () => {
+    // createTempProject writes no ROADMAP.md, so getMilestoneInfo does NOT throw —
+    // it returns its documented default version ('v1.0'). The dated `archived-*`
+    // label is only reached if no safe version label is resolvable at all, which
+    // this common case is not. This pins the no-override path to its pre-#2288
+    // behavior (getMilestoneInfo-derived label), not a dated fallback.
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- ensure no ROADMAP.md (SUT fallback path, not teardown)
+    fs.rmSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), { recursive: true, force: true });
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'no override + no ROADMAP archives under getMilestoneInfo default (v1.0), unchanged from pre-#2288'
+    );
+  });
+
+  test('rejects an --archive-version containing path traversal (no phase dir escapes .planning) (#2288 security)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // A traversal payload as the archive-version must be rejected outright — the
+    // value becomes a MOVED directory name, so accepting it would relocate phase
+    // history outside .planning/milestones/.
+    const result = runGsdTools(
+      'phases clear --confirm --archive-version ../../../gsd-poc-escape',
+      tmpDir,
+    );
+    assert.ok(!result.success, 'phases clear must FAIL on a path-traversal --archive-version');
+
+    // The phase directory must NOT have moved anywhere — it stays put.
+    assert.ok(
+      fs.existsSync(phase1),
+      'phase dir must remain in place when the archive-version is rejected',
+    );
+    // Nothing may have been created outside the project's milestones dir.
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '..', 'gsd-poc-escape-phases')),
+      'no directory may be created outside the project via traversal',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'no archive dir should be created at all when the override is rejected',
+    );
+  });
+
+  test('rejects backslash path separators in --archive-version (#2288 security)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // Starts with an alphanumeric so it clears the leading-char anchor — this
+    // proves the backslash (Windows path separator) itself is rejected, not just
+    // a leading-dot traversal.
+    const result = runGsdTools(
+      'phases clear --confirm --archive-version v1\\\\..\\\\evil',
+      tmpDir,
+    );
+    assert.ok(!result.success, 'phases clear must FAIL on a backslash-separator --archive-version');
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place');
+  });
+
+  test('errors when --archive-version is present but its value is missing (does not silently drop the override) (#2288)', () => {
+    // A truncated invocation must fail loud, not fall through to the live read
+    // (which would silently re-file under the new milestone — the #2288 bug).
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v2.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v2.0\n---\n\n# State\n');
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // --archive-version as the final token with no value following it.
+    const result = runGsdTools('phases clear --confirm --archive-version', tmpDir);
+    assert.ok(!result.success, 'a value-less --archive-version must be an error, not a silent fallback');
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place when the flag is rejected');
+  });
+});
+
+// ─── #2288: sibling sink — `milestone complete <version>` path safety ───────
+
+describe('milestone complete: version path-traversal guard (#2288 security)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('rejects a milestone-complete version containing path traversal (no write/move escapes .planning)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // `version` is interpolated into `${version}-ROADMAP.md`, `${version}-phases`,
+    // etc. as a MOVED/written path component — a traversal value must be rejected
+    // before any filesystem mutation.
+    const result = runGsdTools('milestone complete ../../../gsd-ms-escape', tmpDir);
+    assert.ok(!result.success, 'milestone complete must FAIL on a path-traversal version');
+
+    // No artifact created outside the project via traversal.
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '..', 'gsd-ms-escape-phases')),
+      'no directory may be created outside the project via a traversal version',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '..', 'gsd-ms-escape-ROADMAP.md')),
+      'no file may be written outside the project via a traversal version',
+    );
+    // Phase dir untouched.
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place when the version is rejected');
+  });
+
+  test('rejects a backslash-separator milestone-complete version (#2288 security)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('milestone complete v1\\\\..\\\\evil', tmpDir);
+    assert.ok(!result.success, 'milestone complete must FAIL on a backslash-separator version');
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place');
+  });
+});
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-2433-todo-phase-linking.test.cjs — consolidation epic #1969 (B4 #1973)

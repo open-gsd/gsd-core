@@ -180,15 +180,33 @@ process.stdin.on('end', () => {
           'starting new complex work.';
     }
 
-    const output = {
-      hookSpecificOutput: {
-        hookEventName: (data.hook_event_name && data.hook_event_name.trim())
-          || (process.env.GEMINI_API_KEY ? "AfterTool" : "PostToolUse"),
-        additionalContext: message
-      }
-    };
+    // #2289: the hookSpecificOutput.additionalContext envelope is only a valid
+    // output shape for the context-injection events (PostToolUse, and AfterTool
+    // for the Gemini dialect). This hook is also wired to other lifecycle events
+    // on some hosts — Codex registers it under Stop / SubagentStart /
+    // SubagentStop / PreCompact (#772) — and those reject the envelope
+    // ("hook returned invalid stop hook JSON output"). Use a POSITIVE allowlist:
+    // emit only for injection-capable events; every other event, and a
+    // missing/unrecognized name, exits 0 with no stdout. A Stop-only blacklist is
+    // not enough — a missing name would still fall through to the injection path.
+    // All side effects above (debounce counter, one-time critical-session
+    // recording) have already run regardless of whether output is emitted.
+    const eventName = (data.hook_event_name && data.hook_event_name.trim()) || "";
+    // Preserve the pre-#2289 Gemini fallback: a missing event name under a
+    // Gemini-dialect runtime (GEMINI_API_KEY set) still means AfterTool, so its
+    // advisory output is unchanged. A missing name on any other host is silent.
+    const geminiFallback = eventName === "" && !!process.env.GEMINI_API_KEY;
+    const injectionSupported = eventName === "PostToolUse" || eventName === "AfterTool" || geminiFallback;
 
-    process.stdout.write(JSON.stringify(output));
+    if (injectionSupported) {
+      const output = {
+        hookSpecificOutput: {
+          hookEventName: eventName || "AfterTool",
+          additionalContext: message
+        }
+      };
+      process.stdout.write(JSON.stringify(output));
+    }
   } catch (e) {
     // Silent fail -- never block tool execution
     process.exit(0);

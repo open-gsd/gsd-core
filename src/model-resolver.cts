@@ -573,6 +573,7 @@ function resolveEffortForTier(cwd: string, agentType: string, attempt?: number):
 
 export = {
   resolveTierEntry,
+  CLAUDE_AGENT_ALIASES,
   resolveModelPolicy,
   resolveModelInternal,
   _resetModelPolicyWarningCacheForTests,

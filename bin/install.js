@@ -168,14 +168,27 @@ const DEFAULT_RUNTIME = 'claude';
 const GSD_CLAUDE_ALLOW_PERMISSIONS = Object.freeze([
   'Bash(npx gsd-core *)',
   'Read(.planning/*)',
-  'Write(.planning/*)',
+  'Edit(.planning/*)',
   'Read(STATE.md)',
-  'Write(STATE.md)',
+  'Edit(STATE.md)',
 ]);
 const GSD_CLAUDE_DENY_PERMISSIONS = Object.freeze([
   'Read(.env)',
   'Read(.env.*)',
   'Read(.secrets)',
+]);
+// #2278 — Stale allow-rule forms from before the fix. Claude Code has no
+// standalone `Write` permission gate: file-editing tools (Write/Edit/
+// NotebookEdit) are gated collectively via `Edit(pattern)`. The original
+// `Write(.planning/*)` / `Write(STATE.md)` entries were therefore silently
+// unmatched (never granted anything) and Claude Code additionally surfaces a
+// session-start warning about unmatched permission rules. This list lets
+// mergeClaudePermissions and uninstall cleanup retire those stale entries on
+// existing installs while the current GSD_CLAUDE_ALLOW_PERMISSIONS above
+// carries the working `Edit(...)` forms.
+const GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS = Object.freeze([
+  'Write(.planning/*)',
+  'Write(STATE.md)',
 ]);
 
 /**
@@ -184,6 +197,12 @@ const GSD_CLAUDE_DENY_PERMISSIONS = Object.freeze([
  * Additive and idempotent: existing allow/deny entries are preserved; GSD
  * entries are appended only if not already present. No other permission sub-keys
  * (ask, disableBypassPermissionsMode, etc.) are touched.
+ *
+ * Migration (#2278): before adding the current GSD_CLAUDE_ALLOW_PERMISSIONS,
+ * any stale GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS entry (e.g. the unmatched
+ * `Write(...)` forms from before the fix) is removed from permissions.allow,
+ * so existing installs end up with the working `Edit(...)` forms instead of
+ * both the dead legacy entry and its replacement sitting side by side.
  *
  * Defensive: if settings is not a plain object, returns immediately without
  * throwing. If permissions.allow / permissions.deny exist but are not arrays
@@ -204,6 +223,10 @@ function mergeClaudePermissions(settings) {
   if (!Array.isArray(settings.permissions.deny)) {
     settings.permissions.deny = [];
   }
+
+  settings.permissions.allow = settings.permissions.allow.filter(
+    (e) => !GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS.includes(e)
+  );
 
   for (const entry of GSD_CLAUDE_ALLOW_PERMISSIONS) {
     if (!settings.permissions.allow.includes(entry)) {
@@ -352,6 +375,7 @@ const {
 } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
 const {
   resolveTierEntry: gsdResolveTierEntry,
+  CLAUDE_AGENT_ALIASES,
 } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2071 — install-time effort resolution (readGsdEffectiveEffortConfig /
@@ -439,6 +463,25 @@ function _resolveHostBehaviors(runtime, registry) {
  */
 function _hostBehaviors(runtime) {
   return _resolveHostBehaviors(runtime, _capabilityRegistry);
+}
+
+/**
+ * Read a runtime's documentation-sourced `hostIntegration.dispatch` axes
+ * (ADR-1239 Phase A — `capabilities/<runtime>/capability.json`
+ * `runtime.hostIntegration.dispatch`): `{namedDispatch, nested, maxDepth,
+ * background, backgroundDispatch, subagentToolkit}`. These are validated,
+ * closed-vocabulary FACTS about what the runtime's real dispatch primitive
+ * supports (never inferred) — see `docs/reference/host-integration-capability-
+ * matrix.md` for citations. Unlike `_hostBehaviors` (install *policy*), this is
+ * the negotiated *capability* surface; #2284 is its first content-projection
+ * consumer (previously read only by `shouldFlattenDispatch`). Returns `{}` if
+ * the registry or the runtime's descriptor is unavailable, so callers must
+ * treat every axis as absent/unknown (fail-closed) rather than assume a value.
+ */
+function _hostIntegrationDispatch(runtime) {
+  const cap = _capabilityRegistry && _capabilityRegistry.runtimes && _capabilityRegistry.runtimes[runtime];
+  const dispatch = cap && cap.runtime && cap.runtime.hostIntegration && cap.runtime.hostIntegration.dispatch;
+  return dispatch || {};
 }
 
 /**
@@ -2371,6 +2414,56 @@ function extractFrontmatterField(frontmatter, fieldName) {
   return match[1].trim().replace(/^['"]|['"]$/g, '');
 }
 
+// #2284 finding (b): the `<runtime_compatibility>` block appearing in
+// gsd-core/workflows/{plan-phase,execute-phase}.md is a runtime-COMPARISON
+// table ("**Claude Code:** Uses `Agent(...)`" / "a backgrounded Claude Code
+// agent" / "top-level Claude Code") — every "Claude Code" mention inside it
+// is a COMPARED-RUNTIME LABEL, not a host self-reference. The brand swap
+// below (`Claude Code` → the installing runtime's own display name) is
+// meant only for host self-references; applying it inside this block
+// mislabels the comparison (e.g. Windsurf installs would read "**Windsurf:**
+// Uses `Agent(...)`" describing what is actually Claude Code's behavior).
+// This is cross-cutting across every runtime that brand-swaps workflow
+// content (cursor/windsurf/trae/cline/codebuddy hardcoded; qwen/hermes
+// descriptor-driven via hostBehaviors.brandingRewrites) — confirmed to
+// reproduce on unmodified Windsurf, not Hermes-specific.
+const RUNTIME_COMPATIBILITY_BLOCK_RE = /<runtime_compatibility>[\s\S]*?<\/runtime_compatibility>/g;
+
+/**
+ * Rewrite bare "Claude Code" self-references in workflow content to
+ * `brandName`, EXCEPT inside `<runtime_compatibility>...</runtime_compatibility>`
+ * blocks, which are left byte-for-byte verbatim. Every other content
+ * transform in a runtime's `.md` converter (tool-name renames, path
+ * rewrites, etc.) is unaffected — only this literal brand-name swap is
+ * protected-region-aware, since only it risks mislabeling a
+ * runtime-comparison table.
+ *
+ * Implementation: SPLIT `content` on the protected-block regex, brand-swap
+ * only the GAP text between (and around) matches, then rejoin gap+block
+ * alternately. No placeholder/sentinel token of any kind is substituted in
+ * — a prior version used a sentinel-token mask/restore, which is exactly the
+ * kind of invisible landmine this rewrite eliminates (a sentinel string, no
+ * matter how obscure, is a theoretical collision risk with real content and
+ * is easy to silently reintroduce in a future edit without it showing in a
+ * diff). Behavior-identical to the removed sentinel-token version — verified
+ * via `npm run gen:golden` producing zero further diff.
+ */
+function applyClaudeCodeBrandSwap(content, brandName) {
+  if (!brandName) return content;
+  let result = '';
+  let lastIndex = 0;
+  RUNTIME_COMPATIBILITY_BLOCK_RE.lastIndex = 0; // reset shared global-regex state before each use
+  let m;
+  while ((m = RUNTIME_COMPATIBILITY_BLOCK_RE.exec(content))) {
+    const gap = content.slice(lastIndex, m.index);
+    result += gap.replace(/\bClaude Code\b/g, brandName);
+    result += m[0]; // protected block, verbatim — never brand-swapped
+    lastIndex = m.index + m[0].length;
+  }
+  result += content.slice(lastIndex).replace(/\bClaude Code\b/g, brandName);
+  return result;
+}
+
 // Tool name mapping from Claude Code to Cursor CLI
 const claudeToCursorTools = {
   Bash: 'Shell',
@@ -2403,8 +2496,9 @@ function convertClaudeToCursorMarkdown(content) {
   // Remove Claude Code-specific bug workarounds before brand replacement
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  // Replace "Claude Code" brand references with "Cursor"
-  converted = converted.replace(/\bClaude Code\b/g, 'Cursor');
+  // Replace "Claude Code" brand references with "Cursor" — #2284(b): skips
+  // <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'Cursor');
   return converted;
 }
 
@@ -2536,8 +2630,9 @@ function convertClaudeToWindsurfMarkdown(content) {
   // Remove Claude Code-specific bug workarounds before brand replacement
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  // Replace "Claude Code" brand references with "Windsurf"
-  converted = converted.replace(/\bClaude Code\b/g, 'Windsurf');
+  // Replace "Claude Code" brand references with "Windsurf" — #2284(b): skips
+  // <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'Windsurf');
   return converted;
 }
 
@@ -2671,7 +2766,8 @@ function convertClaudeToTraeMarkdown(content) {
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'TRAE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  converted = converted.replace(/\bClaude Code\b/g, 'Trae');
+  // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'Trae');
   return converted;
 }
 
@@ -2743,7 +2839,8 @@ function convertClaudeToCodebuddyMarkdown(content) {
   converted = converted.replace(/\.claude\//g, '.codebuddy/');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  converted = converted.replace(/\bClaude Code\b/g, 'CodeBuddy');
+  // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'CodeBuddy');
   return converted;
 }
 
@@ -2838,7 +2935,8 @@ function convertClaudeToCliineMarkdown(content) {
   converted = converted.replace(/\bCLAUDE_CONFIG_DIR\b/g, 'CLINE_CONFIG_DIR');
   converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
   converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
-  converted = converted.replace(/\bClaude Code\b/g, 'Cline');
+  // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'Cline');
   return converted;
 }
 
@@ -2890,6 +2988,825 @@ function convertClaudeCommandToClineSkill(content, skillName, runtime = null, cm
 }
 
 // ── End Cline converters ─────────────────────────────────────────────────────
+
+// ── Hermes converters (#2284) ────────────────────────────────────────────────
+//
+// Hermes exposes `delegate_task` for subagent dispatch, not the Claude-shaped
+// `Agent(...)` tool the host-neutral `gsd-core/workflows/*.md` corpus assumes.
+// Prior to this fix, the hermes `.md` hook (RUNTIME_CONTENT_DISPATCH.hermes)
+// only brand-swapped "Claude Code" → "Hermes Agent" via
+// hostBehaviors.brandingRewrites, leaving the false "Agent tool IS available"
+// assertion and literal `Agent(...)` call syntax installed verbatim.
+//
+// `projectNamedDispatchToStructuralDelegate` is GENERIC projection machinery:
+// it branches ENTIRELY on the runtime's documentation-sourced
+// `hostIntegration.dispatch` facts (read via `_hostIntegrationDispatch`,
+// capabilities/<runtime>/capability.json — never hardcoded here) and a
+// `toolConfig` that supplies only the target primitive's own vocabulary (its
+// call name + native parameter names — not a capability claim; there is no
+// `dispatch` axis for "the call's own parameter names", so that vocabulary is
+// necessarily supplied by the caller, exactly as every other runtime's
+// converter supplies its own tool-name vocabulary, e.g. Trae's `Shell(`).
+//
+// Hermes-specific facts consumed (capabilities/hermes/capability.json,
+// docs/reference/host-integration-capability-matrix.md:244-249 — UNCHANGED by
+// this fix):
+//   - dispatch.namedDispatch: false — Hermes's delegate_task has no named-
+//     agent lookup ("Subagents are identified only by role ('leaf' or
+//     'orchestrator')"). GSD resolves the referenced gsd-* role itself
+//     (fail-closed against the staged agents/ dir) and embeds the loaded
+//     PROMPT CONTENT into the delegate_task payload.
+//   - dispatch.background: true — `delegate_task(background=true)` "returns a
+//     handle immediately"; Claude's `run_in_background=` maps onto Hermes's
+//     own `background=` parameter, preserving the async-handle / no-busy-poll
+//     / resume-on-completion wording already used throughout these workflows.
+//   - dispatch.subagentToolkit: "read-only" / dispatch.maxDepth: 1 — dispatched
+//     roles never themselves further delegate, so no nested-delegation
+//     instruction is ever emitted toward them.
+
+/**
+ * Resolve the set of gsd-* role-prompt stems actually shipped in this
+ * package's `agents/` directory (the FULL source set, not profile-staged —
+ * `--minimal`/`--profile=core` intentionally excludes many agents from a
+ * given install without those workflows being unreachable, so validating
+ * against the profile-filtered subset would fail every restricted-profile
+ * Hermes install; validating against the shipped source catches genuine
+ * authoring bugs — a stale/typo'd role reference — without that regression).
+ * Returns `null` if the directory cannot be resolved (fail-closed: callers
+ * must refuse to install rather than skip validation).
+ */
+function _resolveAvailableGsdRoles() {
+  try {
+    const agentsDir = path.join(__dirname, '..', 'agents');
+    return new Set(
+      fs.readdirSync(agentsDir, { withFileTypes: true })
+        .filter((e) => e.isFile() && e.name.endsWith('.md'))
+        .map((e) => e.name.slice(0, -3)),
+    );
+  } catch (_e) {
+    return null;
+  }
+}
+
+/**
+ * Fail-closed validation (#2284 AC: "Missing role prompts fail closed" /
+ * "never emit a workflow referencing an unresolvable role"). A single literal
+ * `gsd-*` role value must resolve to a real `agents/<role>.md` file — throws
+ * an explicit Error otherwise, aborting the install (the standard
+ * `copyWithPathReplacement` failure path already used for its own
+ * confinement-violation throws). Called per extracted role value from EVERY
+ * call-syntax form (`subagent_type=`, `subagent_type:`, post-rename
+ * `gsd_role=`) — the check operates on the resolved value, independent of
+ * which source syntax produced it. Non-literal / dynamic expressions (e.g.
+ * `research_hook.ref.agent`) are not quoted strings and are never passed
+ * here; they carry their own runtime resolution + fail-closed instruction via
+ * the injected per-call resolution line.
+ */
+function _assertRoleResolvable(role, availableRoles, runtime, sourceDescription) {
+  if (!availableRoles) {
+    throw new Error(
+      `${runtime} workflow install: could not resolve the shipped agents/ directory to validate named-role ` +
+      'dispatch references — refusing to install (fail-closed, #2284)',
+    );
+  }
+  if (role.startsWith('gsd-') && !availableRoles.has(role)) {
+    throw new Error(
+      `${runtime} workflow install: dispatch references role "${role}" via ${sourceDescription}, but no ` +
+      `matching agents/${role}.md prompt file is shipped — refusing to install a workflow that dispatches ` +
+      'an unresolvable role (fail-closed, #2284)',
+    );
+  }
+}
+
+/**
+ * Segment `text` into 'code' and 'string' runs (recognizes `"..."`, `'...'`,
+ * and Python-style `"""..."""`, with backslash-escaping). Required because
+ * the real corpus embeds unescaped parens inside quoted prompt bodies (e.g.
+ * discuss-phase-assumptions.md's `(e.g., "Technical Approach")` inside a
+ * `"""`-quoted prompt) — naive paren/keyword scanning across raw text would
+ * desync on these. Downstream call-span detection and header-token
+ * extraction operate on a same-length MASK derived from this segmentation
+ * (see `maskStringLiterals`) so string content can never be mistaken for
+ * call structure.
+ */
+function _segmentCodeAndStrings(text) {
+  const segments = [];
+  let i = 0;
+  let segStart = 0;
+  const flushCode = (end) => { if (end > segStart) segments.push({ type: 'code', start: segStart, end }); };
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      flushCode(i);
+      const strStart = i;
+      i += 3;
+      while (i < text.length && !(text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"')) {
+        i += text[i] === '\\' ? 2 : 1;
+      }
+      i = Math.min(i + 3, text.length);
+      segments.push({ type: 'string', start: strStart, end: i, quoteLen: 3 });
+      segStart = i;
+      continue;
+    }
+    // Only `"` is recognized as a single-char string delimiter — NOT `'`.
+    // The corpus is markdown prose, not code: apostrophes are routine English
+    // contractions/possessives ("install's", "don't") and treating them as
+    // string delimiters would swallow everything up to the next unrelated
+    // apostrophe as "inside a string" (verified against the real corpus —
+    // this was a real, disqualifying bug during development of this fix).
+    // Every real call-argument value in the corpus uses `"`/`"""` only.
+    if (ch === '"') {
+      flushCode(i);
+      const strStart = i;
+      i += 1;
+      while (i < text.length && text[i] !== '"') {
+        i += text[i] === '\\' ? 2 : 1;
+      }
+      i = Math.min(i + 1, text.length);
+      segments.push({ type: 'string', start: strStart, end: i, quoteLen: 1 });
+      segStart = i;
+      continue;
+    }
+    i += 1;
+  }
+  flushCode(text.length);
+  return segments;
+}
+
+/**
+ * Same-length mask of `text` with the INTERIOR of every string literal
+ * replaced by a space (newlines preserved, so line-based regexes still work).
+ * The delimiting quote character(s) themselves (`"`, `'`, `"""`) are kept
+ * verbatim so a value-extraction regex like `key\s*[=:]\s*"[^"]*"` still
+ * matches correctly against the mask — only the STRING CONTENT is blanked,
+ * never the quote structure. Positions in the mask line up 1:1 with `text`,
+ * so match indices/offsets found against the mask are valid offsets into the
+ * original.
+ */
+function maskStringLiterals(text) {
+  let mask = '';
+  for (const seg of _segmentCodeAndStrings(text)) {
+    const slice = text.slice(seg.start, seg.end);
+    if (seg.type === 'code') { mask += slice; continue; }
+    const q = seg.quoteLen;
+    if (slice.length <= q) { mask += slice; continue; } // truncated/unterminated — keep verbatim
+    const closeLen = Math.min(q, slice.length - q);
+    const open = slice.slice(0, q);
+    const close = slice.slice(slice.length - closeLen);
+    const interiorLen = slice.length - q - closeLen;
+    const interior = interiorLen > 0 ? slice.slice(q, q + interiorLen) : '';
+    mask += open + interior.replace(/[^\n]/g, ' ') + close;
+  }
+  return mask;
+}
+
+/**
+ * Locate every `<headWord>(` / `<headWord>({` call span in `text`.
+ *
+ * #2284 round-2 CRITICAL fix: this MUST NOT rely on whole-document quote
+ * parity. A markdown workflow file mixes prose, ```bash code fences (full of
+ * their own double-quoted strings), and shell quoting — there is no single
+ * document-wide quote grammar, so a `"`-heavy bash `echo` upstream of a real
+ * call (e.g. code-review.md's fenced `echo "..."` block before its
+ * `Agent(subagent_type="gsd-code-reviewer", ...)` call) can desync a
+ * CUMULATIVE quote-state scan, making the scanner believe the real call's
+ * `Agent(` sits "inside a string" and silently skipping it entirely — the
+ * call then survives completely unnormalized. (Reproduced and root-caused
+ * against the real corpus.)
+ *
+ * Fixed shape: find each `<headWord>(` occurrence via a PLAIN literal-text
+ * search (`indexOf`, immune to any prior document content), then run a
+ * balanced paren-matching scan whose quote-tracking state STARTS FRESH AT
+ * THE HEAD — local to this one call, never inherited from (or able to be
+ * corrupted by) anything earlier in the document. Handles all three real
+ * corpus shapes: multi-line one-key-per-line, single-line object-literal
+ * (`Agent({ ... })`), and single-line compact
+ * (`Agent(subagent_type="x", model="y", prompt="...")`) — including prompt
+ * bodies containing their own unescaped `()`/`{}` (skipped via the SAME
+ * span-local quote tracking, e.g. discuss-phase-assumptions.md's
+ * `"""`-quoted parenthetical prose).
+ *
+ * Returns `[{start, end, hasBraceWrapper}]` — `start`/`end` bound the FULL
+ * call INCLUDING the head word and the closing `)`/`})`.
+ */
+function findDispatchCallSpans(text, headWord) {
+  const spans = [];
+  const headToken = `${headWord}(`;
+  let searchFrom = 0;
+  for (;;) {
+    const start = text.indexOf(headToken, searchFrom);
+    if (start === -1) break;
+    const prevChar = start > 0 ? text[start - 1] : '';
+    if (/[A-Za-z0-9_]/.test(prevChar)) { searchFrom = start + 1; continue; } // word-boundary guard
+
+    let i = start + headToken.length; // just past the '('
+    let j = i;
+    while (j < text.length && /\s/.test(text[j])) j++;
+    const hasBraceWrapper = text[j] === '{';
+
+    // LOCAL scan — quote/paren state is fresh here, never inherited from
+    // anything before `start` in the document.
+    let parenDepth = 1;
+    let inString = null; // null | '"' | 'triple'
+    let end = -1;
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (ch === '\\') { i++; continue; }
+        if (inString === 'triple') {
+          if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') { inString = null; i += 2; }
+          continue;
+        }
+        if (ch === inString) inString = null;
+        continue;
+      }
+      if (ch === '"' && text[i + 1] === '"' && text[i + 2] === '"') { inString = 'triple'; i += 2; continue; }
+      if (ch === '"') { inString = '"'; continue; }
+      if (ch === '(') { parenDepth++; continue; }
+      if (ch === ')') {
+        parenDepth--;
+        if (parenDepth === 0) { end = i + 1; break; }
+        continue;
+      }
+    }
+    if (end === -1) { searchFrom = start + 1; continue; } // unterminated — skip past, keep scanning
+    spans.push({ start, end, hasBraceWrapper });
+    searchFrom = end;
+  }
+  return spans;
+}
+
+/**
+ * Remove a call argument's `[matchStart, matchEnd)` token from `spanText`,
+ * consuming its surrounding comma/whitespace so no dangling `, ,` or trailing
+ * comment survives. When the argument owns its whole line, the whole line
+ * (including a trailing inline `# comment`) is removed; `consumeLeadingComments`
+ * additionally removes contiguous comment-only lines immediately ABOVE it —
+ * #2284 Finding 5: explanatory prose describing a now-removed conditional
+ * (e.g. execute-phase.md's "# Only include model= when ...") must not survive
+ * describing a branch that no longer exists. Inline (single-line-compact /
+ * object-literal) occurrences instead eat one adjacent comma.
+ */
+function _stripCallArgument(spanText, matchStart, matchEnd, { consumeLeadingComments = false } = {}) {
+  let end = matchEnd;
+  const afterRe = /^[ \t]*,?[ \t]*(#[^\n]*)?\r?\n?/;
+  const afterMatch = afterRe.exec(spanText.slice(end));
+  const hadTrailingComma = !!(afterMatch && /,/.test(afterMatch[0]));
+  if (afterMatch) end += afterMatch[0].length;
+
+  let start = matchStart;
+  const lineStart = spanText.lastIndexOf('\n', start - 1) + 1;
+  const ownLine = /^[ \t]*$/.test(spanText.slice(lineStart, start));
+  if (ownLine) {
+    start = lineStart;
+    if (consumeLeadingComments) {
+      for (;;) {
+        const prevLineStart = start > 0 ? spanText.lastIndexOf('\n', start - 2) + 1 : 0;
+        const prevLine = spanText.slice(prevLineStart, start);
+        if (/^[ \t]*#[^\n]*\r?\n$/.test(prevLine)) {
+          start = prevLineStart;
+          if (prevLineStart === 0) break;
+        } else break;
+      }
+    }
+  } else if (!hadTrailingComma) {
+    // Inline form and this was the LAST arg (no trailing comma) — eat a
+    // leading comma so the previous arg doesn't dangle one.
+    const before = spanText.slice(0, start);
+    const cm = /,[ \t]*$/.exec(before);
+    if (cm) start -= cm[0].length;
+  }
+  return spanText.slice(0, start) + spanText.slice(end);
+}
+
+/**
+ * Replace a named-role argument token's `[matchStart, matchEnd)` span
+ * (`subagent_type=`/`subagent_type:` + its value) with the projected
+ * `gsd_role=` / role-prompt-resolution / structural-role argument group.
+ * Preserves the pretty multi-line one-arg-per-line style when the original
+ * token owned its own line; falls back to an inline, comma-joined group for
+ * the single-line-compact and object-literal forms.
+ */
+function _projectRoleArgument(spanText, matchStart, matchEnd, roleValueExpr, toolConfig, canOrchestrate) {
+  const { namedRoleParam, promptContentParam, structuralRoleParam, leafRoleValue } = toolConfig;
+  const lineStart = spanText.lastIndexOf('\n', matchStart - 1) + 1;
+  const startsOwnLine = /^[ \t]*$/.test(spanText.slice(lineStart, matchStart));
+
+  // Consume an immediately-following separator comma (+ same-line whitespace/
+  // newline) into `end` — never leave it dangling AFTER an injected trailing
+  // `# comment` (a bare `,` after `#...` would sit on the comment's own line,
+  // outside any real argument list).
+  let end = matchEnd;
+  const afterRe = /^[ \t]*,[ \t]*\r?\n?/;
+  const afterMatch = afterRe.exec(spanText.slice(end));
+  const hadTrailingComma = !!afterMatch;
+  if (afterMatch) end += afterMatch[0].length;
+  const ownLine = startsOwnLine && hadTrailingComma && /\n$/.test(afterMatch[0]);
+
+  const promptContentPhrase =
+    `${promptContentParam}=<resolve ${roleValueExpr} against the active install's gsd-* role prompts and load ` +
+    'its contents; FAIL CLOSED with an explicit error if unresolved — never execute the role inline>';
+
+  let replacement;
+  if (ownLine) {
+    const indent = spanText.slice(lineStart, matchStart);
+    const depthNote = canOrchestrate ? '' : '  # nested delegation is unavailable at this dispatch depth/toolkit';
+    replacement =
+      `${namedRoleParam}=${roleValueExpr},\n` +
+      `${indent}${promptContentPhrase},\n` +
+      `${indent}${structuralRoleParam}="${leafRoleValue}",${depthNote}\n`;
+  } else {
+    // Inline forms never carry a trailing `#` comment mid-argument-list (it
+    // would silently "comment out" the remainder of the call), so the
+    // depth/toolkit caveat is only ever emitted in the pretty own-line form.
+    // Re-emit exactly the separator that originally followed this argument
+    // (a comma if more args follow; nothing if it was the last one).
+    replacement =
+      `${namedRoleParam}=${roleValueExpr}, ${promptContentPhrase}, ${structuralRoleParam}="${leafRoleValue}"` +
+      (hadTrailingComma ? ', ' : '');
+  }
+  return spanText.slice(0, matchStart) + replacement + spanText.slice(end);
+}
+
+// Matches a `subagent_type`/`model` argument's key+delimiter+value across all
+// three corpus forms: quoted-string values ("gsd-planner", "{model}") and
+// bare dynamic-expression values (ref.agent, research_hook.ref.agent,
+// executor_model). The captured group is always the value (a suffix of the
+// whole match), so its start offset is `match.index + match[0].length -
+// match[1].length` — avoids needing the regex `d` (indices) flag.
+function _callArgValueRe(key) {
+  return new RegExp(`\\b${key}\\s*[=:]\\s*("(?:[^"\\\\]|\\\\.)*"|[A-Za-z_][\\w.]*)`);
+}
+
+/**
+ * Returns the literal role name from a captured role-argument value EXPR
+ * (e.g. `"gsd-planner"`) — or `null` when it is not a genuine static
+ * literal: a bare dynamic expression (`ref.agent`), OR a quoted value that
+ * still contains `{...}` template interpolation (the corpus's own
+ * placeholder convention, e.g. `model="{researcher_model}"` — and,
+ * critically, `subagent_type: "gsd-{agent}"` in
+ * gsd-core/references/universal-anti-patterns.md, a DOCUMENTATION template
+ * illustrating the naming pattern, never a concrete role to resolve).
+ * Fail-closed validation only ever runs on a genuine static literal; a
+ * template/dynamic value still gets the full role-prompt-resolution
+ * projection treatment (the resolve+fail-closed instruction applies equally
+ * once a template is substituted at runtime) — only the STATIC CHECK is
+ * skipped, never the projection itself.
+ */
+function _literalRoleValue(roleValueExpr) {
+  const m = /^"([^"]*)"$/.exec(roleValueExpr);
+  if (!m) return null;
+  if (/[{}]/.test(m[1])) return null;
+  return m[1];
+}
+
+/**
+ * `maskStringLiterals` PLUS `#`-to-end-of-line comment blanking (comments are
+ * never string literals, so they survive string-masking as literal `#...`
+ * text). Header-token searches (subagent_type/model/run_in_background) must
+ * use THIS mask, not the string-only one — verified necessary against the
+ * real corpus: execute-phase.md's explanatory comment "# Only include
+ * model= when executor_model is..." literally contains the substring
+ * "model= when", which a comment-blind `model` regex mismatches as a real
+ * `model=when` argument, corrupting the comment AND missing the real
+ * `model="{executor_model}"` line beneath it. Scoped to call-span text only
+ * (never the whole document), so markdown `#`/`##` headings elsewhere are
+ * unaffected.
+ */
+function _maskStringsAndComments(text) {
+  return maskStringLiterals(text).replace(/#[^\n]*/g, (m) => ' '.repeat(m.length));
+}
+
+/**
+ * Normalize ONE `Agent(...)`/`Agent({...})` call span (already isolated by
+ * `findDispatchCallSpans`) onto the target's real dispatch primitive. Every
+ * behavioral branch reads `dispatch` (the runtime's sourced
+ * `hostIntegration.dispatch` facts) — none is hardcoded. Handles all three
+ * corpus call-argument shapes uniformly via string-aware token location
+ * (`maskStringLiterals` recomputed after each structural edit, since prior
+ * edits shift offsets).
+ */
+function _normalizeDispatchCallSpan(spanText, hasBraceWrapper, dispatch, toolConfig) {
+  const namedDispatch = dispatch.namedDispatch === true;
+  const backgroundCapable = dispatch.background === true;
+  const canOrchestrate = dispatch.subagentToolkit === 'full'
+    && (dispatch.maxDepth === -1 || (typeof dispatch.maxDepth === 'number' && dispatch.maxDepth > 1));
+  const { toolName, backgroundParam, supportsPerCallModel, availableRoles, runtime } = toolConfig;
+
+  let text = spanText;
+
+  // 1. Named-role argument (subagent_type= / subagent_type:) — only when the
+  //    target has no native named-agent lookup (dispatch.namedDispatch).
+  //    Fail-closed validation runs on the extracted value REGARDLESS of
+  //    which source syntax produced it (#2284 requirement 2).
+  if (!namedDispatch) {
+    const roleRe = _callArgValueRe('subagent_type');
+    const rm = roleRe.exec(_maskStringsAndComments(text));
+    if (rm) {
+      // Read the VALUE from the original (unmasked) text at the matched
+      // offset — `rm[1]` was captured against the mask, whose string
+      // INTERIOR is blanked, so it must never be used as the real value.
+      const roleValueExpr = text.slice(rm.index + rm[0].length - rm[1].length, rm.index + rm[0].length);
+      const literalRole = _literalRoleValue(roleValueExpr);
+      if (literalRole !== null) {
+        _assertRoleResolvable(literalRole, availableRoles, runtime, 'subagent_type');
+      } else if (!availableRoles) {
+        // No literal value to check, but a null availableRoles still means
+        // the shipped agents/ dir couldn't be resolved at all — fail closed
+        // unconditionally rather than silently install an unverifiable call.
+        _assertRoleResolvable('', availableRoles, runtime, 'subagent_type');
+      }
+      text = _projectRoleArgument(text, rm.index, rm.index + rm[0].length, roleValueExpr, toolConfig, canOrchestrate);
+    }
+  }
+
+  // 2. Per-call model argument (model= / model:) — stripped entirely when the
+  //    target has no per-call model-selection parameter (there is no
+  //    `dispatch` axis for this — it is inherent tool vocabulary, like the
+  //    parameter names themselves). Also removes now-dead explanatory
+  //    comment lines directly above a `model=` line that owns its own line
+  //    (#2284 Finding 5).
+  if (!supportsPerCallModel) {
+    const modelRe = _callArgValueRe('model');
+    const mm = modelRe.exec(_maskStringsAndComments(text));
+    if (mm) {
+      text = _stripCallArgument(text, mm.index, mm.index + mm[0].length, { consumeLeadingComments: true });
+    }
+  }
+
+  // 3. Background-dispatch flag (run_in_background= / run_in_background:) —
+  //    maps onto the target's own background parameter ONLY when documented
+  //    to support it; otherwise stripped rather than forwarding a parameter
+  //    the primitive doesn't accept.
+  {
+    const bgRe = /\brun_in_background\s*[=:]\s*(?:true|false)/;
+    const bm = bgRe.exec(_maskStringsAndComments(text));
+    if (bm) {
+      if (backgroundCapable) {
+        const matched = text.slice(bm.index, bm.index + bm[0].length);
+        const replaced = matched.replace(/^run_in_background(\s*[=:]\s*)/, `${backgroundParam}$1`);
+        text = text.slice(0, bm.index) + replaced + text.slice(bm.index + bm[0].length);
+      } else {
+        text = _stripCallArgument(text, bm.index, bm.index + bm[0].length);
+      }
+    }
+  }
+
+  // 4. Call-syntax head rename + object-literal brace stripping. Hermes's
+  //    delegate_task is a flat kwarg call — `Agent({...})`'s wrapper braces
+  //    are dropped rather than carried through, so every projected call ends
+  //    up in the same flat shape regardless of source syntax.
+  text = text.replace(/^Agent\(/, `${toolName}(`);
+  if (hasBraceWrapper) {
+    const openMask = maskStringLiterals(text);
+    const braceOpenIdx = openMask.indexOf('{');
+    if (braceOpenIdx !== -1) text = text.slice(0, braceOpenIdx) + text.slice(braceOpenIdx + 1);
+    const closeMask = maskStringLiterals(text);
+    const braceCloseIdx = closeMask.lastIndexOf('}');
+    if (braceCloseIdx !== -1) text = text.slice(0, braceCloseIdx) + text.slice(braceCloseIdx + 1);
+  }
+
+  return text;
+}
+
+/**
+ * Blank the interior (and delimiters) of every string literal inside
+ * `spanText` to spaces — same length, newlines preserved — using a fresh,
+ * LOCAL quote-tracking scan that starts at `spanText[0]` with NO inherited
+ * state. This is deliberately the SAME state-machine shape as the
+ * `inString`/`\\`/triple-quote handling inside `findDispatchCallSpans`
+ * (double-quoted and `"""`-triple-quoted, backslash-escape aware) — reused
+ * here so a call span's quoted argument VALUES (documentation prose, prompt
+ * bodies) never masquerade as real call syntax, without EVER falling back to
+ * a whole-document cumulative quote-parity mask (the round-2 defect
+ * documented on `findDispatchCallSpans` above).
+ */
+function _blankStringLiteralInteriors(spanText) {
+  let out = '';
+  let inString = null; // null | '"' | 'triple'
+  for (let i = 0; i < spanText.length; i++) {
+    const ch = spanText[i];
+    if (inString) {
+      if (ch === '\\') {
+        out += ' ';
+        i++;
+        if (i < spanText.length) out += (spanText[i] === '\n') ? '\n' : ' ';
+        continue;
+      }
+      if (inString === 'triple') {
+        if (ch === '"' && spanText[i + 1] === '"' && spanText[i + 2] === '"') {
+          inString = null;
+          out += '   ';
+          i += 2;
+          continue;
+        }
+        out += (ch === '\n') ? '\n' : ' ';
+        continue;
+      }
+      if (ch === inString) { inString = null; out += ' '; continue; }
+      out += (ch === '\n') ? '\n' : ' ';
+      continue;
+    }
+    if (ch === '"' && spanText[i + 1] === '"' && spanText[i + 2] === '"') {
+      inString = 'triple';
+      out += '   ';
+      i += 2;
+      continue;
+    }
+    if (ch === '"') { inString = '"'; out += ' '; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Quote-aware view of `content` for the completeness checks below: for every
+ * REAL call span located via `findDispatchCallSpans` (once per head word in
+ * `headWords`), the string-literal ARGUMENT VALUES inside that span are
+ * blanked via `_blankStringLiteralInteriors`; the call's own head word and
+ * bare (unquoted) argument tokens are left untouched. `headWords` is
+ * processed in order and each pass re-scans the PROGRESSIVELY-masked string
+ * — `toolName` first, then `'Agent'` — so a spurious `Agent(` that
+ * `findDispatchCallSpans('Agent')` would otherwise "find" purely because it
+ * sits inside an outer call's quoted string (e.g. a `description="...Agent()
+ * ...subagent_type=x"` argument value) has ALREADY been blanked away by the
+ * outer `toolName` pass by the time the `'Agent'` pass runs, so it is never
+ * mistaken for a real, independent call. A genuinely real (unquoted) `Agent(`
+ * — including one nested as a raw, un-renamed argument value — survives every
+ * pass and remains visible to the caller's regex checks.
+ */
+function _maskQuotedRegionsWithinCallSpans(content, headWords) {
+  let masked = content;
+  for (const headWord of headWords) {
+    const spans = findDispatchCallSpans(masked, headWord);
+    for (let i = spans.length - 1; i >= 0; i--) {
+      const { start, end } = spans[i];
+      const maskedSpan = _blankStringLiteralInteriors(masked.slice(start, end));
+      masked = masked.slice(0, start) + maskedSpan + masked.slice(end);
+    }
+  }
+  return masked;
+}
+
+/**
+ * Post-projection guard (#2284 requirement 3 — belt-and-suspenders): after
+ * projection, assert the corpus form the projection could not anticipate
+ * never silently ships. Throws an explicit install error (fail-LOUD) rather
+ * than let an unprojected/incompletely-projected dispatch call install.
+ *
+ * #2284 round-2 CRITICAL fix: this is an INDEPENDENT check — it does NOT use
+ * `maskStringLiterals` over the whole document (the round-1 primitive whose
+ * cumulative, document-wide quote-parity tracking was the root cause of the
+ * round-2 defect: a `"`-heavy bash fence upstream of a real call desynced
+ * quote state and made `findDispatchCallSpans` blind to that call, shipping
+ * a Frankenstein `Agent(gsd_role="...", model="...")` with no detection).
+ *
+ * #2284 round-3 fix: a BLUNT, mask-free literal check over the whole
+ * document (round-2's fix) over-throws — it cannot tell a real residual
+ * `Agent(`/`subagent_type` call from the SAME text appearing INSIDE a quoted
+ * string (documentation/prompt prose, e.g. `description="...Agent()..."`).
+ * The completeness checks (residual `subagent_type` / literal `Agent(`) now
+ * run against `_maskQuotedRegionsWithinCallSpans` — quote-aware, but scoped
+ * strictly to already-correctly-bounded, per-occurrence-LOCAL call spans
+ * (never a whole-document cumulative mask), so a real Frankenstein call
+ * (unquoted, real call syntax) still fires while a same-text mention genuinely
+ * inside a quoted string does not.
+ *
+ * The completeness checks also only apply when `namedDispatch` is false: when
+ * `dispatch.namedDispatch === true`, `_normalizeDispatchCallSpan` step 1
+ * INTENTIONALLY leaves `subagent_type` unprojected (the target primitive
+ * resolves named agents itself) — a residual `subagent_type` in that case is
+ * the correct, intended output, not a defect. (The call HEAD is still renamed
+ * unconditionally regardless of `namedDispatch` — see step 4 there — so a
+ * literal `Agent(` residual is gated the same way purely for symmetry with
+ * the dispatch-facts-driven contract; it is never actually left unrenamed by
+ * the projection in practice.)
+ *
+ * The model-leak check is unaffected by either fix above — it is orthogonal
+ * to `namedDispatch` (gated only by `supportsPerCallModel`) and already
+ * bounds each real call via the independently-fixed, per-occurrence-local,
+ * non-cumulative `findDispatchCallSpans`, then does a raw substring check
+ * within that bound.
+ */
+function _assertProjectionComplete(content, toolConfig, namedDispatch = false) {
+  const { toolName, runtime, supportsPerCallModel } = toolConfig;
+
+  if (!namedDispatch) {
+    const quoteAware = _maskQuotedRegionsWithinCallSpans(content, [toolName, 'Agent']);
+    if (/\bsubagent_type\s*[=:]/.test(quoteAware)) {
+      throw new Error(
+        `${runtime} workflow install: projection left a residual subagent_type reference — refusing to install ` +
+        '(fail-closed post-projection guard, #2284)',
+      );
+    }
+    if (/\bAgent\(/.test(quoteAware)) {
+      throw new Error(
+        `${runtime} workflow install: projection left literal Agent( call syntax — refusing to install ` +
+        '(fail-closed post-projection guard, #2284)',
+      );
+    }
+  }
+
+  if (!supportsPerCallModel) {
+    for (const span of findDispatchCallSpans(content, toolName)) {
+      const rawSpanText = content.slice(span.start, span.end);
+      if (/\bmodel\s*[=:]/.test(rawSpanText)) {
+        throw new Error(
+          `${runtime} workflow install: projection left a leaked model= argument inside a ${toolName}(...) call ` +
+          '— refusing to install (fail-closed post-projection guard, #2284)',
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Project host-neutral `Agent(...)` named-subagent dispatch prose onto a
+ * target runtime's real dispatch primitive. See the file-header comment above
+ * for the governing rule: every behavioral branch reads `dispatch` (the
+ * runtime's sourced `hostIntegration.dispatch` facts) — none is a hardcoded
+ * assumption about a specific runtime. Handles all three real corpus call
+ * forms (multi-line one-key-per-line, single-line object-literal, single-line
+ * compact) via string-aware call-span detection rather than three independent
+ * line-anchored regexes, and closes with a post-projection guard that fails
+ * loud on any form it did not anticipate (#2284).
+ *
+ * @param {string} content
+ * @param {{namedDispatch?: boolean, nested?: boolean, maxDepth?: number, background?: boolean, backgroundDispatch?: boolean, subagentToolkit?: string}} dispatch
+ * @param {{toolName: string, namedRoleParam: string, promptContentParam: string, structuralRoleParam: string, leafRoleValue: string, backgroundParam: string, supportsPerCallModel: boolean, availableRoles: Set<string>|null, runtime: string}} toolConfig
+ */
+function projectNamedDispatchToStructuralDelegate(content, dispatch, toolConfig) {
+  const d = dispatch || {};
+  const namedDispatch = d.namedDispatch === true;
+  const backgroundCapable = d.background === true;
+  const { toolName, promptContentParam } = toolConfig;
+
+  let converted = content;
+
+  // 1. The "Agent tool IS available" contract assertion (currently unique to
+  //    plan-phase.md, matched generically in case of future reuse elsewhere).
+  const assertionRe = /The Agent tool IS available in a top-level ([^\n]+?) session\.\s+Always spawn\s+([\s\S]*?)\s+as separate Agent\(\) calls\./;
+  converted = converted.replace(assertionRe, (_m, sessionName, roster) => {
+    const rosterFlat = roster.replace(/\s+/g, ' ').trim();
+    if (namedDispatch) {
+      return `The \`${toolName}\` tool IS available in a top-level ${sessionName} session. Always dispatch ${rosterFlat} as separate \`${toolName}()\` calls.`;
+    }
+    return (
+      `${sessionName} has no \`Agent\` tool. It exposes \`${toolName}\`, which dispatches by structural role — ` +
+      'it has no concept of a named subagent identity. GSD projects each named gsd-* role onto this primitive ' +
+      `itself: resolve the role's prompt file from the active install, load its contents, and embed them in the ` +
+      `\`${toolName}\` payload via \`${promptContentParam}\` as the dispatched task's operating instructions. ` +
+      'FAIL CLOSED — surface an explicit error and stop — if a referenced role prompt cannot be resolved; never ' +
+      `execute the role inline as a substitute. In a top-level ${sessionName} session, always dispatch ` +
+      `${rosterFlat} as separate \`${toolName}\` calls.`
+    );
+  });
+
+  // 1b. Dispatch-depth-availability prose immediately adjacent to a renamed
+  //     `Agent()` mention in the SAME sentence (plan-review-convergence.md
+  //     ~lines 108, 347, 355) — a bare "Agent" left un-renamed right next to
+  //     the projection's own `Agent()`→`${toolName}()` rename produced
+  //     self-contradictory installed text (e.g. "...delegate_task(...)...
+  //     with Agent available..."). Narrowly scoped to the EXACT known
+  //     phrases the projection itself creates the inconsistency beside —
+  //     never a broad bare-word `Agent` rename, which would corrupt
+  //     legitimate `Agent`-adjacent prose elsewhere in the corpus (role
+  //     names, "Agent Brief", agent-file references).
+  converted = converted.replace(
+    /\borchestrator runs at depth 0 with Agent available\b/g,
+    `orchestrator runs at depth 0 with ${toolName} available`,
+  );
+  converted = converted.replace(
+    /\(bug #936: depth-1 Agent has no Agent tool\)/g,
+    `(bug #936: depth-1 ${toolName} has no nested ${toolName})`,
+  );
+
+  // 2. Per-call model-selection prose ("Model resolution:" paragraph,
+  //    execute-phase.md) + inline backtick-quoted model-mention prose
+  //    examples (not live call sites) — only rewritten when the target
+  //    primitive has no per-call model parameter at all.
+  if (!toolConfig.supportsPerCallModel) {
+    const modelResolutionRe = /\*\*Model resolution:\*\* If `executor_model` is `"inherit"`, omit the `model=` parameter from all `Agent\(\)` calls — do NOT pass `model="inherit"` to Agent\. Omitting the `model=` parameter causes [^.]+\. Only set `model=` when `executor_model` is an explicit model name \(e\.g\., `"claude-sonnet-5"`, `"claude-opus-4-8"`\)\./;
+    converted = converted.replace(
+      modelResolutionRe,
+      `**Model resolution:** \`${toolName}\` has no per-call model-selection parameter — every dispatched role ` +
+      `always inherits the host session's active model. Never pass \`model=\` to \`${toolName}\`; drop the ` +
+      '`executor_model` value entirely for this runtime.',
+    );
+    converted = converted.replace(/`model="[^"`\n]*"`,?\s*(?:and\s+)?/g, '');
+  }
+
+  // 3. Background-dispatch PROSE mentions outside any real call span (e.g.
+  //    execute-phase.md:595,600 — `run_in_background: true` inline
+  //    documentation, not a call argument) — #2284 Finding 3. Only rewritten
+  //    when the target is documented to support background dispatch (a
+  //    prose mention of an unsupported capability would be equally
+  //    misleading as a real leaked argument).
+  if (backgroundCapable) {
+    converted = converted.replace(
+      /\brun_in_background(\s*[=:]\s*(?:true|false))/g,
+      `${toolConfig.backgroundParam}$1`,
+    );
+  }
+
+  // 4. Call-span-based normalization — the core of the fix. Every
+  //    `Agent(...)`/`Agent({...})` occurrence (all three corpus forms) is
+  //    located via string-aware balanced paren/brace matching, then
+  //    normalized as a unit; spans are rebuilt right-to-left so earlier
+  //    offsets stay valid while later ones are rewritten.
+  const spans = findDispatchCallSpans(converted, 'Agent');
+  for (let i = spans.length - 1; i >= 0; i--) {
+    const { start, end, hasBraceWrapper } = spans[i];
+    const rebuilt = _normalizeDispatchCallSpan(converted.slice(start, end), hasBraceWrapper, d, toolConfig);
+    converted = converted.slice(0, start) + rebuilt + converted.slice(end);
+  }
+
+  // 5. "Agent tool" capability mentions (conditions gating parallel vs.
+  //    sequential dispatch, e.g. map-codebase.md) → the real target primitive
+  //    name, which resolves these conditions accurately since it IS a real,
+  //    always-available dispatch primitive for this target.
+  converted = converted.replace(/\bAgent tool\b/g, toolName);
+
+  // 5b. Catch-all: a `subagent_type` mention that is NOT part of any real
+  //     `Agent(...)` call span (e.g. map-codebase.md's inline documentation
+  //     prose ``Use Agent tool with `subagent_type="X"`, ...`` — disconnected
+  //     example syntax, not a live call). Renamed for the same accuracy the
+  //     real calls get; a literal quoted role value is still fail-closed
+  //     validated even though there is no call structure to inject
+  //     role-prompt/fail-closed guidance INTO.
+  if (!namedDispatch) {
+    converted = converted.replace(
+      /\bsubagent_type(\s*[=:]\s*"[^"]*")/g,
+      (_m, rest) => {
+        const literalRole = _literalRoleValue(rest.replace(/^\s*[=:]\s*/, ''));
+        if (literalRole !== null) {
+          _assertRoleResolvable(literalRole, toolConfig.availableRoles, toolConfig.runtime, 'subagent_type (prose mention)');
+        }
+        return `${toolConfig.namedRoleParam}${rest}`;
+      },
+    );
+    converted = converted.replace(/\bsubagent_type(\s*[=:])/g, `${toolConfig.namedRoleParam}$1`);
+  }
+
+  // 5c. Safety net (#2284 requirement 2): the PRIMARY mechanism for
+  //     eliminating literal `Agent(` syntax is complete span detection (step
+  //     4) — this unconditional final rename exists only so that even a call
+  //     span detection somehow misses at least loses its `Agent(` head
+  //     rather than shipping the literal Claude-shaped tool name verbatim.
+  //     A call caught only by this safety net is still INCOMPLETELY
+  //     normalized (no role/model handling) and gets caught by the
+  //     independent post-projection guard below via its OTHER invariants
+  //     (residual subagent_type / leaked model=), which this safety net does
+  //     not touch — the install still fails closed for a missed span.
+  converted = converted.replace(/\bAgent\(/g, `${toolName}(`);
+
+  // 6. Post-projection guard (#2284 requirement 3): fail loud, never ship
+  //    silently, on any residual/leaked form the projection above did not
+  //    anticipate. `namedDispatch` gates the completeness checks — a
+  //    residual subagent_type is INTENTIONAL, not a defect, when the target
+  //    resolves named agents itself (see `_assertProjectionComplete`).
+  _assertProjectionComplete(converted, toolConfig, namedDispatch);
+
+  return converted;
+}
+
+const HERMES_DISPATCH_TOOL_CONFIG = Object.freeze({
+  toolName: 'delegate_task',
+  namedRoleParam: 'gsd_role',
+  promptContentParam: 'gsd_role_prompt',
+  structuralRoleParam: 'role',
+  leafRoleValue: 'leaf',
+  backgroundParam: 'background',
+  supportsPerCallModel: false,
+});
+
+/**
+ * Hermes `.md` content converter (#2284): brand-swap (unchanged behavior,
+ * descriptor-driven per `hostBehaviors.brandingRewrites`) followed by the
+ * generic named-dispatch → `delegate_task` projection above, driven by
+ * `capabilities/hermes/capability.json`'s `hostIntegration.dispatch` (read
+ * via `_hostIntegrationDispatch`, values UNCHANGED by this fix — they are
+ * already documentation-sourced and correct).
+ */
+function convertClaudeToHermesMarkdown(content, ctx) {
+  const runtime = (ctx && ctx.runtime) || 'hermes';
+  const b = _hostBehaviors(runtime).brandingRewrites;
+  let converted = content;
+  if (b) {
+    converted = converted.replace(/CLAUDE\.md/g, b['CLAUDE.md']);
+    // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+    converted = applyClaudeCodeBrandSwap(converted, b['Claude Code']);
+    converted = converted.replace(/\.claude\//g, b['.claude/']);
+  }
+  const dispatch = _hostIntegrationDispatch(runtime);
+  const toolConfig = Object.assign({}, HERMES_DISPATCH_TOOL_CONFIG, {
+    availableRoles: _resolveAvailableGsdRoles(),
+    runtime,
+  });
+  return projectNamedDispatchToStructuralDelegate(converted, dispatch, toolConfig);
+}
+
+// ── End Hermes converters ────────────────────────────────────────────────────
 
 function convertSlashCommandsToCodexSkillMentions(content) {
   // Colon-style /gsd: never appears as a filesystem path segment, so no boundary guard is needed (unlike the hyphen-style below).
@@ -3093,6 +4010,36 @@ purpose: ${toSingleLine(description)}
 }
 
 /**
+ * #2310 — True if `model` is an Anthropic-flavored value that must never appear as a
+ * Codex agent `.toml` `model`. Two forms: (a) a bare Claude Agent-tool tier alias
+ * (opus/sonnet/haiku/fable — the canonical CLAUDE_AGENT_ALIASES, imported from
+ * src/model-resolver.cts so it can't diverge); (b) any Claude model id in any provider
+ * namespacing — `claude-*`, `anthropic/claude-*`, `us.anthropic.claude-*` (the forms the
+ * catalog assigns to opencode/hermes/kilo, reachable on a Codex .toml via the runtime-
+ * resolver path). No OpenAI/Codex model id contains "claude", so a case-insensitive
+ * substring test is a safe, exhaustive guard for (b). Codex/ChatGPT rejects all of these.
+ */
+function _isAnthropicFlavoredModel(model) {
+  return typeof model === 'string' && (CLAUDE_AGENT_ALIASES.has(model) || model.toLowerCase().includes('claude'));
+}
+
+// #2310 — dedupe stderr warnings so repeated agent emits don't spam (mirrors the
+// #2041/#1133 model-resolver warn-dedupe). Value is length-capped so an oversized
+// or secret-shaped override cannot leak in full to logs.
+const _codexModelOverrideDroppedWarned = new Set();
+function _warnCodexModelOverrideDropped(agentName, value) {
+  const key = `${agentName}::${value}`;
+  if (_codexModelOverrideDroppedWarned.has(key)) return;
+  _codexModelOverrideDroppedWarned.add(key);
+  const safe = String(value).length > 64 ? `${String(value).slice(0, 64)}…` : String(value);
+  process.stderr.write(
+    `gsd: warning — Codex agent "${agentName}" model "${safe}" is not a valid Codex model ` +
+    `(Anthropic alias/id); dropping it so Codex uses a valid default. ` +
+    `Set runtime:"codex" or pin a gpt-* model to route it.\n`,
+  );
+}
+
+/**
  * Generate a per-agent .toml config file for Codex.
  * Sets required agent metadata, sandbox_mode, and developer_instructions
  * from the agent markdown content.
@@ -3125,21 +4072,43 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // model_overrides is respected on Codex (which uses static TOML, not inline
   // Task() model parameters). See #2256.
   // Precedence: per-agent model_overrides > runtime-aware tier resolution (#2517).
-  const modelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
-  let hasPinnedModel = false;
-  if (modelOverride) {
-    lines.push(`model = ${JSON.stringify(modelOverride)}`);
-    hasPinnedModel = true;
-  } else if (runtimeResolver) {
+  // #2310 — a Codex .toml `model` MUST be a real Codex/OpenAI model id. Codex is a
+  // passive/session-only model host (ADR-1239): GSD cannot reliably route per-agent
+  // tiers, and a bare GSD/Claude tier alias (opus/sonnet/haiku/fable) or a claude-*
+  // id 400s on a ChatGPT-account Codex ("The 'sonnet' model is not supported when
+  // using Codex with a ChatGPT account"). So: embed ONLY an explicit real-Codex
+  // model pin from model_overrides; omit anything Anthropic-flavored so the agent
+  // inherits the always-available session model. (Removing the runtime-resolver
+  // per-tier embedding below is the ADR-2310 passive-posture epic.)
+  const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+  let pinnedModel = null;
+  if (rawModelOverride) {
+    if (typeof rawModelOverride === 'string' && rawModelOverride && !_isAnthropicFlavoredModel(rawModelOverride)) {
+      pinnedModel = rawModelOverride;   // explicit real-Codex model pin → embed verbatim (#2256)
+    } else {
+      _warnCodexModelOverrideDropped(resolvedName, rawModelOverride);   // alias/claude-* → omit
+    }
+  }
+  if (!pinnedModel && runtimeResolver) {
     // #2517 — runtime-aware tier resolution. Embeds Codex-native model + reasoning_effort
     // from RUNTIME_PROFILE_MAP / model_profile_overrides for the configured tier.
+    // (Superseded on the default path by the ADR-2310 passive-posture epic.)
     const entry = runtimeResolver.resolve(resolvedName) || runtimeResolver.resolve(agentName);
-    if (entry?.model) {
-      lines.push(`model = ${JSON.stringify(entry.model)}`);
-      hasPinnedModel = true;
-      // model is resolved here; reasoning_effort from catalog tier is REPLACED by the
-      // unified effort resolver below (#443). Do NOT emit entry.reasoning_effort here.
-    }
+    if (entry?.model) pinnedModel = entry.model;
+  }
+  // #2310 — final safety gate: never emit an Anthropic-flavored model into a Codex
+  // .toml, even from the runtime-resolver path (e.g. a defaults.json runtime that
+  // does not match the codex install target).
+  if (pinnedModel && _isAnthropicFlavoredModel(pinnedModel)) {
+    _warnCodexModelOverrideDropped(resolvedName, pinnedModel);
+    pinnedModel = null;
+  }
+  let hasPinnedModel = false;
+  if (pinnedModel) {
+    lines.push(`model = ${JSON.stringify(pinnedModel)}`);
+    hasPinnedModel = true;
+    // model is resolved here; reasoning_effort from catalog tier is REPLACED by the
+    // unified effort resolver below (#443). Do NOT emit entry.reasoning_effort here.
   }
 
   // #443 — Unified effort for Codex .toml. Uses the same config-driven precedence chain
@@ -6585,7 +7554,8 @@ const RUNTIME_CONTENT_DISPATCH = {
       const b = _hostBehaviors(ctx.runtime).brandingRewrites;
       if (b) {
         content = content.replace(/CLAUDE\.md/g, b['CLAUDE.md']);
-        content = content.replace(/\bClaude Code\b/g, b['Claude Code']);
+        // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+        content = applyClaudeCodeBrandSwap(content, b['Claude Code']);
         content = content.replace(/\.claude\//g, b['.claude/']);
       }
       return content;
@@ -6602,16 +7572,13 @@ const RUNTIME_CONTENT_DISPATCH = {
     },
   },
   hermes: {
-    md: (content, ctx) => {
-      // Guarded (post-review #2092): see qwen entry above.
-      const b = _hostBehaviors(ctx.runtime).brandingRewrites;
-      if (b) {
-        content = content.replace(/CLAUDE\.md/g, b['CLAUDE.md']);
-        content = content.replace(/\bClaude Code\b/g, b['Claude Code']);
-        content = content.replace(/\.claude\//g, b['.claude/']);
-      }
-      return content;
-    },
+    // #2284: brand-swap alone left the false "Agent tool IS available"
+    // assertion + literal `Agent(...)` call syntax installed verbatim — see
+    // convertClaudeToHermesMarkdown / projectNamedDispatchToStructuralDelegate
+    // above (the Hermes converters section) for the full named-dispatch →
+    // `delegate_task` projection, driven by capabilities/hermes/capability.json's
+    // hostIntegration.dispatch facts.
+    md: (content, ctx) => convertClaudeToHermesMarkdown(content, ctx),
     js: (content, ctx) => {
       const b = _hostBehaviors(ctx.runtime).brandingRewrites;
       if (b) {
@@ -7610,8 +8577,11 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
       let permissionsModified = false;
       if (Array.isArray(settings.permissions.allow)) {
         const before = settings.permissions.allow.length;
+        // #2278 — filter against the union of the current allow-rule forms
+        // AND the retired legacy forms, so uninstall still cleans up
+        // pre-fix installs that still carry the stale `Write(...)` entries.
         settings.permissions.allow = settings.permissions.allow.filter(
-          (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e)
+          (e) => !GSD_CLAUDE_ALLOW_PERMISSIONS.includes(e) && !GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS.includes(e)
         );
         if (settings.permissions.allow.length !== before) {
           permissionsModified = true;
@@ -12227,6 +13197,7 @@ module.exports = {
     // #768 — Claude Code permissions pre-population
     mergeClaudePermissions,
     GSD_CLAUDE_ALLOW_PERMISSIONS,
+    GSD_CLAUDE_LEGACY_ALLOW_PERMISSIONS,
     GSD_CLAUDE_DENY_PERMISSIONS,
     GSD_CODEX_MARKER,
     CODEX_AGENT_SANDBOX,
@@ -12276,6 +13247,18 @@ module.exports = {
     convertClaudeToCliineMarkdown,
     convertClaudeCommandToClineSkill,
     convertClaudeAgentToClineAgent,
+    // #2284(b) — cross-cutting branding protected-region helper
+    applyClaudeCodeBrandSwap,
+    // #2284 — Hermes named-dispatch → delegate_task projection
+    convertClaudeToHermesMarkdown,
+    projectNamedDispatchToStructuralDelegate,
+    _hostIntegrationDispatch,
+    _resolveAvailableGsdRoles,
+    HERMES_DISPATCH_TOOL_CONFIG,
+    maskStringLiterals,
+    findDispatchCallSpans,
+    _assertProjectionComplete,
+    _normalizeDispatchCallSpan,
     buildClineRulesBody,
     buildClineAgentsMdBody,
     buildClinePreToolUseHook,

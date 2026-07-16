@@ -1215,6 +1215,31 @@ describe('Drift item I001 — canonicalPlanStem: long PLAN stem matches short SU
     assert.strictEqual(gen.canonicalPlanStem('68-01-scaffolding'), '68-01');
     assert.strictEqual(gen.canonicalPlanStem('3A-01-feature'), '3A-01');
   });
+
+  test('PHASE_TOKEN_FROM_DIR_RE rejects a ≥3-digit slug word after a phase number (#2232)', () => {
+    const gen = require('../gsd-core/bin/lib/validate.cjs');
+    const re = gen.PHASE_TOKEN_FROM_DIR_RE;
+    // Dir "14-2026-photos-performance" (roadmap phase name "2026 Photos &
+    // Performance") must extract token "14", not "14-2026" — the year is the
+    // slug's first word. Boundary by continuation-segment digit width:
+    assert.strictEqual(re.exec('14-2026-photos-performance')?.[1], '14'); // 4-digit: slug
+    assert.strictEqual(re.exec('05-100-slug')?.[1], '05'); // 3-digit: slug (policy)
+    assert.strictEqual(re.exec('02-01-setup')?.[1], '02-01'); // 2-digit: sub-phase
+    assert.strictEqual(re.exec('46-6-rs')?.[1], '46'); // 1-digit: slug (#2043)
+  });
+
+  test('canonicalPlanStem does not pair a ≥3-digit slug word (#2232)', () => {
+    const gen = require('../gsd-core/bin/lib/validate.cjs');
+    // A year-leading slug is not a plan component: the stem is returned
+    // unchanged rather than the bogus "14-2026".
+    assert.strictEqual(
+      gen.canonicalPlanStem('14-2026-photos-performance'),
+      '14-2026-photos-performance',
+    );
+    assert.strictEqual(gen.canonicalPlanStem('05-100-slug'), '05-100-slug');
+    // Legit zero-padded plan components still canonicalize.
+    assert.strictEqual(gen.canonicalPlanStem('68-01-scaffolding'), '68-01');
+  });
 });
   });
 }

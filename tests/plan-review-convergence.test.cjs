@@ -66,6 +66,20 @@ describe('plan-review-convergence command source (#2306)', () => {
     assert.ok(command.includes('--llama-cpp'), 'must document --llama-cpp flag for local llama.cpp server');
   });
 
+  // #2293: the 1.7.0 Antigravity adapter (successor to the discontinued Gemini
+  // CLI) was unreachable from convergence because its reviewer whitelist dropped
+  // --agy/--antigravity. The flag must be documented and in the argument-hint.
+  test('command documents the --agy / --antigravity reviewer flag (#2293)', () => {
+    assert.ok(command.includes('--agy'), 'must document --agy flag (Antigravity CLI reviewer)');
+    assert.ok(command.includes('--antigravity'), 'must document the --antigravity alias');
+  });
+
+  test('argument-hint advertises --agy (#2293)', () => {
+    const hint = command.match(/^argument-hint:\s*"(.*)"\s*$/m);
+    assert.ok(hint, 'command must declare an argument-hint');
+    assert.ok(hint[1].includes('--agy'), `argument-hint must list --agy, got: ${hint[1]}`);
+  });
+
   test('command references the workflow file via execution_context', () => {
     assert.ok(
       command.includes('@$HOME/.claude/gsd-core/workflows/plan-review-convergence.md'),
@@ -124,6 +138,57 @@ describe('plan-review-convergence command source (#2306)', () => {
       command.includes('plan_review_convergence'),
       'command must document the config key required to enable the feature (#2306-v2)'
     );
+  });
+});
+
+// ─── #2293: Antigravity reviewer flag reachable from convergence ─────────────
+
+describe('plan-review-convergence: --agy/--antigravity reviewer whitelist (#2293)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  const SKILL_PATH = path.join(__dirname, '..', 'skills', 'gsd-plan-review-convergence', 'SKILL.md');
+
+  test('workflow REVIEWER_FLAGS extraction whitelists --agy and --antigravity', () => {
+    // The runtime contract is the grep-accumulation block: each recognized flag
+    // has its own `grep -q '\\-\\-<flag>'` line. Absence = the flag is silently dropped.
+    assert.ok(/grep -q '\\-\\-agy'/.test(workflow), 'workflow must whitelist --agy');
+    assert.ok(/grep -q '\\-\\-antigravity'/.test(workflow), 'workflow must whitelist --antigravity');
+  });
+
+  test('generated SKILL.md mirrors the --agy flag (argument-hint parity)', () => {
+    const skill = fs.readFileSync(SKILL_PATH, 'utf8');
+    assert.ok(skill.includes('--agy'), 'generated SKILL.md must document --agy (regenerate via gen:plugin-skills)');
+  });
+
+  // Behavioral: execute the ACTUAL deployed REVIEWER_FLAGS accumulation block and
+  // assert --antigravity passes through instead of being dropped to the --codex
+  // default. POSIX-only — the block is /bin/sh-style grep pipework; skip on Windows
+  // where a bash shim is not guaranteed on PATH.
+  test('[behavioral] the deployed extraction passes --antigravity through (not the --codex fallback)', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
+    const { execFileSync } = require('node:child_process');
+    const startIdx = workflow.indexOf('REVIEWER_FLAGS=""');
+    const endMarker = 'if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi';
+    const endIdx = workflow.indexOf(endMarker);
+    assert.ok(startIdx !== -1 && endIdx !== -1, 'the REVIEWER_FLAGS accumulation block must exist in the workflow');
+    const block = workflow.slice(startIdx, endIdx + endMarker.length) + '\nprintf "%s" "$REVIEWER_FLAGS"';
+    const run = (args) => execFileSync('bash', ['-c', block], {
+      env: { ...process.env, ARGUMENTS: args },
+      encoding: 'utf8',
+      timeout: 5000,
+    }).trim();
+
+    const agy = run('5 --antigravity');
+    assert.ok(agy.split(/\s+/).includes('--antigravity'), `--antigravity must pass through, got: "${agy}"`);
+    assert.notStrictEqual(agy, '--codex', 'must NOT collapse to the --codex-only fallback when --antigravity is given');
+
+    assert.ok(run('5 --agy').split(/\s+/).includes('--agy'), '--agy short form must pass through');
+
+    // Regressions: default + existing flags unchanged.
+    assert.strictEqual(run('5'), '--codex', 'no reviewer flag → --codex default preserved');
+    const mixed = run('5 --codex --gemini');
+    assert.ok(mixed.includes('--codex') && mixed.includes('--gemini'), 'existing flags still recognized');
+    // --agy must not be spuriously matched by an unrelated flag (independence).
+    assert.ok(!run('5 --gemini').includes('--agy'), '--gemini must not trip the --agy whitelist');
   });
 });
 
