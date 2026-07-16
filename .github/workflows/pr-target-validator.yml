@@ -9,8 +9,19 @@ name: PR Target Validator
 #
 # See: docs/branching.md, docs/adr/230-introduce-next-integration-branch.md
 
+# Trigger (#2331): pull_request_target, NOT pull_request. This job runs ONLY for
+# non-OWNER/MEMBER/COLLABORATOR authors (see the `if:` below) — i.e. exactly the
+# fork PRs whose `pull_request` GITHUB_TOKEN is downgraded to read-only
+# regardless of the `permissions:` block. On that trigger the sticky-comment
+# call below 403s, the unhandled rejection kills the step, and core.setFailed
+# never runs: the author sees an API stack trace instead of "retarget to next".
+# pull_request_target runs in the base-repo context with a write-capable token.
+# Safe here (as in pr-template-format.yml): the only checkout is the BASE branch
+# with persist-credentials: false, and the PR-controlled inputs (pr.base.ref /
+# pr.head.ref) are read as data. No head code executes, so the "PR cannot edit
+# the policy that judges it" property below is reinforced, not weakened.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
 concurrency:
@@ -19,6 +30,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -91,28 +103,37 @@ jobs:
             ].join('\n');
 
             // Post or update a sticky comment.
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-            });
-            const marker = '<!-- pr-target-validator -->';
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            const body = `${marker}\n${msg}`;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
+            //
+            // #2331: the comment is a COURTESY, the verdict below is the GATE.
+            // A failure here must never suppress the verdict. pull_request_target
+            // should make the 403 impossible; this catch is defense in depth so a
+            // future permission change degrades the diagnostic, not the gate.
+            try {
+              const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body,
               });
+              const marker = '<!-- pr-target-validator -->';
+              const existing = comments.find(c => c.body && c.body.includes(marker));
+              const body = `${marker}\n${msg}`;
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body,
+                });
+              }
+            } catch (err) {
+              core.warning(`Could not post the PR-target comment (${err.status || err.message}). Guidance follows:\n${msg}`);
             }
 
             if (warnOnly) {

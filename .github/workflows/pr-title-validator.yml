@@ -23,6 +23,18 @@ name: PR Title Validator
 # matcher lands on the base branch it does not exist there — the introducing
 # PR is skipped (bootstrap); every PR after merge is fully gated.
 #
+# Trigger (#2331): pull_request_target, NOT pull_request. A `pull_request`
+# event raised from a fork hands the job a read-only GITHUB_TOKEN regardless of
+# the `permissions:` block below, so the sticky-comment call 403s, the
+# unhandled rejection kills this step, and core.setFailed never runs — the
+# contributor sees an API stack trace instead of the retitle instructions.
+# pull_request_target runs in the base-repo context with a write-capable token.
+# This is safe here for the same reason it is safe in pr-template-format.yml:
+# the only checkout is the BASE branch (persist-credentials: false) and the
+# only PR-controlled input is `pr.title`, read as data. No head code executes.
+# The trust boundary above is reinforced, not weakened — pull_request_target
+# checks out base by definition.
+#
 # Unlike pr-target-validator, this runs for ALL authors (including members):
 # the changelog drift that motivated #1549 came from member PRs.
 #
@@ -32,7 +44,7 @@ name: PR Title Validator
 # See: scripts/release-notes/conventional-title.cjs, CONTRIBUTING.md, issue #1549.
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
 concurrency:
@@ -41,6 +53,7 @@ concurrency:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -113,28 +126,42 @@ jobs:
             ].join('\n');
 
             // Post or update a sticky comment.
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-            });
-            const marker = '<!-- pr-title-validator -->';
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            const body = `${marker}\n${msg}`;
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
+            //
+            // #2331: the comment is a COURTESY, the verdict below is the GATE.
+            // Never let a failure here suppress the verdict — that inversion is
+            // the bug this guard exists to prevent (a 403 on the createComment
+            // call used to kill the step before core.setFailed ran, replacing
+            // "retitle as type(#issue): summary" with an API stack trace).
+            // pull_request_target should make the 403 impossible; this catch is
+            // defense in depth so a future permission change degrades the
+            // diagnostic rather than the gate.
+            try {
+              const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body,
               });
+              const marker = '<!-- pr-title-validator -->';
+              const existing = comments.find(c => c.body && c.body.includes(marker));
+              const body = `${marker}\n${msg}`;
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body,
+                });
+              }
+            } catch (err) {
+              // Surface the guidance in the job log so it is not lost entirely.
+              core.warning(`Could not post the PR-title comment (${err.status || err.message}). Guidance follows:\n${msg}`);
             }
 
             if (warnOnly) {

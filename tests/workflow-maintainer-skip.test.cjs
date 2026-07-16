@@ -47,6 +47,45 @@ describe('PR policy workflow maintainer carve-outs', () => {
     assertMaintainerSkip(workflow);
   });
 
+  // #2331: same defect class as the close-draft-prs.yml trigger lock above,
+  // swept across the three PR-policy workflows it had never covered. Each one
+  // comments on the PR and THEN emits its verdict; on a bare `pull_request`
+  // trigger a fork PR's read-only GITHUB_TOKEN 403s the comment call, the
+  // unhandled rejection kills the github-script step, and the verdict
+  // (core.setFailed) never runs — the contributor gets an API stack trace
+  // instead of the instructions the comment exists to deliver.
+  for (const { file, name } of [
+    { file: '.github/workflows/pr-title-validator.yml', name: 'PR title validator' },
+    { file: '.github/workflows/pr-target-validator.yml', name: 'PR target validator' },
+    { file: '.github/workflows/require-issue-link.yml', name: 'Require issue link' },
+  ]) {
+    test(`${name} triggers on pull_request_target so fork PRs get the verdict, not a 403`, () => {
+      const workflow = readWorkflow(file);
+
+      assert.match(workflow, /^\s*pull_request_target:/m);
+      assert.doesNotMatch(workflow, /^\s*pull_request:\s*$/m);
+    });
+
+    test(`${name} declares a write permission for the endpoint it calls`, () => {
+      const workflow = readWorkflow(file);
+
+      // pull_request_target only grants what `permissions:` declares. These
+      // workflows comment via the issue-comments endpoint, so the write scope
+      // must be present or the trigger change alone would not fix the 403.
+      assert.match(workflow, /^\s*(issues|pull-requests):\s*write\s*$/m);
+    });
+
+    test(`${name} cannot let a failed comment suppress its verdict`, () => {
+      const workflow = readWorkflow(file);
+
+      // Defense in depth: the comment is a courtesy, the verdict is the gate.
+      // Guard the inversion (comment throws -> setFailed skipped) that #2331
+      // fixed, so a future permission change degrades the diagnostic only.
+      assert.match(workflow, /\btry\s*\{/);
+      assert.match(workflow, /catch\s*\(err\)\s*\{[\s\S]*?core\.warning/);
+    });
+  }
+
   test('draft PR sweep enforces the same policy as the event-driven close', () => {
     const workflow = readWorkflow('.github/workflows/close-draft-prs-sweep.yml');
 
