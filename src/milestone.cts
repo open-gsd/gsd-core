@@ -37,6 +37,15 @@ const { planningPaths } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 const { writeStateMd } = stateMod;
 
+// #2288 security: a milestone version label becomes a filesystem directory
+// component (`milestones/<label>-phases/`) into which phase directories are
+// MOVED. Any label used as a path segment must be a safe version token —
+// letters/digits/'.'/'-'/'_', leading alphanumeric, no path separators and no
+// `..` (the leading-alphanumeric anchor rejects a bare `..`). This gates both
+// the caller-supplied `--archive-version` override and the STATE.md-derived
+// live-read value, so a crafted value cannot escape `.planning/milestones/`.
+const ARCHIVE_VERSION_LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
 interface MilestoneCompleteOptions {
   name?: string;
   force?: boolean;
@@ -262,6 +271,15 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
 function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCompleteOptions, raw: boolean): void {
   if (!version) {
     error('version required for milestone complete (e.g., v1.0)');
+  }
+  // #2288 security: `version` is a CLI positional that is interpolated into
+  // multiple filesystem sinks below — `path.join(archiveDir, `${version}-ROADMAP.md`)`,
+  // `${version}-REQUIREMENTS.md`, `${version}-MILESTONE-AUDIT.md`, and the
+  // `${version}-phases` archive directory that phase dirs are MOVED into. Reject
+  // path separators / `..` here (same guard as `--archive-version`) so a crafted
+  // version cannot write or relocate content outside `.planning/milestones/`.
+  if (!ARCHIVE_VERSION_LABEL_RE.test(version)) {
+    error(`milestone complete: version "${version}" is invalid — a milestone version label may contain only letters, digits, '.', '-' and '_', and must not contain path separators or "..".`);
   }
 
   const roadmapPath = planningPaths(cwd).roadmap;
@@ -593,6 +611,32 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
   // --force bypasses the uncommitted-changes guard. Only use when the caller
   // has already archived or explicitly accepts loss of uncommitted work. (#1447)
   const force = Array.isArray(args) && args.includes('--force');
+  // #2288: explicit outgoing-version override for the archive destination.
+  // new-milestone.md runs `state.milestone-switch` BEFORE `phases.clear --confirm`,
+  // so a live read of STATE.md would already report the NEW milestone version by
+  // the time we get here. Callers that know the outgoing version pass it explicitly;
+  // absent an override, archivePhaseDirectories falls back to the live read.
+  const avIndex = Array.isArray(args) ? args.indexOf('--archive-version') : -1;
+  let archiveVersionOverride: string | null = null;
+  if (avIndex !== -1) {
+    const rawArchiveVersion = args[avIndex + 1];
+    // Missing / flag-shaped value: fail loud instead of silently dropping the
+    // override. A truncated invocation (e.g. a broken template substitution
+    // leaving `--archive-version` with no value) must NOT fall through to the
+    // live read — that silently re-files the archive under the new milestone,
+    // the exact #2288 bug this flag exists to prevent.
+    if (typeof rawArchiveVersion !== 'string' || rawArchiveVersion.startsWith('--') || rawArchiveVersion.trim() === '') {
+      error('--archive-version requires a value (a milestone version token, e.g. v1.0)');
+    }
+    const trimmed = rawArchiveVersion.trim();
+    // #2288 security: reject path separators / `..` so a crafted value cannot
+    // relocate phase history outside `.planning/milestones/` (phase dirs are
+    // MOVED into the archive dir — a traversal is data loss, not just an odd name).
+    if (!ARCHIVE_VERSION_LABEL_RE.test(trimmed)) {
+      error(`--archive-version "${trimmed}" is invalid — a milestone version label may contain only letters, digits, '.', '-' and '_', and must not contain path separators or "..".`);
+    }
+    archiveVersionOverride = trimmed;
+  }
   let cleared = 0;
 
   if (fs.existsSync(phasesDir)) {
@@ -647,7 +691,8 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
 
     try {
       // #1871: archive phase directories instead of destroying them (shared helper).
-      cleared = archivePhaseDirectories(cwd, phasesDir, dirs).archived;
+      // #2288: thread the explicit --archive-version override (if any) through.
+      cleared = archivePhaseDirectories(cwd, phasesDir, dirs, archiveVersionOverride).archived;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       error('Failed to clear phases directory: ' + message);
@@ -659,17 +704,45 @@ function cmdPhasesClear(cwd: string, raw: boolean, args: string[]): void {
 
 /**
  * #1871: move each non-999 phase directory under `phasesDir` into
- * `milestones/<version>-phases/` (collision-safe; version from getMilestoneInfo,
- * timestamp fallback). Shared by `phases clear` (archive-then-remove) and the
- * internal milestone.complete phase archival so phase history survives a
- * milestone switch instead of being hard-deleted.
+ * `milestones/<version>-phases/` (collision-safe). Shared by `phases clear`
+ * (archive-then-remove) and the internal milestone.complete phase archival so
+ * phase history survives a milestone switch instead of being hard-deleted.
+ *
+ * Archive-version precedence (#2288): an explicit `archiveVersionOverride` wins
+ * first, then a live `getMilestoneInfo(cwd)` read (which itself defaults to a
+ * version like `v1.0` when ROADMAP/STATE is absent), and only a dated fallback
+ * label if no safe version label is resolvable at all. The override is validated
+ * by the caller (`cmdPhasesClear`); the live-read value is re-validated here
+ * (defense in depth) because `getMilestoneInfo` derives it from STATE.md's
+ * unvalidated `milestone:` field. The override exists because `new-milestone.md`
+ * runs `state.milestone-switch` BEFORE `phases.clear --confirm` — by the time
+ * this runs, a live read of STATE.md would already report the NEW milestone
+ * version, so phase history from the OLD milestone would be misfiled under the
+ * new version's archive directory. Callers that know the outgoing version must
+ * pass it explicitly.
  */
-function archivePhaseDirectories(cwd: string, phasesDir: string, dirs: ReadonlyArray<{ name: string }>): { archiveDir: string; archived: number } {
-  let archiveVersion: string | null = null;
-  try {
-    archiveVersion = getMilestoneInfo(cwd).version ?? null;
-  } catch {
-    /* ROADMAP/STATE unreadable — fall back to a dated label */
+function archivePhaseDirectories(cwd: string, phasesDir: string, dirs: ReadonlyArray<{ name: string }>, archiveVersionOverride: string | null = null): { archiveDir: string; archived: number } {
+  // Self-protecting (#2288 security defense in depth): the sole current caller
+  // (`cmdPhasesClear`) already validates the override, but re-test it here so a
+  // future caller cannot reopen the path-traversal sink at line ~742. An override
+  // that fails the safe-label check is discarded (falls through to the live read
+  // / dated label) rather than reaching `path.join` unvalidated.
+  const safeOverride = archiveVersionOverride && ARCHIVE_VERSION_LABEL_RE.test(archiveVersionOverride.trim())
+    ? archiveVersionOverride.trim()
+    : null;
+  let archiveVersion: string | null = safeOverride;
+  if (!archiveVersion) {
+    try {
+      const liveVersion = getMilestoneInfo(cwd).version ?? null;
+      // Defense in depth (#2288 security): getMilestoneInfo reads STATE.md's
+      // `milestone:` field, which is unvalidated file content. Only accept it
+      // as a path component if it is a safe version label; a crafted value
+      // (path separators / `..`) falls through to the dated label below rather
+      // than escaping `.planning/milestones/`.
+      archiveVersion = liveVersion && ARCHIVE_VERSION_LABEL_RE.test(liveVersion) ? liveVersion : null;
+    } catch {
+      /* ROADMAP/STATE unreadable — fall back to a dated label */
+    }
   }
   if (!archiveVersion) {
     archiveVersion = `archived-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}`;
