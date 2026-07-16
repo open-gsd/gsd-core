@@ -82,10 +82,21 @@ jobs:
             }
 
             // decision === 'blocked': base is main and head is not an allowed pattern.
+            //
+            // #2331: `head` is attacker-controlled (a fork author names their own
+            // branch) and the comment below is posted by github-actions[bot] with a
+            // write token. A backtick IS legal in a git ref name, so echoed raw into
+            // an inline-code span it closes the span early and the remainder renders
+            // as live Markdown. This is weaker than the pr-title-validator case —
+            // check-ref-format forbids space, ':', '[' and '*', so no bare URL, link
+            // or emphasis is expressible in a branch name — but it is the same class
+            // and is stripped identically rather than left to the charset to police.
+            const headForMarkdown = String(head).replace(/`/g, "'");
+
             const msg = [
               `### Wrong target branch`,
               ``,
-              `This PR targets \`main\` but the source branch \`${head}\` is not a release, hotfix, critical-fix, or back-merge branch.`,
+              `This PR targets \`main\` but the source branch \`${headForMarkdown}\` is not a release, hotfix, critical-fix, or back-merge branch.`,
               ``,
               `**Most PRs should target \`next\`, not \`main\`.** See [docs/branching.md](../blob/main/docs/branching.md).`,
               ``,

@@ -83,8 +83,57 @@ describe('PR policy workflow maintainer carve-outs', () => {
       // fixed, so a future permission change degrades the diagnostic only.
       assert.match(workflow, /\btry\s*\{/);
       assert.match(workflow, /catch\s*\(err\)\s*\{[\s\S]*?core\.warning/);
+
+      // Assert the ORDER, not just the presence: core.setFailed must appear
+      // AFTER the catch block's core.warning. If the verdict were moved inside
+      // the try, it would textually precede the catch — which is exactly the
+      // regression this locks. Presence-only assertions pass either way.
+      const catchWarning = workflow.indexOf('Could not post');
+      const verdict = workflow.indexOf('core.setFailed');
+      assert.ok(catchWarning !== -1, 'expected the catch-block core.warning');
+      assert.ok(verdict !== -1, 'expected a core.setFailed verdict');
+      assert.ok(
+        verdict > catchWarning,
+        'core.setFailed must sit AFTER the catch block, not inside the try — ' +
+          'otherwise a thrown comment error skips the verdict (#2331)'
+      );
     });
   }
+
+  // #2331: these two workflows echo attacker-controlled text (PR title / fork
+  // branch name) into a bot-authored comment posted with a write token. Raw
+  // interpolation into an inline-code span lets a single backtick close the span
+  // so the remainder renders as live Markdown — on a PR title (no charset limit)
+  // that is enough to autolink an arbitrary URL from github-actions[bot].
+  for (const { file, name, varName } of [
+    { file: '.github/workflows/pr-title-validator.yml', name: 'PR title validator', varName: 'titleForMarkdown' },
+    { file: '.github/workflows/pr-target-validator.yml', name: 'PR target validator', varName: 'headForMarkdown' },
+  ]) {
+    test(`${name} strips backticks before echoing untrusted text into the comment`, () => {
+      const workflow = readWorkflow(file);
+
+      // The sanitizer exists and removes the one character that can break out
+      // of an inline-code span.
+      assert.match(workflow, new RegExp(`const ${varName} = String\\(\\w+\\)\\.replace\\(/\`/g, "'"\\)`));
+      // The rendered comment interpolates the SANITIZED value, never the raw one.
+      assert.match(workflow, new RegExp(`\\\\\`\\$\\{${varName}\\}`));
+    });
+  }
+
+  test('the backtick sanitizer actually neutralizes the inline-code breakout', () => {
+    // Behavioral check of the transform the workflows apply, rather than only
+    // asserting the source text contains it.
+    const sanitize = (v) => String(v).replace(/`/g, "'");
+    const hostile = 'bad`See https://evil.example/ci-status for details x';
+
+    assert.match('`' + hostile + '`', /`bad`See/, 'pre-fix: the span breaks out');
+    assert.doesNotMatch('`' + sanitize(hostile) + '`', /`bad`/, 'post-fix: it cannot');
+    assert.equal(sanitize(hostile).includes('`'), false, 'no backtick survives');
+    // Boundary: no backtick, one backtick, many backticks.
+    assert.equal(sanitize('plain'), 'plain');
+    assert.equal(sanitize('`'), "'");
+    assert.equal(sanitize('``a``'), "''a''");
+  });
 
   test('draft PR sweep enforces the same policy as the event-driven close', () => {
     const workflow = readWorkflow('.github/workflows/close-draft-prs-sweep.yml');

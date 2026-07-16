@@ -105,10 +105,24 @@ jobs:
               return;
             }
 
+            // #2331: `title` is attacker-controlled free text (a PR title has no
+            // charset restriction) and the comment below is posted by
+            // github-actions[bot] with a write token. Echoed raw into an inline-code
+            // span, a single backtick in the title closes the span early and the
+            // remainder renders as live Markdown — GFM autolinks a bare URL, so a
+            // fork author could make our own bot post an arbitrary clickable link
+            // into the PR thread (phishing that borrows the bot's credibility).
+            // Stripping the backtick is sufficient and complete: it is the only
+            // character that can break out of an inline-code span, and everything
+            // else is inert once it cannot. Only the RENDERED body needs this;
+            // core.warning/core.setFailed below go to the job log, not Markdown,
+            // and @actions/core already escapes workflow-command sequences there.
+            const titleForMarkdown = String(title).replace(/`/g, "'");
+
             const msg = [
               `### PR title needs the issue-ref convention`,
               ``,
-              `\`${title}\``,
+              `\`${titleForMarkdown}\``,
               ``,
               result.message,
               ``,
