@@ -8743,3 +8743,356 @@ describe('bug-2502: insert-phase must update STATE.md next-phase recommendation'
 });
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regressions: issue #2316 — phase complete ghost REQ-ID / silent-discard defects
+//
+// ROADMAP.md may cite a REQ-ID in a phase's `**Requirements:**` line that was
+// never registered anywhere in REQUIREMENTS.md (neither its body nor its
+// Traceability table). The only existing cross-check compares REQUIREMENTS.md's
+// own body against its own Traceability table — it never consults the REQ-IDs
+// ROADMAP actually cites — so such a "ghost" REQ-ID is invisible: the checkbox/
+// Traceability write for it silently matches nothing, and the command reports
+// `requirements_updated: true, warnings: []` identically to a run that wrote
+// something real.
+//
+// Contract asserted by #2316-3: `requirements_updated` reflects whether
+// REQUIREMENTS.md's content actually changed (before !== after write), not
+// merely whether the file existed in the transaction.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a 3-phase fixture:
+ *   Phase 01 "known"  — cites KNOWN-01, which IS registered in REQUIREMENTS.md
+ *                       (body checkbox + Traceability row). CONTROL phase.
+ *   Phase 02 "orphan" — cites ORPHAN-01, ORPHAN-02, which are registered
+ *                       NOWHERE in REQUIREMENTS.md. BUG phase.
+ *   Phase 03 "tbd"    — carries the literal `**Requirements**: TBD` placeholder
+ *                       seeded by phase.add/-batch/-insert. BOUNDARY phase:
+ *                       "TBD" itself must never be treated as a ghost REQ-ID.
+ */
+function build2316GhostReqFixture() {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2316-ghost-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase1Dir = path.join(phasesDir, '01-known');
+  const phase2Dir = path.join(phasesDir, '02-orphan');
+  const phase3Dir = path.join(phasesDir, '03-tbd');
+  fs.mkdirSync(phase1Dir, { recursive: true });
+  fs.mkdirSync(phase2Dir, { recursive: true });
+  fs.mkdirSync(phase3Dir, { recursive: true });
+
+  fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+    '# Requirements',
+    '',
+    '## Functional Requirements',
+    '',
+    '- [ ] **KNOWN-01** Known and registered requirement.',
+    '',
+    '## Traceability',
+    '',
+    '| Requirement | Phase | Status |',
+    '|-------------|-------|--------|',
+    '| KNOWN-01 | Phase 01 | Pending |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Known',
+    '- [ ] Phase 02: Orphan',
+    '- [ ] Phase 03: Tbd',
+    '',
+    '### Phase 01: Known',
+    '**Goal:** Build the known thing',
+    '**Requirements:** KNOWN-01',
+    '**Plans:** 1 plans',
+    '',
+    '### Phase 02: Orphan',
+    '**Goal:** Build the orphan thing',
+    '**Requirements:** ORPHAN-01, ORPHAN-02',
+    '**Plans:** 1 plans',
+    '',
+    '### Phase 03: Tbd',
+    '**Goal:** Not yet mapped',
+    '**Requirements**: TBD',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Known | 0/1 | Not started | - |',
+    '| 02. Orphan | 0/1 | Not started | - |',
+    '| 03. Tbd | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Current Phase Name:** Known',
+    '**Status:** In progress',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 3',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  for (const [dir, n] of [[phase1Dir, '01'], [phase2Dir, '02'], [phase3Dir, '03']]) {
+    fs.writeFileSync(path.join(dir, `${n}-01-PLAN.md`), '# Plan\nDo the work.\n');
+    fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), '# Summary\nDone.\n');
+  }
+
+  return { tmpDir, planDir };
+}
+
+describe('issue #2316: phase complete ghost REQ-ID / silent-discard defects', () => {
+  test(
+    '#2316-1: ROADMAP-cited REQ-ID absent from REQUIREMENTS.md entirely → phase complete must report non-empty warnings naming the ghost ID(s)',
+    () => {
+      const { tmpDir } = build2316GhostReqFixture();
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '2'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        assert.ok(
+          warnings.length > 0,
+          `#2316-1 FAILED: expected non-empty warnings for ghost REQ-IDs ORPHAN-01/ORPHAN-02 ` +
+          `(cited by ROADMAP Phase 02 but registered nowhere in REQUIREMENTS.md), got warnings:[].\n` +
+          `Full output: ${output}`,
+        );
+        assert.ok(
+          warnings.some((w) => w.includes('ORPHAN-01')),
+          `#2316-1 FAILED: warnings must name ORPHAN-01, got: ${JSON.stringify(warnings)}`,
+        );
+        assert.ok(
+          warnings.some((w) => w.includes('ORPHAN-02')),
+          `#2316-1 FAILED: warnings must name ORPHAN-02, got: ${JSON.stringify(warnings)}`,
+        );
+        assert.strictEqual(
+          parsed.has_warnings, true,
+          `#2316-1 FAILED: has_warnings must be true when ghost REQ-IDs are cited, got: ${JSON.stringify(parsed)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2316-2 (control): a phase citing only a registered REQ-ID still ticks the checkbox + flips the Traceability row, and does not warn',
+    () => {
+      const { tmpDir, planDir } = build2316GhostReqFixture();
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        assert.deepStrictEqual(
+          parsed.warnings || [], [],
+          `#2316-2 FAILED: control phase (KNOWN-01 is registered) must not warn, got: ${JSON.stringify(parsed.warnings)}`,
+        );
+        assert.strictEqual(parsed.has_warnings, false, '#2316-2 FAILED: has_warnings must be false for the control phase');
+
+        const reqContent = fs.readFileSync(path.join(planDir, 'REQUIREMENTS.md'), 'utf-8');
+        assert.ok(
+          /-\s*\[x\]\s*\*\*KNOWN-01\*\*/.test(reqContent),
+          `#2316-2 FAILED: checkbox for KNOWN-01 must be ticked.\nREQUIREMENTS.md:\n${reqContent}`,
+        );
+        assert.ok(
+          /\|\s*KNOWN-01\s*\|\s*Phase 01\s*\|\s*Complete\s*\|/.test(reqContent),
+          `#2316-2 FAILED: Traceability row for KNOWN-01 must flip to Complete.\nREQUIREMENTS.md:\n${reqContent}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2316-3: requirements_updated must reflect whether REQUIREMENTS.md content actually changed, not merely that the file existed in the transaction',
+    () => {
+      // Case A (BUG): nothing written (ghost REQ-IDs only) → requirements_updated must be false.
+      const ghost = build2316GhostReqFixture();
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '2'], ghost.tmpDir);
+        const parsed = JSON.parse(output);
+        assert.strictEqual(
+          parsed.requirements_updated, false,
+          `#2316-3a FAILED: requirements_updated must be false when REQUIREMENTS.md content did not change ` +
+          `(ghost REQ-IDs ORPHAN-01/ORPHAN-02 match nothing to tick or flip).\nFull output: ${output}`,
+        );
+      } finally {
+        cleanup(ghost.tmpDir);
+      }
+
+      // Case B (CONTROL): a real write landed → requirements_updated must remain true.
+      // Guards against a fix that over-broadens to "always false".
+      const known = build2316GhostReqFixture();
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], known.tmpDir);
+        const parsed = JSON.parse(output);
+        assert.strictEqual(
+          parsed.requirements_updated, true,
+          `#2316-3b FAILED: requirements_updated must remain true when a real checkbox/Traceability write landed.\n` +
+          `Full output: ${output}`,
+        );
+      } finally {
+        cleanup(known.tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2316-7 (boundary): the literal "**Requirements**: TBD" placeholder seeded by phase.add/-batch/-insert must not produce a ghost-ID warning for the token "TBD"',
+    () => {
+      const { tmpDir } = build2316GhostReqFixture();
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '3'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        assert.ok(
+          !warnings.some((w) => /\bTBD\b/.test(w)),
+          `#2316-7 FAILED: the TBD placeholder must not be treated as a ghost REQ-ID, got warnings: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+});
+
+/**
+ * Build a 2-phase fixture where REQUIREMENTS.md has ONE body section (name
+ * controlled by `heading`) containing a REQ-ID (PRESET-01) that is absent from
+ * the Traceability table. `heading` is the only variable across callers, so
+ * this isolates the DEFERRED_HEADING_RE regex behavior precisely.
+ */
+function build2316HeadingFixture(heading) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2316-heading-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase1Dir = path.join(phasesDir, '01-preset');
+  const phase2Dir = path.join(phasesDir, '02-next');
+  fs.mkdirSync(phase1Dir, { recursive: true });
+  fs.mkdirSync(phase2Dir, { recursive: true });
+
+  fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+    '# Requirements',
+    '',
+    heading,
+    '',
+    '- **PRESET-01** Body requirement missing from traceability table.',
+    '',
+    '## Traceability',
+    '',
+    '| Requirement | Phase | Status |',
+    '|-------------|-------|--------|',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Preset',
+    '- [ ] Phase 02: Next',
+    '',
+    '### Phase 01: Preset',
+    '**Goal:** Build preset',
+    '**Requirements:** TBD',
+    '**Plans:** 1 plans',
+    '',
+    '### Phase 02: Next',
+    '**Goal:** whatever',
+    '**Requirements:** TBD',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Preset | 0/1 | Not started | - |',
+    '| 02. Next | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  for (const [dir, n] of [[phase1Dir, '01'], [phase2Dir, '02']]) {
+    fs.writeFileSync(path.join(dir, `${n}-01-PLAN.md`), '# Plan\nDo the work.\n');
+    fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), '# Summary\nDone.\n');
+  }
+
+  return tmpDir;
+}
+
+describe('issue #2316 (Secondary A): DEFERRED_HEADING_RE\'s bare `v\\d+` alternative over-matches an active heading', () => {
+  test(
+    '#2316-4a: "## v1 Requirements" heading with a body REQ-ID missing from the Traceability table must still surface the body-vs-table warning (an active "v1" heading is not deferred)',
+    () => {
+      const tmpDir = build2316HeadingFixture('## v1 Requirements');
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        assert.ok(
+          warnings.some((w) => /PRESET-01/.test(w) && /Traceability/i.test(w)),
+          `#2316-4a FAILED: expected a body-vs-table Traceability warning naming PRESET-01 under the ` +
+          `"## v1 Requirements" heading (the bare v\\d+ regex alternative wrongly treats it as deferred), ` +
+          `got warnings: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2316-4b (control): "## Functional" heading (identical fixture, non-versioned heading name) must surface the same body-vs-table warning',
+    () => {
+      const tmpDir = build2316HeadingFixture('## Functional');
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        assert.ok(
+          warnings.some((w) => /PRESET-01/.test(w) && /Traceability/i.test(w)),
+          `#2316-4b FAILED: control heading "## Functional" must also warn for PRESET-01, got warnings: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  for (const heading of ['## Deferred', '## Backlog', '## Future']) {
+    test(
+      `#2316-5: genuinely deferred heading "${heading}" must still suppress the body-vs-table warning (regression guard — #1159 introduced this filter deliberately; the v\\d+ fix must not remove deferred/backlog/future detection)`,
+      () => {
+        const tmpDir = build2316HeadingFixture(heading);
+        try {
+          const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+          const parsed = JSON.parse(output);
+          const warnings = parsed.warnings || [];
+          const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+          assert.strictEqual(
+            traceWarnings.length, 0,
+            `#2316-5 FAILED: heading "${heading}" must still be treated as deferred (no warning), ` +
+            `got: ${JSON.stringify(traceWarnings)}`,
+          );
+        } finally {
+          cleanup(tmpDir);
+        }
+      },
+    );
+  }
+});

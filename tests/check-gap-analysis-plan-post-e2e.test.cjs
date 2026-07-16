@@ -434,6 +434,73 @@ describe('Full pipeline: render-hooks plan:post discovers gate, then check dispa
   });
 });
 
+// ─── Section 3b: issue #2316 (Secondary B) — all-unregistered ghost REQ-IDs ──
+//
+// runGapAnalysis's `items.length === 0` short-circuit fires BEFORE ghostReqIds
+// (phaseReqIds cited by ROADMAP but absent from REQUIREMENTS.md) is folded
+// into `rows`. When EVERY cited REQ-ID is a ghost, reqItems is filtered down
+// to [] and there is no CONTEXT.md, so items.length === 0 and the ghost rows
+// never appear — the phase reports "No requirements or decisions to check."
+// instead of the ⚠ Missing from REQUIREMENTS.md rows. A phase with ONE
+// unregistered ID mixed with a registered one already surfaces correctly
+// (see the mapped-REQ-ID-absent test in Section 2 above) — only the
+// ALL-unregistered case is broken.
+
+describe('issue #2316 (Secondary B): all-unregistered phaseReqIds must still emit ghost rows, not the empty-state message', () => {
+  let tmpDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+    phaseDir = path.join(tmpDir, '.planning', 'phases', '01-test');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    const init = runGsdTools('config-ensure-section', tmpDir);
+    assert.ok(init.success, `config-ensure-section failed: ${init.error}`);
+    writeRequirements(path.join(tmpDir, '.planning'), ['KNOWN-01']);
+    writePlan(phaseDir, '01', '# Plan\n\nImplements KNOWN-01.\n');
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  test(
+    '#2316-6a (control, mixed known+ghost): a phase mapping one registered and one ghost REQ-ID already surfaces the ghost row',
+    () => {
+      const r = runGapCheck([phaseDir, 'KNOWN-01,ORPHAN-01'], tmpDir);
+      assert.ok(r.success, `check failed: ${r.error}`);
+      const out = JSON.parse(r.output);
+      assert.ok(
+        out.table.includes('ORPHAN-01') && out.table.includes('Missing from REQUIREMENTS.md'),
+        `#2316-6a FAILED: mixed control must still list ORPHAN-01 as Missing, got table: ${out.table}`,
+      );
+      assert.strictEqual(out.counts.total, 2, '#2316-6a FAILED: total must count both REQ-IDs');
+    },
+  );
+
+  test(
+    '#2316-6b: a phase whose EVERY cited REQ-ID is unregistered must still return the ghost rows, not "No requirements or decisions to check."',
+    () => {
+      const r = runGapCheck([phaseDir, 'ORPHAN-01,ORPHAN-02'], tmpDir);
+      assert.ok(r.success, `check failed: ${r.error}`);
+      const out = JSON.parse(r.output);
+      assert.ok(
+        !/No requirements or decisions to check/.test(out.table),
+        `#2316-6b FAILED: all-unregistered REQ-IDs must not collapse to the empty-state message.\nFull table: ${out.table}`,
+      );
+      assert.ok(
+        out.table.includes('ORPHAN-01') && out.table.includes('ORPHAN-02'),
+        `#2316-6b FAILED: table must list both ghost REQ-IDs, got: ${out.table}`,
+      );
+      assert.ok(
+        out.table.includes('Missing from REQUIREMENTS.md'),
+        `#2316-6b FAILED: table must show "Missing from REQUIREMENTS.md" status for the ghost IDs, got: ${out.table}`,
+      );
+      assert.strictEqual(out.counts.total, 2, '#2316-6b FAILED: total must count both ghost REQ-IDs, not 0');
+      assert.strictEqual(out.counts.uncovered, 2, '#2316-6b FAILED: uncovered must count both ghost REQ-IDs, not 0');
+      assert.strictEqual(out.enabled, true, '#2316-6b FAILED: enabled must still be true');
+    },
+  );
+});
+
 // ─── Section 4: Pure resolver tests against real registry ────────────────────
 
 describe('resolveLoopHooks plan:post — pure function against real registry', () => {
