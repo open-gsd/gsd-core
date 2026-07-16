@@ -1382,6 +1382,13 @@ function cmdValidateHealth(
             );
           }
         }
+      } else if (configModels !== undefined && configModels !== null) {
+        addIssue(
+          'warning',
+          'W022',
+          `config.json: models is set to ${JSON.stringify(configModels)}, but must be an object mapping phase types to tiers — this value will be ignored`,
+          `Set models to an object like {"planning": "sonnet"}, or remove the key to use profile defaults`,
+        );
       }
     } catch (err) {
       addIssue(

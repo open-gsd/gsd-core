@@ -80,6 +80,10 @@ export const VALID_AGENT_TIERS: Set<string> = new Set(Object.keys(_catalog.adapt
 // Catalog-derived so this can never drift from the resolver's tier gate:
 // Object.values(adaptiveTierMap) === ['opus', 'sonnet', 'haiku'] today, plus 'inherit'.
 export const VALID_TIERS: Set<string> = new Set([...Object.values(_catalog.adaptiveTierMap), 'inherit']);
+// Same catalog-derived tier values as VALID_TIERS but WITHOUT 'inherit' — used
+// by config-loader's runtime-override validation (model_profile_overrides /
+// model_policy.runtime_tiers), which does not accept 'inherit' as a tier.
+export const ADAPTIVE_TIER_VALUES: Set<string> = new Set(Object.values(_catalog.adaptiveTierMap));
 
 /** Per-profile model slots for each agent. */
 export interface AgentModelProfiles {

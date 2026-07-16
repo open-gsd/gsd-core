@@ -582,6 +582,104 @@ describe('validate health command', () => {
     );
   });
 
+  // ─── #2070 review finding 3: malformed top-level `models` is silently
+  // skipped today (src/verify.cts guards `typeof === 'object' && !Array`
+  // with no else branch, so an array/string/number/boolean `models` value
+  // produces ZERO diagnostics — the same undiagnosable-no-op class #2070
+  // targets). `models` absent or explicitly `null` must stay silent. ────────
+
+  for (const [label, malformedModels] of [
+    ['an array', []],
+    ['a string', 'opus'],
+    ['a number', 5],
+    ['a boolean', true],
+  ]) {
+    test(`warns W022 for a top-level models value that is ${label} (not a plain object)`, () => {
+      writeMinimalProjectMd(tmpDir);
+      writeMinimalRoadmap(tmpDir, ['1']);
+      writeMinimalStateMd(tmpDir);
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ model_profile: 'balanced', models: malformedModels })
+      );
+      fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+      const result = runGsdTools('validate health', tmpDir);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const output = JSON.parse(result.output);
+      const w022 = output.warnings.find(w => w.code === 'W022');
+      assert.ok(
+        w022,
+        `Expected W022 when top-level models is ${label} (${JSON.stringify(malformedModels)}): ${JSON.stringify(output.warnings)}`
+      );
+      const fullText = `${w022.message} ${w022.fix || ''}`;
+      assert.ok(fullText.includes('models'), `Expected W022 message to mention "models": ${JSON.stringify(w022)}`);
+      assert.ok(/object/i.test(fullText), `Expected W022 message to indicate models must be an object: ${JSON.stringify(w022)}`);
+      assert.ok(/ignor/i.test(fullText), `Expected W022 message to indicate the value will be ignored: ${JSON.stringify(w022)}`);
+    });
+  }
+
+  test('does not warn W022 for an empty-object top-level models value (valid, just empty)', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: {} })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn W022 for an empty models object: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('does not warn W022 for a top-level models value of null (explicit unset)', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', models: null })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn W022 for models: null: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  test('does not warn W022 when the models key is absent entirely', () => {
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced' })
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-a'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(
+      !output.warnings.some(w => w.code === 'W022'),
+      `Should not warn W022 when models is absent: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
   // ─── Check 6: Phase directory naming (NN-name format) ─────────────────────
 
   test('warns about incorrectly named phase directories', () => {
