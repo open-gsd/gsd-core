@@ -37,6 +37,22 @@ function nearestExistingDir(start) {
   return null;
 }
 
+// #2304: Kimi's native hook bus delivers Kimi's tool vocabulary in the payload
+// (Write → WriteFile, Edit/MultiEdit → StrReplaceFile) while the [[hooks]]
+// matcher is registered pre-translated (runtime-hooks-surface.cts
+// buildKimiHooksTomlBlock) — so without normalizing the payload too, the
+// matcher fires but the tool_name check below exits 0 and the guard is dormant
+// on Kimi. Accepts both the bare and module-qualified
+// ('kimi_cli.tools.file:WriteFile') forms; unknown names still fall through to
+// the early exit. Inlined per guard (not hooks/lib/): hook scripts are staged
+// as standalone files, and a sibling require is a staging dependency that can
+// fail silently.
+const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit' };
+function normalizeToolName(raw) {
+  if (typeof raw !== 'string') return raw;
+  return KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)] || raw;
+}
+
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
 process.stdin.setEncoding('utf8');
@@ -45,7 +61,7 @@ process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
     const data = JSON.parse(input);
-    const toolName = data.tool_name;
+    const toolName = normalizeToolName(data.tool_name);
 
     // Only guard Edit, Write, and MultiEdit tool calls
     if (toolName !== 'Edit' && toolName !== 'Write' && toolName !== 'MultiEdit') {

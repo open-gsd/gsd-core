@@ -504,3 +504,71 @@ describe('bug #2520: read guard detects Claude Code without relying on CLAUDECOD
 });
   });
 }
+
+
+// ────────────────────────────────────────────────────────────────────────
+// #2304 — Kimi tool vocabulary engages the read guard
+// ────────────────────────────────────────────────────────────────────────
+
+describe('#2304: Kimi tool vocabulary engages the read guard', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempDir('gsd-read-guard-2304-'); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  test('WriteFile on an existing file injects read-first guidance like Write', () => {
+    const filePath = path.join(tmpDir, 'existing.js');
+    fs.writeFileSync(filePath, 'console.log("hello");\n');
+
+    const result = runHook({
+      tool_name: 'WriteFile',
+      tool_input: { file_path: filePath, content: 'console.log("world");\n' },
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.length > 0, 'Kimi WriteFile should produce the advisory');
+    const output = JSON.parse(result.stdout);
+    assert.ok(output.hookSpecificOutput?.additionalContext?.includes('Read'));
+  });
+
+  test('StrReplaceFile on an existing file injects guidance like Edit', () => {
+    const filePath = path.join(tmpDir, 'existing.js');
+    fs.writeFileSync(filePath, 'const x = 1;\n');
+
+    const result = runHook({
+      tool_name: 'StrReplaceFile',
+      tool_input: { file_path: filePath, old_string: 'const x = 1;', new_string: 'const x = 2;' },
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.length > 0, 'Kimi StrReplaceFile should produce the advisory');
+    const output = JSON.parse(result.stdout);
+    assert.ok(output.hookSpecificOutput?.additionalContext?.includes('Read'));
+  });
+
+  test('module-qualified kimi_cli.tools.file:WriteFile is recognized', () => {
+    const filePath = path.join(tmpDir, 'existing.js');
+    fs.writeFileSync(filePath, 'content\n');
+
+    const result = runHook({
+      tool_name: 'kimi_cli.tools.file:WriteFile',
+      tool_input: { file_path: filePath, content: 'replacement\n' },
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.stdout.length > 0, 'module-qualified Kimi WriteFile should produce the advisory');
+  });
+
+  test('Kimi ReadFile stays out of scope (silent exit)', () => {
+    const filePath = path.join(tmpDir, 'existing.js');
+    fs.writeFileSync(filePath, 'content\n');
+
+    const result = runHook({
+      tool_name: 'kimi_cli.tools.file:ReadFile',
+      tool_input: { file_path: filePath },
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout, '', 'ReadFile is not a write tool — guard must stay silent');
+  });
+});
