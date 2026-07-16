@@ -3127,6 +3127,73 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #2304 — Kimi tool vocabulary engages the guard
+// ---------------------------------------------------------------------------
+
+describe('#2304 — Kimi tool vocabulary engages the guard', () => {
+  test('WriteFile targeting the main repo from a worktree is blocked like Write', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'WriteFile',
+      tool_input: { file_path: path.join(mainRepo, 'out.txt') },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 2,
+      `Kimi WriteFile targeting an outside path must be blocked. Got ${result.status}. stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.decision, 'block');
+  });
+
+  test('StrReplaceFile targeting the main repo from a worktree is blocked like Edit', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'StrReplaceFile',
+      tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 2,
+      `Kimi StrReplaceFile targeting an outside path must be blocked. Got ${result.status}. stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.decision, 'block');
+  });
+
+  test('module-qualified kimi_cli.tools.file:WriteFile is also recognized', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'kimi_cli.tools.file:WriteFile',
+      tool_input: { file_path: path.join(mainRepo, 'out.txt') },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 2,
+      `Module-qualified Kimi WriteFile must be blocked. Got ${result.status}. stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.decision, 'block');
+  });
+
+  test('StrReplaceFile with a path inside the worktree still passes', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'StrReplaceFile',
+      tool_input: { file_path: path.join(worktreeDir, 'src', 'foo.ts') },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 0,
+      `Kimi StrReplaceFile inside the worktree should pass. Got ${result.status}. stderr: ${result.stderr}`);
+  });
+
+  test('non-file Kimi tools still pass through silently', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'kimi_cli.tools.file:Grep',
+      tool_input: { file_path: path.join(mainRepo, 'src', 'index.ts') },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 0);
+    assert.strictEqual(result.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #1342 — GSD-activity gate + fail-open for no-repo targets
 // ---------------------------------------------------------------------------
 
