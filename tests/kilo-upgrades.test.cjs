@@ -320,6 +320,7 @@ const PLUGIN_GUARD_HOOKS = [
   'gsd-prompt-guard.js',
   'gsd-read-guard.js',
   'gsd-worktree-path-guard.js',
+  'gsd-workflow-guard.js',
 ];
 
 for (const scope of ['global', 'local']) {
