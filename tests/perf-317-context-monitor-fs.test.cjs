@@ -64,7 +64,10 @@ function runMonitorRaw(opts) {
     fs.writeFileSync(warnPath, JSON.stringify(wd));
   }
 
-  const input = JSON.stringify({ session_id: sessionId, cwd });
+  // #2289: explicit hook_event_name is required — the hook now emits its
+  // envelope ONLY for the PostToolUse/AfterTool allowlist; a missing name
+  // (non-Gemini) is silent. These callers model PostToolUse invocations.
+  const input = JSON.stringify({ session_id: sessionId, cwd, hook_event_name: 'PostToolUse' });
   let stdout = '';
   let exitCode = 0;
 
@@ -185,8 +188,11 @@ describe('perf #317: config.json absent (exercises config-missing → defaults p
     let exitCode = 0;
     let stdout = '';
     try {
+      // #2289: send hook_event_name: 'PostToolUse' so the silence asserted below
+      // is attributable ONLY to context_warnings=false, not to the hook's
+      // non-injection-event silence path.
       stdout = execFileSync(process.execPath, [MONITOR_PATH], {
-        input: JSON.stringify({ session_id: sessionId, cwd: testCwd }),
+        input: JSON.stringify({ session_id: sessionId, cwd: testCwd, hook_event_name: 'PostToolUse' }),
         encoding: 'utf-8',
         timeout: 5000,
       });
@@ -351,9 +357,13 @@ function runHook(sessionId, remainingPct, cwd) {
     timestamp: Math.floor(Date.now() / 1000),
   }));
 
+  // #2289: explicit hook_event_name: 'PostToolUse' so the hook takes the
+  // emitting/allowlisted path — the tests in this block assert on stdout
+  // content and record-session side effects, not event-name plumbing.
   const input = JSON.stringify({
     session_id: sessionId,
     cwd,
+    hook_event_name: 'PostToolUse',
   });
 
   const result = spawnSync(process.execPath, [HOOK_PATH], {
@@ -640,7 +650,10 @@ function runMonitorHook(remainingPct, usedPct) {
     timestamp: Math.floor(Date.now() / 1000),
   }));
 
-  const input = JSON.stringify({ session_id: sessionId, cwd: os.tmpdir() });
+  // #2289: explicit hook_event_name: 'PostToolUse' — this helper's callers
+  // assert on emitted message content (used_pct wording), which requires
+  // the allowlisted emitting path.
+  const input = JSON.stringify({ session_id: sessionId, cwd: os.tmpdir(), hook_event_name: 'PostToolUse' });
   let stdout = '';
   try {
     stdout = execFileSync(process.execPath, [MONITOR_PATH], {
@@ -826,36 +839,26 @@ function makeSessionId(suffix) {
 
 // ─── hookEventName echoing ────────────────────────────────────────────────────
 
-describe('bug #925: context monitor echoes the invoking hook event name', () => {
-  test('hookEventName is "Stop" when payload contains hook_event_name: "Stop"', () => {
+describe('bug #925: context monitor echoes the invoking hook event name (superseded for non-injection events by #2289)', () => {
+  test('Stop is a non-injection event → silent (#2289)', () => {
+    // #2289: Codex's Stop schema rejects the hookSpecificOutput envelope
+    // entirely ("invalid stop hook JSON output"), so the hook must emit
+    // NOTHING for Stop rather than echo it. This supersedes bug #925's
+    // "echo the triggering event name" behavior for Stop specifically.
     const out = runMonitor({ hookEventName: 'Stop', sessionId: makeSessionId('stop') });
-    assert.ok(out, 'hook must emit output when context is below WARNING threshold (remaining=30)');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'Stop',
-      `Expected hookEventName "Stop" but got "${out.hookSpecificOutput?.hookEventName}". ` +
-      'The hook must echo the hook_event_name from stdin, not hardcode "PostToolUse".'
-    );
+    assert.strictEqual(out, null, 'Stop is a non-injection event → silent (#2289)');
   });
 
-  test('hookEventName is "SubagentStop" when payload contains hook_event_name: "SubagentStop"', () => {
+  test('SubagentStop is a non-injection event → silent (#2289)', () => {
+    // #2289: same rationale as Stop above — non-injection events get no envelope.
     const out = runMonitor({ hookEventName: 'SubagentStop', sessionId: makeSessionId('subagent-stop') });
-    assert.ok(out, 'hook must emit output when context is below WARNING threshold');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'SubagentStop',
-      `Expected hookEventName "SubagentStop" but got "${out.hookSpecificOutput?.hookEventName}".`
-    );
+    assert.strictEqual(out, null, 'SubagentStop is a non-injection event → silent (#2289)');
   });
 
-  test('hookEventName is "PreCompact" when payload contains hook_event_name: "PreCompact"', () => {
+  test('PreCompact is a non-injection event → silent (#2289)', () => {
+    // #2289: same rationale as Stop above — non-injection events get no envelope.
     const out = runMonitor({ hookEventName: 'PreCompact', sessionId: makeSessionId('precompact') });
-    assert.ok(out, 'hook must emit output when context is below WARNING threshold');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'PreCompact',
-      `Expected hookEventName "PreCompact" but got "${out.hookSpecificOutput?.hookEventName}".`
-    );
+    assert.strictEqual(out, null, 'PreCompact is a non-injection event → silent (#2289)');
   });
 
   test('hookEventName is "PostToolUse" when payload contains hook_event_name: "PostToolUse"', () => {
@@ -871,8 +874,12 @@ describe('bug #925: context monitor echoes the invoking hook event name', () => 
 
 // ─── Fallback behaviour (no hook_event_name in payload) ──────────────────────
 
-describe('bug #925: context monitor falls back to heuristic when hook_event_name absent', () => {
-  test('falls back to "PostToolUse" when hook_event_name is absent (non-Gemini)', () => {
+describe('bug #925: context monitor falls back to heuristic when hook_event_name absent (non-Gemini fallback now silent per #2289)', () => {
+  test('absent hook_event_name (non-Gemini) is now silent (#2289)', () => {
+    // #2289: a missing hook_event_name without GEMINI_API_KEY set used to fall
+    // back to "PostToolUse" and emit. It is now a non-injection case → silent,
+    // since we cannot positively confirm this is a context-injection-capable
+    // invocation without either an allowlisted event name or the Gemini signal.
     const env = { ...process.env };
     delete env.GEMINI_API_KEY;
     const out = runMonitor({
@@ -880,15 +887,12 @@ describe('bug #925: context monitor falls back to heuristic when hook_event_name
       sessionId: makeSessionId('fallback-non-gemini'),
       env: { GEMINI_API_KEY: '' }, // ensure unset
     });
-    assert.ok(out, 'hook must emit output when context is below WARNING threshold');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'PostToolUse',
-      `Expected fallback "PostToolUse" for non-Gemini but got "${out.hookSpecificOutput?.hookEventName}".`
-    );
+    assert.strictEqual(out, null, 'absent hook_event_name (non-Gemini) is now silent (#2289)');
   });
 
   test('falls back to "AfterTool" when hook_event_name is absent and GEMINI_API_KEY is set', () => {
+    // Unchanged by #2289: this is the Gemini fallback, which remains an
+    // explicit allowlisted emitting path.
     const out = runMonitor({
       hookEventName: undefined,
       sessionId: makeSessionId('fallback-gemini'),
@@ -902,57 +906,44 @@ describe('bug #925: context monitor falls back to heuristic when hook_event_name
     );
   });
 
-  test('falls back to "PostToolUse" when hook_event_name is an empty string (non-Gemini)', () => {
+  test('empty-string hook_event_name (non-Gemini) is now silent (#2289)', () => {
+    // #2289: an empty hook_event_name without GEMINI_API_KEY is treated the
+    // same as absent — non-injection case → silent.
     const out = runMonitor({
       hookEventName: '',
       sessionId: makeSessionId('fallback-empty'),
       env: { GEMINI_API_KEY: '' },
     });
-    assert.ok(out, 'hook must emit output when context is below WARNING threshold');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'PostToolUse',
-      `Expected fallback "PostToolUse" for empty hook_event_name but got "${out.hookSpecificOutput?.hookEventName}".`
-    );
+    assert.strictEqual(out, null, 'empty-string hook_event_name (non-Gemini) is now silent (#2289)');
   });
 
-  test('falls back to "PostToolUse" when hook_event_name is whitespace-only (non-Gemini)', () => {
-    // trim() makes "   " → "" which is falsy, so the || fallback fires
+  test('whitespace-only hook_event_name (non-Gemini) is now silent (#2289)', () => {
+    // trim() makes "   " → "" which is falsy; #2289: this now takes the
+    // non-injection silent path rather than falling back to "PostToolUse".
     const out = runMonitor({
       hookEventName: '   ',
       sessionId: makeSessionId('fallback-whitespace'),
       env: { GEMINI_API_KEY: '' },
     });
-    assert.ok(out, 'hook must emit output when context is below WARNING threshold');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'PostToolUse',
-      `Expected fallback "PostToolUse" for whitespace-only hook_event_name but got "${out.hookSpecificOutput?.hookEventName}".`
-    );
+    assert.strictEqual(out, null, 'whitespace-only hook_event_name (non-Gemini) is now silent (#2289)');
   });
 });
 
 // ─── Critical threshold also echoes the event name ───────────────────────────
 
 describe('bug #925: critical threshold warning also uses correct hookEventName', () => {
-  test('CRITICAL warning emitted under Stop also echoes "Stop"', () => {
+  test('CRITICAL under Stop is silent (Codex rejects the Stop envelope) (#2289)', () => {
+    // #2289: even at CRITICAL severity, Stop is a non-injection event whose
+    // schema (Codex) rejects the hookSpecificOutput envelope outright. The
+    // hook must emit nothing rather than echo "Stop", superseding bug #925's
+    // "echoes Stop" expectation for this event specifically.
     const out = runMonitor({
       hookEventName: 'Stop',
       sessionId: makeSessionId('critical-stop'),
       remainingPct: 20,
       usedPct: 80,
     });
-    assert.ok(out, 'hook must emit output at critical threshold (remaining=20)');
-    assert.strictEqual(
-      out.hookSpecificOutput?.hookEventName,
-      'Stop',
-      `Expected hookEventName "Stop" at critical threshold, got "${out.hookSpecificOutput?.hookEventName}".`
-    );
-    assert.match(
-      out.hookSpecificOutput?.additionalContext || '',
-      /CONTEXT CRITICAL/,
-      'Output should be a CRITICAL warning at remaining=20'
-    );
+    assert.strictEqual(out, null, 'CRITICAL under Stop must be silent — no envelope for a non-injection event (#2289)');
   });
 });
   });

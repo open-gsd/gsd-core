@@ -4,7 +4,7 @@
   ".kimi/hooks/gsd-check-update-worker.js": "6593f80914f4edee",
   ".kimi/hooks/gsd-check-update.js": "aac7612ee04ff5fe",
   ".kimi/hooks/gsd-config-reload.js": "96546e0e8bb47904",
-  ".kimi/hooks/gsd-context-monitor.js": "783c93351e82151f",
+  ".kimi/hooks/gsd-context-monitor.js": "4c0535bc269e130e",
   ".kimi/hooks/gsd-cursor-post-tool.js": "9168e0a09de1972a",
   ".kimi/hooks/gsd-cursor-pre-tool.js": "873998b25e308c29",
   ".kimi/hooks/gsd-cursor-session-start.js": "9b2e6f4f0c405375",
