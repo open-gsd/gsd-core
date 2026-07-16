@@ -1,7 +1,7 @@
 ---
 name: gsd-plan-review-convergence
 description: "Cross-AI plan convergence - replan until review concerns are resolved."
-argument-hint: "<phase> [--codex] [--gemini] [--claude] [--opencode] [--ollama] [--lm-studio] [--llama-cpp] [--text] [--ws <name>] [--all] [--max-cycles N]"
+argument-hint: "<phase> [--codex] [--gemini] [--claude] [--opencode] [--ollama] [--lm-studio] [--llama-cpp] [--agy] [--text] [--ws <name>] [--all] [--max-cycles N]"
 allowed-tools:
   - Read
   - Write
@@ -42,6 +42,7 @@ Phase number: extracted from $ARGUMENTS (required)
 **Flags:**
 - `--codex` — Use Codex CLI as reviewer (default if no reviewer specified)
 - `--gemini` — Use Gemini CLI as reviewer
+- `--agy` / `--antigravity` — Use Antigravity CLI as reviewer (successor to the discontinued Gemini CLI)
 - `--claude` — Use Claude CLI as reviewer (separate session)
 - `--opencode` — Use OpenCode as reviewer
 - `--ollama` — Use local Ollama server as reviewer (OpenAI-compatible, default host `http://localhost:11434`; configure model via `review.models.ollama`)
