@@ -314,7 +314,7 @@
   "hooks/gsd-check-update-worker.js": "4bb354044e0dff91",
   "hooks/gsd-check-update.js": "d2065cb3e725a42a",
   "hooks/gsd-config-reload.js": "4f52b8a0120bb1b8",
-  "hooks/gsd-context-monitor.js": "437a33e6e3058640",
+  "hooks/gsd-context-monitor.js": "b71785540277e9d7",
   "hooks/gsd-cursor-post-tool.js": "8a8a249c0642cc71",
   "hooks/gsd-cursor-pre-tool.js": "8cb8e8f895edaec9",
   "hooks/gsd-cursor-session-start.js": "05a14e903c5edafa",
