@@ -80,17 +80,59 @@ function isPhaseContinuationSegment(seg: string): boolean {
 // bracket readers (PR-2: roadmap/validate/verify) must build their regexes by
 // interpolating these exports, never by copying the literal.
 //
+// The canonical numeric WIDTH of a bracket identity field, mirroring pad2()'s
+// output: exactly 2 digits, or 3+ with no leading zero. Owned here as a SOURCE
+// so the read side (BRACKET_PHASE_TOKEN_SOURCE, below) and the emit-side
+// validator (CANONICAL_NUMERIC_RE, which toDir enforces) are one rule rather
+// than two literals that agree today and drift tomorrow.
+const BRACKET_CANONICAL_NUMERIC_SOURCE = '(?:[1-9]\\d{2,}|\\d{2})';
+
 // BRACKET_PHASE_TOKEN_SOURCE differs from PHASE_NUMBER_TOKEN_SOURCE by a
 // dot-OR-dash sub-separator: a bracket dir/heading numeric run is `MM-PP[.SS]`
 // (a hyphen joins milestone↔phase, a dot joins phase↔sub-phase), whereas M-NN
 // sub-phases are dot-only.
 //
-// Deliberately MORE PERMISSIVE than parsePhaseId's strict grammar (it admits a
-// letter-suffixed token and unbounded [.-] runs that the parser rejects): this
-// is a READ-TOLERANCE source for the PR-2 readers, which must recognize a
+// The run is POSITIONAL, not a free repetition — `MM-PP[.SS][-LL]` — and each
+// position gets the width its DELIMITER can actually afford:
+//
+//   MM   leading   unbounded  — delimited by the `{CODE}.` prefix
+//   -PP  dash-1    canonical  — the grammar REQUIRES this dash, so it is a field
+//                              separator, not a continuation heuristic
+//   .SS  dot       canonical  — a slug carries no dot (toDir sanitizes them
+//                              away), so this position cannot collide
+//   -LL  dash-2    #2232 cap  — the ONLY slug-adjacent position, and therefore
+//                              the only one a slug word can collide with
+//
+// #2232 reconciliation: the slug-adjacent position interpolates the single-owner
+// PHASE_CONTINUATION_SEGMENT_SOURCE, so the #2232 bug class cannot reopen on the
+// bracket path — dir `PROJ.01-14-2026-photos-…` (a slug leading with a year)
+// yields `01-14`, never `01-14-2026`.
+//
+// DELIBERATE DIVERGENCE from the M-NN dir-token path (pinned by the parity gate
+// in tests/continuation-grammar-parity.test.cjs, which fails if these two rules
+// drift for a reason nobody intended): the non-slug-adjacent positions stay
+// WIDER than #2232's cap. Bracket admits 3+-digit milestone/phase/sub-phase
+// (CANONICAL_NUMERIC_RE — `[GSD.100] 05` is a pinned regression), and unlike the
+// M-NN continuations those positions are delimiter-disambiguated rather than
+// heuristically recognized, so there is no year collision to defend against.
+// Interpolating the cap verbatim at every position would only under-collect ids
+// that toDir itself emits: `PROJ.02-105-slug` (3-digit phase) would read as
+// `02`, and `[GSD.02] 05.100` (3-digit sub-phase) as `05`. Upstream draws this
+// same line for the same reason — core-utils/phase cap the paired PLAN component
+// while the leading phase component stays unbounded (phase numbers ≥100 are
+// legitimate). The trade-off this accepts is #2232's policy verbatim: a PLAN
+// ≥100 is out of the token grammar.
+//
+// Still deliberately MORE PERMISSIVE than parsePhaseId's strict grammar (it
+// admits a letter-suffixed and unpadded leading token that the parser rejects):
+// this is a READ-TOLERANCE source for the PR-2 readers, which must recognize a
 // bracket-shaped token before deciding what to do with it — it is not the
 // emit/identity grammar. parsePhaseId stays the arbiter of well-formedness.
-const BRACKET_PHASE_TOKEN_SOURCE = '\\d+[A-Z]?(?:[.-]\\d+)*';
+const BRACKET_PHASE_TOKEN_SOURCE =
+  `\\d+[A-Z]?` +
+  `(?:-${BRACKET_CANONICAL_NUMERIC_SOURCE}(?!\\d))?` +
+  `(?:\\.${BRACKET_CANONICAL_NUMERIC_SOURCE}(?!\\d))?` +
+  `(?:-${PHASE_CONTINUATION_SEGMENT_SOURCE})?`;
 
 // A phase HEADING intro under bracket is either a `[...]` bracket (optionally
 // followed by a `Phase ` label) or a bare `Phase ` label; a bare number is NOT
@@ -284,9 +326,13 @@ function renderPhaseId(id: PhaseId): string {
 // itself would ever produce, closing off a hand-built id as a path-traversal
 // vector. PROJECT_ID_RE mirrors the parser's `[A-Z][A-Z0-9_]*` grammar;
 // CANONICAL_NUMERIC_RE mirrors pad2()'s output shape — exactly 2 digits, or
-// 3+ digits with no leading zero.
+// 3+ digits with no leading zero. It is BUILT from
+// BRACKET_CANONICAL_NUMERIC_SOURCE rather than re-spelled as a literal, so this
+// emit-side gate and the read-side token source cannot disagree about what
+// "canonical width" means (the anchors here make the source's trailing `(?!\d)`
+// guard, which the unanchored read side needs, redundant).
 const PROJECT_ID_RE = /^[A-Z][A-Z0-9_]*$/;
-const CANONICAL_NUMERIC_RE = /^(?:\d{2}|[1-9]\d{2,})$/;
+const CANONICAL_NUMERIC_RE = new RegExp(`^${BRACKET_CANONICAL_NUMERIC_SOURCE}$`);
 
 function toDir(id: PhaseId, slug: string): string {
   if (!PROJECT_ID_RE.test(id.project)) {
