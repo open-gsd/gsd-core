@@ -1,7 +1,7 @@
 {
   ".gsd-profile": "0e716a5fef4e6dc1",
   ".gsd/defaults.json": "560664b045e645cb",
-  "extensions/gsd.cjs": "ec367369156896d3",
+  "extensions/gsd.cjs": "d7f753326b98024a",
   "gsd-core/VERSION": "ef0deccd81a6723c",
   "gsd-core/bin/check-latest-version.cjs": "e4a224058c8f4d74",
   "gsd-core/bin/ensure-runtime-build.cjs": "51bc64467ab30f62",
