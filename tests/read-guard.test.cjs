@@ -511,6 +511,9 @@ describe('bug #2520: read guard detects Claude Code without relying on CLAUDECOD
 // ────────────────────────────────────────────────────────────────────────
 
 describe('#2304: Kimi tool vocabulary engages the read guard', () => {
+  // Payload shapes mirror kimi-cli's actual tool schemas
+  // (src/kimi_cli/tools/file/{write,replace}.py): WriteFile takes
+  // `path`/`content`, StrReplaceFile takes `path` + `edit: Edit | list[Edit]`.
   let tmpDir;
 
   beforeEach(() => { tmpDir = createTempDir('gsd-read-guard-2304-'); });
@@ -522,7 +525,7 @@ describe('#2304: Kimi tool vocabulary engages the read guard', () => {
 
     const result = runHook({
       tool_name: 'WriteFile',
-      tool_input: { file_path: filePath, content: 'console.log("world");\n' },
+      tool_input: { path: filePath, content: 'console.log("world");\n' },
     });
 
     assert.equal(result.exitCode, 0);
@@ -537,7 +540,7 @@ describe('#2304: Kimi tool vocabulary engages the read guard', () => {
 
     const result = runHook({
       tool_name: 'StrReplaceFile',
-      tool_input: { file_path: filePath, old_string: 'const x = 1;', new_string: 'const x = 2;' },
+      tool_input: { path: filePath, edit: { old: 'const x = 1;', new: 'const x = 2;' } },
     });
 
     assert.equal(result.exitCode, 0);
@@ -552,7 +555,7 @@ describe('#2304: Kimi tool vocabulary engages the read guard', () => {
 
     const result = runHook({
       tool_name: 'kimi_cli.tools.file:WriteFile',
-      tool_input: { file_path: filePath, content: 'replacement\n' },
+      tool_input: { path: filePath, content: 'replacement\n' },
     });
 
     assert.equal(result.exitCode, 0);
@@ -565,7 +568,7 @@ describe('#2304: Kimi tool vocabulary engages the read guard', () => {
 
     const result = runHook({
       tool_name: 'kimi_cli.tools.file:ReadFile',
-      tool_input: { file_path: filePath },
+      tool_input: { path: filePath },
     });
 
     assert.equal(result.exitCode, 0);
