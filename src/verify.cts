@@ -28,6 +28,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { isCanonicalPlanningFile } from './artifacts.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
+import { VALID_PROFILES, VALID_TIERS, VALID_PHASE_TYPES } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled } = agentInstallCheck;
@@ -1354,14 +1355,33 @@ function cmdValidateHealth(
     try {
       const rawCfg = fs.readFileSync(configPath, 'utf-8');
       const parsed = JSON.parse(rawCfg) as Record<string, unknown>;
-      const validProfiles = ['quality', 'balanced', 'budget', 'inherit'];
-      if (parsed['model_profile'] && !validProfiles.includes(parsed['model_profile'] as string)) {
+      if (parsed['model_profile'] && !VALID_PROFILES.includes(parsed['model_profile'] as string)) {
         addIssue(
           'warning',
           'W004',
           `config.json: invalid model_profile "${parsed['model_profile'] as string}"`,
-          `Valid values: ${validProfiles.join(', ')}`,
+          `Valid values: ${VALID_PROFILES.join(', ')}`,
         );
+      }
+      const configModels = parsed['models'];
+      if (configModels && typeof configModels === 'object' && !Array.isArray(configModels)) {
+        for (const [phaseType, tierValue] of Object.entries(configModels as Record<string, unknown>)) {
+          if (!VALID_PHASE_TYPES.has(phaseType)) {
+            addIssue(
+              'warning',
+              'W022',
+              `config.json: models has an unknown phase type "${phaseType}" which will be ignored`,
+              `Valid phase types: ${[...VALID_PHASE_TYPES].join(', ')}`,
+            );
+          } else if (typeof tierValue !== 'string' || !VALID_TIERS.has(tierValue)) {
+            addIssue(
+              'warning',
+              'W022',
+              `config.json: models.${phaseType} has an invalid tier value ${JSON.stringify(tierValue)} which will be ignored`,
+              `Valid tiers: ${[...VALID_TIERS].join(', ')}`,
+            );
+          }
+        }
       }
     } catch (err) {
       addIssue(

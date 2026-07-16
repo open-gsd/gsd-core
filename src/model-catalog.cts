@@ -77,6 +77,9 @@ export { _catalog as catalog };
 export const VALID_PROFILES: string[] = [..._catalog.profiles];
 export const VALID_PHASE_TYPES: Set<string> = new Set(_catalog.phaseTypes);
 export const VALID_AGENT_TIERS: Set<string> = new Set(Object.keys(_catalog.adaptiveTierMap));
+// Catalog-derived so this can never drift from the resolver's tier gate:
+// Object.values(adaptiveTierMap) === ['opus', 'sonnet', 'haiku'] today, plus 'inherit'.
+export const VALID_TIERS: Set<string> = new Set([...Object.values(_catalog.adaptiveTierMap), 'inherit']);
 
 /** Per-profile model slots for each agent. */
 export interface AgentModelProfiles {
