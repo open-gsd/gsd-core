@@ -563,3 +563,86 @@ test('execute-phase.md: awk extracts resolves_phase from YAML frontmatter', () =
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #2308: new-milestone.md must not clobber the shared PROJECT.md when a
+// workstream is active, and must propagate ${GSD_WS} to downstream routing.
+// ────────────────────────────────────────────────────────────────────────
+describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
+  const content = fs.readFileSync(workflowPath, 'utf8');
+
+  test('step 1 parses --ws into GSD_WS using the established grep idiom', () => {
+    assert.ok(content.includes('GSD_WS=""'), 'should initialize GSD_WS to empty string');
+    assert.ok(
+      content.includes("grep -qE -- '--ws[[:space:]]+[^[:space:]]+'"),
+      'should test for the --ws flag using the established idiom (see verify-work.md)'
+    );
+    assert.ok(
+      content.includes('GSD_WS=$(echo "$ARGUMENTS" | grep -oE -- \'--ws[[:space:]]+[^[:space:]]+\')'),
+      'should extract the --ws value into GSD_WS using the established idiom'
+    );
+  });
+
+  test('step 4 carries a workstream skip-guard keyed on GSD_WS', () => {
+    const step4Idx = content.indexOf('## 4. Update PROJECT.md');
+    const step5Idx = content.indexOf('## 5. Update STATE.md');
+    assert.ok(step4Idx !== -1 && step5Idx !== -1 && step4Idx < step5Idx, 'steps 4 and 5 should be locatable');
+    const step4Body = content.slice(step4Idx, step5Idx);
+
+    assert.match(
+      step4Body,
+      /Skip this entire step if a workstream is active/i,
+      'step 4 should describe a whole-step skip guard'
+    );
+    assert.ok(step4Body.includes('GSD_WS'), 'step 4 guard should be keyed on GSD_WS');
+    assert.ok(step4Body.includes('#2308'), 'step 4 should reference the originating issue');
+    assert.ok(
+      step4Body.includes('Shared'),
+      'step 4 should justify the guard by pointing at PROJECT.md being the shared file'
+    );
+  });
+
+  test('step 6 commit does not stage PROJECT.md unconditionally', () => {
+    const step6Idx = content.indexOf('## 6. Cleanup and Commit');
+    const step7Idx = content.indexOf('## 7. Load Context and Resolve Models');
+    assert.ok(step6Idx !== -1 && step7Idx !== -1 && step6Idx < step7Idx, 'steps 6 and 7 should be locatable');
+    const step6Body = content.slice(step6Idx, step7Idx);
+
+    assert.ok(step6Body.includes('if [ -n "$GSD_WS" ]'), 'step 6 commit must branch on GSD_WS');
+    assert.ok(
+      step6Body.includes('--files .planning/STATE.md') &&
+        step6Body.includes('--files .planning/PROJECT.md .planning/STATE.md'),
+      'step 6 should have a workstream-mode branch (STATE.md only) and a flat-mode branch (PROJECT.md + STATE.md)'
+    );
+    // The bare, unconditional two-file commit form from before the fix must be gone.
+    const bareForm = 'gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md\n```';
+    assert.ok(
+      !content.includes(bareForm),
+      'the pre-fix unconditional commit staging PROJECT.md must no longer appear bare'
+    );
+  });
+
+  test('routing interpolations still propagate ${GSD_WS} at the documented lines', () => {
+    assert.ok(
+      content.includes('/gsd:new-milestone --reset-phase-numbers ${GSD_WS}'),
+      'reset-phase-numbers rerun hint should propagate ${GSD_WS}'
+    );
+    assert.ok(
+      content.includes('/gsd:discuss-phase [N] ${GSD_WS}'),
+      'discuss-phase routing hint should propagate ${GSD_WS}'
+    );
+    assert.ok(
+      content.includes('/gsd:plan-phase [N] ${GSD_WS}'),
+      'plan-phase routing hint should propagate ${GSD_WS}'
+    );
+  });
+
+  test('success criteria reflects PROJECT.md update is skipped in workstream mode', () => {
+    assert.match(
+      content,
+      /PROJECT\.md updated with Current Milestone section.*skipped.*workstream/i,
+      'success criteria should note the PROJECT.md step is skipped in workstream mode'
+    );
+  });
+});

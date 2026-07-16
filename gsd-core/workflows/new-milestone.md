@@ -23,9 +23,17 @@ Valid GSD subagent types (use exact names — do not fall back to 'general-purpo
 
 Parse `$ARGUMENTS` before doing anything else:
 - `--reset-phase-numbers` flag → opt into restarting roadmap phase numbering at `1`
+- `--ws <name>` flag → active workstream scope; parse it into `GSD_WS` using the established idiom:
+
+```bash
+GSD_WS=""
+echo "$ARGUMENTS" | grep -qE -- '--ws[[:space:]]+[^[:space:]]+' && GSD_WS=$(echo "$ARGUMENTS" | grep -oE -- '--ws[[:space:]]+[^[:space:]]+')
+```
 - remaining text → use as milestone name if present
 
 If the flag is absent, keep the current behavior of continuing phase numbering from the previous milestone.
+
+`GSD_WS` must chain to every downstream routing suggestion in this workflow (Step 4's shared-file guard, and the `/gsd:discuss-phase`/`/gsd:plan-phase` routing hints below) per the routing-propagation contract in `references/workstream-flag.md` — never let it silently drop.
 
 - Read PROJECT.md (existing project, validated requirements, decisions)
 - Read MILESTONES.md (what shipped previously)
@@ -134,6 +142,8 @@ AskUserQuestion:
 **If "Looks good":** Proceed to Step 4.
 
 ## 4. Update PROJECT.md
+
+**Skip this entire step if a workstream is active** (i.e., `GSD_WS` is non-empty, parsed in Step 1). PROJECT.md is shared across workstreams (`references/workstream-flag.md` marks it `# Shared` in the directory diagram); the active workstream's own `.planning/workstreams/<name>/STATE.md`/`ROADMAP.md`/`REQUIREMENTS.md` already carry this milestone's state. Writing a `## Current Milestone` heading here would clobber the shared file, and with parallel milestones across workstreams, whichever workstream runs `new-milestone` last would silently win the shared heading (#2308). In flat mode (`GSD_WS` empty), continue below exactly as before.
 
 Add/update:
 
@@ -247,8 +257,14 @@ Stage the phase archive move + source removal so they land in the same commit as
 git add .planning/milestones/ .planning/phases/ 2>/dev/null || true
 ```
 
+PROJECT.md was only written in Step 4's flat-mode branch — when a workstream is active (`GSD_WS` non-empty), Step 4 was skipped and PROJECT.md has no changes to stage here:
+
 ```bash
-gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md
+if [ -n "$GSD_WS" ]; then
+  gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/STATE.md
+else
+  gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md
+fi
 ```
 
 ## 7. Load Context and Resolve Models
@@ -659,7 +675,7 @@ Also: `/gsd:plan-phase [N] ${GSD_WS}` — skip discussion, plan directly
 </process>
 
 <success_criteria>
-- [ ] PROJECT.md updated with Current Milestone section
+- [ ] PROJECT.md updated with Current Milestone section (skipped when a workstream is active — shared file, see Step 4)
 - [ ] STATE.md reset for new milestone
 - [ ] MILESTONE-CONTEXT.md consumed and deleted (if existed)
 - [ ] Research completed (if selected) — 4 parallel agents, milestone-aware
