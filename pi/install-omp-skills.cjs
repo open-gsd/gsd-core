@@ -7,6 +7,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { readCmdNames, transformContentToHyphen } = require('../scripts/fix-slash-commands.cjs');
+
+const ompCommandNames = readCmdNames();
 
 const OMP_RUNTIME_BLOCK = `<omp_runtime_cli>
 **OMP runtime CLI:** \`{{OMP_GSD_TOOLS}}\` is the only authoritative \`gsd-tools.cjs\` for this skill. Bind \`gsd_run() { GSD_RUNTIME=omp node "{{OMP_GSD_TOOLS}}" "$@"; }\` before any query and use \`gsd_run\` throughout. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another installed runtime may own that executable. Preserve \`GSD_RUNTIME=omp\` on every direct runtime CLI invocation so command formatting, agent discovery, and capability resolution stay OMP-scoped.
@@ -34,8 +37,10 @@ function toPosixPath(value) {
 
 function projectSkillContent(content, runtimeRoot) {
   const runtimeGsdRoot = toPosixPath(path.join(runtimeRoot, 'gsd-core'));
-  return content.replaceAll('~/.claude/gsd-core', runtimeGsdRoot);
+  const rewritten = content.replaceAll('~/.claude/gsd-core', runtimeGsdRoot);
+  return transformContentToHyphen(rewritten, ompCommandNames);
 }
+
 
 function applyOmpSkillBlock(name, content, runtimeRoot) {
   const gsdToolsPath = toPosixPath(path.join(runtimeRoot, 'gsd-core', 'bin', 'gsd-tools.cjs'));

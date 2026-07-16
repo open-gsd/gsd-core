@@ -611,10 +611,19 @@ module.exports = function gsdPiExtension(pi, options = {}) {
     return path.join(cwd, '.planning', '.omp-next-action.json');
   }
 
+  function normalizeNativeGsdCommand(command) {
+    const value = String(command || '').trim();
+    const match = /^\/(?:skill:)?gsd(?:(?:[-:])([A-Za-z0-9_-]+))?((?:[ \t]+[^\r\n]+)?)$/.exec(value);
+    if (!match) return value;
+    return `/gsd${match[1] ? `-${match[1]}` : ''}${match[2]}`;
+  }
+
   function readNextAction(cwd) {
     try {
       const action = JSON.parse(fs.readFileSync(nextActionPath(cwd), 'utf8'));
-      return typeof action?.command === 'string' && typeof action?.label === 'string' ? action : null;
+      return typeof action?.command === 'string' && typeof action?.label === 'string'
+        ? { ...action, command: normalizeNativeGsdCommand(action.command) }
+        : null;
     } catch {
       return null;
     }
@@ -624,7 +633,8 @@ module.exports = function gsdPiExtension(pi, options = {}) {
     const target = nextActionPath(cwd);
     const temporary = `${target}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(temporary, JSON.stringify(action, null, 2) + '\n');
+      const normalized = { ...action, command: normalizeNativeGsdCommand(action?.command) };
+      fs.writeFileSync(temporary, JSON.stringify(normalized, null, 2) + '\n');
       fs.renameSync(temporary, target);
       return true;
     } catch {
@@ -694,9 +704,10 @@ module.exports = function gsdPiExtension(pi, options = {}) {
     if (!label) return null;
     return {
       label,
-      command,
+      command: normalizeNativeGsdCommand(command),
       requiresFreshContext: lines.some((line) => /^\/(?:new|clear)\s+then:?$/i.test(line)),
     };
+
   }
 
   function assistantMessageText(message) {

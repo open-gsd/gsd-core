@@ -1994,6 +1994,7 @@ const capabilities = {
         "skipSharedHooksInstall": false,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
+        "hyphenNameAgentBody": true,
         "skipCodexSkillsManifest": true
       }
     }
@@ -5134,6 +5135,7 @@ const runtimes = {
         "skipSharedHooksInstall": false,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
+        "hyphenNameAgentBody": true,
         "skipCodexSkillsManifest": true
       }
     }

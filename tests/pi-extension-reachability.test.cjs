@@ -1272,6 +1272,8 @@ test('the OMP agent installer projects native task and isolation guidance', () =
   assert.match(executor, /terminal `yield` protocol/);
   assert.match(executor, /IRC status request/);
   assert.match(executor, /\[gsd-task-result\] phase \{PHASE\}/);
+  assert.match(executor, /\/gsd-execute-phase/);
+  assert.doesNotMatch(executor, /\/gsd:[a-z]/i);
   const reviewer = fs.readFileSync(path.join(destination, 'gsd-code-reviewer.md'), 'utf8');
   const debugManager = fs.readFileSync(path.join(destination, 'gsd-debug-session-manager.md'), 'utf8');
   assert.match(reviewer, /OMP native orchestration/);
@@ -1305,6 +1307,7 @@ test('the OMP development installer projects every GSD skill with runtime paths'
       assert.ok(content.includes(`\`${runtimeTools}\``), `${path.basename(path.dirname(skillPath))} must pin the OMP runtime`);
       assert.match(content, /GSD_RUNTIME=omp node/);
       assert.match(content, /Never invoke bare `gsd-tools`/);
+      assert.doesNotMatch(content, /\/gsd:[a-z]/i);
     }
 
     const planSkill = fs.readFileSync(path.join(skillsDir, 'gsd-plan-phase', 'SKILL.md'), 'utf8');
@@ -1364,12 +1367,17 @@ test('the generic installer creates a self-contained OMP runtime', async () => {
     assert.match(executor, /OMP native orchestration/);
     assert.doesNotMatch(executor, /~\/\.claude\//);
     assert.match(executor, /^model: "claude-[^"]+"$/m);
+    assert.match(executor, /\/gsd-execute-phase/);
+    assert.doesNotMatch(executor, /\/gsd:[a-z]/i);
     const executeSkill = fs.readFileSync(path.join(destination, 'skills', 'gsd-execute-phase', 'SKILL.md'), 'utf8');
     assert.match(executeSkill, /<omp_native_execution>/);
     assert.match(executeSkill, /Native `task` is the executor primitive/);
     const progressSkill = fs.readFileSync(path.join(destination, 'skills', 'gsd-progress', 'SKILL.md'), 'utf8');
     assert.match(progressSkill, /<omp_artifact_handling>/);
     assert.match(progressSkill, /truncated summary glob may supply recent-work examples only/);
+    const progressWorkflow = fs.readFileSync(path.join(destination, 'gsd-core', 'workflows', 'progress.md'), 'utf8');
+    assert.match(progressWorkflow, /\/gsd-plan-phase \{phase\} --gaps/);
+    assert.doesNotMatch(progressWorkflow, /\/gsd:[a-z]/i);
     const { extensionEventSurfaceFor } = require('../gsd-core/bin/lib/host-integration.cjs');
     assert.deepEqual(extensionEventSurfaceFor('pi'), [
       'resources_discover', 'session_start',
@@ -2552,13 +2560,10 @@ test('the adapter runs a fresh-session GSD Next Up continuation after confirmati
   const action = gsdPiExtension._internals.extractNextAction(output);
   assert.deepEqual(action, {
     label: 'Phase 1 gap closure — plan the metadata-refresh-before-validation boundary.',
-    command: '/gsd:plan-phase 01 --gaps',
+    command: '/gsd-plan-phase 01 --gaps',
     requiresFreshContext: true,
   });
-  assert.deepEqual(gsdPiExtension._internals.extractNextAction(output.replace('/gsd:plan-phase', '/gsd-plan-phase')), {
-    ...action,
-    command: '/gsd-plan-phase 01 --gaps',
-  });
+  assert.deepEqual(gsdPiExtension._internals.extractNextAction(output.replace('/gsd:plan-phase', '/gsd-plan-phase')), action);
 
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-omp-continuation-'));
   fs.mkdirSync(path.join(cwd, '.planning'));
@@ -2577,7 +2582,7 @@ test('the adapter runs a fresh-session GSD Next Up continuation after confirmati
   assert.deepEqual(widgets[0].lines.map(stripAnsi), [
     'GSD · Next Up',
     '└─ Phase 1 gap closure — plan the metadata-refresh-before-validation boundary.',
-    '   /gsd:plan-phase 01 --gaps',
+    '   /gsd-plan-phase 01 --gaps',
   ]);
 
   await pi._recorded.commands['gsd-next'].handler('', ctx);
@@ -2585,7 +2590,7 @@ test('the adapter runs a fresh-session GSD Next Up continuation after confirmati
   const appended = [];
   await sessions[0].setup({ appendMessage: (message) => appended.push(message) });
   assert.match(appended[0].content[0].text, /Execute it now, end-to-end/);
-  assert.match(appended[0].content[0].text, /GSD action: `gsd:plan-phase`/);
+  assert.match(appended[0].content[0].text, /GSD action: `gsd-plan-phase`/);
   assert.match(appended[0].content[0].text, /Arguments \(literal data\): "01 --gaps"/);
 });
 
@@ -2609,7 +2614,7 @@ test('the adapter runs a selected non-fresh GSD continuation without editor copy
     const continuation = pi._recorded.messages.at(-1);
     assert.equal(continuation.message.customType, 'gsd-native-continuation');
     assert.equal(continuation.options.triggerTurn, true);
-    assert.match(continuation.message.content, /GSD action: `gsd:discuss-phase`/);
+    assert.match(continuation.message.content, /GSD action: `gsd-discuss-phase`/);
     assert.match(continuation.message.content, /Arguments \(literal data\): "05"/);
     assert.match(continuation.message.content, /Do not display a command for the user to copy/);
   } finally {
@@ -2637,7 +2642,7 @@ test('native assistant completion captures Next Up and routes the selected actio
     });
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cwd, '.planning', '.omp-next-action.json'), 'utf8')), {
       label: 'Phase 5: Optional Enhancements — clarify scope before planning.',
-      command: '/gsd:discuss-phase 05',
+      command: '/gsd-discuss-phase 05',
       requiresFreshContext: false,
     });
     assert.equal(pi._recorded.messages.at(-1).message.customType, 'gsd-native-continuation');

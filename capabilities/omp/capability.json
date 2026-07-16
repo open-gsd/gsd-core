@@ -72,6 +72,8 @@
       "skipSharedHooksInstall": false,
       "skipSettingsUi": true,
       "skipUpdateBannerCommand": true,
+      "hyphenNameAgentBody": true,
+
       "skipCodexSkillsManifest": true
     }
   }

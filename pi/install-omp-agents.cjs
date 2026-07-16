@@ -9,6 +9,9 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { readCmdNames, transformContentToHyphen } = require('../scripts/fix-slash-commands.cjs');
+
+const ompCommandNames = readCmdNames();
 
 const ompTools = 'read, write, edit, bash, glob, grep, lsp, web_search, task';
 
@@ -45,12 +48,14 @@ If execution stops before the plan is complete, end the normal final response wi
 
 function rewriteRuntimePaths(content, runtimeRoot) {
   const root = runtimeRoot.replace(/\\/g, '/').replace(/\/$/, '');
-  return content
+  const rewritten = content
     .replace(/~\/\.claude\//g, `${root}/`)
     .replace(/\$HOME\/\.claude\//g, `${root}/`)
     .replace(/~\/\.claude\b/g, root)
     .replace(/\$HOME\/\.claude\b/g, root);
+  return transformContentToHyphen(rewritten, ompCommandNames);
 }
+
 
 function projectAgent(content, sourcePath, runtimeRoot, options = {}) {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
