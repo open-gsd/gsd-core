@@ -902,12 +902,16 @@ describe('input validators: shell metacharacter and identifier rejection', () =>
 // ─── Hook: gsd-prompt-guard under Kimi tool vocabulary (#2304) ──────────────
 
 describe('#2304: gsd-prompt-guard engages on Kimi tool vocabulary', () => {
+  // Payload shapes mirror kimi-cli's actual tool schemas
+  // (src/kimi_cli/tools/file/{write,replace}.py): WriteFile takes
+  // `path`/`content`, StrReplaceFile takes `path` + `edit: Edit | list[Edit]`.
+
   test('WriteFile of hostile .planning/ content triggers the advisory like Write', () => {
     const content = fs.readFileSync(
       path.join(FIXTURE_DIR, 'context-instruction-override.md'), 'utf-8');
     const r = runHook(PROMPT_GUARD_HOOK, {
       tool_name: 'WriteFile',
-      tool_input: { file_path: '/proj/.planning/CONTEXT.md', content },
+      tool_input: { path: '/proj/.planning/CONTEXT.md', content },
     });
     assert.strictEqual(r.status, 0, 'hooks never block (must exit 0)');
     assert.ok(r.parsed, `Kimi WriteFile of hostile content must trigger the advisory; got ${JSON.stringify(r.stdout)}`);
@@ -916,15 +920,29 @@ describe('#2304: gsd-prompt-guard engages on Kimi tool vocabulary', () => {
       'advisory must include non-empty additionalContext');
   });
 
-  test('StrReplaceFile with hostile new_string triggers the advisory like Edit', () => {
+  test('StrReplaceFile with a hostile edit.new triggers the advisory like Edit', () => {
     const content = fs.readFileSync(
       path.join(FIXTURE_DIR, 'plan-fake-system-tags.md'), 'utf-8');
     const r = runHook(PROMPT_GUARD_HOOK, {
       tool_name: 'StrReplaceFile',
-      tool_input: { file_path: '/proj/.planning/PLAN.md', old_string: 'x', new_string: content },
+      tool_input: { path: '/proj/.planning/PLAN.md', edit: { old: 'x', new: content } },
     });
     assert.strictEqual(r.status, 0);
     assert.ok(r.parsed, 'Kimi StrReplaceFile of hostile content must trigger the advisory');
+  });
+
+  test('StrReplaceFile with a hostile edit in a list of edits triggers the advisory', () => {
+    const content = fs.readFileSync(
+      path.join(FIXTURE_DIR, 'context-instruction-override.md'), 'utf-8');
+    const r = runHook(PROMPT_GUARD_HOOK, {
+      tool_name: 'StrReplaceFile',
+      tool_input: {
+        path: '/proj/.planning/PLAN.md',
+        edit: [{ old: 'a', new: 'benign text' }, { old: 'b', new: content }],
+      },
+    });
+    assert.strictEqual(r.status, 0);
+    assert.ok(r.parsed, 'a hostile edit anywhere in the list must trigger the advisory');
   });
 
   test('module-qualified kimi_cli.tools.file:WriteFile is recognized', () => {
@@ -932,7 +950,7 @@ describe('#2304: gsd-prompt-guard engages on Kimi tool vocabulary', () => {
       path.join(FIXTURE_DIR, 'context-instruction-override.md'), 'utf-8');
     const r = runHook(PROMPT_GUARD_HOOK, {
       tool_name: 'kimi_cli.tools.file:WriteFile',
-      tool_input: { file_path: '/proj/.planning/CONTEXT.md', content },
+      tool_input: { path: '/proj/.planning/CONTEXT.md', content },
     });
     assert.strictEqual(r.status, 0);
     assert.ok(r.parsed, 'module-qualified Kimi WriteFile must trigger the advisory');
@@ -943,7 +961,7 @@ describe('#2304: gsd-prompt-guard engages on Kimi tool vocabulary', () => {
       path.join(FIXTURE_DIR, 'context-instruction-override.md'), 'utf-8');
     const r = runHook(PROMPT_GUARD_HOOK, {
       tool_name: 'kimi_cli.tools.file:Grep',
-      tool_input: { file_path: '/proj/.planning/PLAN.md', content },
+      tool_input: { path: '/proj/.planning/PLAN.md', content },
     });
     assert.strictEqual(r.status, 0);
     assert.strictEqual(r.silent, true, 'prompt-guard scope is write tools only — Grep must stay silent');
