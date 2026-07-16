@@ -375,6 +375,7 @@ const {
 } = require(path.join(_gsdLibDir, 'model-catalog.cjs'));
 const {
   resolveTierEntry: gsdResolveTierEntry,
+  CLAUDE_AGENT_ALIASES,
 } = require(path.join(_gsdLibDir, 'model-resolver.cjs'));
 
 // #2071 — install-time effort resolution (readGsdEffectiveEffortConfig /
@@ -4006,6 +4007,36 @@ purpose: ${toSingleLine(description)}
 }
 
 /**
+ * #2310 — True if `model` is an Anthropic-flavored value that must never appear as a
+ * Codex agent `.toml` `model`. Two forms: (a) a bare Claude Agent-tool tier alias
+ * (opus/sonnet/haiku/fable — the canonical CLAUDE_AGENT_ALIASES, imported from
+ * src/model-resolver.cts so it can't diverge); (b) any Claude model id in any provider
+ * namespacing — `claude-*`, `anthropic/claude-*`, `us.anthropic.claude-*` (the forms the
+ * catalog assigns to opencode/hermes/kilo, reachable on a Codex .toml via the runtime-
+ * resolver path). No OpenAI/Codex model id contains "claude", so a case-insensitive
+ * substring test is a safe, exhaustive guard for (b). Codex/ChatGPT rejects all of these.
+ */
+function _isAnthropicFlavoredModel(model) {
+  return typeof model === 'string' && (CLAUDE_AGENT_ALIASES.has(model) || model.toLowerCase().includes('claude'));
+}
+
+// #2310 — dedupe stderr warnings so repeated agent emits don't spam (mirrors the
+// #2041/#1133 model-resolver warn-dedupe). Value is length-capped so an oversized
+// or secret-shaped override cannot leak in full to logs.
+const _codexModelOverrideDroppedWarned = new Set();
+function _warnCodexModelOverrideDropped(agentName, value) {
+  const key = `${agentName}::${value}`;
+  if (_codexModelOverrideDroppedWarned.has(key)) return;
+  _codexModelOverrideDroppedWarned.add(key);
+  const safe = String(value).length > 64 ? `${String(value).slice(0, 64)}…` : String(value);
+  process.stderr.write(
+    `gsd: warning — Codex agent "${agentName}" model "${safe}" is not a valid Codex model ` +
+    `(Anthropic alias/id); dropping it so Codex uses a valid default. ` +
+    `Set runtime:"codex" or pin a gpt-* model to route it.\n`,
+  );
+}
+
+/**
  * Generate a per-agent .toml config file for Codex.
  * Sets required agent metadata, sandbox_mode, and developer_instructions
  * from the agent markdown content.
@@ -4038,21 +4069,43 @@ function generateCodexAgentToml(agentName, agentContent, modelOverrides = null, 
   // model_overrides is respected on Codex (which uses static TOML, not inline
   // Task() model parameters). See #2256.
   // Precedence: per-agent model_overrides > runtime-aware tier resolution (#2517).
-  const modelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
-  let hasPinnedModel = false;
-  if (modelOverride) {
-    lines.push(`model = ${JSON.stringify(modelOverride)}`);
-    hasPinnedModel = true;
-  } else if (runtimeResolver) {
+  // #2310 — a Codex .toml `model` MUST be a real Codex/OpenAI model id. Codex is a
+  // passive/session-only model host (ADR-1239): GSD cannot reliably route per-agent
+  // tiers, and a bare GSD/Claude tier alias (opus/sonnet/haiku/fable) or a claude-*
+  // id 400s on a ChatGPT-account Codex ("The 'sonnet' model is not supported when
+  // using Codex with a ChatGPT account"). So: embed ONLY an explicit real-Codex
+  // model pin from model_overrides; omit anything Anthropic-flavored so the agent
+  // inherits the always-available session model. (Removing the runtime-resolver
+  // per-tier embedding below is the ADR-2310 passive-posture epic.)
+  const rawModelOverride = modelOverrides?.[resolvedName] || modelOverrides?.[agentName];
+  let pinnedModel = null;
+  if (rawModelOverride) {
+    if (typeof rawModelOverride === 'string' && rawModelOverride && !_isAnthropicFlavoredModel(rawModelOverride)) {
+      pinnedModel = rawModelOverride;   // explicit real-Codex model pin → embed verbatim (#2256)
+    } else {
+      _warnCodexModelOverrideDropped(resolvedName, rawModelOverride);   // alias/claude-* → omit
+    }
+  }
+  if (!pinnedModel && runtimeResolver) {
     // #2517 — runtime-aware tier resolution. Embeds Codex-native model + reasoning_effort
     // from RUNTIME_PROFILE_MAP / model_profile_overrides for the configured tier.
+    // (Superseded on the default path by the ADR-2310 passive-posture epic.)
     const entry = runtimeResolver.resolve(resolvedName) || runtimeResolver.resolve(agentName);
-    if (entry?.model) {
-      lines.push(`model = ${JSON.stringify(entry.model)}`);
-      hasPinnedModel = true;
-      // model is resolved here; reasoning_effort from catalog tier is REPLACED by the
-      // unified effort resolver below (#443). Do NOT emit entry.reasoning_effort here.
-    }
+    if (entry?.model) pinnedModel = entry.model;
+  }
+  // #2310 — final safety gate: never emit an Anthropic-flavored model into a Codex
+  // .toml, even from the runtime-resolver path (e.g. a defaults.json runtime that
+  // does not match the codex install target).
+  if (pinnedModel && _isAnthropicFlavoredModel(pinnedModel)) {
+    _warnCodexModelOverrideDropped(resolvedName, pinnedModel);
+    pinnedModel = null;
+  }
+  let hasPinnedModel = false;
+  if (pinnedModel) {
+    lines.push(`model = ${JSON.stringify(pinnedModel)}`);
+    hasPinnedModel = true;
+    // model is resolved here; reasoning_effort from catalog tier is REPLACED by the
+    // unified effort resolver below (#443). Do NOT emit entry.reasoning_effort here.
   }
 
   // #443 — Unified effort for Codex .toml. Uses the same config-driven precedence chain
