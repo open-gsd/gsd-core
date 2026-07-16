@@ -7458,7 +7458,7 @@ function uninstall(isGlobal, runtime = DEFAULT_RUNTIME) {
   if (runtime === 'omp') {
     const extensionsDir = path.join(targetDir, 'extensions');
     let removedExtensions = 0;
-    for (const file of ['gsd-omp.ts', 'gsd-omp.cjs']) {
+    for (const file of ['gsd-omp.ts', 'gsd-omp.cjs', 'gsd-graphify-worker.cjs']) {
       try {
         fs.unlinkSync(path.join(extensionsDir, file));
         removedExtensions++;
@@ -8535,7 +8535,7 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
   }
 
   if (runtime === 'omp') {
-    for (const file of ['gsd-omp.ts', 'gsd-omp.cjs']) {
+    for (const file of ['gsd-omp.ts', 'gsd-omp.cjs', 'gsd-graphify-worker.cjs']) {
       const extensionPath = path.join(configDir, 'extensions', file);
       if (fs.existsSync(extensionPath)) manifest.files[`extensions/${file}`] = fileHash(extensionPath);
     }
@@ -9919,14 +9919,17 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
 
   if (runtime === 'omp') {
     const adapterSource = path.join(src, 'pi', 'gsd.cjs');
+    const graphifyWorkerSource = path.join(src, 'pi', 'gsd-graphify-worker.cjs');
     const extensionsDir = assertDestWithinConfigHome(targetDir, 'extensions');
     const adapterTarget = path.join(extensionsDir, 'gsd-omp.cjs');
     const extensionTarget = path.join(extensionsDir, 'gsd-omp.ts');
-    if (!fs.existsSync(adapterSource)) {
-      failures.push('OMP adapter source');
+    const graphifyWorkerTarget = path.join(extensionsDir, 'gsd-graphify-worker.cjs');
+    if (!fs.existsSync(adapterSource) || !fs.existsSync(graphifyWorkerSource)) {
+      failures.push('OMP adapter sources');
     } else {
       fs.mkdirSync(extensionsDir, { recursive: true });
       fs.copyFileSync(adapterSource, adapterTarget);
+      fs.copyFileSync(graphifyWorkerSource, graphifyWorkerTarget);
       fs.writeFileSync(extensionTarget, 'import { createRequire } from "node:module";\n\nconst require = createRequire(import.meta.url);\nconst gsdPiExtension = require("./gsd-omp.cjs");\n\nexport default (pi: unknown) => gsdPiExtension(pi, { runtime: "omp" });\n');
       const sourceMarkerPath = path.join(targetDir, 'gsd-core', 'OMP-SOURCE.json');
       if (fs.existsSync(path.join(src, '.git'))) {

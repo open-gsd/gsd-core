@@ -8,6 +8,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const OMP_RUNTIME_BLOCK = `<omp_runtime_cli>
+**OMP runtime CLI:** \`{{OMP_GSD_TOOLS}}\` is the only authoritative \`gsd-tools.cjs\` for this skill. Bind \`gsd_run() { GSD_RUNTIME=omp node "{{OMP_GSD_TOOLS}}" "$@"; }\` before any query and use \`gsd_run\` throughout. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another installed runtime may own that executable. Preserve \`GSD_RUNTIME=omp\` on every direct runtime CLI invocation so command formatting, agent discovery, and capability resolution stay OMP-scoped.
+</omp_runtime_cli>`;
+
 const OMP_SKILL_BLOCKS = {
   'gsd-execute-phase': `<omp_native_execution>
 **OMP:** Native \`task\` is the executor primitive. Replace every \`Agent(...)\` dispatch in the execution workflow with a native \`task\` dispatch; do not fall back to inline execution merely because Claude's \`Agent\` API is absent.
@@ -20,8 +24,6 @@ const OMP_SKILL_BLOCKS = {
 - Never invoke \`git worktree\` yourself. OMP owns isolation setup and cleanup.
 </omp_native_execution>`,
   'gsd-progress': `<omp_artifact_handling>
-**OMP runtime CLI:** \`{{OMP_GSD_TOOLS}}\` is the only authoritative \`gsd-tools.cjs\` for this skill. Bind \`gsd_run() { GSD_RUNTIME=omp node "{{OMP_GSD_TOOLS}}" "$@"; }\` before any query and use \`gsd_run\` throughout. Never invoke bare \`gsd-tools\` or \`gsd-tools.cjs\` through \`PATH\`; another installed runtime may own that executable. Preserve \`GSD_RUNTIME=omp\` on every direct runtime CLI invocation so command formatting, agent discovery, and capability resolution stay OMP-scoped.
-
 **OMP optional artifacts:** \`.planning/.continue-here.md\`, \`.planning/debug/\`, and \`.planning/todos/pending/\` are optional. Probe a path's existence before reading it. Absence means no checkpoint, zero active debug sessions, or zero pending todo artifacts; it is not an error. Do not invoke Glob/Grep with a missing directory as its root. When checking optional directories, scan an existing \`.planning\` root and filter matching paths. A truncated summary glob may supply recent-work examples only; never use it to derive plan or summary counts.
 </omp_artifact_handling>`,
 };
@@ -36,13 +38,17 @@ function projectSkillContent(content, runtimeRoot) {
 }
 
 function applyOmpSkillBlock(name, content, runtimeRoot) {
-  const template = OMP_SKILL_BLOCKS[name];
-  const block = template?.replaceAll('{{OMP_GSD_TOOLS}}', toPosixPath(path.join(runtimeRoot, 'gsd-core', 'bin', 'gsd-tools.cjs')));
-  if (!block || content.includes(block)) return content;
-  const marker = content.includes('<context>') ? '<context>' : '<process>';
-  const index = content.indexOf(marker);
-  if (index < 0) throw new Error(`Missing ${marker} in ${name}/SKILL.md`);
-  return `${content.slice(0, index)}${block}\n\n${content.slice(index)}`;
+  const gsdToolsPath = toPosixPath(path.join(runtimeRoot, 'gsd-core', 'bin', 'gsd-tools.cjs'));
+  const blocks = [OMP_RUNTIME_BLOCK, OMP_SKILL_BLOCKS[name]]
+    .filter(Boolean)
+    .map((template) => template.replaceAll('{{OMP_GSD_TOOLS}}', gsdToolsPath));
+  const missingBlocks = blocks.filter((block) => !content.includes(block));
+  if (!missingBlocks.length) return content;
+  const marker = ['<context>', '<process>', '<objective>'].find((candidate) => content.includes(candidate));
+  const frontmatterEnd = content.indexOf('\n---\n', 3);
+  const index = marker ? content.indexOf(marker) : frontmatterEnd < 0 ? -1 : frontmatterEnd + 5;
+  if (index < 0) throw new Error(`Missing insertion point in ${name}/SKILL.md`);
+  return `${content.slice(0, index)}${missingBlocks.join('\n\n')}\n\n${content.slice(index)}`;
 }
 
 function installOmpSkills(skillsDir, sourceSkillsDir = path.resolve(__dirname, '..', 'skills')) {

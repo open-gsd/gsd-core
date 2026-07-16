@@ -1990,7 +1990,7 @@ const capabilities = {
       },
       "hostBehaviors": {
         "localInstallDeferred": true,
-        "skipSharedHooksInstall": true,
+        "skipSharedHooksInstall": false,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
         "skipCodexSkillsManifest": true
@@ -5129,7 +5129,7 @@ const runtimes = {
       },
       "hostBehaviors": {
         "localInstallDeferred": true,
-        "skipSharedHooksInstall": true,
+        "skipSharedHooksInstall": false,
         "skipSettingsUi": true,
         "skipUpdateBannerCommand": true,
         "skipCodexSkillsManifest": true

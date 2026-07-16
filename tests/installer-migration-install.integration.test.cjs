@@ -39,7 +39,9 @@ const RUNTIME_INSTALL_CONTRACTS = {
   // dead hook scripts or the CommonJS package.json marker.
   kilo: { surface: 'flat-command', settings: false, packageJson: false },
   opencode: { surface: 'flat-command', settings: true, packageJson: true },
-  omp: { surface: 'omp-native', settings: false, packageJson: false },
+  // OMP's native extension spawns the shared hook bundle and uses hooks/lib/git-cmd.js,
+  // so its config root requires the same CommonJS marker as Pi.
+  omp: { surface: 'omp-native', settings: false, packageJson: true },
   // #2102 Stage 1/2: pi is a PLUGIN-ONLY install (hostBehaviors.pluginOnlyInstall)
   // for commands/agents/skills — NO commands/, agents/, or skills/ dir. pi's
   // /gsd command is registered programmatically by the native extension
