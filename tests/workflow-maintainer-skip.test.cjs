@@ -82,10 +82,10 @@ describe('PR policy workflow maintainer carve-outs', () => {
   // unhandled rejection kills the github-script step, and the verdict
   // (core.setFailed) never runs — the contributor gets an API stack trace
   // instead of the instructions the comment exists to deliver.
-  for (const { file, name } of [
-    { file: '.github/workflows/pr-title-validator.yml', name: 'PR title validator' },
-    { file: '.github/workflows/pr-target-validator.yml', name: 'PR target validator' },
-    { file: '.github/workflows/require-issue-link.yml', name: 'Require issue link' },
+  for (const { file, name, scope, otherScope } of [
+    { file: '.github/workflows/pr-title-validator.yml', name: 'PR title validator', scope: 'pull-requests', otherScope: 'issues' },
+    { file: '.github/workflows/pr-target-validator.yml', name: 'PR target validator', scope: 'pull-requests', otherScope: 'issues' },
+    { file: '.github/workflows/require-issue-link.yml', name: 'Require issue link', scope: 'issues', otherScope: 'pull-requests' },
   ]) {
     test(`${name} triggers on pull_request_target so fork PRs get the verdict, not a 403`, () => {
       const workflow = readWorkflow(file);
@@ -94,13 +94,30 @@ describe('PR policy workflow maintainer carve-outs', () => {
       assert.doesNotMatch(workflow, /^\s*pull_request:\s*$/m);
     });
 
-    test(`${name} declares a write permission for the endpoint it calls`, () => {
+    test(`${name} keeps exactly the one write scope its comment call needs`, () => {
       const workflow = readWorkflow(file);
 
-      // pull_request_target only grants what `permissions:` declares. These
-      // workflows comment via the issue-comments endpoint, so the write scope
-      // must be present or the trigger change alone would not fix the 403.
-      assert.match(workflow, /^\s*(issues|pull-requests):\s*write\s*$/m);
+      // pull_request_target only grants what `permissions:` declares, so the
+      // write scope must be present or the trigger change alone would not fix
+      // the 403. Assert the SPECIFIC scope, not an `(issues|pull-requests)`
+      // alternation — an alternation is satisfied by whichever scope happens to
+      // be there and would not catch its removal.
+      //
+      // Each file needs only ONE: GitHub accepts either `issues: write` or
+      // `pull-requests: write` for issues.createComment when the target is a
+      // PR. Verified from this repo's history, not the docs — pr-title-validator
+      // has posted on `pull-requests: write` alone, require-issue-link on
+      // `issues: write` alone. The 403 was the fork downgrade, not the scope.
+      //
+      // The negative half is the point of this test: a pull_request_target
+      // workflow must not carry privilege it never exercises, so adding the
+      // other scope "to be safe" is a regression this catches.
+      assert.match(workflow, new RegExp(`^\\s*${scope}:\\s*write\\s*$`, 'm'));
+      assert.doesNotMatch(
+        workflow,
+        new RegExp(`^\\s*${otherScope}:\\s*write\\s*$`, 'm'),
+        `${file} does not call a ${otherScope}.* API — do not grant it write on a pull_request_target workflow`
+      );
     });
 
     test(`${name} cannot let a failed comment suppress its verdict`, () => {

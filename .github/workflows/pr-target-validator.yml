@@ -28,9 +28,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Scope unchanged by #2331 — see the note in pr-title-validator.yml. This
+# workflow's `pull-requests: write` alone already authorizes the comment call
+# (its sticky comment has posted 8 times on that scope); the 403 was the fork
+# token downgrade, not a missing scope.
 permissions:
   contents: read
-  issues: write
   pull-requests: write
 
 jobs:

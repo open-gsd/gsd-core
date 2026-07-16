@@ -18,9 +18,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Scope unchanged by #2331 — see the note in pr-title-validator.yml. `issues:
+# write` alone already authorizes this workflow's issues.createComment call on a
+# PR: its sticky comment has posted on same-repo PRs (#106, #164, #232, #259) on
+# exactly this scope. The 403 was the fork token downgrade, not a missing scope,
+# so no `pull-requests: write` is added — this job never calls a pulls.* API.
 permissions:
   issues: write
-  pull-requests: write
 
 jobs:
   check-issue-link:

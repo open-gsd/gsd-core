@@ -51,9 +51,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Scope unchanged by #2331 — deliberately. `pull-requests: write` alone already
+# authorizes github.rest.issues.createComment on a PR (GitHub accepts EITHER
+# `issues` or `pull-requests` write for the issue-comments endpoint when the
+# target is a PR). Verified against this repo's own history rather than the
+# docs: this workflow has only ever declared `pull-requests: write` and its
+# sticky comment has posted 26 times; require-issue-link.yml declares only
+# `issues: write` and its comment posts too. The 403 was the fork token
+# downgrade, NOT a missing scope — so widening the scope here would add
+# privilege on a pull_request_target workflow while fixing nothing.
 permissions:
   contents: read
-  issues: write
   pull-requests: write
 
 jobs:
