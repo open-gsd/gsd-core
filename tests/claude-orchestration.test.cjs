@@ -546,11 +546,20 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
         { minLength: 1, maxLength: 4 },
       ).filter((plans) => new Set(plans.map((p) => p.id)).size === plans.length), // unique ids
       (planSpecs) => {
+        // Only plan IDs are unique — briefs may legitimately collide (fast-check
+        // shrinks toward short/empty strings, so duplicate briefs are common).
+        // emitWorkflowScript emits one agent() per plan keyed by the brief label
+        // and is correct for duplicate briefs, but the per-plan line lookup below
+        // (indexOf) would find the FIRST occurrence and misattribute its isolation
+        // when two plans share a brief. Make each agent() label unique by suffixing
+        // the unique id, so the lookup is unambiguous — this disambiguates the TEST
+        // probe, it does not change what the code under test does.
+        const labelFor = (p) => p.brief + ' [' + p.id + ']';
         const waves = [{
           id: 'w1',
           plans: planSpecs.map((p, i) => ({
             id: p.id,
-            brief: p.brief,
+            brief: labelFor(p),
             files_modified: ['src/file' + i + '.cts'], // disjoint -> no overlap-driven staging noise
             use_worktree: p.useWorktree,
           })),
@@ -558,7 +567,7 @@ describe('emitWorkflowScript — per-plan use_worktree (#2772 / #2285 finding 1)
         const r = emitWorkflowScript({ phaseDir: '.p', runId: 'r', waves });
         assert.strictEqual(r.ok, true);
         for (const p of planSpecs) {
-          const briefEsc = JSON.stringify(p.brief);
+          const briefEsc = JSON.stringify(labelFor(p));
           const idx = r.script.indexOf('agent(' + briefEsc + ',');
           assert.ok(idx !== -1, 'agent() call for plan must exist');
           const lineEnd = r.script.indexOf('\n', idx);
