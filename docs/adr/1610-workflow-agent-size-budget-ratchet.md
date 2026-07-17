@@ -1,6 +1,6 @@
-# ADR 1610: workflow & agent size-budget ratchet (per-file byte baseline + tier hard caps) [Proposed]
+# ADR 1610: workflow & agent size-budget ratchet (per-file byte baseline + tier hard caps) [Accepted]
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-22); see "Ratification" below
 - **Date:** 2026-06-22
 
 > **Provenance.** Drafted 2026-06-22 to give an already-shipped architectural governance
@@ -12,6 +12,22 @@
 > `tests/{workflow,agent}-size-baseline.json`, `scripts/workflow-size.cjs`, and
 > `scripts/lib/allowlist-ratchet.cjs` on `next`. The rationale here is lifted from those
 > tests' own doc comments (the decision was documented in-code but never as an ADR).
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive after independent re-verification of the evidence below; the ADR had sat in `Proposed` for 25 days after the decision it documents had already shipped.
+
+**Evidence the decision shipped:**
+
+- Owning issue #1074 ("replace tier-max workflow size-budget ratchet with a per-file baseline + loose hard caps") is CLOSED, `stateReason: COMPLETED`, closed 2026-06-12T14:00:56Z.
+- All three landing PRs are MERGED: #1089 (`test(#1074): add additive per-file workflow size baseline guard`, 2026-06-12T03:59:57Z), #1096 (`test(#1074): swap workflow size enforcement to baseline + loose hard caps`, 2026-06-12T13:30:44Z), #1097 (`test(#1074): agent-size-budget per-file baseline + line→byte rebase`, 2026-06-12T13:58:44Z).
+- `scripts/workflow-size.cjs:32-35` — `lfByteCount()` implements the CRLF→LF-normalized byte count described in Decision point 2 (#683).
+- `scripts/workflow-size.cjs:64-72,80-82` — `measureMdFiles`/`measureWorkflows` is the single shared measurement path cited in Decision point 5, re-exported for both the guard and `scripts/update-size-baseline.cjs`.
+- `scripts/lib/allowlist-ratchet.cjs:180` exports `assertFileBaseline` — the per-file baseline assertion named in Decision point 3 and Cross-references.
+- `tests/workflow-size-budget.test.cjs:95-97,102` defines `XL_CAP = 98304` (96 KiB), `LARGE_CAP = 61440` (60 KiB), `DEFAULT_CAP = 40960` (40 KiB), `NEW_FILE_CAP = 32768` (32 KiB) — the exact numbers quoted in Decision point 3.
+
+**Governance:** owning issue #1074, `stateReason: COMPLETED`, closed 2026-06-12T14:00:56Z.
+
 
 ## Context
 

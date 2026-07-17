@@ -3,6 +3,38 @@
 - **Status:** Proposed
 - **Date:** 2026-06-03
 
+## Why this is still `Proposed` (audited 2026-07-17)
+
+Confirmed shipped: immutable per-release tags (`finalize` mints `v<version>` exactly once at
+line 629; `rc` auto-increments `v<version>-rc.N` at line 353 — no force-push or re-tag anywhere
+in the file), the `@next`/`@latest` dist-tag split (`npm publish --provenance --access public
+--tag next` in the `rc` job at line 437 vs. the default/`latest` publish in `finalize` at line
+636), and the Amendment (2026-06-12, #1104) "`next` rests at last published" behavior, wired
+through `scripts/sync-next-version.cjs` in both the `rc` job (`release.yml:479`) and the
+`main`→`next` back-merge (`auto-backmerge.yml:176-178`).
+
+**The blocker.** Decision §1 — the mechanism this ADR is named for — is not implemented: "recreate
+(or hard-reset) an **ephemeral** `release/<version>` branch from `origin/next` HEAD at the *start*
+of each `rc`/`finalize` run." In the live `.github/workflows/release.yml`, the `create` job still
+creates `release/<version>` once and hard-errors if it already exists ("Branch $BRANCH already
+exists. Delete it first or use rc/finalize.", lines 126–133); the `rc` job's checkout (line 330)
+and the `finalize` job's checkout (line 522) both simply check out that same pre-existing ref —
+neither job fetches, resets, or recreates it from `origin/next`. This is exactly the "persistent
+branch you never backport into" antipattern the ADR's own Context section set out to kill, and
+precisely the alternative its own Alternatives section rejected ("Keep the persistent branch but
+cherry-pick RC fixes into it ... Rejected as primary"). `docs/adr/README.md:98` already names this
+ADR in the corpus audit as one whose "namesake mechanism is performed by hand." Issue #660 is
+closed `COMPLETED`, but its scope was landing the ADR/design decision, not the `release.yml`
+re-cut step — no commit since has added it; today, cutting an rc "on the head of `next`" still
+requires a manual `git push --force origin <next-head>:refs/heads/release/<version>` before
+dispatching the workflow.
+
+**Unblock condition.** Add a step to both the `rc` and `finalize` jobs in
+`.github/workflows/release.yml` that hard-resets (or recreates) `release/<version>` from
+`origin/next` HEAD before the version bump, so the re-cut happens automatically on every
+dispatch instead of via a manual force-push. Once that step exists in the file and one real
+`rc`/`finalize` run has exercised it end to end, this ADR is ready for another ratification pass.
+
 ## Context
 
 The release pipeline (`.github/workflows/release.yml`) is a three-mode `workflow_dispatch`

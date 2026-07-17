@@ -16,11 +16,19 @@ const _require: NodeRequire = require;
 // works in every layout:
 //
 //   1. Co-located install path — gsd-core/bin/shared/model-catalog.json
-//   2. Source-repo dev path — sdk/shared/model-catalog.json
-//   3. GSD_MODEL_CATALOG env override
+//   2. GSD_MODEL_CATALOG env override
+//
+// A third candidate — `sdk/shared/model-catalog.json`, three levels up — used to
+// sit between them. It was the legacy source-repo path kept as a fallback by the
+// #3288 fix, whose contract was "check the co-located path FIRST, before the
+// legacy source-repo path". ADR-0174 then retired the `@opengsd/gsd-sdk` package
+// boundary and deleted the `sdk/` tree outright, so that candidate can no longer
+// resolve in any layout: in a source repo there is no `sdk/`, and in an install
+// layout it points at `~/.claude/sdk/shared/`, which the installer never writes
+// (the original #3288 bug). It is removed rather than left as dead weight that
+// implies a package boundary this repo no longer has.
 const _catalogCandidates: string[] = [
   path.resolve(__dirname, '..', 'shared', 'model-catalog.json'),
-  path.resolve(__dirname, '..', '..', '..', 'sdk', 'shared', 'model-catalog.json'),
   ...(process.env['GSD_MODEL_CATALOG'] ? [path.resolve(process.env['GSD_MODEL_CATALOG'])] : []),
 ];
 

@@ -1,7 +1,9 @@
 # Skill Surface Budget Module owns install-time skill listing curation
 
-- **Status:** Proposed
+- **Status:** Superseded by [ADR-0011](0011-skill-surface-budget-module.md) (Skill Surface Budget Module — install-time profile staging and runtime surface control); originally Proposed (2026-05-12)
 - **Date:** 2026-05-12
+
+> **Provenance of this status (2026-07-16).** This file said `Proposed` while the hand-maintained index in `README.md` recorded it as *"Skill Surface Budget Module — earlier draft superseded by ADR-0011"*, status *"Superseded by 0011"*. The index was right and the file was stale. When the index became a generated artifact (derived from these files), that assertion would have been silently dropped and this superseded draft would have reappeared as a live `Proposed` decision — so it is recorded here, at its source, instead. This is the one status corrected from the old index rather than left for ratification, because leaving it would have *lost* a decision the maintainer had already made.
 
 We propose extending the existing install profile seam (`gsd-core/bin/lib/install-profiles.cjs`) into a **Skill Surface Budget Module** that owns which subset of GSD's 66 skills is written to the runtime config dirs, and that owns the per-skill `requires:` dependency manifest used to keep that subset closed under cross-skill references. GSD currently ships a binary `--minimal` / full toggle; runtimes that enumerate skills (Claude Code, OpenCode, etc.) cap the `<available_skills>` system-prompt block at `skillListingBudgetFraction` of the context window (default 1% = ~2k tokens at 200k), and GSD alone consumes ~60% of that cap (#3408). Further description shrinkage is unavailable — `scripts/lint-descriptions.cjs` already enforces a hard 100-char ceiling and the mean is 72.5 chars. The remaining lever is surfacing fewer skills, which requires a typed profile model plus a dependency manifest, not more ad-hoc allowlists.
 

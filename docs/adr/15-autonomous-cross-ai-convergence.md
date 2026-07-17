@@ -1,10 +1,26 @@
 # Cross-AI Plan Convergence via Existing Orchestration Commands
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-05-24); see "Ratification" below
 - **Date:** 2026-05-24
 - **Issue:** #15
 
 Current orchestration commands (`/gsd-autonomous` and `/gsd-progress --next --auto`) route planning through `gsd-plan-phase` and only use local/Claude subagent review paths. The cross-AI convergence path already exists (`/gsd-plan-review-convergence`, `/gsd-review`, `review.default_reviewers`, `review.models.*`) but is not wired into these orchestrators. This creates a gap: users can configure cross-AI reviewers yet still get local-only planning in autonomous/auto-chain execution.
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive after the shipped implementation was independently re-verified; the Status field had read "Proposed" for roughly 8 weeks after the underlying decision had already landed.
+
+**Evidence the decision shipped:**
+
+- Primary, parity, and alias surfaces are present verbatim: `commands/gsd/progress.md:4,28` (`--next --converge`, `--cross-ai` alias, reviewer flags, `--max-cycles N`) and `commands/gsd/autonomous.md:4,40-41` (`--converge`, `--cross-ai` alias).
+- The `plan_strategy=local|converge` seam is implemented in `gsd-core/workflows/next.md:260-313` (`PLAN_STRATEGY` parsing, `CONVERGENCE_ARGS` build, feature-gate check, Route-3 override) and mirrored in `gsd-core/workflows/autonomous.md:19-90,378-419`.
+- Fail-fast-on-disabled-gate behavior matches the ADR's Failure Policy exactly: `next.md:279-292` and the equivalent block in `autonomous.md` check `workflow.plan_review_convergence` via `config-get` and abort with the exact `gsd config-set workflow.plan_review_convergence true` instruction — no silent downgrade to `local`.
+- The config contract is shipped: `gsd-core/bin/shared/config-schema.manifest.json:36` (`workflow.plan_review_convergence`), `:54` (`review.default_reviewers`), `:123,141` (`review.models.*`); documented identically in `docs/CONFIGURATION.md:225,316` and `docs/COMMANDS.md:620-622,850-852`.
+- Dedicated regression tests exist: `tests/adr-15-progress-converge.test.cjs` (179 lines, describe block titled `'ADR-15: /gsd:progress --next --auto --converge (#1190)'`) and `tests/autonomous-converge.test.cjs` (225 lines, covering the parity surface under `'autonomous --converge flag (#711)'` — this file does not itself reference ADR-15 by name).
+- Landing commits: `092340d18` (`fix(#711): wire autonomous convergence flag`, 2026-06-10, parity surface) and `0b3a2e5f9` (`feat(#1190): wire --converge primary surface into /gsd:progress --next (ADR-15) (#1237)`, 2026-06-14) — the latter's commit body states "ADR-15 designates /gsd-progress --next --auto --converge as the PRIMARY plan-convergence surface" and confirms the wiring gap the ADR called out is closed.
+- No later ADR references or supersedes ADR-15: `grep -rl 'ADR-15' docs/adr/*.md` returns only `docs/adr/README.md`'s own index row (line 158), which still lists it as "Proposed" — the stale bookkeeping entry this ratification corrects.
+
+**Governance state:** Issue #15 CLOSED — stateReason COMPLETED (closed 2026-05-25T03:12:26Z). Follow-up test-coverage issue #1190 ("test(coverage): fill Proposed-ADR test gaps") also CLOSED — stateReason COMPLETED (closed 2026-06-14T19:52:24Z).
 
 ## Decision
 

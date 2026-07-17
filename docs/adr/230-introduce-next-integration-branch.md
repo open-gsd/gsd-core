@@ -8,6 +8,72 @@
 > open a `chore:` issue, replace `XXXX` with the assigned issue number, and
 > rename the file accordingly.
 
+## Why this is still `Proposed` (audited 2026-07-17)
+
+The architectural shift is real and operating: the live default branch is
+`next` (`gh api repos/open-gsd/gsd-core --jq .default_branch`), `.github/workflows/auto-backmerge.yml`
+runs unconditionally (`if: true`, not the Phase-1 `if: false` stub) and has
+produced real, merged `main → next` back-merge PRs across multiple releases
+(#671, #1337, #1673, and others), `release.yml` cherry-picks from
+`origin/next` with an `origin/main` fallback per the Phase-3 patch,
+`pr-target-validator.yml` enforces (`WARN_ONLY: 'false'`), and
+`auto-branch.yml` branches from `next` with a `main` fallback.
+
+**The blocker.** The Decision section requires differentiated branch
+protection: `main` — "strict: 2 reviewer approvals, all CI green, ...
+restrict push to maintainers via PR only"; `next` — "loose: ... 'require
+branches up to date' OFF." Live settings invert this. `main`'s classic
+branch protection (verified via `gh api repos/open-gsd/gsd-core/branches/main/protection`
+and its `required_pull_request_reviews` / `required_status_checks`
+sub-resources) shows `required_approving_review_count: 1` (spec: 2),
+`required_status_checks` returns 404 "not enabled" (spec: all CI green
+required — there is no CI gate on `main` at all), and
+`allow_force_pushes.enabled: true` (spec: restrict push to maintainers via
+PR only). `next`'s protection, by contrast, has `required_status_checks.strict: true`
+across 7 contexts and `allow_force_pushes.enabled: false` — stricter than
+`main`, not looser. The two GitHub Rulesets that might have compensated
+(`main-protection` id 16752567, `release-branches` id 16752568) are both
+`enforcement: "evaluate"` (dry-run, non-blocking) and were never promoted
+to active; `main-protection`'s condition further targets `~DEFAULT_BRANCH`,
+a dynamic alias that now resolves to `next` (the current default branch),
+so even if activated it would apply to the wrong branch. Migration Phase 2
+step 3 ("Apply branch protection: `bash scripts/setup-branch-protection.sh`")
+was evidently run for `next` but never durably applied to `main`.
+
+Issue #230's own closure (`state_reason: completed`) certifies only Phase 1
+(additive infrastructure) — its body scopes itself explicitly to Phase 1
+and defers branch-protection application, the default-branch flip, and
+workflow-enforcement flags to a "Phase 2 follow-up (separate PR)"; that
+follow-up evidently landed for `next` but not for `main`'s protection.
+Separately, `next`'s "require branches up to date OFF (this is the whole
+point)" was reversed five days later by ADR-415 (Accepted, 2026-05-28),
+which set `required_status_checks.strict = true` on `next` after a real
+stale-base regression (#406/#411/#412) — so the specific rebase-treadmill
+relief this ADR promises for `next` no longer holds exactly as written,
+though the broader architectural decision (integration branch, isolated
+`main`, automated back-merge) is unaffected. Migration Phase 4 cleanup
+(drop `develop` from `branch-naming.yml`'s `alwaysValid`; drop the `|| main`
+fallbacks in `release.yml`/`auto-branch.yml`) is also still open, gated on
+"2-3 successful releases" per the ADR's own text — cosmetic, not blocking.
+
+**Unblock condition.** Ratify once `main`'s live branch protection matches
+this ADR's Decision section — `required_approving_review_count: 2`,
+`required_status_checks` enabled and required, `allow_force_pushes: false`
+— applied via `scripts/setup-branch-protection.sh` (or an equivalent `gh api`
+call), and the two `evaluate`-mode Rulesets are either activated with
+corrected `ref_name` conditions or removed as redundant with classic
+protection. Verify with:
+
+```
+gh api repos/open-gsd/gsd-core/branches/main/protection/required_pull_request_reviews --jq .required_approving_review_count   # expect 2
+gh api repos/open-gsd/gsd-core/branches/main/protection/required_status_checks                                                # expect 200, not 404
+gh api repos/open-gsd/gsd-core/branches/main/protection --jq .allow_force_pushes.enabled                                      # expect false
+```
+
+Until then, either bring `main`'s protection into line with the Decision
+section, or amend this ADR (as ADR-415 did for one `next` parameter) to
+record the protection posture actually in force.
+
 ## Context
 
 Today every contributor branch — `feat/`, `fix/`, `chore/`, `docs/`,
