@@ -55,7 +55,7 @@ const SHRINK_RATIO = 0.4;
 const FLOOR_LINES = 40;
 
 // Curated .planning/ artifacts, matched against the resolved target path with
-// separators normalised to '/'. Deliberately a closed set (see header).
+// separators normalized to '/'. Deliberately a closed set (see header).
 // Case-insensitive: on the case-insensitive filesystems macOS and Windows
 // default to, a differently-cased path is the SAME real file — a Write to
 // '.planning/roadmap.md' clobbers ROADMAP.md while a case-sensitive match
@@ -136,7 +136,7 @@ process.stdin.on('end', () => {
     }
 
     // Resolve relative paths against the session cwd (the same base the
-    // runtime uses), then normalise separators for the curated match.
+    // runtime uses), then normalize separators for the curated match.
     const cwd = data.cwd || process.cwd();
     const filePath = path.resolve(cwd, rawFilePath);
     const normalized = filePath.replace(/\\/g, '/');
@@ -169,9 +169,12 @@ process.stdin.on('end', () => {
           `readable, or — if this overwrite is intentional — re-run with the ` +
           `environment variable GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
       };
-      process.stdout.write(JSON.stringify(output));
+      // writeSync: pipe writes via process.stdout/stderr are async on Windows
+      // and process.exit() does not flush them — a truncated block payload is
+      // a guard that silently half-fired.
+      fs.writeSync(1, JSON.stringify(output));
       // Kimi feeds stderr (not stdout) back to the model on exit 2.
-      process.stderr.write(output.reason);
+      fs.writeSync(2, output.reason);
       process.exit(2);
     }
 
@@ -206,9 +209,10 @@ process.stdin.on('end', () => {
         `environment variable GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
     };
 
-    process.stdout.write(JSON.stringify(output));
+    // writeSync — same Windows flush rationale as the read-error branch above.
+    fs.writeSync(1, JSON.stringify(output));
     // Kimi feeds stderr (not stdout) back to the model on exit 2.
-    process.stderr.write(output.reason);
+    fs.writeSync(2, output.reason);
     process.exit(2);
   } catch {
     // Silent fail — never block valid tool calls due to hook errors
