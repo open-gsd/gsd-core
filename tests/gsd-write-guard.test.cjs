@@ -327,3 +327,35 @@ describe('#2304: Kimi tool vocabulary engages the write guard', () => {
     assert.equal(r.stdout, '');
   });
 });
+
+describe('guard <-> complete-milestone workflow binding (the escape hatch is WIRED, not just present)', () => {
+  // #2255 review Blocker 1: the one first-party legitimate milestone reset —
+  // complete-milestone's reorganize step — must actually set the escape hatch,
+  // or the guard hard-blocks the tree's own workflow mid-step. The env var
+  // name is taken from the guard's typed output, so a rename on EITHER side
+  // fails here instead of silently unwiring the hatch.
+  const workflowPath = path.join(
+    __dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'
+  );
+
+  test('the reorganize step sets the exact override the guard honors', () => {
+    const src = fs.readFileSync(workflowPath, 'utf8');
+    const stepStart = src.indexOf('<step name="reorganize_roadmap_and_delete_originals">');
+    assert.notEqual(stepStart, -1,
+      'reorganize step missing or renamed in complete-milestone.md — rebind this test');
+    const step = src.slice(stepStart, src.indexOf('</step>', stepStart));
+
+    fs.writeFileSync(roadmapPath, lines(292));
+    const blocked = runHook(writePayload(roadmapPath, lines(16)));
+    assert.equal(blocked.status, 2, 'baseline: the reorganize-shaped Write must block without the hatch');
+    const envVar = JSON.parse(blocked.stdout).overrideEnvVar;
+
+    assert.ok(step.includes(`${envVar}=1`),
+      `complete-milestone.md's reorganize step no longer sets ${envVar}=1 — ` +
+      'its whole-file ROADMAP.md rewrite would be hard-blocked by gsd-write-guard (#2255 Blocker 1)');
+
+    const allowed = runHook(writePayload(roadmapPath, lines(16)), { [envVar]: '1' });
+    assert.equal(allowed.status, 0,
+      'the identical catastrophic payload must pass under the env the workflow step sets');
+  });
+});
