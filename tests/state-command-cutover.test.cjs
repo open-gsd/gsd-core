@@ -66,7 +66,11 @@ describe('dispatchHostCommand: unit', async () => {
     // against a fake cwd it may emit an error (missing subcommand), but the
     // dispatch itself must report consumed=true (no fall-through to the
     // unknown-command error).
-    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify', 'capability']) {
+    // NOTE: `capability` (P2) is omitted from this INVOCATION loop — it is async
+    // and does FS/config reads, so invoking it against /fake/cwd is fragile.
+    // It is covered by the registry-ownership assertion below (non-invoking)
+    // and by the dedicated capability-lifecycle/consent/trust/state suites.
+    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify']) {
       const errFn = makeErrorRecorder();
       const consumed = await dispatchHostCommand({
         command: cmd,
