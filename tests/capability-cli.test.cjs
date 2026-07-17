@@ -1123,7 +1123,12 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
   test('reproduces #2322: capability state reports surfaced:true but the skill is not written to <config-dir>/skills/', () => {
     const home = tmpDir('cap-cli-home-');
     const cwd = makeCwd();
-    const AUTHORED = '---\nname: my-thing\ndescription: third-party test skill\n---\n\n# My Thing\nAuthored verbatim by the capability author — must reach disk unmodified.\n';
+    // #2322 MEDIUM-4: a fixture with NO rewrite-triggering content would pass
+    // the byte-for-byte assertion below vacuously (it never proves the
+    // runtime body rewrite pass — which DOES run over third-party skills too —
+    // actually ran). Embed a `~/.claude/` reference so the later assertion
+    // exercises that pass instead of asserting its absence.
+    const AUTHORED = '---\nname: my-thing\ndescription: third-party test skill\n---\n\n# My Thing\nSee @~/.claude/workflows/example.md for details.\n';
     const src = writeCapSourceWithSkill('my-thing', 'my-thing', AUTHORED);
 
     // Step 2 of the issue repro: capability install ./capabilities/my-thing --yes
@@ -1155,10 +1160,13 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
       fs.existsSync(stagedPath),
       `gsd-my-thing/SKILL.md must exist under ${rcd}/skills/ — capability state reports surfaced:true but nothing was materialized to disk (#2322)`,
     );
-    assert.equal(
-      fs.readFileSync(stagedPath, 'utf8'),
+    const staged = fs.readFileSync(stagedPath, 'utf8');
+    assert.notEqual(
+      staged,
       AUTHORED,
-      'the staged SKILL.md must be byte-for-byte the capability-authored file (no converter should touch an already-authored third-party skill)',
+      '#2322 MEDIUM-4: a third-party skill is NOT immune from the runtime-targeted body rewrite pass that runs over the whole stage dir (rewriteStagedSkillBodies) — a byte-for-byte-equal assertion here would be vacuous',
     );
+    assert.ok(!staged.includes('~/.claude/'), 'the ~/.claude/ literal must have been rewritten to the resolved path prefix');
+    assert.ok(staged.includes('workflows/example.md'), 'the rewrite must preserve the referenced path suffix, not corrupt the body');
   });
 });

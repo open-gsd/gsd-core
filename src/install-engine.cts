@@ -600,6 +600,11 @@ function _runLegacyUninstallCleanup(runtime: string, configDir: string, scope: s
  * @param scope
  * @param resolvedProfile     from resolveProfile() / resolveEffectiveProfile()
  * @param resolveAttribution  injection: (runtime) => attribution string | undefined
+ * @param capabilityRegistry  #2322: optional composed capability registry
+ *   (capabilityClusters view) — threaded into resolveRuntimeArtifactLayout so
+ *   the skills kind can materialize installed third-party capability skills
+ *   bound to their declaring capId. Absent -> no third-party skills staged
+ *   (fail closed), matching the layout resolver's own optional-registry contract.
  */
 function installRuntimeArtifacts(
   runtime: string,
@@ -607,6 +612,7 @@ function installRuntimeArtifacts(
   scope: string,
   resolvedProfile: any,
   resolveAttribution: ResolveAttribution = () => undefined,
+  capabilityRegistry?: any,
 ): void {
   // Combined-family runtimes (OpenCode/Kilo, ADR-1239 / #2087): route through
   // the dedicated combined commands+skills+plugin orchestrator instead of the
@@ -621,7 +627,7 @@ function installRuntimeArtifacts(
   // Legacy cleanup before layout-driven writes
   _runLegacyInstallMigrations(runtime, configDir, scope);
 
-  const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, configDir, scope as 'global' | 'local');
+  const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, configDir, scope as 'global' | 'local', capabilityRegistry);
   const planResult = runtimeArtifactInstallPlan.createRuntimeArtifactInstallPlan({
     // `Layout` is structurally identical across the layout/install-plan .cjs
     // modules but nominally distinct to tsc (untyped .cjs boundary) — bridge it.
