@@ -17,7 +17,7 @@
  *   - ./planning-workspace.cjs (planningDir, planningRoot)
  *   - ./shell-command-projection.cjs (execGit, platformWriteSync, platformReadSync)
  *   - ./core-utils.cjs       (detectSubRepos)
- *   - ./model-catalog.cjs    (KNOWN_RUNTIMES, KNOWN_PROVIDERS)
+ *   - ./model-catalog.cjs    (KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES)
  */
 
 import fs from 'node:fs';
@@ -35,7 +35,7 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS, normalizeLegacyKeys } fro
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configSchema = require('./config-schema.cjs');
 const { VALID_CONFIG_KEYS, DYNAMIC_KEY_PATTERNS, isCentralConfigKey: _isCentralConfigKeyFn } = configSchema;
-import { KNOWN_RUNTIMES, KNOWN_PROVIDERS } from './model-catalog.cjs';
+import { KNOWN_RUNTIMES, KNOWN_PROVIDERS, ADAPTIVE_TIER_VALUES } from './model-catalog.cjs';
 // ─── Federated Config (ADR-857 phase 3b) ─────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import federatedConfigModule = require('./federated-config.cjs');
@@ -190,7 +190,11 @@ function isGitIgnored(cwd: string, targetPath: string): boolean {
 
 // ─── Model alias resolution ───────────────────────────────────────────────────
 
-const RUNTIME_OVERRIDE_TIERS = new Set(['opus', 'sonnet', 'haiku']);
+// Catalog-derived (model-catalog.cts) so this vocabulary can never drift from
+// VALID_TIERS in verify.cts — see #2070 "Generative Fix Divergence". Excludes
+// 'inherit' (unlike VALID_TIERS): runtime overrides always resolve to a
+// concrete tier, never the adaptive sentinel.
+const RUNTIME_OVERRIDE_TIERS = ADAPTIVE_TIER_VALUES;
 const _warnedConfigKeys = new Set<string>();
 
 function _warnUnknownProfileOverrides(parsed: Record<string, unknown>, configLabel: string): void {

@@ -16,7 +16,7 @@
  *   - ./config-loader.cjs    (loadConfig)
  *   - ./configuration.cjs    (CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS)
  *   - ./model-profiles.cjs   (MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier)
- *   - ./model-catalog.cjs    (MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS)
+ *   - ./model-catalog.cjs    (MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS)
  */
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -30,7 +30,7 @@ import { CONFIG_DEFAULTS as CANONICAL_CONFIG_DEFAULTS } from './configuration.cj
 import modelProfiles = require('./model-profiles.cjs');
 const { MODEL_PROFILES, AGENT_TO_PHASE_TYPE, AGENT_DEFAULT_TIERS, VALID_AGENT_TIERS, nextTier } = modelProfiles;
 
-import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS } from './model-catalog.cjs';
+import { MODEL_ALIAS_MAP, RUNTIME_PROFILE_MAP, PROVIDER_PRESETS, VALID_TIERS } from './model-catalog.cjs';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -333,7 +333,6 @@ function resolveModelInternal(cwd: string, agentType: string): string {
   const phaseTypeTier = (phaseType && configModels && typeof configModels === 'object')
     ? configModels[phaseType]
     : undefined;
-  const VALID_TIERS = new Set(['opus', 'sonnet', 'haiku', 'inherit']);
   const tier = (phaseTypeTier && VALID_TIERS.has(phaseTypeTier))
     ? phaseTypeTier
     : (profile === 'inherit'

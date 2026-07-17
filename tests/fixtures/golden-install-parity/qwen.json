@@ -343,7 +343,7 @@
   "scripts/changeset/README.md": "86ff89331dfd94b2",
   "scripts/changeset/cli.cjs": "68f92a344b199271",
   "scripts/changeset/github-release-notes.cjs": "795677f0c009b132",
-  "scripts/changeset/lint.cjs": "0066faed159154f0",
+  "scripts/changeset/lint.cjs": "23cb53f77a6ea180",
   "scripts/changeset/new.cjs": "4991e21fd17f5541",
   "scripts/changeset/parse.cjs": "f9a949cbcab56445",
   "scripts/changeset/render.cjs": "e47bc3e1587c3cae",
