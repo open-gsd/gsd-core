@@ -356,6 +356,24 @@ function normalizeNodePath(execPath: string, opts?: NodeNormOpts): string {
     const shim = `${miseMatch[1]}/shims/node${miseMatch[2] || ''}`;
     if (existsSync(shim)) return shim;
   }
+
+  // volta pins a concrete node image at <VOLTA_HOME>/tools/image/node/<ver>/bin/node
+  // (Windows: <VOLTA_HOME>/tools/image/node/<ver>/node.exe — volta's own layout
+  // puts node.exe at the image root, no bin/). `volta uninstall node@<ver>` prunes
+  // that image, so a baked hook command 404s — the same ephemeral-path failure
+  // #977 fixed for fnm and #1619 for mise. The stable alias is the shim
+  // <VOLTA_HOME>/bin/node, a symlink to volta-shim that always resolves to the
+  // active pin. Derive <VOLTA_HOME> from execPath rather than the env so a custom
+  // VOLTA_HOME and the Windows %LOCALAPPDATA%\Volta default both work (#2185's
+  // reasoning), and only rewrite when the shim exists — otherwise fall back to
+  // the raw execPath unchanged.
+  const voltaMatch = normalizedForMatch.match(
+    /^(.*)\/tools\/image\/node\/[^/]+\/(?:bin\/)?node(\.exe)?$/,
+  );
+  if (voltaMatch) {
+    const shim = `${voltaMatch[1]}/bin/node${voltaMatch[2] || ''}`;
+    if (existsSync(shim)) return shim;
+  }
   return execPath;
 }
 
