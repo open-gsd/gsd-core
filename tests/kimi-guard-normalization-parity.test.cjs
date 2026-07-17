@@ -4,11 +4,11 @@
  * The KIMI_TOOL_NAMES map + normalizeKimiPayload helper is deliberately
  * inlined per hook script (a sibling require is a staging dependency that
  * can fail silently — see the rationale comment in each guard), which
- * leaves four hand-maintained copies plus their inverse in bin/install.js
+ * leaves five hand-maintained copies plus their inverse in bin/install.js
  * (claudeToKimiTools / convertKimiToolName). Nothing at runtime binds them.
  *
  * This test is that binding, with zero runtime coupling:
- *   1. the four inlined copies are byte-identical;
+ *   1. the five inlined copies are byte-identical;
  *   2. every entry in the guard map is the value-inverse of what the
  *      installer's matcher vocabulary emits for that Claude tool;
  *   3. every guard-relevant Claude tool the installer translates has a
@@ -31,13 +31,14 @@ const HOOK_FILES = [
   'hooks/gsd-read-guard.js',
   'hooks/gsd-worktree-path-guard.js',
   'hooks/gsd-read-injection-scanner.js',
+  'hooks/gsd-workflow-guard.js',
 ];
 
 // Claude tool names whose PreToolUse/PostToolUse guards are registered with a
 // translated matcher on Kimi (runtime-hooks-surface.cts buildKimiHooksTomlBlock):
 // the write guards match WriteFile|StrReplaceFile, the injection scanner
-// matches ReadFile. Bash->Shell (gsd-workflow-guard.js) is tracked separately.
-const GUARD_RELEVANT_CLAUDE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'Read'];
+// matches ReadFile, and gsd-workflow-guard.js matches Shell|WriteFile|StrReplaceFile.
+const GUARD_RELEVANT_CLAUDE_TOOLS = ['Write', 'Edit', 'MultiEdit', 'Read', 'Bash'];
 
 function extractBlock(file) {
   const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
