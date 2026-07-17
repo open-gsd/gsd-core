@@ -45,19 +45,35 @@ manifest and drives each fixture through the gate's real CLI entrypoint —
 never the parser function directly — so the assertion is at gate-verdict
 altitude (the boolean/JSON a user actually sees), not parse-tree altitude.
 
-## Why some assertions are `{ todo: '#NNNN' }`
+## Why the still-broken fixtures assert `currentBuggyOutput`, not a red `todo`
 
-Two of the four gates here are still open bugs (#2365, #2347) at the time
-this corpus was added. Their fixtures encode the *correct* expected verdict,
-which today's code does not deliver — the assertion genuinely fails. Per
-Node's documented `test()` `todo` option, a todo test still executes and
-still reports its failure, but does not affect the process exit code
-(https://nodejs.org/api/test.html#test-options) — so the gap is visible in
-every test run without blocking `gsd-test` or requiring a code fix here.
-The fixes belong to #2365 / #2366 / #2347, not to this corpus. When one of
-those lands, remove its fixture's `todo` — the assertion should then pass
-for real, and a still-red result after the todo is removed means the fix
-didn't fully cover this fixture.
+Three of the four gates here are still open bugs (#2365, #2366, #2347) at
+the time this corpus was added. Their `MANIFEST.json` entries carry BOTH
+the correct target verdict (`expected*` — what the eventual fix must
+produce) and the exact CURRENT observed verdict (`currentBuggyOutput` —
+what today's code actually returns). The test asserts against
+`currentBuggyOutput`: an honest, non-vacuous characterization of today's
+known-broken reality, not a fake pass.
+
+This is deliberately NOT node:test's `todo` option. `todo` looked like the
+right tool — a todo test executes and reports its failure without
+affecting Node's own process exit code
+(https://nodejs.org/api/test.html#test-options) — but this repo's actual
+test-runner (`gsd-test` / `gsd-test-runner` v1.6.2) has no concept of it:
+its JSONL result parser (`internal/pipeline/parse.go`'s `parseJSONL`, in
+the separate `gsd-test-runner` repo) only recognizes `kind: "pass" | "fail"`
+and hard-errors on anything else — verified directly against that source,
+not assumed. A `{ todo: true }` test whose body throws is still counted as
+a real failure in `gsd-test`'s own verdict, which would block the push
+gate exactly as if it weren't marked todo at all.
+
+Asserting `currentBuggyOutput` sidesteps this because the test genuinely
+passes today — no runner-level "expected failure" feature required. The
+fixes belong to #2365 / #2366 / #2347, not to this corpus. When one of
+those lands, the corresponding assertion will fail (the gate now returns
+something other than the pinned buggy value) — at that point, flip the
+test to assert `expected*` instead and delete the stale
+`currentBuggyOutput`.
 
 The `audit-uat/` corpus has no `todo`: #2286 was fixed by #2317 before this
 corpus was written, so its assertions are ordinary, currently-passing

@@ -13,6 +13,11 @@ blocking gate, not `detectApiIntegration()` called in isolation.
 - `non-integration-assertion.txt` — a line that explicitly states no new
   integration was added, misread as evidence of one.
 
-All four currently `detected: true`; the gate expects `false` for all four
-(see `MANIFEST.json`). Tracked as `{ todo: '#2365' }` in
-`tests/representative-corpus.test.cjs` until #2365 lands.
+The first three currently `detected: true`; the gate expects `false` for
+all four (see `MANIFEST.json`'s `expectedDetected`/`currentBuggyOutput`
+fields). `non-integration-assertion.txt` already returns `detected: false`
+in isolation, so it's asserted directly. The other three are asserted
+against their `currentBuggyOutput` in `tests/representative-corpus.test.cjs`
+— a characterization of today's known-broken behavior, not a `todo` (see
+`tests/fixtures/representative/README.md` for why `todo` doesn't work with
+this repo's test-runner) — until #2365 lands.

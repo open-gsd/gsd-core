@@ -8,7 +8,16 @@
       "expectedCounts": { "surface": 3, "integrate": 1, "optout": 2 },
       "expectedErrorCount": 0,
       "expectedBlock": false,
-      "note": "Self-contained 15-line COVERAGE.md from #2366's own reproduction: one canonical matrix (search/skip), a second section-split canonical table (widget) for a transferred capability, and a decoy 3-column summary table whose 2nd cell reads 'INTEGRATE'. Today's parser invents a 'tier' capability from the summary table's header row (silent corruption, zero errors) and drops 'skip' (bolded decision rejected), while also spuriously erroring on the second header. Expected: exactly 3 rows (search, skip, widget), 0 errors."
+      "currentBuggyOutput": {
+        "block": true,
+        "error_count": 3,
+        "errors": [
+          "row: decision \"**OPT-OUT**\" not in {INTEGRATE, OPT-OUT}",
+          "row: decision \"DECISION\" not in {INTEGRATE, OPT-OUT}",
+          "row: decision \"12\" not in {INTEGRATE, OPT-OUT}"
+        ]
+      },
+      "note": "Self-contained 15-line COVERAGE.md from #2366's own reproduction: one canonical matrix (search/skip), a second section-split canonical table (widget) for a transferred capability, and a decoy 3-column summary table whose 2nd cell reads 'INTEGRATE'. Today's parser invents a 'tier' capability from the summary table's header row (silent corruption, zero errors) and drops 'skip' (bolded decision rejected), while also spuriously erroring on the second header — the errors array above shows the rejected-DECISION-header and the rejected-bolded-OPT-OUT and rejected-numeric-'12'-cell paths, none of which mention the silently-invented 'tier' row (that corruption produces no error at all, which is the headline finding). Expected once fixed: exactly 3 rows (search, skip, widget), 0 errors — see expectedCounts/expectedErrorCount/expectedBlock."
     }
   ]
 }

@@ -15,8 +15,10 @@ distinguish (`none-present` vs `could-not-parse`) collapse into
 `none-present`, and a populated, genuinely decision-shaped CONTEXT.md
 passes silently.
 
-Expected: `outcome: 'could-not-parse'`, `passed: false` (see
-`MANIFEST.json`). Today's gate instead reports
-`passed: true, skipped: true, reason: 'no trackable decisions'`. Tracked
-as `{ todo: '#2347' }` in `tests/representative-corpus.test.cjs` until
-#2347 lands.
+Expected once fixed: `reason: 'could-not-parse'`, `passed: false` (see
+`MANIFEST.json`'s `expectedReason`/`expectedPassed`). Today's gate instead
+reports `passed: true, skipped: true, reason: 'no trackable decisions'` —
+pinned in `MANIFEST.json`'s `currentBuggyOutput` and asserted directly in
+`tests/representative-corpus.test.cjs` (a characterization of today's
+known-broken behavior, not a `todo` — see
+`tests/fixtures/representative/README.md` for why) until #2347 lands.
