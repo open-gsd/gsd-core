@@ -94,11 +94,15 @@ function isOverrideSet() {
 // through untouched. Inlined per guard (not hooks/lib/): hook scripts are
 // staged as standalone files, and a sibling require is a staging dependency
 // that can fail silently.
-const KIMI_TOOL_NAMES = { WriteFile: 'Write' };
+// A Map, not an object literal: bare bracket lookup resolves prototype keys
+// ('constructor', '__proto__', 'toString') to truthy functions/objects, so the
+// !mapped fall-through never fires for them; Map.get returns undefined (same
+// shape as canonicalizeRuntimeName in src/runtime-name-policy.cts).
+const KIMI_TOOL_NAMES = new Map([['WriteFile', 'Write']]);
 function normalizeKimiPayload(data) {
   const raw = data.tool_name;
   if (typeof raw !== 'string') return data;
-  const mapped = KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)];
+  const mapped = KIMI_TOOL_NAMES.get(raw.slice(raw.lastIndexOf(':') + 1));
   if (!mapped) return data;
   data.tool_name = mapped;
   const input = data.tool_input;
