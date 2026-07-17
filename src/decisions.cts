@@ -86,16 +86,24 @@ const bulletTitledColonRe = /^\s*-\s+\*\*D-([A-Za-z0-9][A-Za-z0-9_-]*)(?:\s*\[([
 
 /**
  * #2347: format-agnostic evidence that a block/section holds real decision
- * ENTRIES the parser could not read — a bold-lead-in bullet (`- **…**`),
- * whatever the ID grammar. The three parser grammars above all require a `D-`
+ * ENTRIES the parser could not read — a bullet whose bold lead-in is an
+ * ID-SHAPED token (uppercase prefix, optional digits, hyphen, alnum), whatever
+ * the exact ID grammar. The three parser grammars above all require a `D-`
  * prefix; #1365's fail-loud guard reused that same `\bD-` test as its "is this
  * decision-shaped?" evidence, so any other prefix (e.g. `D5-01`) was invisible
  * to BOTH parser and guard, collapsing `could-not-parse` into a clean
- * `none-present` pass. This regex matches only the bullet's leading bold token
- * (`-\s+\*\*…\*\*`), so prose that merely contains bold (`- some **word**`) does
- * NOT trip it — only decision-entry-shaped bullets do.
+ * `none-present` pass.
+ *
+ * The ID-shape requirement (not "any bold bullet") is deliberate: a decisions
+ * block or `### Claude's Discretion` sub-section legitimately contains prose
+ * bullets with bold labels (`- **Scope:** …`, `- **Why:** …`, `- **Note:** …`).
+ * Those are NOT decision entries and must stay `none-present` — a false
+ * `could-not-parse` hard-blocks the plan gate. `[A-Z]+[0-9]*-[A-Za-z0-9]` matches
+ * `D-01` / `D5-01` / `DEC-01` but not `Scope:` / `Why:` / `Follow-up:` (mixed
+ * case) / `TODO:` (no `-<alnum>` id) — mirroring the parser's own `D-<alnum>`
+ * shape without hardcoding the `D`.
  */
-const boldLeadInBulletRe = /^\s*-\s+\*\*[^*\n]+\*\*/m;
+const boldLeadInBulletRe = /^\s*-\s+\*\*[A-Z]+[0-9]*-[A-Za-z0-9]/m;
 
 interface ParseDecisionLinesResult {
   decisions: Decision[];

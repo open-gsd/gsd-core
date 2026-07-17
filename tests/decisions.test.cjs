@@ -276,6 +276,42 @@ describe('extractDecisions — format-agnostic evidence test (#2347)', () => {
     assert.strictEqual(r.outcome, 'parsed');
     assert.strictEqual(r.decisions.length, 1);
   });
+
+  // ── The evidence must be ID-SHAPED, not "any bold bullet" ────────────────────
+  // A decisions block / discretion section legitimately uses bold LABELS on prose
+  // bullets (- **Why:** …, - **Scope:** …). Those are not decision entries; a
+  // false could-not-parse here hard-blocks the plan gate. Guards against the
+  // over-broad evidence regex an earlier iteration shipped.
+  test('bold prose-label bullets (Why/Note/Scope) are NOT evidence — stay none-present', () => {
+    const md = '<decisions>\n'
+      + '- **Why:** rationale for inheriting prior decisions\n'
+      + '- **Scope:** everything from the previous phase carries over\n'
+      + '- **Note:** nothing new was decided here\n'
+      + '</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'bold LABELS on prose bullets must not be mistaken for decision entries');
+  });
+
+  test("a Claude's Discretion sub-section with bold-label bullets stays none-present", () => {
+    const md = '<decisions>\n'
+      + "### Claude's Discretion\n"
+      + '- **Scope:** left to judgment, no specific preference\n'
+      + '- **Follow-up:** revisit if performance regresses\n'
+      + '</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'a discretion section of bold-label prose bullets must pass the gate cleanly');
+  });
+
+  test('a bold ALL-CAPS label with no id-shape (TODO/NOTE) is not evidence', () => {
+    const md = '<decisions>\n- **TODO:** decide the datastore next phase\n- **NOTE:** blocked on infra\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'a bold ALL-CAPS label with no -<alnum> id structure is not a decision entry');
+  });
+
+  test('heading path: bold prose-label bullets under a Decisions heading stay none-present', () => {
+    const md = '## Decisions\n\n- **Why:** we kept the prior stack\n- **Scope:** no new choices this phase\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present');
+  });
 });
 
 // ─── QA matrix for parser correctness ────────────────────────────────────────
