@@ -3,9 +3,26 @@
 - **Status:** Proposed
 - **Date:** 2026-06-08
 - **Issue:** #857
-- **Supersedes (generalizes):** Skill Surface Budget Module (ADR-0011), Runtime Install Policy Module (ADR-0058)
+- **Supersedes (generalizes):** Skill Surface Budget Module ([ADR-0011](0011-skill-surface-budget-module.md)), Runtime Install Policy Module ([ADR-58](58-runtime-install-policy-module.md)) — **prospective**: this ADR is still `Proposed`, so neither target is marked superseded. See "Status caveat" below.
 - **Builds on:** CommandRoutingHub (ADR-0012), Runtime Artifact Layout Module (ADR-3660), generated-cjs single source (ADR-457)
 - **Amended:** 2026-06-12 — phase-6 boundary settled before the Migrate phase freezes it: the **verifier↔predicate contract** is classified as core verification substrate (not an off-by-default Feature Capability). See *Verification substrate vs. plug-in tier (the predicate boundary)* below. Prompted by @davesienkowski's boundary analysis on #857; coordinates with ADR-550 (spec-phase probe contract).
+
+## Status caveat (2026-07-16): `Proposed` is stale — pending maintainer ratification
+
+This ADR still reads `Proposed`, but the capability system it decides **shipped** and is the architecture of the 1.6.0/1.7.0 product:
+
+- `src/capability-lifecycle.cts` implements `installCapability` / `upgradeCapability` / `removeCapability` / `bindProjectConsent`, with trust gates, consent binding, integrity pinning, and reserved first-party namespaces.
+- `src/capability-state.cts` resolves capability state; `capability-validator.cjs` validates descriptors; `scripts/gen-capability-registry.cjs` generates the registry.
+- The owning epic [#857](https://github.com/open-gsd/gsd-core/issues/857) is **closed**.
+
+The `Proposed` label is therefore materially misleading: it invites a contributor or agent to treat the shipped capability system as an unbuilt idea, and to treat [ADR-0011](0011-skill-surface-budget-module.md) / [ADR-58](58-runtime-install-policy-module.md) as the live architecture instead of the decisions this ADR generalizes.
+
+Two things this caveat deliberately does **not** do:
+
+1. **It does not flip the status.** Ratifying an ADR is a maintainer act; this file records the discrepancy rather than resolving it unilaterally.
+2. **It does not mark ADR-0011 or ADR-58 superseded.** While this ADR is `Proposed`, its supersession claim is *prospective* — stamping two live, Accepted decisions as superseded by an unratified ADR would assert something untrue. On ratification, `scripts/gen-adr-index.cjs` will require those back-links.
+
+See also [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (EoS, Accepted), which realizes and **inverts** this ADR's Decision 8 — flipping *projection* to *embedding*. For how GSD meets a host, EoS is the current frame.
 
 ## Context
 

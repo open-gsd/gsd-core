@@ -3,6 +3,19 @@
 - **Status:** Accepted
 - **Date:** 2026-06-07
 - **Issue:** #58
+- **Subsumed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (GSD as an Embeddable Orchestration Engine) — read it first; see the amendment below
+
+## Amendment (2026-07-16): subsumed by ADR-1239 (EoS)
+
+[ADR-1239](1239-gsd-embeddable-orchestration-engine.md) — **GSD as an Embeddable Orchestration Engine** (EoS), Accepted — subsumes this ADR as an adapter: the typed `InstallPlan` projection this module owns becomes one of the surfaces the host negotiates for, rather than the outermost seam at which GSD meets a host.
+
+**This ADR is not superseded and its status is unchanged.** The `InstallPlan` seam is live and load-bearing. It is now a *component* of the EoS frame, not the top-level answer to "how does GSD meet a host?".
+
+**Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
+
+Note: [ADR-857](857-capability-system.md) (Proposed) also claims to generalize this module. That claim is **prospective** — it takes effect only if and when ADR-857 is ratified, and is deliberately not recorded as a supersession here.
+
+Recorded because ADR-1239 declared this subsumption while this file recorded nothing.
 
 ## Context
 

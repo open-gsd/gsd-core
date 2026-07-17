@@ -3,8 +3,19 @@
 - **Status:** Proposed
 - **Date:** 2026-06-08 (amended same day across two design grillings — see "Grilling amendments")
 - **Issue:** #894
-- **Parent:** ADR-857 (Capability system) — resolves its Open question #1
+- **Parent:** [ADR-857](857-capability-system.md) (Capability system) — resolves its Open question #1
 - **Phase:** ADR-857 rollout phase 3a (design-only)
+- **Subsumed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (GSD as an Embeddable Orchestration Engine) — read it first; see the amendment below
+
+## Amendment (2026-07-16): subsumed by ADR-1239 (EoS); status is stale
+
+[ADR-1239](1239-gsd-embeddable-orchestration-engine.md) — **GSD as an Embeddable Orchestration Engine** (EoS), Accepted — subsumes this ADR as an adapter. The capability declaration format remains the vocabulary a descriptor is written in; EoS is the frame that decides how a host loads the engine at all.
+
+**Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
+
+**Status caveat — pending maintainer ratification.** This ADR still reads `Proposed`, but the format it specifies shipped: `capability.json` descriptors are validated in `capability-validator.cjs`, generated through `scripts/gen-capability-registry.cjs`, and consumed across the installed runtimes. Its owning epic [#857](https://github.com/open-gsd/gsd-core/issues/857) is **closed**. The `Proposed` label is therefore stale and materially misleading — it invites a reader to treat a shipped, load-bearing format as an unbuilt proposal. The status flip is deliberately **not** made here: ratifying an ADR is a maintainer act, and this file records the discrepancy rather than resolving it unilaterally.
+
+Recorded because ADR-1239 declared this subsumption while this file recorded nothing.
 
 ## Context
 
