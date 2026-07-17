@@ -66,10 +66,12 @@ describe('dispatchHostCommand: unit', async () => {
     // against a fake cwd it may emit an error (missing subcommand), but the
     // dispatch itself must report consumed=true (no fall-through to the
     // unknown-command error).
-    // NOTE: `capability` (P2) is omitted from this INVOCATION loop — it is async
-    // and does FS/config reads, so invoking it against /fake/cwd is fragile.
-    // It is covered by the registry-ownership assertion below (non-invoking)
-    // and by the dedicated capability-lifecycle/consent/trust/state suites.
+    // NOTE: `capability` (P2) and the P3 routers are omitted from this INVOCATION
+    // loop — they delegate to module functions (commands.cmd*, config.cmd*,
+    // _dispatchNonFamily, require()) that call the MODULE-SCOPE error() (which
+    // exits the process) rather than the injected mock. They are covered by the
+    // registry-ownership assertion below (non-invoking) and by their own
+    // dedicated behavioral test suites (resolve/git/config/research tests).
     for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify']) {
       const errFn = makeErrorRecorder();
       const consumed = await dispatchHostCommand({
@@ -153,8 +155,20 @@ describe('state cutover: end-to-end dispatch via the host table', async () => {
 // ─── 5. REGISTRY — HOST_COMMAND_ROUTERS owns `state` ────────────────────────
 
 describe('HOST_COMMAND_ROUTERS registry', async () => {
-  test('owns all 6 migrated Tier-1 host commands as function entries', async () => {
-    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify', 'capability']) {
+  test('owns all migrated host commands as function entries (P1+P2+P3)', async () => {
+    const allHostCommands = [
+      // P1 Tier-1 host routers
+      'state', 'phase', 'init', 'roadmap', 'validate', 'verify',
+      // P2 capability router
+      'capability',
+      // P3 resolve/git/config/research routers (ADR-2346 P3)
+      'resolve-model', 'resolve-granularity', 'resolve-execution',
+      'git',
+      'config-ensure-section', 'config-set', 'config-set-model-profile',
+      'config-get', 'config-new-project', 'config-path', 'migrate-config',
+      'research-store', 'research-plan',
+    ];
+    for (const cmd of allHostCommands) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, cmd),
         `HOST_COMMAND_ROUTERS must own \`${cmd}\``,
