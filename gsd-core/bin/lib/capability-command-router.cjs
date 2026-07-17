@@ -21,6 +21,8 @@ const path = require('node:path');
 const io = require('./io.cjs');
 const { output, error, ERROR_REASON } = io;
 const { ExitError } = require('./cli-exit.cjs');
+const capabilityState = require('./capability-state.cjs');
+const capabilityWriter = require('./capability-writer.cjs');
 
 async function routeCapabilityCommand({ args, cwd, raw }) {
   // capability state [--config-dir <path>]
