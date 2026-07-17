@@ -202,9 +202,11 @@ There is no re-registration on new releases: register once, and your GitHub Rele
 
 ## Ranking + comments
 
-Ranking and community feedback live in **GitHub Discussions**, not in the registry markdown. Each merged entry gets exactly one Discussion in a dedicated `Registry` Discussions category:
+Ranking and community feedback live in **GitHub Discussions**, not in the registry markdown. Each merged entry — from either registry — gets exactly one Discussion in the dedicated `EoS Registry` Discussions category:
 
 - **Upvotes** on the Discussion post and on individual comments, with GitHub's built-in **Top** sort surfacing the most-upvoted community feedback first.
 - **Threaded comments** for experience reports, questions, and follow-up from other users.
 
-**Operational setup (one-time, per repo):** a repo admin creates the `Registry` category under this repository's Discussions settings. From then on, every merged entry gets its own Discussion thread created in that category, and the thread's URL is recorded in the entry's `discussion` field (see [Entry schema](#entry-schema) above) so the generated catalog links directly to it.
+**Operational setup (one-time, per repo):** a repo admin creates the `EoS Registry` category under this repository's Discussions settings, using the **open-ended discussion** format. From then on, every merged entry gets its own Discussion thread created in that category, and the thread's URL is recorded in the entry's `discussion` field (see [Entry schema](#entry-schema) above) so the generated catalog links directly to it. Despite its name, the category carries threads for **both** registries — `discussion` is required on Capability entries exactly as it is on EoS entries.
+
+**The open-ended format is required, and the choice is not cosmetic.** Because `discussion` is a required field, the thread must exist *before* the entry's PR is opened — and the person opening it is the entry's author, an outside contributor holding neither `maintain` nor `admin` permission on this repository. GitHub's **Announcement** format restricts starting new discussions to those two permission levels, so choosing it blocks every external submission at the first step, while still looking correctly configured to the admin who set it up. **Question/Answer** adds answer-marking, which pins one reply above the rest of a thread — a directory entry has no answer, and the pinning cuts across the upvote **Top** ordering described above. Open-ended is the format this process requires.
