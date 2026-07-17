@@ -22,16 +22,18 @@ Valid GSD subagent types (use exact names — do not fall back to 'general-purpo
 ## 1. Load Context
 
 Parse `$ARGUMENTS` before doing anything else:
-- `--reset-phase-numbers` flag → opt into restarting roadmap phase numbering at `1`
-- `--ws <name>` flag → active workstream scope; parse it into `GSD_WS` using the established idiom:
+
+- `--reset-phase-numbers` flag → opt into restarting roadmap phase numbering at `1`. If absent, keep the current behavior of continuing phase numbering from the previous milestone.
+- `--ws <name>` flag → active workstream scope, parsed into `GSD_WS`
+- remaining text, with `--ws <name>` stripped → use as milestone name if present, captured into `MILESTONE_ARG`
+
+Parse `GSD_WS` and `MILESTONE_ARG` using the established idiom (see `verify-work.md`):
 
 ```bash
 GSD_WS=""
 echo "$ARGUMENTS" | grep -qE -- '--ws[[:space:]]+[^[:space:]]+' && GSD_WS=$(echo "$ARGUMENTS" | grep -oE -- '--ws[[:space:]]+[^[:space:]]+')
+MILESTONE_ARG=$(echo "$ARGUMENTS" | sed -E 's/--ws[[:space:]]+[^[:space:]]+//g' | xargs)
 ```
-- remaining text → use as milestone name if present
-
-If the flag is absent, keep the current behavior of continuing phase numbering from the previous milestone.
 
 `GSD_WS` must chain to every downstream routing suggestion in this workflow (Step 4's shared-file guard, and the `/gsd:discuss-phase`/`/gsd:plan-phase` routing hints below) per the routing-propagation contract in `references/workstream-flag.md` — never let it silently drop.
 
@@ -143,7 +145,9 @@ AskUserQuestion:
 
 ## 4. Update PROJECT.md
 
-**Skip this entire step if a workstream is active** (i.e., `GSD_WS` is non-empty, parsed in Step 1). PROJECT.md is shared across workstreams (`references/workstream-flag.md` marks it `# Shared` in the directory diagram); the active workstream's own `.planning/workstreams/<name>/STATE.md`/`ROADMAP.md`/`REQUIREMENTS.md` already carry this milestone's state. Writing a `## Current Milestone` heading here would clobber the shared file, and with parallel milestones across workstreams, whichever workstream runs `new-milestone` last would silently win the shared heading (#2308). In flat mode (`GSD_WS` empty), continue below exactly as before.
+PROJECT.md is shared across workstreams (`references/workstream-flag.md` marks it `# Shared` in the directory diagram). This step has two independently-scoped parts — only Part A is workstream-guarded.
+
+**Part A — milestone-state write (skip when a workstream is active).** Skip Part A if `GSD_WS` is non-empty (parsed in Step 1). The active workstream's own `.planning/workstreams/<name>/STATE.md`/`ROADMAP.md`/`REQUIREMENTS.md` already carry this milestone's state. Writing a `## Current Milestone` heading here would clobber the shared file, and with parallel milestones across workstreams, whichever workstream runs `new-milestone` last would silently win the shared heading (#2308). In flat mode (`GSD_WS` empty), run Part A exactly as before:
 
 Add/update:
 
@@ -160,7 +164,7 @@ Add/update:
 
 Update Active requirements section and "Last updated" footer.
 
-Ensure the `## Evolution` section exists in PROJECT.md. If missing (projects created before this feature), add it before the footer:
+**Part B — Evolution structural repair (always runs, regardless of `GSD_WS`).** `## Evolution` is a shared, idempotent structural section, not workstream state — a pre-Evolution project must be backfilled whether or not a workstream is active, so this part is NOT covered by Part A's skip. Ensure the `## Evolution` section exists in PROJECT.md. If missing (projects created before this feature), add it before the footer:
 
 ```markdown
 ## Evolution
@@ -257,14 +261,10 @@ Stage the phase archive move + source removal so they land in the same commit as
 git add .planning/milestones/ .planning/phases/ 2>/dev/null || true
 ```
 
-PROJECT.md was only written in Step 4's flat-mode branch — when a workstream is active (`GSD_WS` non-empty), Step 4 was skipped and PROJECT.md has no changes to stage here:
+Stage PROJECT.md in both modes. Step 4's Part A guard — not this commit — is what protects the shared `## Current Milestone` heading (#2308): when a workstream is active Part A never writes it, so the only change PROJECT.md can carry here is Part B's idempotent `## Evolution` backfill, which must be committed rather than stranded as a dangling edit. Do NOT reintroduce a `[ -n "$GSD_WS" ]` branch around this commit: `GSD_WS` is set in Step 1's shell and each step's bash block runs in its own shell (the same reason Step 5 round-trips `OUTGOING_MILESTONE` through a file), so such a guard reads an unset variable, always takes the flat-mode branch, and only appears to work.
 
 ```bash
-if [ -n "$GSD_WS" ]; then
-  gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/STATE.md
-else
-  gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md
-fi
+gsd_run query commit "docs: start milestone v[X.Y] [Name]" --files .planning/PROJECT.md .planning/STATE.md
 ```
 
 ## 7. Load Context and Resolve Models
