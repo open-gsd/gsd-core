@@ -86,14 +86,15 @@ function isOverrideSet() {
 // buildKimiHooksTomlBlock) — so without normalizing the payload too, the
 // matcher fires but the tool_name check below exits 0 and the guard is dormant
 // on Kimi. The tool_input field names differ as well (kimi-cli
-// src/kimi_cli/tools/file/{write,replace}.py): WriteFile takes `path`/`content`,
-// StrReplaceFile takes `path` + `edit: Edit | list[Edit]` with `old`/`new` —
+// src/kimi_cli/tools/file/write.py): WriteFile takes `path`/`content`, and
 // kimi-cli's hooks/events.py forwards tool_input verbatim, so both layers need
-// mapping. Accepts bare and module-qualified ('kimi_cli.tools.file:WriteFile')
-// names; unknown names fall through untouched. Inlined per guard (not
-// hooks/lib/): hook scripts are staged as standalone files, and a sibling
-// require is a staging dependency that can fail silently.
-const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit' };
+// mapping. Only WriteFile is mapped: this guard exits 0 for any tool but
+// Write, so an Edit-class mapping here would be dead code. Accepts bare and
+// module-qualified ('kimi_cli.tools.file:WriteFile') names; unknown names fall
+// through untouched. Inlined per guard (not hooks/lib/): hook scripts are
+// staged as standalone files, and a sibling require is a staging dependency
+// that can fail silently.
+const KIMI_TOOL_NAMES = { WriteFile: 'Write' };
 function normalizeKimiPayload(data) {
   const raw = data.tool_name;
   if (typeof raw !== 'string') return data;
@@ -104,16 +105,6 @@ function normalizeKimiPayload(data) {
   if (input && typeof input === 'object') {
     if (input.file_path === undefined && typeof input.path === 'string') {
       input.file_path = input.path;
-    }
-    const edits = Array.isArray(input.edit) ? input.edit
-      : (input.edit && typeof input.edit === 'object') ? [input.edit] : [];
-    if (edits.length) {
-      if (input.old_string === undefined && edits[0].old !== undefined) {
-        input.old_string = String(edits[0].old);
-      }
-      if (input.new_string === undefined) {
-        input.new_string = edits.map((e) => String(e.new ?? '')).join('\n');
-      }
     }
   }
   return data;

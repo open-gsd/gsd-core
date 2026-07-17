@@ -311,7 +311,7 @@ describe('#2304: Kimi tool vocabulary engages the write guard', () => {
       tool_name: 'StrReplaceFile',
       tool_input: { path: roadmapPath, edit: { old: 'line 1', new: 'line one' } },
     });
-    assert.equal(r.status, 0, 'StrReplaceFile normalizes to Edit, which the guard exempts by design (#2255)');
+    assert.equal(r.status, 0, 'StrReplaceFile is unmapped in this guard (Edit-class, out of scope by design #2255) and must fall through to the non-Write exemption');
     assert.equal(r.stdout, '');
   });
 
