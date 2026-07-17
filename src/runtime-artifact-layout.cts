@@ -56,6 +56,20 @@ interface ResolvedProfile {
 }
 
 /**
+ * #2322: mirrors the (unexported) CapabilityRegistry shape in install-profiles.cts.
+ * Threaded through resolveRuntimeArtifactLayout -> skillsKind so the skills-kind
+ * stage() closure can bind a third-party capability skill stem to its DECLARING
+ * capability (capabilityClusters) at staging time — never by scanning the
+ * installed capabilities root and guessing. Optional: a caller with no registry
+ * in scope gets a layout whose skills kind stages NOTHING third-party (fail
+ * closed), matching install-profiles.cts's own registry-optional contract.
+ */
+interface CapabilityRegistryForSkills {
+  capabilityClusters?: Record<string, string[]>;
+  profileMembership?: Record<string, { tier: string; profiles: string[] }>;
+}
+
+/**
  * Cross-cutting context for descriptor-driven agent staging (ADR-1235 §1).
  * Passed as the optional second arg to ArtifactKind.stage() for agents kind
  * entries so that stageAgentsForRuntimeWithConverter can apply the exact
@@ -316,6 +330,10 @@ function kimiAgentsKind(destSubpath: string, prefix: string, configDir: string):
  *                       arg so scope-aware converters (antigravity, copilot) can choose
  *                       between global home paths and workspace-relative paths without
  *                       colliding with the `runtime` string at position 3.
+ * @param capabilityRegistry #2322: optional capability registry — captured in the
+ *                       stage() closure so third-party capability skills are bound to
+ *                       their declaring capId at staging time. Absent -> stage() stages
+ *                       nothing third-party (fail closed).
  */
 function skillsKind(
   destSubpath: string,
@@ -325,6 +343,7 @@ function skillsKind(
   configDir: string,
   nested = false,
   scope: 'local' | 'global' = 'global',
+  capabilityRegistry?: CapabilityRegistryForSkills,
 ): ArtifactKind {
   return {
     kind: 'skills',
@@ -345,7 +364,7 @@ function skillsKind(
       const isGlobal = scope === 'global';
       const wrappedConverter = (content: string, skillName: string): string =>
         realConverter(content, skillName, runtime, cmdNames, isGlobal);
-      return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix, nested);
+      return stageSkillsForRuntimeAsSkills(findInstallSourceRoot(configDir), resolved, wrappedConverter, prefix, nested, capabilityRegistry);
     },
   };
 }
@@ -465,7 +484,7 @@ function getRegistry(): RegistryLike {
  * Map a single ArtifactKindDescriptor entry to an ArtifactKind using the
  * matching builder function. Mirrors the hand-built calls in the old switch.
  */
-function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, configDir: string, scope: 'local' | 'global'): ArtifactKind {
+function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, configDir: string, scope: 'local' | 'global', capabilityRegistry?: CapabilityRegistryForSkills): ArtifactKind {
   const { kind, destSubpath, prefix, nesting, converter } = entry;
   const nested = nesting === 'nested';
 
@@ -489,7 +508,7 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
           `resolveRuntimeArtifactLayout: skills entry for '${runtime}' has converter=null (converter is required for skills)`,
         );
       }
-      result = skillsKind(destSubpath, prefix, converter, runtime, configDir, nested, scope);
+      result = skillsKind(destSubpath, prefix, converter, runtime, configDir, nested, scope, capabilityRegistry);
       break;
 
     case 'kimi-agents':
@@ -514,9 +533,19 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
  *
  * ADR-857 phase 5d: driven by the capability-registry artifactLayout descriptor
  * instead of a hardcoded switch statement.
+ *
+ * @param capabilityRegistry #2322: optional — when the caller has a composed
+ *   capability registry in scope (e.g. capability-writer.cts's `capability set`
+ *   path, or a fresh install's registry-aware profile resolution), pass it here
+ *   so the skills kind's stage() closure can materialize installed third-party
+ *   capability skills bound to their declaring capId. Both call paths (surface
+ *   apply AND the installer) must pass their registry here — resolveProfile's
+ *   own `'*'` (full profile) short-circuit never carries a registry, so if it
+ *   is not threaded in at layout-build time a `full`-profile install stages no
+ *   third-party capability skills regardless of registration (#2322 blocker 2).
  */
-function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope: 'local' | 'global' = 'global'): Layout {
-  return resolveRuntimeArtifactLayoutFromRegistry(getRegistry(), runtime, configDir, scope);
+function resolveRuntimeArtifactLayout(runtime: string, configDir: string, scope: 'local' | 'global' = 'global', capabilityRegistry?: CapabilityRegistryForSkills): Layout {
+  return resolveRuntimeArtifactLayoutFromRegistry(getRegistry(), runtime, configDir, scope, capabilityRegistry);
 }
 
 function resolveRuntimeArtifactLayoutFromRegistry(
@@ -524,6 +553,7 @@ function resolveRuntimeArtifactLayoutFromRegistry(
   runtime: string,
   configDir: string,
   scope: 'local' | 'global' = 'global',
+  capabilityRegistry?: CapabilityRegistryForSkills,
 ): Layout {
   if (typeof configDir !== 'string' || configDir === '') {
     throw new TypeError('configDir must be a non-empty string');
@@ -538,7 +568,7 @@ function resolveRuntimeArtifactLayoutFromRegistry(
   }
 
   const entries: ArtifactKindDescriptor[] = desc[scope] ?? [];
-  const kinds: ArtifactKind[] = entries.map((entry) => dispatchKindEntry(entry, runtime, configDir, scope));
+  const kinds: ArtifactKind[] = entries.map((entry) => dispatchKindEntry(entry, runtime, configDir, scope, capabilityRegistry));
 
   return { runtime, configDir, scope, kinds };
 }
