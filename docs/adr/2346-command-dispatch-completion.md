@@ -28,19 +28,21 @@ Complete the ADR-959 cutover and dissolve the switch entirely into a **two-layer
 `runCommand` collapses to a ~15-line dispatcher:
 
 ```
-try registry (dispatchCapabilityCommand)   // families — ADR-959 mechanism, completed
-  → try leaf table (_dispatchNonFamily)     // single-purpose verbs — fills the prepared seam
+try capability registry (dispatchCapabilityCommand)   // toggleable FEATURE capabilities — ADR-959, unchanged
+  → try host dispatch table (dispatchHostCommand)      // all non-capability commands — fills the prepared seam
     → unknown-command error
 ```
 
-- **Families** (multi-subcommand, module-backed) route through the `commandFamilies` registry exactly as `graphify`/`audit`/`intel` already do.
-- **Leaf verbs** (single-purpose) live in a dispatch table that fills the prepared `_dispatchNonFamily` seam — single-purpose verbs are *not* perverted into fake capability families (a leaf like `generate-slug` has no feature bundle, no config gate, no tier).
+- **Layer 1 — capability registry (`commandFamilies`):** toggleable FEATURE capabilities only — `graphify`/`audit`/`intel` (+ genuine future features). Populated from `capability.json` `commands` arrays by `gen-capability-registry.cjs` per ADR-959. **Unchanged by this ADR.**
+- **Layer 2 — host dispatch table (`dispatchHostCommand` + `HOST_COMMAND_ROUTERS`, consulted in the `default` case):** ALL non-capability commands. This fills the seam ADR-959 named (`_dispatchNonFamily`). It holds **host routers** (multi-subcommand core commands like `state`/`phase`/`capability`) AND **leaf verbs** (single-purpose commands like `generate-slug`), dispatched by a `{ command → handler }` table.
 
-### 2. Family/leaf classification rule
+**Host commands are NOT declared as capabilities.** They are core, non-toggleable, carry no `tier`/`activationKey`/install-profile membership, and cannot be tier-gated or turned off — so the capability registry (whose model is "toggleable feature bundle") is the wrong vehicle for them. The capability-vs-host boundary is the load-bearing distinction this ADR adds over ADR-959: a single-purpose leaf is never perverted into a fake capability, AND a core host command is never perverted into a toggleable feature.
 
-> Promote a cluster to a **family** when it has **(a) ≥3 related subcommands**, **(b) a shared backing module**, and **(c) a shared parse/return shape**. Lone verbs or pairs stay **leaves** (two adapters over different modules ≠ one seam).
+### 2. Host-router vs leaf classification rule
 
-Applied: 9 families result — `state`, `phase`, `init`, `roadmap`, `validate`/`verify`, `capability`, plus 4 promoted clusters (`config`, `research`, `resolve`, `git`). `worktree` + `workstream` stay leaves (2 verbs, different modules). ~40 remaining verbs rehome into ~4 themed leaf modules.
+> Organize a non-capability command as a **host router module** when its cluster has **(a) ≥3 related subcommands**, **(b) a shared backing module**, and **(c) a shared parse/return shape**. Lone verbs or pairs stay **leaves** (two adapters over different modules ≠ one seam). Both host routers and leaves dispatch through the Layer-2 host table — the distinction is code organization (a router module vs a themed leaf module), not dispatch routing.
+
+Applied: 9 host-router clusters result — `state`, `phase`, `init`, `roadmap`, `validate`/`verify`, `capability`, plus 4 promoted clusters (`config`, `research`, `resolve`, `git`). `worktree` + `workstream` stay leaves (2 verbs, different modules). ~40 remaining verbs rehome into ~4 themed leaf modules. **None of these are capability declarations** — they are host routers/leaves in the Layer-2 table. (The capability registry's feature families — graphify/audit/intel — are unaffected.)
 
 ### 3. Shared `parseFamilyArgs`
 

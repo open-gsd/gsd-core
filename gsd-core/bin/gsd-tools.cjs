@@ -562,6 +562,57 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   return true;
 }
 
+// ─── ADR-2346 (epic #2345): host dispatch table ───────────────────────────────
+// Layer-2 of the two-layer dispatch. Core, non-capability host commands live
+// here — NOT in the capability registry (ADR-959's commandFamilies is reserved
+// for toggleable feature capabilities: graphify/audit/intel). A host command
+// like `state` is core, non-toggleable, carries no tier/activationKey, so it
+// cannot be a capability. Each entry maps a top-level command to its standard
+// `route*Command` router (the same routers the hardcoded `case` arms called).
+// Consulted in runCommand's `default` case, after capability + overlay
+// dispatch, before the unknown-command error. A migrated command's `case` arm
+// is removed at cutover so it reaches here; an unmigrated command still hits
+// its `case` (collision structurally impossible, same property as ADR-959).
+const HOST_COMMAND_ROUTERS = {
+  // Each entry wraps its `route*Command` router so it receives the module-scope
+  // lib the old `case` arm passed, plus the per-dispatch context
+  // { args, cwd, raw, error }. Closes over module-scope libs (state/phase/…)
+  // exactly as the old inline arms did — byte-identical dispatch.
+  state: (ctx) => routeStateCommand({ state, ...ctx }),
+  phase: (ctx) => routePhaseCommand({ phase, ...ctx }),
+  roadmap: (ctx) => routeRoadmapCommand({ roadmap, ...ctx }),
+  verify: (ctx) => routeVerifyCommand({ verify, ...ctx }),
+  // validate additionally binds the module-scope `output` emitter.
+  validate: (ctx) => routeValidateCommand({ verify, output, ...ctx }),
+  // init preserves the #1688 stale-bake warning (best-effort, swallowed) that
+  // ran before the router in the old `case 'init':` arm.
+  init: (ctx) => {
+    try { warnIfStaleBake(ctx.cwd); } catch { /* guard must never break init */ }
+    routeInitCommand({ init, ...ctx });
+  },
+};
+
+// Returns true when consumed (suppress "Unknown command"), false to fall
+// through. Prototype-pollution-safe: own-property lookup rejects
+// `__proto__`/`constructor`/`prototype` command keys (same guard as
+// dispatchCapabilityCommand).
+function dispatchHostCommand({ command, args, cwd, raw, error }) {
+  if (
+    command === '__proto__' ||
+    command === 'constructor' ||
+    command === 'prototype'
+  ) {
+    return false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, command)) {
+    return false;
+  }
+  const router = HOST_COMMAND_ROUTERS[command];
+  if (typeof router !== 'function') return false;
+  router({ args, cwd, raw, error });
+  return true; // consumed — don't emit "Unknown command"
+}
+
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────
 
 // ─── CLI Router ───────────────────────────────────────────────────────────────
@@ -877,17 +928,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'state': {
-      routeStateCommand({
-        state,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
     case 'resolve-model': {
       commands.cmdResolveModel(cwd, args[1], raw);
       break;
@@ -1116,17 +1156,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error('Unknown frontmatter subcommand. Available: get, set, merge, validate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
-      break;
-    }
-
-    case 'verify': {
-      routeVerifyCommand({
-        verify,
-        args,
-        cwd,
-        raw,
-        error,
-      });
       break;
     }
 
@@ -1475,17 +1504,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'roadmap': {
-      routeRoadmapCommand({
-        roadmap,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
     case 'assumption-delta': {
       // #1561 — advisory architecture checkpoint. `scan <phase>` reads the
       // phase section via the same resolver as roadmap.get-phase and runs the
@@ -1540,17 +1558,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'phase': {
-      routePhaseCommand({
-        phase,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
     case 'milestone': {
       const subcommand = args[1];
       if (subcommand === 'complete') {
@@ -1565,18 +1572,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
-      break;
-    }
-
-    case 'validate': {
-      routeValidateCommand({
-        verify,
-        args,
-        cwd,
-        raw,
-        output: output,
-        error,
-      });
       break;
     }
 
@@ -1627,21 +1622,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         name: parseMultiwordArg(args, 'name'),
       };
       commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
-      break;
-    }
-
-    case 'init': {
-      // #1688: warn (at most once per process) if the user edited model_overrides
-      // without re-running `gsd install <runtime>` on a static-frontmatter runtime.
-      // Best-effort, stderr-only, swallowed errors — never blocks the command.
-      try { warnIfStaleBake(cwd); } catch { /* guard must never break init */ }
-      routeInitCommand({
-        init,
-        args,
-        cwd,
-        raw,
-        error,
-      });
       break;
     }
 
@@ -3232,6 +3212,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // require()-ing its router FROM the capability's install root (confined to that root).
       if (dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error })) break;
 
+      // ADR-2346 (epic #2345): host dispatch table — core, non-capability
+      // commands (state, …) routed via their `route*Command` router instead of
+      // a hardcoded `case` arm. Tried after capability/overlay dispatch and
+      // before the unknown-command error.
+      if (dispatchHostCommand({ command, args, cwd, raw, error })) break;
+
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
       // originalCommand to reconstruct the original dotted form and suggest
@@ -3263,4 +3249,4 @@ if (require.main === module) {
 // synthetic registry + requireModule injections.
 // ADR-1244 Phase 5: export dispatchOverlayCapabilityCommand + defaultRequireFromInstallRoot for
 // the third-party overlay dispatch + install-root confinement tests.
-module.exports = { dispatchCapabilityCommand, dispatchOverlayCapabilityCommand, defaultRequireFromInstallRoot };
+module.exports = { dispatchCapabilityCommand, dispatchOverlayCapabilityCommand, defaultRequireFromInstallRoot, dispatchHostCommand, HOST_COMMAND_ROUTERS };
