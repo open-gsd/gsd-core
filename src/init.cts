@@ -1164,6 +1164,9 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
         const createdMatch = content.match(/^created:\s*(.+)$/m);
         const titleMatch = content.match(/^title:\s*(.+)$/m);
         const areaMatch = content.match(/^area:\s*(.+)$/m);
+        // #2337: kept in parity with cmdListTodos — surface severity when
+        // present, omit the key entirely for todos with no severity line.
+        const severityMatch = content.match(/^severity:\s*(.+)$/m);
         const todoArea = areaMatch ? areaMatch[1].trim() : 'general';
 
         if (area && todoArea !== area) continue;
@@ -1180,6 +1183,7 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
               path.join(planningDir(cwd), 'todos', 'pending', file),
             ),
           ),
+          ...(severityMatch ? { severity: severityMatch[1].trim() } : {}),
         });
       } catch {
         /* intentionally empty */
