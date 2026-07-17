@@ -829,6 +829,1113 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     output(plan, raw);
   }
 
+  // ─── ADR-2346 P4: leaf host routers (all remaining commands) ───────────
+  // Each body relocated verbatim from its `case` arm; inner break; → return;.
+
+  function routeAgent({ args, cwd, raw, error }) {
+    routeAgentCommand({ args, raw });
+  }
+
+  function routeSmartEntry({ args, cwd, raw, error }) {
+    smartEntryMod.runSmartEntry(cwd, args, raw);
+  }
+
+  function routeCheck({ args, cwd, raw, error }) {
+    routeCheckCommand({ args, cwd, raw });
+  }
+
+  function routeFindPhase({ args, cwd, raw, error }) {
+    // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
+          // SDK handler: findPhase in sdk/src/query/phase.ts.
+          const handled = _dispatchNonFamily({
+            registryCommand: 'find-phase',
+            registryArgs: args.slice(1),
+            legacyCommand: 'find-phase',
+            legacyArgs: args.slice(1),
+            cwd,
+            raw,
+            error,
+            output: output,
+          });
+          if (!handled) phase.cmdFindPhase(cwd, args[1], raw);
+  }
+
+  function routeCommit({ args, cwd, raw, error }) {
+    const amend = args.includes('--amend');
+          const noVerify = args.includes('--no-verify');
+          const filesIndex = args.indexOf('--files');
+          // Collect all positional args between command name and first flag,
+          // then join them — handles both quoted ("multi word msg") and
+          // unquoted (multi word msg) invocations from different shells
+          const endIndex = filesIndex !== -1 ? filesIndex : args.length;
+          const messageArgs = args.slice(1, endIndex).filter(a => !a.startsWith('--'));
+          const message = messageArgs.join(' ') || undefined;
+          const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
+          commands.cmdCommit(cwd, message, files, raw, amend, noVerify);
+  }
+
+  function routeCheckCommit({ args, cwd, raw, error }) {
+    commands.cmdCheckCommit(cwd, raw);
+  }
+
+  function routeCommitToSubrepo({ args, cwd, raw, error }) {
+    const message = args[1];
+          const filesIndex = args.indexOf('--files');
+          const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
+          commands.cmdCommitToSubrepo(cwd, message, files, raw);
+  }
+
+  function routePrSubrepo({ args, cwd, raw, error }) {
+    const message = args[1];
+          const { repo, branch } = parseNamedArgs(args, ['repo', 'branch']);
+          commands.cmdPrSubrepo(cwd, repo, branch, message, raw);
+  }
+
+  function routeVerifySummary({ args, cwd, raw, error }) {
+    const summaryPath = args[1];
+          const countIndex = args.indexOf('--check-count');
+          const checkCount = countIndex !== -1 ? parseInt(args[countIndex + 1], 10) : 2;
+          verify.cmdVerifySummary(cwd, summaryPath, checkCount, raw);
+  }
+
+  function routeTemplate({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'select') {
+            template.cmdTemplateSelect(cwd, args[2], raw);
+          } else if (subcommand === 'fill') {
+            const templateType = args[2];
+            const { phase, plan, name, type, wave, fields: fieldsRaw } = parseNamedArgs(args, ['phase', 'plan', 'name', 'type', 'wave', 'fields']);
+            let fields = {};
+            if (fieldsRaw) {
+              const { safeJsonParse } = require('./lib/security.cjs');
+              const result = safeJsonParse(fieldsRaw, { label: '--fields' });
+              if (!result.ok) error(result.error);
+              fields = result.value;
+            }
+            template.cmdTemplateFill(cwd, templateType, {
+              phase, plan, name, fields,
+              type: type || 'execute',
+              wave: wave || '1',
+            }, raw);
+          } else {
+            error('Unknown template subcommand. Available: select, fill', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeTask({ args, cwd, raw, error }) {
+    routeTaskCommand({ args, cwd, raw });
+  }
+
+  function routeFrontmatter({ args, cwd, raw, error }) {
+    // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
+          // SDK handler: sdk/src/query/frontmatter.ts + frontmatter-mutation.ts.
+          // CJS fallback: frontmatter.cjs (cooperating sibling).
+          const subcommand = args[1];
+          const file = args[2];
+          const FRONTMATTER_SDK_MAP = {
+            get: 'frontmatter.get',
+            set: 'frontmatter.set',
+            merge: 'frontmatter.merge',
+            validate: 'frontmatter.validate',
+          };
+          if (subcommand in FRONTMATTER_SDK_MAP) {
+            const handled = _dispatchNonFamily({
+              registryCommand: FRONTMATTER_SDK_MAP[subcommand],
+              registryArgs: args.slice(2),
+              legacyCommand: 'frontmatter',
+              legacyArgs: args.slice(1),
+              cwd,
+              raw,
+              error,
+              output: output,
+            });
+            if (handled) return;
+          }
+          // CJS fallback (SDK unavailable or unknown subcommand)
+          if (subcommand === 'get') {
+            frontmatter.cmdFrontmatterGet(cwd, file, parseNamedArgs(args, ['field']).field, raw);
+          } else if (subcommand === 'set') {
+            const { field, value } = parseNamedArgs(args, ['field', 'value']);
+            frontmatter.cmdFrontmatterSet(cwd, file, field, value !== null ? value : undefined, raw);
+          } else if (subcommand === 'merge') {
+            frontmatter.cmdFrontmatterMerge(cwd, file, parseNamedArgs(args, ['data']).data, raw);
+          } else if (subcommand === 'validate') {
+            frontmatter.cmdFrontmatterValidate(cwd, file, parseNamedArgs(args, ['schema']).schema, raw);
+          } else {
+            error('Unknown frontmatter subcommand. Available: get, set, merge, validate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeEval({ args, cwd, raw, error }) {
+    routeEvalCommand({ evalMod, args, cwd, raw, error });
+  }
+
+  function routeVerification({ args, cwd, raw, error }) {
+    routeVerificationCommand({
+            verification,
+            args,
+            cwd,
+            raw,
+            error,
+          });
+  }
+
+  function routeGenerateSlug({ args, cwd, raw, error }) {
+    // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
+          // SDK handler: generateSlug in sdk/src/query/utils.ts.
+          const handled = _dispatchNonFamily({
+            registryCommand: 'generate-slug',
+            registryArgs: args.slice(1),
+            legacyCommand: 'generate-slug',
+            legacyArgs: args.slice(1),
+            cwd,
+            raw,
+            error,
+            output: output,
+          });
+          if (!handled) commands.cmdGenerateSlug(args[1], raw);
+  }
+
+  function routeCurrentTimestamp({ args, cwd, raw, error }) {
+    // Keep this command on the CJS fast path.
+          // Rationale: it is a pure local formatter and avoids SDK bridge startup
+          // in tight subprocess loops where Windows CI has shown intermittent
+          // native crashes (0xC0000005 / 3221225477).
+          commands.cmdCurrentTimestamp(args[1] || 'full', raw);
+  }
+
+  function routeProjectInstructionFile({ args, cwd, raw, error }) {
+    // #1529: pure runtime→filename projection. Backs the
+          // `gsd_run query project-instruction-file --runtime <r>` call in
+          // new-project.md so the bash workflow and profile-output.cjs share one
+          // source of truth (getProjectInstructionFile in runtime-name-policy.cjs).
+          // No SDK bridge — pure local lookup, runs before .planning/ exists.
+          const { getProjectInstructionFile } = require('./lib/runtime-name-policy.cjs');
+          // Parse --runtime <value> (space or = form); default to empty so the
+          // safe AGENTS.md cross-agent default applies.
+          const pifArgs = args.slice(1);
+          let pifRuntime = '';
+          for (let i = 0; i < pifArgs.length; i++) {
+            const a = pifArgs[i];
+            if (a === '--runtime' && pifArgs[i + 1] !== undefined) { pifRuntime = pifArgs[++i]; continue; }
+            if (a.startsWith('--runtime=')) { pifRuntime = a.slice('--runtime='.length); continue; }
+            // First positional that isn't a flag also works (lenient); otherwise ignore unknown flags.
+            if (!a.startsWith('-') && !pifRuntime) { pifRuntime = a; }
+          }
+          const filename = getProjectInstructionFile(pifRuntime);
+          process.stdout.write(filename + '\n');
+  }
+
+  function routeListTodos({ args, cwd, raw, error }) {
+    commands.cmdListTodos(cwd, args[1], raw);
+  }
+
+  function routeListSeeds({ args, cwd, raw, error }) {
+    commands.cmdListSeeds(cwd, args[1], raw);
+  }
+
+  function routeVerifyPathExists({ args, cwd, raw, error }) {
+    commands.cmdVerifyPathExists(cwd, args[1], raw);
+  }
+
+  function routeQuickTasksAppend({ args, cwd, raw, error }) {
+    // #2133 / ADR-2143 §3,§7: schema-backed replacement for fast.md's inline
+          // `awk NF-2` Quick Tasks column arithmetic. Row construction is delegated
+          // to the pure appendQuickTaskRow (markdown-table.cjs); this case only
+          // handles the I/O (read STATE.md, resolve date/commit, write STATE.md).
+          const qtaArgs = args.slice(1);
+          const qtaTask = parseNamedArgs(qtaArgs, ['task']).task || args[1];
+          if (!qtaTask) {
+            error('quick-tasks-append requires --task <description> (or a positional description)', ERROR_REASON.USAGE);
+          }
+
+          const statePath = path.join(cwd, '.planning', 'STATE.md');
+          if (!fs.existsSync(statePath)) {
+            error(`quick-tasks-append: STATE.md not found at ${statePath}`, ERROR_REASON.USAGE);
+          }
+
+          const date = new Date().toISOString().slice(0, 10);
+          const { execGit } = require('./lib/shell-command-projection.cjs');
+          const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd });
+          const commit = hashResult.exitCode === 0 && hashResult.stdout ? hashResult.stdout : '—';
+
+          const { appendQuickTaskRow } = require('./lib/markdown-table.cjs');
+
+          // #2242 review fix: route the read -> mutate -> write cycle through
+          // state.readModifyWriteStateMd (lib/state.cjs) instead of a raw
+          // fs.readFileSync + fs.writeFileSync pair, so the whole read-modify-write
+          // is atomic under STATE.md's lockfile — closing the lost-update race a
+          // raw read/write pair left open (cf. #500/#905/#1230). This mirrors the
+          // pattern every other STATE.md-mutating case in state.cts uses (e.g.
+          // cmdStateAddBlocker, cmdStateAddDecision): a mutable outer variable
+          // captures the pure helper's side output, and a fail-loud reason throws
+          // ExitError from INSIDE the transform (readModifyWriteStateMd's finally
+          // still releases the lock before the throw propagates; the transform
+          // throws before returning new content, so nothing is ever written).
+          let mutation;
+          state.readModifyWriteStateMd(statePath, (content) => {
+            const result = appendQuickTaskRow(content, { description: qtaTask, date, commit });
+            if (!result.ok) {
+              // Mirrors fast.md's old "skip with a brief log" behaviour (#2133): this
+              // is an expected, recoverable condition (no table / unrecognized
+              // schema), not a hard crash. ExitError sets a non-zero exit code (so
+              // fast.md's `|| echo ...` fallback fires) without calling
+              // process.exit() directly — stdout stays flushed and untouched.
+              throw new ExitError(1, `⚠ quick-tasks-append: ${result.reason}`);
+            }
+            mutation = result.value;
+            return result.value.content;
+          }, cwd);
+
+          output({ ok: true, row: mutation.row, variant: mutation.variant }, raw, mutation.row);
+  }
+
+  function routeNormalizeTestCommand({ args, cwd, raw, error }) {
+    // #1857: rewrite a resolved test command to a one-shot form so a
+          // watch-mode runner (vitest/jest) cannot hang a verification gate. Shared
+          // by the regression gate and the post-merge gate. args[1] is the raw
+          // resolved command; --cwd (already parsed into `cwd`) locates package.json.
+          const testCommandNormalizer = require('./lib/normalize-test-command.cjs');
+          testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
+  }
+
+  function routeDispatchShouldFlatten({ args, cwd, raw, error }) {
+    // #1708 / #853: typed query replacing the `RUNTIME === 'codex'` prose rule.
+          //
+          // Resolves the current runtime (GSD_RUNTIME > config.runtime > 'claude'),
+          // looks up registry.runtimes[id].runtime.hostIntegration.dispatch, and
+          // calls shouldFlattenDispatch(dispatch) from host-integration.cjs.
+          //
+          // Fail-closed: any unknown runtime, missing dispatch, or thrown error
+          // yields `true` (inline — the always-safe default).
+          //
+          // Output:
+          //   --raw   → prints exactly `true` or `false`
+          //   --json  → prints { runtime, shouldFlatten, dispatch }
+          //   default → same as --raw
+          try {
+            // Resolve runtime using the same precedence as `config-get runtime`.
+            const { resolveRuntime } = require('./lib/runtime-slash.cjs');
+            const runtimeId = resolveRuntime(cwd);
+
+            // Look up dispatch from the capability registry.
+            const registry = require('./lib/capability-registry.cjs');
+            const runtimeEntry = registry.runtimes != null
+              ? registry.runtimes[runtimeId]
+              : null;
+            const dispatch = runtimeEntry?.runtime?.hostIntegration?.dispatch ?? null;
+
+            // Call shouldFlattenDispatch from host-integration.cjs.
+            const hostIntegration = require('./lib/host-integration.cjs');
+            const shouldFlat = dispatch !== null
+              ? hostIntegration.shouldFlattenDispatch(dispatch)
+              : true; // fail-closed: unknown runtime → inline
+
+            const jsonIdx = args.indexOf('--json');
+            if (jsonIdx !== -1) {
+              output({
+                runtime: runtimeId,
+                shouldFlatten: shouldFlat,
+                dispatch: dispatch,
+              }, raw);
+            } else {
+              // --raw or default: print exactly true or false
+              process.stdout.write(shouldFlat ? 'true' : 'false');
+            }
+          } catch {
+            // Fail-closed on any error: inline is always safe.
+            process.stdout.write('true');
+          }
+  }
+
+  function routeAgentSkills({ args, cwd, raw, error }) {
+    // --json emits typed IR { agent_type, block, skills_count } for test assertions
+          // (#455). Default (no flag) outputs raw XML so workflow shell expansions work.
+          const jsonIdx = args.indexOf('--json');
+          const agentSkillsJsonMode = jsonIdx !== -1;
+          if (agentSkillsJsonMode) args.splice(jsonIdx, 1);
+          init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode);
+  }
+
+  function routeSkillManifest({ args, cwd, raw, error }) {
+    init.cmdSkillManifest(cwd, args, raw);
+  }
+
+  function routeHistoryDigest({ args, cwd, raw, error }) {
+    commands.cmdHistoryDigest(cwd, raw);
+  }
+
+  function routePhases({ args, cwd, raw, error }) {
+    routePhasesCommand({
+            phase,
+            milestone,
+            args,
+            cwd,
+            raw,
+            error,
+          });
+  }
+
+  function routeAssumptionDelta({ args, cwd, raw, error }) {
+    // #1561 — advisory architecture checkpoint. `scan <phase>` reads the
+          // phase section via the same resolver as roadmap.get-phase and runs the
+          // deterministic detectAssumptionDelta, emitting the typed IR as JSON.
+          const sub = args[1];
+          if (sub === 'scan') {
+            const phaseNum = args[2];
+            // Reject missing or flag-shaped phase values (QA matrix: values that
+            // look like flags). `scan --json` must not treat "--json" as a phase.
+            if (!phaseNum || phaseNum.startsWith('-')) {
+              error('Usage: assumption-delta scan <phase> [--terms <csv>]', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+              return;
+            }
+            // Optional --terms <csv> override (replaces the pluralization cues;
+            // optional/chosen keep defaults). An EMPTY value ("") or a flag-shaped
+            // value restores the curated defaults (does NOT disable pluralization).
+            // Terms are normalized (deduped, alphanumeric-only, capped) by
+            // detectAssumptionDelta's resolveTerms.
+            let termsOverride;
+            const termsIdx = args.indexOf('--terms');
+            const termsVal = termsIdx !== -1 ? args[termsIdx + 1] : undefined;
+            if (typeof termsVal === 'string' && !termsVal.startsWith('-')) {
+              const list = termsVal
+                .split(',')
+                .map((t) => t.trim().toLowerCase())
+                .filter((t) => t.length > 0);
+              termsOverride = list.length > 0 ? { pluralization: list } : undefined;
+            }
+            const section = roadmap.getRoadmapPhaseWithFallback(cwd, phaseNum);
+            const result = detectAssumptionDelta(section ?? '', termsOverride);
+            output(result, raw);
+            return;
+          }
+          error(`Unknown assumption-delta subcommand: ${sub}. Available: scan`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+  }
+
+  function routeRequirements({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'mark-complete') {
+            milestone.cmdRequirementsMarkComplete(cwd, args.slice(2), raw);
+          } else {
+            error('Unknown requirements subcommand. Available: mark-complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeGapAnalysis({ args, cwd, raw, error }) {
+    // Post-planning gap checker (#2493) — unified REQUIREMENTS.md +
+          // CONTEXT.md <decisions> coverage report against PLAN.md files.
+          gapChecker.cmdGapAnalysis(cwd, args.slice(1), raw);
+  }
+
+  function routeMilestone({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'complete') {
+            const milestoneName = parseMultiwordArg(args, 'name');
+            // #1871: archive phase dirs by default on milestone complete so the next
+            // new-milestone never inherits un-archived dirs. --no-archive-phases opts out.
+            const archivePhases = !args.includes('--no-archive-phases');
+            const force = args.includes('--force');
+            // #2118: --dry-run prints a preview plan without mutating.
+            const dryRun = args.includes('--dry-run');
+            milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun }, raw);
+          } else {
+            error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeProgress({ args, cwd, raw, error }) {
+    const subcommand = args[1] || 'json';
+          commands.cmdProgressRender(cwd, subcommand, raw);
+  }
+
+  function routeUat({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'render-checkpoint') {
+            const uat = require('./lib/uat.cjs');
+            const options = parseNamedArgs(args, ['file']);
+            uat.cmdRenderCheckpoint(cwd, options, raw);
+          } else if (subcommand === 'classify-coverage') {
+            const coverage = require('./lib/coverage.cjs');
+            const options = parseNamedArgs(args, ['summary', 'file']);
+            coverage.cmdClassify(cwd, options, raw);
+          } else {
+            error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeStats({ args, cwd, raw, error }) {
+    const subcommand = args[1] || 'json';
+          commands.cmdStats(cwd, subcommand, raw);
+  }
+
+  function routeTodo({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'complete') {
+            commands.cmdTodoComplete(cwd, args[2], raw);
+          } else if (subcommand === 'match-phase') {
+            commands.cmdTodoMatchPhase(cwd, args[2], raw);
+          } else {
+            error('Unknown todo subcommand. Available: complete, match-phase', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeScaffold({ args, cwd, raw, error }) {
+    const scaffoldType = args[1];
+          const scaffoldOptions = {
+            phase: parseNamedArgs(args, ['phase']).phase,
+            name: parseMultiwordArg(args, 'name'),
+          };
+          commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
+  }
+
+  function routeLoop({ args, cwd, raw, error }) {
+    // loop render-hooks <point>
+          const loopSubcommand = args[1];
+          if (loopSubcommand === 'render-hooks') {
+            let loopConfigDir = null;
+            const configDirEqArg = args.find(arg => arg.startsWith('--config-dir='));
+            const configDirIdx = args.indexOf('--config-dir');
+            if (configDirEqArg) {
+              const value = configDirEqArg.slice('--config-dir='.length).trim();
+              if (!value) error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              loopConfigDir = value;
+            } else if (configDirIdx !== -1) {
+              const value = args[configDirIdx + 1];
+              if (!value || value.startsWith('--')) {
+                error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              }
+              loopConfigDir = value;
+            }
+            // --active-cap <capId>: parse and validate before delegating
+            let loopActiveCap = undefined;
+            const activeCapEqArg = args.find(arg => arg.startsWith('--active-cap='));
+            const activeCapIdx = args.indexOf('--active-cap');
+            if (activeCapEqArg) {
+              const value = activeCapEqArg.slice('--active-cap='.length).trim();
+              if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              loopActiveCap = value;
+            } else if (activeCapIdx !== -1) {
+              const value = args[activeCapIdx + 1];
+              if (!value || value.startsWith('--')) {
+                error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              }
+              loopActiveCap = value;
+            }
+            // --runtime <r> (#2003): explicit runtime override so the config-dir
+            // resolution bypasses the persisted-runtime fallback (GSD_RUNTIME →
+            // config.runtime). Mirrors the --config-dir dual-form (--runtime X /
+            // --runtime=X) and the capability-set --runtime precedent.
+            let loopRuntime = undefined;
+            const runtimeEqArg = args.find(arg => arg.startsWith('--runtime='));
+            const runtimeIdx = args.indexOf('--runtime');
+            if (runtimeEqArg) {
+              const value = runtimeEqArg.slice('--runtime='.length).trim();
+              if (!value) error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              loopRuntime = value;
+            } else if (runtimeIdx !== -1) {
+              const value = args[runtimeIdx + 1];
+              if (!value || value.startsWith('--')) {
+                error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
+              }
+              loopRuntime = value;
+            }
+            loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
+              configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
+              activeCap: loopActiveCap,
+              runtime: loopRuntime,
+            });
+          } else {
+            error(
+              `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
+              ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
+            );
+          }
+  }
+
+  function routePhasePlanIndex({ args, cwd, raw, error }) {
+    phase.cmdPhasePlanIndex(cwd, args[1], raw);
+  }
+
+  function routeStateSnapshot({ args, cwd, raw, error }) {
+    state.cmdStateSnapshot(cwd, raw);
+  }
+
+  function routeSummaryExtract({ args, cwd, raw, error }) {
+    const summaryPath = args[1];
+          const fieldsIndex = args.indexOf('--fields');
+          const fields = fieldsIndex !== -1 ? args[fieldsIndex + 1].split(',') : null;
+          commands.cmdSummaryExtract(cwd, summaryPath, fields, raw);
+  }
+
+  async function routeWebsearch({ args, cwd, raw, error }) {
+    const query = args[1];
+          const limitIdx = args.indexOf('--limit');
+          const freshnessIdx = args.indexOf('--freshness');
+          await commands.cmdWebsearch(query, {
+            limit: limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : 10,
+            freshness: freshnessIdx !== -1 ? args[freshnessIdx + 1] : null,
+          }, raw);
+  }
+
+  function routeWorkstream({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'create') {
+            const migrateNameIdx = args.indexOf('--migrate-name');
+            const noMigrate = args.includes('--no-migrate');
+            workstream.cmdWorkstreamCreate(cwd, args[2], {
+              migrate: !noMigrate,
+              migrateName: migrateNameIdx !== -1 ? args[migrateNameIdx + 1] : null,
+            }, raw);
+          } else if (subcommand === 'list') {
+            workstream.cmdWorkstreamList(cwd, raw);
+          } else if (subcommand === 'status') {
+            workstream.cmdWorkstreamStatus(cwd, args[2], raw);
+          } else if (subcommand === 'complete') {
+            workstream.cmdWorkstreamComplete(cwd, args[2], {}, raw);
+          } else if (subcommand === 'set') {
+            workstream.cmdWorkstreamSet(cwd, args[2], raw);
+          } else if (subcommand === 'get') {
+            workstream.cmdWorkstreamGet(cwd, raw);
+          } else if (subcommand === 'progress') {
+            workstream.cmdWorkstreamProgress(cwd, raw);
+          } else {
+            error('Unknown workstream subcommand. Available: create, list, status, complete, set, get, progress', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeWorktree({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          const worktreeSafety = require('./lib/worktree-safety.cjs');
+          if (subcommand === 'cleanup-wave') {
+            worktreeSafety.cmdWorktreeCleanupWave(cwd, args.slice(2));
+          } else if (subcommand === 'record-agent') {
+            worktreeSafety.cmdWorktreeRecordAgent(cwd, args.slice(2));
+          } else if (subcommand === 'reap-orphans') {
+            worktreeSafety.cmdWorktreeReapOrphans(cwd);
+          } else if (subcommand === 'base-check') {
+            require('./lib/worktree-base-ref.cjs').cmdWorktreeBaseCheck(cwd, args.slice(2));
+          } else if (subcommand === 'set-baseref') {
+            require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
+          } else {
+            error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeDocsInit({ args, cwd, raw, error }) {
+    // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
+          // SDK handler: docsInit in sdk/src/query/docs-init.ts.
+          const handled = _dispatchNonFamily({
+            registryCommand: 'docs-init',
+            registryArgs: args.slice(1),
+            legacyCommand: 'docs-init',
+            legacyArgs: args.slice(1),
+            cwd,
+            raw,
+            error,
+            output: output,
+          });
+          if (!handled) docs.cmdDocsInit(cwd, raw);
+  }
+
+  function routeLearnings({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'list') {
+            learnings.cmdLearningsList(raw);
+          } else if (subcommand === 'query') {
+            const tagIdx = args.indexOf('--tag');
+            const tag = tagIdx !== -1 ? args[tagIdx + 1] : null;
+            if (!tag) error('Usage: gsd-tools learnings query --tag <tag>', ERROR_REASON.USAGE);
+            learnings.cmdLearningsQuery(tag, raw);
+          } else if (subcommand === 'copy') {
+            learnings.cmdLearningsCopy(cwd, raw);
+          } else if (subcommand === 'prune') {
+            const olderIdx = args.indexOf('--older-than');
+            const olderThan = olderIdx !== -1 ? args[olderIdx + 1] : null;
+            if (!olderThan) error('Usage: gsd-tools learnings prune --older-than <duration>', ERROR_REASON.USAGE);
+            learnings.cmdLearningsPrune(olderThan, raw);
+          } else if (subcommand === 'delete') {
+            const id = args[2];
+            if (!id) error('Usage: gsd-tools learnings delete <id>', ERROR_REASON.USAGE);
+            learnings.cmdLearningsDelete(id, raw);
+          } else {
+            error('Unknown learnings subcommand. Available: list, query, copy, prune, delete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeTeamsStatus({ args, cwd, raw, error }) {
+    const teamsStatus = require('./lib/teams-status.cjs');
+          teamsStatus.cmdTeamsStatus(cwd, { active: args.includes('--active') });
+  }
+
+  async function routeDetectCustomFiles({ args, cwd, raw, error }) {
+    const configDirIdx = args.indexOf('--config-dir');
+          const configDir = configDirIdx !== -1 ? args[configDirIdx + 1] : null;
+          if (!configDir) {
+            error('Usage: gsd-tools detect-custom-files --config-dir <path>', ERROR_REASON.USAGE);
+          }
+          const resolvedConfigDir = path.resolve(configDir);
+          if (!fs.existsSync(resolvedConfigDir)) {
+            error(`Config directory not found: ${resolvedConfigDir}`, ERROR_REASON.USAGE);
+          }
+
+          const manifestPath = path.join(resolvedConfigDir, 'gsd-file-manifest.json');
+          if (!fs.existsSync(manifestPath)) {
+            // No manifest — cannot determine what is custom. Return empty list
+            // (same behaviour as saveLocalPatches in install.js when no manifest).
+            const out = { custom_files: [], custom_count: 0, manifest_found: false };
+            process.stdout.write(JSON.stringify(out, null, 2));
+            return;
+          }
+
+          let manifest;
+          try {
+            manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
+          } catch {
+            const out = { custom_files: [], custom_count: 0, manifest_found: false, error: 'manifest parse error' };
+            process.stdout.write(JSON.stringify(out, null, 2));
+            return;
+          }
+
+          const manifestKeys = new Set(Object.keys(manifest.files || {}));
+
+          // GSD-managed directories to scan for user-added files. Whole-owned
+          // roots are wiped recursively; shared runtime roots are pruned by the
+          // same gsd-* top-level prefix used by install.js _removeGsdEntries.
+          const GSD_WHOLE_MANAGED_DIRS = [
+            'gsd-core',
+            path.join('commands', 'gsd'),
+          ];
+          const GSD_PREFIX_MANAGED_DIRS = [
+            'agents',
+            'hooks',
+            'skills',
+          ];
+
+          function collectCustomFiles(dir, baseDir, manifestKeys, out) {
+            if (!fs.existsSync(dir)) return;
+            const stat = fs.statSync(dir);
+            if (stat.isFile()) {
+              const relPath = path.relative(baseDir, dir).replace(/\\/g, '/');
+              if (!manifestKeys.has(relPath)) {
+                out.push(relPath);
+              }
+              return;
+            }
+            if (!stat.isDirectory()) return;
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                collectCustomFiles(fullPath, baseDir, manifestKeys, out);
+                continue;
+              }
+              // Use forward slashes for cross-platform manifest key compatibility
+              const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
+              if (!manifestKeys.has(relPath)) {
+                out.push(relPath);
+              }
+            }
+          }
+
+          const customFiles = [];
+          for (const managedDir of GSD_WHOLE_MANAGED_DIRS) {
+            const absDir = path.join(resolvedConfigDir, managedDir);
+            if (!fs.existsSync(absDir)) continue;
+            collectCustomFiles(absDir, resolvedConfigDir, manifestKeys, customFiles);
+          }
+          for (const managedDir of GSD_PREFIX_MANAGED_DIRS) {
+            const absDir = path.join(resolvedConfigDir, managedDir);
+            if (!fs.existsSync(absDir)) continue;
+            for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+              if (!entry.name.startsWith('gsd-')) continue;
+              collectCustomFiles(path.join(absDir, entry.name), resolvedConfigDir, manifestKeys, customFiles);
+            }
+          }
+
+          const out = {
+            custom_files: customFiles,
+            custom_count: customFiles.length,
+            manifest_found: true,
+            manifest_version: manifest.version || null,
+          };
+          process.stdout.write(JSON.stringify(out, null, 2));
+  }
+
+  function routeFromGsd2({ args, cwd, raw, error }) {
+    const gsd2Import = require('./lib/gsd2-import.cjs');
+          gsd2Import.cmdFromGsd2(args.slice(1), cwd, raw);
+  }
+
+  async function routePromptBudget({ args, cwd, raw, error }) {
+    const promptBudget = require('./lib/prompt-budget.cjs');
+
+          // ── Collect multi-value --plan-file flags ──────────────────────────
+          const planFiles = [];
+          for (let i = 1; i < args.length; i++) {
+            if (args[i] === '--plan-file' && args[i + 1] && !args[i + 1].startsWith('--')) {
+              planFiles.push(args[i + 1]);
+              i++;
+            }
+          }
+
+          // ── Parse single-value flags ───────────────────────────────────────
+          const flagMap = new Map();
+          for (let i = 1; i < args.length; i++) {
+            const current = args[i];
+            const next = args[i + 1];
+            if (!current.startsWith('--')) continue;
+            if (!next || next.startsWith('--')) {
+              if (!flagMap.has(current)) flagMap.set(current, null);
+              continue;
+            }
+            if (!flagMap.has(current)) flagMap.set(current, next);
+            i++;
+          }
+          const getFlag = (flag) => flagMap.get(flag) ?? null;
+
+          const budgetStr = getFlag('--budget');
+          const instructionsFile = getFlag('--instructions-file');
+          const roadmapFile = getFlag('--roadmap-file');
+          const outputPromptFile = getFlag('--output-prompt');
+          const outputMetadataFile = getFlag('--output-metadata');
+          const safetyMarginStr = getFlag('--safety-margin-pct');
+          const projectMdHeadLinesStr = getFlag('--project-md-head-lines');
+          const projectFile = getFlag('--project-file');
+          const contextFile = getFlag('--context-file');
+          const researchFile = getFlag('--research-file');
+          const requirementsFile = getFlag('--requirements-file');
+
+          // ── Validate required args ─────────────────────────────────────────
+          if (!budgetStr) {
+            throw new ExitError(1, 'Error: --budget <N> is required');
+          }
+          const budget = parseInt(budgetStr, 10);
+          if (!Number.isFinite(budget) || budget <= 0) {
+            throw new ExitError(1, 'Error: --budget must be a positive integer');
+          }
+          if (!instructionsFile) {
+            throw new ExitError(1, 'Error: --instructions-file <path> is required');
+          }
+          if (!roadmapFile) {
+            throw new ExitError(1, 'Error: --roadmap-file <path> is required');
+          }
+          if (planFiles.length === 0) {
+            throw new ExitError(1, 'Error: at least one --plan-file <path> is required');
+          }
+          if (!outputPromptFile) {
+            throw new ExitError(1, 'Error: --output-prompt <path> is required');
+          }
+          if (!outputMetadataFile) {
+            throw new ExitError(1, 'Error: --output-metadata <path> is required');
+          }
+
+          // ── Validate and read required files ──────────────────────────────
+          async function readRequired(filePath, flagName) {
+            const resolved = path.resolve(filePath);
+            try {
+              return await fs.promises.readFile(resolved, 'utf8');
+            } catch (err) {
+              if (err && err.code === 'ENOENT') {
+                throw new ExitError(1, `Error: file not found for ${flagName}: ${resolved}`);
+              }
+              throw new ExitError(1, `Error: cannot read file for ${flagName}: ${resolved}`);
+            }
+          }
+
+          async function readOptional(filePath) {
+            if (!filePath) return null;
+            const resolved = path.resolve(filePath);
+            try {
+              return await fs.promises.readFile(resolved, 'utf8');
+            } catch (err) {
+              if (err && err.code === 'ENOENT') return null;
+              throw new ExitError(1, `Error: cannot read optional file: ${resolved}`);
+            }
+          }
+
+          const instructions = await readRequired(instructionsFile, '--instructions-file');
+          const roadmap = await readRequired(roadmapFile, '--roadmap-file');
+          const plans = await Promise.all(planFiles.map(async (p) => {
+            const resolved = path.resolve(p);
+            try {
+              const content = await fs.promises.readFile(resolved, 'utf8');
+              return { file: path.basename(p), content };
+            } catch (err) {
+              if (err && err.code === 'ENOENT') {
+                throw new ExitError(1, `Error: plan file not found: ${resolved}`);
+              }
+              throw new ExitError(1, `Error: cannot read plan file: ${resolved}`);
+            }
+          }));
+
+          const projectMd = await readOptional(projectFile);
+          const context = await readOptional(contextFile);
+          const research = await readOptional(researchFile);
+          const requirements = await readOptional(requirementsFile);
+
+          // ── Build options ─────────────────────────────────────────────────
+          const options = {};
+          if (safetyMarginStr !== null) {
+            const pct = parseInt(safetyMarginStr, 10);
+            if (Number.isFinite(pct)) options.safetyMarginPct = pct;
+          }
+          if (projectMdHeadLinesStr !== null) {
+            const lines = parseInt(projectMdHeadLinesStr, 10);
+            if (Number.isFinite(lines)) options.projectMdHeadLines = lines;
+          }
+
+          // ── Call applyBudget ──────────────────────────────────────────────
+          const sections = { instructions, roadmap, plans, projectMd, context, research, requirements };
+          const { prompt, metadata } = promptBudget.applyBudget({ sections, budget, options });
+
+          // ── Write outputs ─────────────────────────────────────────────────
+          await fs.promises.writeFile(path.resolve(outputMetadataFile), JSON.stringify(metadata, null, 2));
+          await fs.promises.writeFile(path.resolve(outputPromptFile), prompt);
+
+          if (metadata.hardFailed) {
+            throw new ExitError(2);
+          }
+  }
+
+  function routeUpdateContext({ args, cwd, raw, error }) {
+    // #498: resolve the installed GSD version, scope, runtime, and config dir
+          // for /gsd:update. Replaces ~280 lines of inline bash in update.md with a
+          // tested projection. Emits the contract as JSON: { installedVersion,
+          // scope, runtime, gsdDir }. Optional --config-dir / --runtime carry the
+          // workflow's execution_context hints (the one thing only it can know).
+          const { loadUpdateContext } = require('./lib/update-context.cjs');
+          const ucArgs = args.slice(1);
+          let preferredConfigDir = '';
+          let preferredRuntime = '';
+          for (let i = 0; i < ucArgs.length; i++) {
+            const a = ucArgs[i];
+            if (a.startsWith('--config-dir=')) { preferredConfigDir = a.slice('--config-dir='.length); continue; }
+            if (a.startsWith('--runtime=')) { preferredRuntime = a.slice('--runtime='.length); continue; }
+            if (a === '--config-dir') {
+              const v = ucArgs[i + 1];
+              if (v === undefined || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
+              preferredConfigDir = v; i++; continue;
+            }
+            if (a === '--runtime') {
+              const v = ucArgs[i + 1];
+              if (v === undefined || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
+              preferredRuntime = v; i++; continue;
+            }
+            if (a === '--json') continue; // JSON is the only output; accepted for symmetry
+            if (a.startsWith('-')) error(`Unknown flag for update-context: ${a}`, ERROR_REASON.USAGE);
+          }
+          const ctx = loadUpdateContext({ preferredConfigDir, preferredRuntime });
+          process.stdout.write(JSON.stringify(ctx) + '\n');
+  }
+
+  async function routeClassifyConfidence({ args, cwd, raw, error }) {
+    const researchProvider = require('./lib/research-provider.cjs');
+          const providerIdx = args.indexOf('--provider');
+          const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
+          if (!provider || provider.startsWith('--')) {
+            error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
+          }
+          const verified = args.includes('--verified');
+          const pkgIdx = args.indexOf('--package');
+          const pkg = pkgIdx !== -1 ? args[pkgIdx + 1] : null;
+          const ecoIdx = args.indexOf('--ecosystem');
+          const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
+          let legitimacyVerdict = null;
+          if (pkg && (!pkg.startsWith('--'))) {
+            const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
+            if (!ecosystem || ecosystem.startsWith('--') || !VALID_ECOSYSTEMS.has(ecosystem)) {
+              error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
+            }
+            const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
+            const results = await pkgLegitimacy.checkPackages({ ecosystem, packages: [pkg] }, {});
+            legitimacyVerdict = results[0] ? results[0].verdict : null;
+          }
+          const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified, legitimacyVerdict });
+          output({ provider, package: pkg || null, ecosystem: ecosystem || null, legitimacyVerdict, verified, confidence }, raw);
+  }
+
+  async function routePackageLegitimacy({ args, cwd, raw, error }) {
+    const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
+          const subcommand = args[1];
+          if (subcommand !== 'check') {
+            error('Unknown package-legitimacy subcommand. Available: check', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+          const ecoIdx = args.indexOf('--ecosystem');
+          const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
+          const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
+          if (!ecosystem || !VALID_ECOSYSTEMS.has(ecosystem)) {
+            error('Usage: gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> ...', ERROR_REASON.USAGE);
+          }
+          // Collect positional package names.
+          // Only --ecosystem takes a value. Every non-flag arg is a package name.
+          // Any unknown --flag is a usage error (do not silently skip+consume the next arg).
+          const packages = [];
+          for (let i = 2; i < args.length; i++) {
+            const a = args[i];
+            if (a === '--ecosystem') { i++; continue; }
+            if (a.startsWith('--')) {
+              error(`package-legitimacy: unknown flag ${a}`, ERROR_REASON.USAGE);
+            }
+            packages.push(a);
+          }
+          if (packages.length === 0) {
+            error('Usage: gsd-tools package-legitimacy check --ecosystem <eco> <pkg1> <pkg2> ...', ERROR_REASON.USAGE);
+          }
+          let pkgResults;
+          try {
+            pkgResults = await pkgLegitimacy.checkPackages({ ecosystem, packages }, {});
+          } catch (pkgErr) {
+            error(`package-legitimacy: ${pkgErr && pkgErr.message ? pkgErr.message : String(pkgErr)}`, ERROR_REASON.UNKNOWN);
+          }
+          output(pkgResults, raw);
+  }
+
+  function routeEffort({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand === 'sync') {
+            const effortSyncArgs = args.slice(2);
+            let dryRun = true;
+            let effortSyncConfigDir;
+            let effortSyncRuntime;
+            for (let i = 0; i < effortSyncArgs.length; i++) {
+              const a = effortSyncArgs[i];
+              if (a === '--apply') { dryRun = false; continue; }
+              if (a === '--dry-run') { dryRun = true; continue; }
+              if (a.startsWith('--config-dir=')) { effortSyncConfigDir = a.slice('--config-dir='.length); continue; }
+              if (a === '--config-dir') {
+                const v = effortSyncArgs[i + 1];
+                if (!v || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
+                effortSyncConfigDir = v; i++; continue;
+              }
+              if (a.startsWith('--runtime=')) { effortSyncRuntime = a.slice('--runtime='.length); continue; }
+              if (a === '--runtime') {
+                const v = effortSyncArgs[i + 1];
+                if (!v || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
+                effortSyncRuntime = v; i++; continue;
+              }
+              if (a === '--raw') continue;
+              if (a.startsWith('-')) error(`Unknown flag for effort sync: ${a}`, ERROR_REASON.USAGE);
+              error(`effort sync takes no positional arguments; got: ${a}`, ERROR_REASON.USAGE);
+            }
+            commands.cmdEffortSync(cwd, raw, { dryRun, configDir: effortSyncConfigDir, runtime: effortSyncRuntime });
+          } else {
+            error('Unknown effort subcommand. Available: sync', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+          }
+  }
+
+  function routeUserStory({ args, cwd, raw, error }) {
+    const subcommand = args[1];
+          if (subcommand !== 'validate') {
+            error(`Unknown user-story subcommand: ${subcommand || '(none)'}. Available: validate`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            return;
+          }
+
+          const storyIdx = args.indexOf('--story');
+          const story = (storyIdx !== -1 && args[storyIdx + 1] && !args[storyIdx + 1].startsWith('--'))
+            ? args[storyIdx + 1]
+            : '';
+
+          // Canonical extraction regex — requires non-whitespace content in each slot
+          // (\S.*? ensures the slot isn't whitespace-only).
+          // Named groups: role / capability / outcome.
+          const USER_STORY_RE = /^As a (\S.*?), I want to (\S.*?), so that (\S.*?)\.$/;
+
+          const errors = [];
+          const trimmed = story.trim();
+          let slots = null;
+
+          if (!trimmed) {
+            errors.push('Story is empty. Required format: "As a [role], I want to [capability], so that [outcome]."');
+          } else {
+            // Per-clause guards produce targeted, actionable error messages before
+            // attempting the full regex. Guards are ordered: role → capability → outcome → period.
+            if (!/^As a \S/i.test(trimmed)) {
+              errors.push('Story must start with "As a [user role]," (role must be non-empty).');
+            }
+            if (!/, I want to \S/i.test(trimmed)) {
+              errors.push('Story must include ", I want to [capability]," (capability must be non-empty).');
+            }
+            if (!/, so that \S/i.test(trimmed)) {
+              errors.push('Story must include ", so that [outcome]." (outcome must be non-empty).');
+            }
+            if (!trimmed.endsWith('.')) {
+              errors.push('Story must end with a period (.).');
+            }
+            // Full-regex check only when per-clause guards all passed — avoids
+            // redundant "format mismatch" noise on top of specific error messages.
+            if (errors.length === 0) {
+              const m = USER_STORY_RE.exec(trimmed);
+              if (!m) {
+                errors.push('Story does not match the canonical format: "As a [role], I want to [capability], so that [outcome]."');
+              } else {
+                slots = { role: m[1], capability: m[2], outcome: m[3] };
+              }
+            }
+          }
+
+          output({ valid: errors.length === 0, errors, slots }, raw);
+  }
+
+  function routeDriftGuard({ args, cwd, raw, error }) {
+    // ADR-22: deterministic authority resolution + severity classification.
+          // Subcommands:
+          //   drift-guard authority                          → effective authority string
+          //   drift-guard severity --status <S> [--authority <A>]  → {severity, hardBlock}
+          const subcommand = args[1];
+
+          // Read config.json directly for both plan_review.source_grounding_authority
+          // and intel.enabled. Neither key is in the config-loader.cjs whitelist that
+          // config-loader.cjs's loadConfig() whitelist does not return; plan_review is only in config.cjs's private
+          // buildConfig(), and intel is a federated capability config key.
+          let configuredAuthority = 'grep';
+          let intelEnabled = false;
+          try {
+            const { planningDir } = require('./lib/planning-workspace.cjs');
+            const cfgPath = require('path').join(planningDir(cwd), 'config.json');
+            if (require('fs').existsSync(cfgPath)) {
+              const rawCfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf-8'));
+              if (rawCfg && rawCfg.plan_review && rawCfg.plan_review.source_grounding_authority) {
+                configuredAuthority = String(rawCfg.plan_review.source_grounding_authority);
+              }
+              if (rawCfg && rawCfg.intel && rawCfg.intel.enabled === true) {
+                intelEnabled = true;
+              }
+            }
+          } catch {
+            // not fatal — defaults apply
+          }
+
+          const effectiveAuthority = getEffectiveAuthority(configuredAuthority, intelEnabled);
+
+          if (subcommand === 'authority') {
+            // Pass rawValue as 3rd arg so --raw returns unquoted string (not JSON)
+            output(effectiveAuthority, raw, effectiveAuthority);
+            return;
+          }
+
+          if (subcommand === 'severity') {
+            const statusIdx = args.indexOf('--status');
+            const statusVal = statusIdx !== -1 ? args[statusIdx + 1] : undefined;
+            if (!statusVal || statusVal.startsWith('--')) {
+              error('drift-guard severity requires --status <VERIFIED|MISSING|AMBIGUOUS|UNCHECKABLE>', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+              return;
+            }
+            const authIdx = args.indexOf('--authority');
+            const authVal = authIdx !== -1 ? args[authIdx + 1] : undefined;
+            const authorityForClassify = (authVal && !authVal.startsWith('--'))
+              ? authVal
+              : effectiveAuthority;
+            const result = classifyDriftSeverity({ status: statusVal, authority: authorityForClassify });
+            output(result, raw);
+            return;
+          }
+
+          error(
+            `Unknown drift-guard subcommand: ${subcommand || '(none)'}. Available: authority, severity`,
+            ERROR_REASON.SDK_UNKNOWN_COMMAND,
+          );
+  }
+
+
 const HOST_COMMAND_ROUTERS = {
   // Each entry wraps its `route*Command` router so it receives the module-scope
   // lib the old `case` arm passed, plus the per-dispatch context
@@ -866,6 +1973,62 @@ const HOST_COMMAND_ROUTERS = {
   'migrate-config': routeMigrateConfig,
   'research-store': routeResearchStore,
   'research-plan': routeResearchPlan,
+  // ADR-2346 P4: all remaining leaf commands
+    'agent': routeAgent,
+    'smart-entry': routeSmartEntry,
+    'check': routeCheck,
+    'find-phase': routeFindPhase,
+    'commit': routeCommit,
+    'check-commit': routeCheckCommit,
+    'commit-to-subrepo': routeCommitToSubrepo,
+    'pr-subrepo': routePrSubrepo,
+    'verify-summary': routeVerifySummary,
+    'template': routeTemplate,
+    'task': routeTask,
+    'frontmatter': routeFrontmatter,
+    'eval': routeEval,
+    'verification': routeVerification,
+    'generate-slug': routeGenerateSlug,
+    'current-timestamp': routeCurrentTimestamp,
+    'project-instruction-file': routeProjectInstructionFile,
+    'list-todos': routeListTodos,
+    'list-seeds': routeListSeeds,
+    'verify-path-exists': routeVerifyPathExists,
+    'quick-tasks-append': routeQuickTasksAppend,
+    'normalize-test-command': routeNormalizeTestCommand,
+    'dispatch-should-flatten': routeDispatchShouldFlatten,
+    'agent-skills': routeAgentSkills,
+    'skill-manifest': routeSkillManifest,
+    'history-digest': routeHistoryDigest,
+    'phases': routePhases,
+    'assumption-delta': routeAssumptionDelta,
+    'requirements': routeRequirements,
+    'gap-analysis': routeGapAnalysis,
+    'milestone': routeMilestone,
+    'progress': routeProgress,
+    'uat': routeUat,
+    'stats': routeStats,
+    'todo': routeTodo,
+    'scaffold': routeScaffold,
+    'loop': routeLoop,
+    'phase-plan-index': routePhasePlanIndex,
+    'state-snapshot': routeStateSnapshot,
+    'summary-extract': routeSummaryExtract,
+    'websearch': routeWebsearch,
+    'workstream': routeWorkstream,
+    'worktree': routeWorktree,
+    'docs-init': routeDocsInit,
+    'learnings': routeLearnings,
+    'teams-status': routeTeamsStatus,
+    'detect-custom-files': routeDetectCustomFiles,
+    'from-gsd2': routeFromGsd2,
+    'prompt-budget': routePromptBudget,
+    'update-context': routeUpdateContext,
+    'classify-confidence': routeClassifyConfidence,
+    'package-legitimacy': routePackageLegitimacy,
+    'effort': routeEffort,
+    'user-story': routeUserStory,
+    'drift-guard': routeDriftGuard,
 };
 
 // Returns true when consumed (suppress "Unknown command"), false to fall
@@ -1191,1289 +2354,6 @@ function extractField(obj, fieldPath) {
 
 async function runCommand(command, args, cwd, raw, defaultValue, originalCommand, workstreamContext = null) {
   switch (command) {
-    case 'agent': {
-      routeAgentCommand({ args, raw });
-      break;
-    }
-
-    case 'smart-entry': {
-      smartEntryMod.runSmartEntry(cwd, args, raw);
-      break;
-    }
-
-    case 'check': {
-      routeCheckCommand({ args, cwd, raw });
-      break;
-    }
-
-
-
-    case 'find-phase': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      // SDK handler: findPhase in sdk/src/query/phase.ts.
-      const handled = _dispatchNonFamily({
-        registryCommand: 'find-phase',
-        registryArgs: args.slice(1),
-        legacyCommand: 'find-phase',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) phase.cmdFindPhase(cwd, args[1], raw);
-      break;
-    }
-
-    case 'commit': {
-      const amend = args.includes('--amend');
-      const noVerify = args.includes('--no-verify');
-      const filesIndex = args.indexOf('--files');
-      // Collect all positional args between command name and first flag,
-      // then join them — handles both quoted ("multi word msg") and
-      // unquoted (multi word msg) invocations from different shells
-      const endIndex = filesIndex !== -1 ? filesIndex : args.length;
-      const messageArgs = args.slice(1, endIndex).filter(a => !a.startsWith('--'));
-      const message = messageArgs.join(' ') || undefined;
-      const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
-      commands.cmdCommit(cwd, message, files, raw, amend, noVerify);
-      break;
-    }
-
-    case 'check-commit': {
-      commands.cmdCheckCommit(cwd, raw);
-      break;
-    }
-
-    case 'commit-to-subrepo': {
-      const message = args[1];
-      const filesIndex = args.indexOf('--files');
-      const files = filesIndex !== -1 ? args.slice(filesIndex + 1).filter(a => !a.startsWith('--')) : [];
-      commands.cmdCommitToSubrepo(cwd, message, files, raw);
-      break;
-    }
-
-    case 'pr-subrepo': {
-      const message = args[1];
-      const { repo, branch } = parseNamedArgs(args, ['repo', 'branch']);
-      commands.cmdPrSubrepo(cwd, repo, branch, message, raw);
-      break;
-    }
-
-    case 'verify-summary': {
-      const summaryPath = args[1];
-      const countIndex = args.indexOf('--check-count');
-      const checkCount = countIndex !== -1 ? parseInt(args[countIndex + 1], 10) : 2;
-      verify.cmdVerifySummary(cwd, summaryPath, checkCount, raw);
-      break;
-    }
-
-    case 'template': {
-      const subcommand = args[1];
-      if (subcommand === 'select') {
-        template.cmdTemplateSelect(cwd, args[2], raw);
-      } else if (subcommand === 'fill') {
-        const templateType = args[2];
-        const { phase, plan, name, type, wave, fields: fieldsRaw } = parseNamedArgs(args, ['phase', 'plan', 'name', 'type', 'wave', 'fields']);
-        let fields = {};
-        if (fieldsRaw) {
-          const { safeJsonParse } = require('./lib/security.cjs');
-          const result = safeJsonParse(fieldsRaw, { label: '--fields' });
-          if (!result.ok) error(result.error);
-          fields = result.value;
-        }
-        template.cmdTemplateFill(cwd, templateType, {
-          phase, plan, name, fields,
-          type: type || 'execute',
-          wave: wave || '1',
-        }, raw);
-      } else {
-        error('Unknown template subcommand. Available: select, fill', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'task': {
-      routeTaskCommand({ args, cwd, raw });
-      break;
-    }
-
-    case 'frontmatter': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      // SDK handler: sdk/src/query/frontmatter.ts + frontmatter-mutation.ts.
-      // CJS fallback: frontmatter.cjs (cooperating sibling).
-      const subcommand = args[1];
-      const file = args[2];
-      const FRONTMATTER_SDK_MAP = {
-        get: 'frontmatter.get',
-        set: 'frontmatter.set',
-        merge: 'frontmatter.merge',
-        validate: 'frontmatter.validate',
-      };
-      if (subcommand in FRONTMATTER_SDK_MAP) {
-        const handled = _dispatchNonFamily({
-          registryCommand: FRONTMATTER_SDK_MAP[subcommand],
-          registryArgs: args.slice(2),
-          legacyCommand: 'frontmatter',
-          legacyArgs: args.slice(1),
-          cwd,
-          raw,
-          error,
-          output: output,
-        });
-        if (handled) break;
-      }
-      // CJS fallback (SDK unavailable or unknown subcommand)
-      if (subcommand === 'get') {
-        frontmatter.cmdFrontmatterGet(cwd, file, parseNamedArgs(args, ['field']).field, raw);
-      } else if (subcommand === 'set') {
-        const { field, value } = parseNamedArgs(args, ['field', 'value']);
-        frontmatter.cmdFrontmatterSet(cwd, file, field, value !== null ? value : undefined, raw);
-      } else if (subcommand === 'merge') {
-        frontmatter.cmdFrontmatterMerge(cwd, file, parseNamedArgs(args, ['data']).data, raw);
-      } else if (subcommand === 'validate') {
-        frontmatter.cmdFrontmatterValidate(cwd, file, parseNamedArgs(args, ['schema']).schema, raw);
-      } else {
-        error('Unknown frontmatter subcommand. Available: get, set, merge, validate', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'eval': {
-      routeEvalCommand({ evalMod, args, cwd, raw, error });
-      break;
-    }
-
-    // ─── Verification Status ───────────────────────────────────────────────
-    //
-    // verification status <phaseDir>
-    //   Read the first *-VERIFICATION.md in phaseDir and return
-    //   { status, next_action, next_command } routing result.
-    //
-    // Note: `verification` (reads verifier-emitted status) is distinct from
-    // `verify` (runs verification checks like plan-structure/artifacts).
-
-    case 'verification': {
-      routeVerificationCommand({
-        verification,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
-    case 'generate-slug': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      // SDK handler: generateSlug in sdk/src/query/utils.ts.
-      const handled = _dispatchNonFamily({
-        registryCommand: 'generate-slug',
-        registryArgs: args.slice(1),
-        legacyCommand: 'generate-slug',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) commands.cmdGenerateSlug(args[1], raw);
-      break;
-    }
-
-    case 'current-timestamp': {
-      // Keep this command on the CJS fast path.
-      // Rationale: it is a pure local formatter and avoids SDK bridge startup
-      // in tight subprocess loops where Windows CI has shown intermittent
-      // native crashes (0xC0000005 / 3221225477).
-      commands.cmdCurrentTimestamp(args[1] || 'full', raw);
-      break;
-    }
-
-    case 'project-instruction-file': {
-      // #1529: pure runtime→filename projection. Backs the
-      // `gsd_run query project-instruction-file --runtime <r>` call in
-      // new-project.md so the bash workflow and profile-output.cjs share one
-      // source of truth (getProjectInstructionFile in runtime-name-policy.cjs).
-      // No SDK bridge — pure local lookup, runs before .planning/ exists.
-      const { getProjectInstructionFile } = require('./lib/runtime-name-policy.cjs');
-      // Parse --runtime <value> (space or = form); default to empty so the
-      // safe AGENTS.md cross-agent default applies.
-      const pifArgs = args.slice(1);
-      let pifRuntime = '';
-      for (let i = 0; i < pifArgs.length; i++) {
-        const a = pifArgs[i];
-        if (a === '--runtime' && pifArgs[i + 1] !== undefined) { pifRuntime = pifArgs[++i]; continue; }
-        if (a.startsWith('--runtime=')) { pifRuntime = a.slice('--runtime='.length); continue; }
-        // First positional that isn't a flag also works (lenient); otherwise ignore unknown flags.
-        if (!a.startsWith('-') && !pifRuntime) { pifRuntime = a; }
-      }
-      const filename = getProjectInstructionFile(pifRuntime);
-      process.stdout.write(filename + '\n');
-      break;
-    }
-
-    case 'list-todos': {
-      commands.cmdListTodos(cwd, args[1], raw);
-      break;
-    }
-
-    case 'list-seeds': {
-      commands.cmdListSeeds(cwd, args[1], raw);
-      break;
-    }
-
-    case 'verify-path-exists': {
-      commands.cmdVerifyPathExists(cwd, args[1], raw);
-      break;
-    }
-
-    case 'quick-tasks-append': {
-      // #2133 / ADR-2143 §3,§7: schema-backed replacement for fast.md's inline
-      // `awk NF-2` Quick Tasks column arithmetic. Row construction is delegated
-      // to the pure appendQuickTaskRow (markdown-table.cjs); this case only
-      // handles the I/O (read STATE.md, resolve date/commit, write STATE.md).
-      const qtaArgs = args.slice(1);
-      const qtaTask = parseNamedArgs(qtaArgs, ['task']).task || args[1];
-      if (!qtaTask) {
-        error('quick-tasks-append requires --task <description> (or a positional description)', ERROR_REASON.USAGE);
-      }
-
-      const statePath = path.join(cwd, '.planning', 'STATE.md');
-      if (!fs.existsSync(statePath)) {
-        error(`quick-tasks-append: STATE.md not found at ${statePath}`, ERROR_REASON.USAGE);
-      }
-
-      const date = new Date().toISOString().slice(0, 10);
-      const { execGit } = require('./lib/shell-command-projection.cjs');
-      const hashResult = execGit(['rev-parse', '--short', 'HEAD'], { cwd });
-      const commit = hashResult.exitCode === 0 && hashResult.stdout ? hashResult.stdout : '—';
-
-      const { appendQuickTaskRow } = require('./lib/markdown-table.cjs');
-
-      // #2242 review fix: route the read -> mutate -> write cycle through
-      // state.readModifyWriteStateMd (lib/state.cjs) instead of a raw
-      // fs.readFileSync + fs.writeFileSync pair, so the whole read-modify-write
-      // is atomic under STATE.md's lockfile — closing the lost-update race a
-      // raw read/write pair left open (cf. #500/#905/#1230). This mirrors the
-      // pattern every other STATE.md-mutating case in state.cts uses (e.g.
-      // cmdStateAddBlocker, cmdStateAddDecision): a mutable outer variable
-      // captures the pure helper's side output, and a fail-loud reason throws
-      // ExitError from INSIDE the transform (readModifyWriteStateMd's finally
-      // still releases the lock before the throw propagates; the transform
-      // throws before returning new content, so nothing is ever written).
-      let mutation;
-      state.readModifyWriteStateMd(statePath, (content) => {
-        const result = appendQuickTaskRow(content, { description: qtaTask, date, commit });
-        if (!result.ok) {
-          // Mirrors fast.md's old "skip with a brief log" behaviour (#2133): this
-          // is an expected, recoverable condition (no table / unrecognized
-          // schema), not a hard crash. ExitError sets a non-zero exit code (so
-          // fast.md's `|| echo ...` fallback fires) without calling
-          // process.exit() directly — stdout stays flushed and untouched.
-          throw new ExitError(1, `⚠ quick-tasks-append: ${result.reason}`);
-        }
-        mutation = result.value;
-        return result.value.content;
-      }, cwd);
-
-      output({ ok: true, row: mutation.row, variant: mutation.variant }, raw, mutation.row);
-      break;
-    }
-
-
-
-
-
-
-
-
-
-    case 'normalize-test-command': {
-      // #1857: rewrite a resolved test command to a one-shot form so a
-      // watch-mode runner (vitest/jest) cannot hang a verification gate. Shared
-      // by the regression gate and the post-merge gate. args[1] is the raw
-      // resolved command; --cwd (already parsed into `cwd`) locates package.json.
-      const testCommandNormalizer = require('./lib/normalize-test-command.cjs');
-      testCommandNormalizer.cmdNormalizeTestCommand(cwd, args[1]);
-      break;
-    }
-
-    case 'dispatch-should-flatten': {
-      // #1708 / #853: typed query replacing the `RUNTIME === 'codex'` prose rule.
-      //
-      // Resolves the current runtime (GSD_RUNTIME > config.runtime > 'claude'),
-      // looks up registry.runtimes[id].runtime.hostIntegration.dispatch, and
-      // calls shouldFlattenDispatch(dispatch) from host-integration.cjs.
-      //
-      // Fail-closed: any unknown runtime, missing dispatch, or thrown error
-      // yields `true` (inline — the always-safe default).
-      //
-      // Output:
-      //   --raw   → prints exactly `true` or `false`
-      //   --json  → prints { runtime, shouldFlatten, dispatch }
-      //   default → same as --raw
-      try {
-        // Resolve runtime using the same precedence as `config-get runtime`.
-        const { resolveRuntime } = require('./lib/runtime-slash.cjs');
-        const runtimeId = resolveRuntime(cwd);
-
-        // Look up dispatch from the capability registry.
-        const registry = require('./lib/capability-registry.cjs');
-        const runtimeEntry = registry.runtimes != null
-          ? registry.runtimes[runtimeId]
-          : null;
-        const dispatch = runtimeEntry?.runtime?.hostIntegration?.dispatch ?? null;
-
-        // Call shouldFlattenDispatch from host-integration.cjs.
-        const hostIntegration = require('./lib/host-integration.cjs');
-        const shouldFlat = dispatch !== null
-          ? hostIntegration.shouldFlattenDispatch(dispatch)
-          : true; // fail-closed: unknown runtime → inline
-
-        const jsonIdx = args.indexOf('--json');
-        if (jsonIdx !== -1) {
-          output({
-            runtime: runtimeId,
-            shouldFlatten: shouldFlat,
-            dispatch: dispatch,
-          }, raw);
-        } else {
-          // --raw or default: print exactly true or false
-          process.stdout.write(shouldFlat ? 'true' : 'false');
-        }
-      } catch {
-        // Fail-closed on any error: inline is always safe.
-        process.stdout.write('true');
-      }
-      break;
-    }
-
-
-
-    case 'agent-skills': {
-      // --json emits typed IR { agent_type, block, skills_count } for test assertions
-      // (#455). Default (no flag) outputs raw XML so workflow shell expansions work.
-      const jsonIdx = args.indexOf('--json');
-      const agentSkillsJsonMode = jsonIdx !== -1;
-      if (agentSkillsJsonMode) args.splice(jsonIdx, 1);
-      init.cmdAgentSkills(cwd, args[1], raw, agentSkillsJsonMode);
-      break;
-    }
-
-    case 'skill-manifest': {
-      init.cmdSkillManifest(cwd, args, raw);
-      break;
-    }
-
-    case 'history-digest': {
-      commands.cmdHistoryDigest(cwd, raw);
-      break;
-    }
-
-    case 'phases': {
-      routePhasesCommand({
-        phase,
-        milestone,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
-    case 'assumption-delta': {
-      // #1561 — advisory architecture checkpoint. `scan <phase>` reads the
-      // phase section via the same resolver as roadmap.get-phase and runs the
-      // deterministic detectAssumptionDelta, emitting the typed IR as JSON.
-      const sub = args[1];
-      if (sub === 'scan') {
-        const phaseNum = args[2];
-        // Reject missing or flag-shaped phase values (QA matrix: values that
-        // look like flags). `scan --json` must not treat "--json" as a phase.
-        if (!phaseNum || phaseNum.startsWith('-')) {
-          error('Usage: assumption-delta scan <phase> [--terms <csv>]', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-          break;
-        }
-        // Optional --terms <csv> override (replaces the pluralization cues;
-        // optional/chosen keep defaults). An EMPTY value ("") or a flag-shaped
-        // value restores the curated defaults (does NOT disable pluralization).
-        // Terms are normalized (deduped, alphanumeric-only, capped) by
-        // detectAssumptionDelta's resolveTerms.
-        let termsOverride;
-        const termsIdx = args.indexOf('--terms');
-        const termsVal = termsIdx !== -1 ? args[termsIdx + 1] : undefined;
-        if (typeof termsVal === 'string' && !termsVal.startsWith('-')) {
-          const list = termsVal
-            .split(',')
-            .map((t) => t.trim().toLowerCase())
-            .filter((t) => t.length > 0);
-          termsOverride = list.length > 0 ? { pluralization: list } : undefined;
-        }
-        const section = roadmap.getRoadmapPhaseWithFallback(cwd, phaseNum);
-        const result = detectAssumptionDelta(section ?? '', termsOverride);
-        output(result, raw);
-        break;
-      }
-      error(`Unknown assumption-delta subcommand: ${sub}. Available: scan`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      break;
-    }
-
-    case 'requirements': {
-      const subcommand = args[1];
-      if (subcommand === 'mark-complete') {
-        milestone.cmdRequirementsMarkComplete(cwd, args.slice(2), raw);
-      } else {
-        error('Unknown requirements subcommand. Available: mark-complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'gap-analysis': {
-      // Post-planning gap checker (#2493) — unified REQUIREMENTS.md +
-      // CONTEXT.md <decisions> coverage report against PLAN.md files.
-      gapChecker.cmdGapAnalysis(cwd, args.slice(1), raw);
-      break;
-    }
-
-    case 'milestone': {
-      const subcommand = args[1];
-      if (subcommand === 'complete') {
-        const milestoneName = parseMultiwordArg(args, 'name');
-        // #1871: archive phase dirs by default on milestone complete so the next
-        // new-milestone never inherits un-archived dirs. --no-archive-phases opts out.
-        const archivePhases = !args.includes('--no-archive-phases');
-        const force = args.includes('--force');
-        // #2118: --dry-run prints a preview plan without mutating.
-        const dryRun = args.includes('--dry-run');
-        milestone.cmdMilestoneComplete(cwd, args[2], { name: milestoneName, archivePhases, force, dryRun }, raw);
-      } else {
-        error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'progress': {
-      const subcommand = args[1] || 'json';
-      commands.cmdProgressRender(cwd, subcommand, raw);
-      break;
-    }
-
-    case 'uat': {
-      const subcommand = args[1];
-      if (subcommand === 'render-checkpoint') {
-        const uat = require('./lib/uat.cjs');
-        const options = parseNamedArgs(args, ['file']);
-        uat.cmdRenderCheckpoint(cwd, options, raw);
-      } else if (subcommand === 'classify-coverage') {
-        const coverage = require('./lib/coverage.cjs');
-        const options = parseNamedArgs(args, ['summary', 'file']);
-        coverage.cmdClassify(cwd, options, raw);
-      } else {
-        error('Unknown uat subcommand. Available: render-checkpoint, classify-coverage', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'stats': {
-      const subcommand = args[1] || 'json';
-      commands.cmdStats(cwd, subcommand, raw);
-      break;
-    }
-
-    case 'todo': {
-      const subcommand = args[1];
-      if (subcommand === 'complete') {
-        commands.cmdTodoComplete(cwd, args[2], raw);
-      } else if (subcommand === 'match-phase') {
-        commands.cmdTodoMatchPhase(cwd, args[2], raw);
-      } else {
-        error('Unknown todo subcommand. Available: complete, match-phase', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'scaffold': {
-      const scaffoldType = args[1];
-      const scaffoldOptions = {
-        phase: parseNamedArgs(args, ['phase']).phase,
-        name: parseMultiwordArg(args, 'name'),
-      };
-      commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
-      break;
-    }
-
-    case 'loop': {
-      // loop render-hooks <point>
-      const loopSubcommand = args[1];
-      if (loopSubcommand === 'render-hooks') {
-        let loopConfigDir = null;
-        const configDirEqArg = args.find(arg => arg.startsWith('--config-dir='));
-        const configDirIdx = args.indexOf('--config-dir');
-        if (configDirEqArg) {
-          const value = configDirEqArg.slice('--config-dir='.length).trim();
-          if (!value) error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          loopConfigDir = value;
-        } else if (configDirIdx !== -1) {
-          const value = args[configDirIdx + 1];
-          if (!value || value.startsWith('--')) {
-            error('Missing value for --config-dir', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          }
-          loopConfigDir = value;
-        }
-        // --active-cap <capId>: parse and validate before delegating
-        let loopActiveCap = undefined;
-        const activeCapEqArg = args.find(arg => arg.startsWith('--active-cap='));
-        const activeCapIdx = args.indexOf('--active-cap');
-        if (activeCapEqArg) {
-          const value = activeCapEqArg.slice('--active-cap='.length).trim();
-          if (!value) error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          loopActiveCap = value;
-        } else if (activeCapIdx !== -1) {
-          const value = args[activeCapIdx + 1];
-          if (!value || value.startsWith('--')) {
-            error('Missing value for --active-cap (e.g. --active-cap tdd)', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          }
-          loopActiveCap = value;
-        }
-        // --runtime <r> (#2003): explicit runtime override so the config-dir
-        // resolution bypasses the persisted-runtime fallback (GSD_RUNTIME →
-        // config.runtime). Mirrors the --config-dir dual-form (--runtime X /
-        // --runtime=X) and the capability-set --runtime precedent.
-        let loopRuntime = undefined;
-        const runtimeEqArg = args.find(arg => arg.startsWith('--runtime='));
-        const runtimeIdx = args.indexOf('--runtime');
-        if (runtimeEqArg) {
-          const value = runtimeEqArg.slice('--runtime='.length).trim();
-          if (!value) error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          loopRuntime = value;
-        } else if (runtimeIdx !== -1) {
-          const value = args[runtimeIdx + 1];
-          if (!value || value.startsWith('--')) {
-            error('Missing value for --runtime', ERROR_REASON ? ERROR_REASON.USAGE : undefined);
-          }
-          loopRuntime = value;
-        }
-        loopResolver.cmdLoopRenderHooks(cwd, args[2], raw, {
-          configDir: loopConfigDir ? path.resolve(loopConfigDir) : undefined,
-          activeCap: loopActiveCap,
-          runtime: loopRuntime,
-        });
-      } else {
-        error(
-          `Unknown loop subcommand: ${loopSubcommand}. Available: render-hooks`,
-          ERROR_REASON ? ERROR_REASON.SDK_UNKNOWN_COMMAND : undefined,
-        );
-      }
-      break;
-    }
-
-    case 'phase-plan-index': {
-      phase.cmdPhasePlanIndex(cwd, args[1], raw);
-      break;
-    }
-
-    case 'state-snapshot': {
-      state.cmdStateSnapshot(cwd, raw);
-      break;
-    }
-
-    case 'summary-extract': {
-      const summaryPath = args[1];
-      const fieldsIndex = args.indexOf('--fields');
-      const fields = fieldsIndex !== -1 ? args[fieldsIndex + 1].split(',') : null;
-      commands.cmdSummaryExtract(cwd, summaryPath, fields, raw);
-      break;
-    }
-
-    case 'websearch': {
-      const query = args[1];
-      const limitIdx = args.indexOf('--limit');
-      const freshnessIdx = args.indexOf('--freshness');
-      await commands.cmdWebsearch(query, {
-        limit: limitIdx !== -1 ? parseInt(args[limitIdx + 1], 10) : 10,
-        freshness: freshnessIdx !== -1 ? args[freshnessIdx + 1] : null,
-      }, raw);
-      break;
-    }
-
-    case 'workstream': {
-      const subcommand = args[1];
-      if (subcommand === 'create') {
-        const migrateNameIdx = args.indexOf('--migrate-name');
-        const noMigrate = args.includes('--no-migrate');
-        workstream.cmdWorkstreamCreate(cwd, args[2], {
-          migrate: !noMigrate,
-          migrateName: migrateNameIdx !== -1 ? args[migrateNameIdx + 1] : null,
-        }, raw);
-      } else if (subcommand === 'list') {
-        workstream.cmdWorkstreamList(cwd, raw);
-      } else if (subcommand === 'status') {
-        workstream.cmdWorkstreamStatus(cwd, args[2], raw);
-      } else if (subcommand === 'complete') {
-        workstream.cmdWorkstreamComplete(cwd, args[2], {}, raw);
-      } else if (subcommand === 'set') {
-        workstream.cmdWorkstreamSet(cwd, args[2], raw);
-      } else if (subcommand === 'get') {
-        workstream.cmdWorkstreamGet(cwd, raw);
-      } else if (subcommand === 'progress') {
-        workstream.cmdWorkstreamProgress(cwd, raw);
-      } else {
-        error('Unknown workstream subcommand. Available: create, list, status, complete, set, get, progress', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    case 'worktree': {
-      const subcommand = args[1];
-      const worktreeSafety = require('./lib/worktree-safety.cjs');
-      if (subcommand === 'cleanup-wave') {
-        worktreeSafety.cmdWorktreeCleanupWave(cwd, args.slice(2));
-      } else if (subcommand === 'record-agent') {
-        worktreeSafety.cmdWorktreeRecordAgent(cwd, args.slice(2));
-      } else if (subcommand === 'reap-orphans') {
-        worktreeSafety.cmdWorktreeReapOrphans(cwd);
-      } else if (subcommand === 'base-check') {
-        require('./lib/worktree-base-ref.cjs').cmdWorktreeBaseCheck(cwd, args.slice(2));
-      } else if (subcommand === 'set-baseref') {
-        require('./lib/worktree-base-ref.cjs').cmdWorktreeSetBaseRef(cwd, args.slice(2));
-      } else {
-        error('Unknown worktree subcommand. Available: cleanup-wave, record-agent, reap-orphans, base-check, set-baseref', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    // ─── Documentation ────────────────────────────────────────────────────
-
-    case 'docs-init': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      // SDK handler: docsInit in sdk/src/query/docs-init.ts.
-      const handled = _dispatchNonFamily({
-        registryCommand: 'docs-init',
-        registryArgs: args.slice(1),
-        legacyCommand: 'docs-init',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) docs.cmdDocsInit(cwd, raw);
-      break;
-    }
-
-    // ─── Learnings ─────────────────────────────────────────────────────────
-
-    case 'learnings': {
-      const subcommand = args[1];
-      if (subcommand === 'list') {
-        learnings.cmdLearningsList(raw);
-      } else if (subcommand === 'query') {
-        const tagIdx = args.indexOf('--tag');
-        const tag = tagIdx !== -1 ? args[tagIdx + 1] : null;
-        if (!tag) error('Usage: gsd-tools learnings query --tag <tag>', ERROR_REASON.USAGE);
-        learnings.cmdLearningsQuery(tag, raw);
-      } else if (subcommand === 'copy') {
-        learnings.cmdLearningsCopy(cwd, raw);
-      } else if (subcommand === 'prune') {
-        const olderIdx = args.indexOf('--older-than');
-        const olderThan = olderIdx !== -1 ? args[olderIdx + 1] : null;
-        if (!olderThan) error('Usage: gsd-tools learnings prune --older-than <duration>', ERROR_REASON.USAGE);
-        learnings.cmdLearningsPrune(olderThan, raw);
-      } else if (subcommand === 'delete') {
-        const id = args[2];
-        if (!id) error('Usage: gsd-tools learnings delete <id>', ERROR_REASON.USAGE);
-        learnings.cmdLearningsDelete(id, raw);
-      } else {
-        error('Unknown learnings subcommand. Available: list, query, copy, prune, delete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    // ─── teams-status ──────────────────────────────────────────────────────
-    // Read-only detector for claude-code's experimental agent-teams feature.
-    // issue #1355: stop gsd-core hanging silently under claude-code agent-teams.
-    // No capability registration needed — this is a diagnostic query command,
-    // not a feature capability.
-    case 'teams-status': {
-      const teamsStatus = require('./lib/teams-status.cjs');
-      teamsStatus.cmdTeamsStatus(cwd, { active: args.includes('--active') });
-      break;
-    }
-
-    // ─── detect-custom-files ───────────────────────────────────────────────
-    // CJS-native: no SDK counterpart exists in the command registry.
-    // detect-custom-files reads a gsd-file-manifest.json against the
-    // live filesystem to identify user-added files. It is installer-specific
-    // logic that has no async query equivalent in the SDK.
-    //
-    // Detect user-added files inside GSD-managed directories that are not
-    // tracked in gsd-file-manifest.json. Used by the update workflow to back
-    // up custom files before the installer wipes those directories.
-    //
-    // This replaces the fragile bash pattern:
-    //   MANIFEST_FILES=$(node -e "require('$RUNTIME_DIR/...')" 2>/dev/null)
-    //   ${filepath#$RUNTIME_DIR/}   # unreliable path stripping
-    // which silently returns CUSTOM_COUNT=0 when $RUNTIME_DIR is unset or
-    // when the stripped path does not match the manifest key format (#1997).
-
-    case 'detect-custom-files': {
-      const configDirIdx = args.indexOf('--config-dir');
-      const configDir = configDirIdx !== -1 ? args[configDirIdx + 1] : null;
-      if (!configDir) {
-        error('Usage: gsd-tools detect-custom-files --config-dir <path>', ERROR_REASON.USAGE);
-      }
-      const resolvedConfigDir = path.resolve(configDir);
-      if (!fs.existsSync(resolvedConfigDir)) {
-        error(`Config directory not found: ${resolvedConfigDir}`, ERROR_REASON.USAGE);
-      }
-
-      const manifestPath = path.join(resolvedConfigDir, 'gsd-file-manifest.json');
-      if (!fs.existsSync(manifestPath)) {
-        // No manifest — cannot determine what is custom. Return empty list
-        // (same behaviour as saveLocalPatches in install.js when no manifest).
-        const out = { custom_files: [], custom_count: 0, manifest_found: false };
-        process.stdout.write(JSON.stringify(out, null, 2));
-        break;
-      }
-
-      let manifest;
-      try {
-        manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf8'));
-      } catch {
-        const out = { custom_files: [], custom_count: 0, manifest_found: false, error: 'manifest parse error' };
-        process.stdout.write(JSON.stringify(out, null, 2));
-        break;
-      }
-
-      const manifestKeys = new Set(Object.keys(manifest.files || {}));
-
-      // GSD-managed directories to scan for user-added files. Whole-owned
-      // roots are wiped recursively; shared runtime roots are pruned by the
-      // same gsd-* top-level prefix used by install.js _removeGsdEntries.
-      const GSD_WHOLE_MANAGED_DIRS = [
-        'gsd-core',
-        path.join('commands', 'gsd'),
-      ];
-      const GSD_PREFIX_MANAGED_DIRS = [
-        'agents',
-        'hooks',
-        'skills',
-      ];
-
-      function collectCustomFiles(dir, baseDir, manifestKeys, out) {
-        if (!fs.existsSync(dir)) return;
-        const stat = fs.statSync(dir);
-        if (stat.isFile()) {
-          const relPath = path.relative(baseDir, dir).replace(/\\/g, '/');
-          if (!manifestKeys.has(relPath)) {
-            out.push(relPath);
-          }
-          return;
-        }
-        if (!stat.isDirectory()) return;
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) {
-            collectCustomFiles(fullPath, baseDir, manifestKeys, out);
-            continue;
-          }
-          // Use forward slashes for cross-platform manifest key compatibility
-          const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
-          if (!manifestKeys.has(relPath)) {
-            out.push(relPath);
-          }
-        }
-      }
-
-      const customFiles = [];
-      for (const managedDir of GSD_WHOLE_MANAGED_DIRS) {
-        const absDir = path.join(resolvedConfigDir, managedDir);
-        if (!fs.existsSync(absDir)) continue;
-        collectCustomFiles(absDir, resolvedConfigDir, manifestKeys, customFiles);
-      }
-      for (const managedDir of GSD_PREFIX_MANAGED_DIRS) {
-        const absDir = path.join(resolvedConfigDir, managedDir);
-        if (!fs.existsSync(absDir)) continue;
-        for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
-          if (!entry.name.startsWith('gsd-')) continue;
-          collectCustomFiles(path.join(absDir, entry.name), resolvedConfigDir, manifestKeys, customFiles);
-        }
-      }
-
-      const out = {
-        custom_files: customFiles,
-        custom_count: customFiles.length,
-        manifest_found: true,
-        manifest_version: manifest.version || null,
-      };
-      process.stdout.write(JSON.stringify(out, null, 2));
-      break;
-    }
-
-    // ─── GSD-2 Reverse Migration ───────────────────────────────────────────
-
-    case 'from-gsd2': {
-      const gsd2Import = require('./lib/gsd2-import.cjs');
-      gsd2Import.cmdFromGsd2(args.slice(1), cwd, raw);
-      break;
-    }
-
-    // ─── Prompt Budget ────────────────────────────────────────────────────
-    //
-    // Assemble and deterministically trim review prompt sections to fit a
-    // token budget. Used by the /gsd-review workflow before dispatching to
-    // small-context local model servers (Ollama, llama.cpp, LM Studio).
-    //
-    // Required flags:
-    //   --budget <N>            Token budget (integer > 0)
-    //   --instructions-file <path>  Review instructions
-    //   --roadmap-file <path>   Roadmap section
-    //   --plan-file <path>      Plan file (may be repeated)
-    //   --output-prompt <path>  Write trimmed prompt here
-    //   --output-metadata <path> Write metadata JSON here
-    //
-    // Optional flags:
-    //   --safety-margin-pct <N>     Default 10
-    //   --project-md-head-lines <N> Default 40
-    //   --project-file <path>
-    //   --context-file <path>
-    //   --research-file <path>
-    //   --requirements-file <path>
-    //
-    // Exit codes:
-    //   0  success (trim or no-trim)
-    //   1  invocation error (missing required arg, missing file, invalid budget)
-    //   2  hardFailed: prompt cannot fit effective budget after trim policy
-
-    case 'prompt-budget': {
-      const promptBudget = require('./lib/prompt-budget.cjs');
-
-      // ── Collect multi-value --plan-file flags ──────────────────────────
-      const planFiles = [];
-      for (let i = 1; i < args.length; i++) {
-        if (args[i] === '--plan-file' && args[i + 1] && !args[i + 1].startsWith('--')) {
-          planFiles.push(args[i + 1]);
-          i++;
-        }
-      }
-
-      // ── Parse single-value flags ───────────────────────────────────────
-      const flagMap = new Map();
-      for (let i = 1; i < args.length; i++) {
-        const current = args[i];
-        const next = args[i + 1];
-        if (!current.startsWith('--')) continue;
-        if (!next || next.startsWith('--')) {
-          if (!flagMap.has(current)) flagMap.set(current, null);
-          continue;
-        }
-        if (!flagMap.has(current)) flagMap.set(current, next);
-        i++;
-      }
-      const getFlag = (flag) => flagMap.get(flag) ?? null;
-
-      const budgetStr = getFlag('--budget');
-      const instructionsFile = getFlag('--instructions-file');
-      const roadmapFile = getFlag('--roadmap-file');
-      const outputPromptFile = getFlag('--output-prompt');
-      const outputMetadataFile = getFlag('--output-metadata');
-      const safetyMarginStr = getFlag('--safety-margin-pct');
-      const projectMdHeadLinesStr = getFlag('--project-md-head-lines');
-      const projectFile = getFlag('--project-file');
-      const contextFile = getFlag('--context-file');
-      const researchFile = getFlag('--research-file');
-      const requirementsFile = getFlag('--requirements-file');
-
-      // ── Validate required args ─────────────────────────────────────────
-      if (!budgetStr) {
-        throw new ExitError(1, 'Error: --budget <N> is required');
-      }
-      const budget = parseInt(budgetStr, 10);
-      if (!Number.isFinite(budget) || budget <= 0) {
-        throw new ExitError(1, 'Error: --budget must be a positive integer');
-      }
-      if (!instructionsFile) {
-        throw new ExitError(1, 'Error: --instructions-file <path> is required');
-      }
-      if (!roadmapFile) {
-        throw new ExitError(1, 'Error: --roadmap-file <path> is required');
-      }
-      if (planFiles.length === 0) {
-        throw new ExitError(1, 'Error: at least one --plan-file <path> is required');
-      }
-      if (!outputPromptFile) {
-        throw new ExitError(1, 'Error: --output-prompt <path> is required');
-      }
-      if (!outputMetadataFile) {
-        throw new ExitError(1, 'Error: --output-metadata <path> is required');
-      }
-
-      // ── Validate and read required files ──────────────────────────────
-      async function readRequired(filePath, flagName) {
-        const resolved = path.resolve(filePath);
-        try {
-          return await fs.promises.readFile(resolved, 'utf8');
-        } catch (err) {
-          if (err && err.code === 'ENOENT') {
-            throw new ExitError(1, `Error: file not found for ${flagName}: ${resolved}`);
-          }
-          throw new ExitError(1, `Error: cannot read file for ${flagName}: ${resolved}`);
-        }
-      }
-
-      async function readOptional(filePath) {
-        if (!filePath) return null;
-        const resolved = path.resolve(filePath);
-        try {
-          return await fs.promises.readFile(resolved, 'utf8');
-        } catch (err) {
-          if (err && err.code === 'ENOENT') return null;
-          throw new ExitError(1, `Error: cannot read optional file: ${resolved}`);
-        }
-      }
-
-      const instructions = await readRequired(instructionsFile, '--instructions-file');
-      const roadmap = await readRequired(roadmapFile, '--roadmap-file');
-      const plans = await Promise.all(planFiles.map(async (p) => {
-        const resolved = path.resolve(p);
-        try {
-          const content = await fs.promises.readFile(resolved, 'utf8');
-          return { file: path.basename(p), content };
-        } catch (err) {
-          if (err && err.code === 'ENOENT') {
-            throw new ExitError(1, `Error: plan file not found: ${resolved}`);
-          }
-          throw new ExitError(1, `Error: cannot read plan file: ${resolved}`);
-        }
-      }));
-
-      const projectMd = await readOptional(projectFile);
-      const context = await readOptional(contextFile);
-      const research = await readOptional(researchFile);
-      const requirements = await readOptional(requirementsFile);
-
-      // ── Build options ─────────────────────────────────────────────────
-      const options = {};
-      if (safetyMarginStr !== null) {
-        const pct = parseInt(safetyMarginStr, 10);
-        if (Number.isFinite(pct)) options.safetyMarginPct = pct;
-      }
-      if (projectMdHeadLinesStr !== null) {
-        const lines = parseInt(projectMdHeadLinesStr, 10);
-        if (Number.isFinite(lines)) options.projectMdHeadLines = lines;
-      }
-
-      // ── Call applyBudget ──────────────────────────────────────────────
-      const sections = { instructions, roadmap, plans, projectMd, context, research, requirements };
-      const { prompt, metadata } = promptBudget.applyBudget({ sections, budget, options });
-
-      // ── Write outputs ─────────────────────────────────────────────────
-      await fs.promises.writeFile(path.resolve(outputMetadataFile), JSON.stringify(metadata, null, 2));
-      await fs.promises.writeFile(path.resolve(outputPromptFile), prompt);
-
-      if (metadata.hardFailed) {
-        throw new ExitError(2);
-      }
-      break;
-    }
-
-    case 'update-context': {
-      // #498: resolve the installed GSD version, scope, runtime, and config dir
-      // for /gsd:update. Replaces ~280 lines of inline bash in update.md with a
-      // tested projection. Emits the contract as JSON: { installedVersion,
-      // scope, runtime, gsdDir }. Optional --config-dir / --runtime carry the
-      // workflow's execution_context hints (the one thing only it can know).
-      const { loadUpdateContext } = require('./lib/update-context.cjs');
-      const ucArgs = args.slice(1);
-      let preferredConfigDir = '';
-      let preferredRuntime = '';
-      for (let i = 0; i < ucArgs.length; i++) {
-        const a = ucArgs[i];
-        if (a.startsWith('--config-dir=')) { preferredConfigDir = a.slice('--config-dir='.length); continue; }
-        if (a.startsWith('--runtime=')) { preferredRuntime = a.slice('--runtime='.length); continue; }
-        if (a === '--config-dir') {
-          const v = ucArgs[i + 1];
-          if (v === undefined || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
-          preferredConfigDir = v; i++; continue;
-        }
-        if (a === '--runtime') {
-          const v = ucArgs[i + 1];
-          if (v === undefined || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
-          preferredRuntime = v; i++; continue;
-        }
-        if (a === '--json') continue; // JSON is the only output; accepted for symmetry
-        if (a.startsWith('-')) error(`Unknown flag for update-context: ${a}`, ERROR_REASON.USAGE);
-      }
-      const ctx = loadUpdateContext({ preferredConfigDir, preferredRuntime });
-      process.stdout.write(JSON.stringify(ctx) + '\n');
-      break;
-    }
-
-    // ─── Research Store ────────────────────────────────────────────────────
-    //
-    // research-store get <key> [--kind <k>]
-    //   -> getResearch(cwd, key, { homeDir }); searches both tiers; output(result, raw)
-    //   (--kind is accepted for backward compatibility but no longer drives tier selection)
-    // research-store put <key> --content <str> --source <s> --provider <p>
-    //                           --confidence <c> --kind <k>
-    //   -> putResearch(cwd, key, { content, source, provider, confidence, kind })
-    //
-    // Tier is derived from source: 'curated' source writes to process.env.HOME/.gsd/research-cache;
-    // all other sources write to cwd/.planning/research/.cache.
-    // Tests may override the home directory by setting the HOME env var.
-
-
-
-    // ─── Classify Confidence ──────────────────────────────────────────────
-    //
-    // classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]
-    //   -> classifyConfidence({ provider, verifiedAgainstOfficial, legitimacyVerdict }); output(result, raw)
-    //
-    // legitimacyVerdict is CODE-COMPUTED via checkPackages — never caller-supplied — so an agent cannot self-assert OK→HIGH.
-
-    case 'classify-confidence': {
-      const researchProvider = require('./lib/research-provider.cjs');
-      const providerIdx = args.indexOf('--provider');
-      const provider = providerIdx !== -1 ? args[providerIdx + 1] : null;
-      if (!provider || provider.startsWith('--')) {
-        error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
-      }
-      const verified = args.includes('--verified');
-      const pkgIdx = args.indexOf('--package');
-      const pkg = pkgIdx !== -1 ? args[pkgIdx + 1] : null;
-      const ecoIdx = args.indexOf('--ecosystem');
-      const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
-      let legitimacyVerdict = null;
-      if (pkg && (!pkg.startsWith('--'))) {
-        const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
-        if (!ecosystem || ecosystem.startsWith('--') || !VALID_ECOSYSTEMS.has(ecosystem)) {
-          error('Usage: gsd-tools query classify-confidence --provider <id> [--package <name> --ecosystem <npm|pypi|crates>] [--verified]', ERROR_REASON.USAGE);
-        }
-        const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
-        const results = await pkgLegitimacy.checkPackages({ ecosystem, packages: [pkg] }, {});
-        legitimacyVerdict = results[0] ? results[0].verdict : null;
-      }
-      const confidence = researchProvider.classifyConfidence({ provider, verifiedAgainstOfficial: verified, legitimacyVerdict });
-      output({ provider, package: pkg || null, ecosystem: ecosystem || null, legitimacyVerdict, verified, confidence }, raw);
-      break;
-    }
-
-    // ─── Package Legitimacy ────────────────────────────────────────────────
-    //
-    // package-legitimacy check --ecosystem <eco> <pkg1> <pkg2> ...
-    //
-    // checkPackages is ASYNC. This entire runCommand function is async, so
-    // we can await directly. On rejection we call error() which exits.
-
-    case 'package-legitimacy': {
-      const pkgLegitimacy = require('./lib/package-legitimacy.cjs');
-      const subcommand = args[1];
-      if (subcommand !== 'check') {
-        error('Unknown package-legitimacy subcommand. Available: check', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      const ecoIdx = args.indexOf('--ecosystem');
-      const ecosystem = ecoIdx !== -1 ? args[ecoIdx + 1] : null;
-      const VALID_ECOSYSTEMS = new Set(['npm', 'pypi', 'crates']);
-      if (!ecosystem || !VALID_ECOSYSTEMS.has(ecosystem)) {
-        error('Usage: gsd-tools package-legitimacy check --ecosystem <npm|pypi|crates> <pkg1> ...', ERROR_REASON.USAGE);
-      }
-      // Collect positional package names.
-      // Only --ecosystem takes a value. Every non-flag arg is a package name.
-      // Any unknown --flag is a usage error (do not silently skip+consume the next arg).
-      const packages = [];
-      for (let i = 2; i < args.length; i++) {
-        const a = args[i];
-        if (a === '--ecosystem') { i++; continue; }
-        if (a.startsWith('--')) {
-          error(`package-legitimacy: unknown flag ${a}`, ERROR_REASON.USAGE);
-        }
-        packages.push(a);
-      }
-      if (packages.length === 0) {
-        error('Usage: gsd-tools package-legitimacy check --ecosystem <eco> <pkg1> <pkg2> ...', ERROR_REASON.USAGE);
-      }
-      let pkgResults;
-      try {
-        pkgResults = await pkgLegitimacy.checkPackages({ ecosystem, packages }, {});
-      } catch (pkgErr) {
-        error(`package-legitimacy: ${pkgErr && pkgErr.message ? pkgErr.message : String(pkgErr)}`, ERROR_REASON.UNKNOWN);
-      }
-      output(pkgResults, raw);
-      break;
-    }
-
-    case 'effort': {
-      const subcommand = args[1];
-      if (subcommand === 'sync') {
-        const effortSyncArgs = args.slice(2);
-        let dryRun = true;
-        let effortSyncConfigDir;
-        let effortSyncRuntime;
-        for (let i = 0; i < effortSyncArgs.length; i++) {
-          const a = effortSyncArgs[i];
-          if (a === '--apply') { dryRun = false; continue; }
-          if (a === '--dry-run') { dryRun = true; continue; }
-          if (a.startsWith('--config-dir=')) { effortSyncConfigDir = a.slice('--config-dir='.length); continue; }
-          if (a === '--config-dir') {
-            const v = effortSyncArgs[i + 1];
-            if (!v || v.startsWith('--')) error('Missing value for --config-dir', ERROR_REASON.USAGE);
-            effortSyncConfigDir = v; i++; continue;
-          }
-          if (a.startsWith('--runtime=')) { effortSyncRuntime = a.slice('--runtime='.length); continue; }
-          if (a === '--runtime') {
-            const v = effortSyncArgs[i + 1];
-            if (!v || v.startsWith('--')) error('Missing value for --runtime', ERROR_REASON.USAGE);
-            effortSyncRuntime = v; i++; continue;
-          }
-          if (a === '--raw') continue;
-          if (a.startsWith('-')) error(`Unknown flag for effort sync: ${a}`, ERROR_REASON.USAGE);
-          error(`effort sync takes no positional arguments; got: ${a}`, ERROR_REASON.USAGE);
-        }
-        commands.cmdEffortSync(cwd, raw, { dryRun, configDir: effortSyncConfigDir, runtime: effortSyncRuntime });
-      } else {
-        error('Unknown effort subcommand. Available: sync', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
-
-    // ─── User Story Validation (bug #1145) ────────────────────────────────────
-    //
-    // Invocation shapes (from mvp-phase.md and verify-work.md):
-    //   gsd_run query user-story.validate --story "$USER_STORY"
-    //   gsd_run query user-story.validate --story "$PHASE_GOAL" --pick valid
-    //
-    // Returns JSON: { valid: boolean, errors: string[], slots: { role, capability, outcome } | null }
-    //   - valid: true only when the story fully matches the canonical format
-    //   - errors: per-slot diagnostic strings (empty on success)
-    //   - slots: extracted role/capability/outcome on success; null on failure
-    //
-    // Canonical format (user-story-template.md):
-    //   "As a [user role], I want to [capability], so that [outcome]."
-    //   Each slot must be non-empty and contain non-whitespace content.
-    //
-    // No .planning/ access needed — pure string validation.
-
-    // #1146: single base-branch resolver for all forking workflows.
-    // Workflows call `gsd_run query git.base-branch` (dotted form normalised to
-    // command='git', args=['git','base-branch']).
-
-
-    case 'user-story': {
-      const subcommand = args[1];
-      if (subcommand !== 'validate') {
-        error(`Unknown user-story subcommand: ${subcommand || '(none)'}. Available: validate`, ERROR_REASON.SDK_UNKNOWN_COMMAND);
-        break;
-      }
-
-      const storyIdx = args.indexOf('--story');
-      const story = (storyIdx !== -1 && args[storyIdx + 1] && !args[storyIdx + 1].startsWith('--'))
-        ? args[storyIdx + 1]
-        : '';
-
-      // Canonical extraction regex — requires non-whitespace content in each slot
-      // (\S.*? ensures the slot isn't whitespace-only).
-      // Named groups: role / capability / outcome.
-      const USER_STORY_RE = /^As a (\S.*?), I want to (\S.*?), so that (\S.*?)\.$/;
-
-      const errors = [];
-      const trimmed = story.trim();
-      let slots = null;
-
-      if (!trimmed) {
-        errors.push('Story is empty. Required format: "As a [role], I want to [capability], so that [outcome]."');
-      } else {
-        // Per-clause guards produce targeted, actionable error messages before
-        // attempting the full regex. Guards are ordered: role → capability → outcome → period.
-        if (!/^As a \S/i.test(trimmed)) {
-          errors.push('Story must start with "As a [user role]," (role must be non-empty).');
-        }
-        if (!/, I want to \S/i.test(trimmed)) {
-          errors.push('Story must include ", I want to [capability]," (capability must be non-empty).');
-        }
-        if (!/, so that \S/i.test(trimmed)) {
-          errors.push('Story must include ", so that [outcome]." (outcome must be non-empty).');
-        }
-        if (!trimmed.endsWith('.')) {
-          errors.push('Story must end with a period (.).');
-        }
-        // Full-regex check only when per-clause guards all passed — avoids
-        // redundant "format mismatch" noise on top of specific error messages.
-        if (errors.length === 0) {
-          const m = USER_STORY_RE.exec(trimmed);
-          if (!m) {
-            errors.push('Story does not match the canonical format: "As a [role], I want to [capability], so that [outcome]."');
-          } else {
-            slots = { role: m[1], capability: m[2], outcome: m[3] };
-          }
-        }
-      }
-
-      output({ valid: errors.length === 0, errors, slots }, raw);
-      break;
-    }
-
-    case 'drift-guard': {
-      // ADR-22: deterministic authority resolution + severity classification.
-      // Subcommands:
-      //   drift-guard authority                          → effective authority string
-      //   drift-guard severity --status <S> [--authority <A>]  → {severity, hardBlock}
-      const subcommand = args[1];
-
-      // Read config.json directly for both plan_review.source_grounding_authority
-      // and intel.enabled. Neither key is in the config-loader.cjs whitelist that
-      // config-loader.cjs's loadConfig() whitelist does not return; plan_review is only in config.cjs's private
-      // buildConfig(), and intel is a federated capability config key.
-      let configuredAuthority = 'grep';
-      let intelEnabled = false;
-      try {
-        const { planningDir } = require('./lib/planning-workspace.cjs');
-        const cfgPath = require('path').join(planningDir(cwd), 'config.json');
-        if (require('fs').existsSync(cfgPath)) {
-          const rawCfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf-8'));
-          if (rawCfg && rawCfg.plan_review && rawCfg.plan_review.source_grounding_authority) {
-            configuredAuthority = String(rawCfg.plan_review.source_grounding_authority);
-          }
-          if (rawCfg && rawCfg.intel && rawCfg.intel.enabled === true) {
-            intelEnabled = true;
-          }
-        }
-      } catch {
-        // not fatal — defaults apply
-      }
-
-      const effectiveAuthority = getEffectiveAuthority(configuredAuthority, intelEnabled);
-
-      if (subcommand === 'authority') {
-        // Pass rawValue as 3rd arg so --raw returns unquoted string (not JSON)
-        output(effectiveAuthority, raw, effectiveAuthority);
-        break;
-      }
-
-      if (subcommand === 'severity') {
-        const statusIdx = args.indexOf('--status');
-        const statusVal = statusIdx !== -1 ? args[statusIdx + 1] : undefined;
-        if (!statusVal || statusVal.startsWith('--')) {
-          error('drift-guard severity requires --status <VERIFIED|MISSING|AMBIGUOUS|UNCHECKABLE>', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-          break;
-        }
-        const authIdx = args.indexOf('--authority');
-        const authVal = authIdx !== -1 ? args[authIdx + 1] : undefined;
-        const authorityForClassify = (authVal && !authVal.startsWith('--'))
-          ? authVal
-          : effectiveAuthority;
-        const result = classifyDriftSeverity({ status: statusVal, authority: authorityForClassify });
-        output(result, raw);
-        break;
-      }
-
-      error(
-        `Unknown drift-guard subcommand: ${subcommand || '(none)'}. Available: authority, severity`,
-        ERROR_REASON.SDK_UNKNOWN_COMMAND,
-      );
-      break;
-    }
 
     default: {
       // ADR-959: try capability-registry dispatch before emitting the unknown-command error.
@@ -2527,3 +2407,4 @@ if (require.main === module) {
 // ADR-1244 Phase 5: export dispatchOverlayCapabilityCommand + defaultRequireFromInstallRoot for
 // the third-party overlay dispatch + install-root confinement tests.
 module.exports = { dispatchCapabilityCommand, dispatchOverlayCapabilityCommand, defaultRequireFromInstallRoot, dispatchHostCommand, HOST_COMMAND_ROUTERS };
+

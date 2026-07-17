@@ -167,6 +167,19 @@ describe('HOST_COMMAND_ROUTERS registry', async () => {
       'config-ensure-section', 'config-set', 'config-set-model-profile',
       'config-get', 'config-new-project', 'config-path', 'migrate-config',
       'research-store', 'research-plan',
+      // P4 all remaining leaf commands (ADR-2346 P4)
+      'agent', 'smart-entry', 'check', 'find-phase', 'commit', 'check-commit',
+      'commit-to-subrepo', 'pr-subrepo', 'verify-summary', 'template', 'task',
+      'frontmatter', 'eval', 'verification', 'generate-slug', 'current-timestamp',
+      'project-instruction-file', 'list-todos', 'list-seeds', 'verify-path-exists',
+      'quick-tasks-append', 'normalize-test-command', 'dispatch-should-flatten',
+      'agent-skills', 'skill-manifest', 'history-digest', 'phases',
+      'assumption-delta', 'requirements', 'gap-analysis', 'milestone', 'progress',
+      'uat', 'stats', 'todo', 'scaffold', 'loop', 'phase-plan-index',
+      'state-snapshot', 'summary-extract', 'websearch', 'workstream', 'worktree',
+      'docs-init', 'learnings', 'teams-status', 'detect-custom-files',
+      'from-gsd2', 'prompt-budget', 'update-context', 'classify-confidence',
+      'package-legitimacy', 'effort', 'user-story', 'drift-guard',
     ];
     for (const cmd of allHostCommands) {
       assert.ok(
