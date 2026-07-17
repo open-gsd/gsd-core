@@ -574,10 +574,22 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 // is removed at cutover so it reaches here; an unmigrated command still hits
 // its `case` (collision structurally impossible, same property as ADR-959).
 const HOST_COMMAND_ROUTERS = {
-  // `state` → routeStateCommand (the pilot cutover, ADR-2346 P1).
-  // Wraps the router so it receives the module-scope `state` lib the old
-  // `case 'state':` arm passed, plus the per-dispatch context.
+  // Each entry wraps its `route*Command` router so it receives the module-scope
+  // lib the old `case` arm passed, plus the per-dispatch context
+  // { args, cwd, raw, error }. Closes over module-scope libs (state/phase/…)
+  // exactly as the old inline arms did — byte-identical dispatch.
   state: (ctx) => routeStateCommand({ state, ...ctx }),
+  phase: (ctx) => routePhaseCommand({ phase, ...ctx }),
+  roadmap: (ctx) => routeRoadmapCommand({ roadmap, ...ctx }),
+  verify: (ctx) => routeVerifyCommand({ verify, ...ctx }),
+  // validate additionally binds the module-scope `output` emitter.
+  validate: (ctx) => routeValidateCommand({ verify, output, ...ctx }),
+  // init preserves the #1688 stale-bake warning (best-effort, swallowed) that
+  // ran before the router in the old `case 'init':` arm.
+  init: (ctx) => {
+    try { warnIfStaleBake(ctx.cwd); } catch { /* guard must never break init */ }
+    routeInitCommand({ init, ...ctx });
+  },
 };
 
 // Returns true when consumed (suppress "Unknown command"), false to fall
@@ -1147,17 +1159,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'verify': {
-      routeVerifyCommand({
-        verify,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
     case 'eval': {
       routeEvalCommand({ evalMod, args, cwd, raw, error });
       break;
@@ -1503,17 +1504,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'roadmap': {
-      routeRoadmapCommand({
-        roadmap,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
     case 'assumption-delta': {
       // #1561 — advisory architecture checkpoint. `scan <phase>` reads the
       // phase section via the same resolver as roadmap.get-phase and runs the
@@ -1568,17 +1558,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'phase': {
-      routePhaseCommand({
-        phase,
-        args,
-        cwd,
-        raw,
-        error,
-      });
-      break;
-    }
-
     case 'milestone': {
       const subcommand = args[1];
       if (subcommand === 'complete') {
@@ -1593,18 +1572,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       } else {
         error('Unknown milestone subcommand. Available: complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
       }
-      break;
-    }
-
-    case 'validate': {
-      routeValidateCommand({
-        verify,
-        args,
-        cwd,
-        raw,
-        output: output,
-        error,
-      });
       break;
     }
 
@@ -1655,21 +1622,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
         name: parseMultiwordArg(args, 'name'),
       };
       commands.cmdScaffold(cwd, scaffoldType, scaffoldOptions, raw);
-      break;
-    }
-
-    case 'init': {
-      // #1688: warn (at most once per process) if the user edited model_overrides
-      // without re-running `gsd install <runtime>` on a static-frontmatter runtime.
-      // Best-effort, stderr-only, swallowed errors — never blocks the command.
-      try { warnIfStaleBake(cwd); } catch { /* guard must never break init */ }
-      routeInitCommand({
-        init,
-        args,
-        cwd,
-        raw,
-        error,
-      });
       break;
     }
 

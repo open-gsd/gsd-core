@@ -61,6 +61,24 @@ describe('dispatchHostCommand: unit', () => {
     assert.strictEqual(consumed, true, 'state must be consumed by the host table');
   });
 
+  test('all migrated Tier-1 host commands are consumed by the host table', () => {
+    // Each migrated router receives its module-scope lib via the table entry;
+    // against a fake cwd it may emit an error (missing subcommand), but the
+    // dispatch itself must report consumed=true (no fall-through to the
+    // unknown-command error).
+    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify']) {
+      const errFn = makeErrorRecorder();
+      const consumed = dispatchHostCommand({
+        command: cmd,
+        args: [cmd],
+        cwd: CWD,
+        raw: RAW,
+        error: errFn,
+      });
+      assert.strictEqual(consumed, true, `${cmd} must be consumed by the host table`);
+    }
+  });
+
   test('returns false for an unknown command (fall through)', () => {
     const errFn = makeErrorRecorder();
     const consumed = dispatchHostCommand({
@@ -131,12 +149,14 @@ describe('state cutover: end-to-end dispatch via the host table', () => {
 // ─── 5. REGISTRY — HOST_COMMAND_ROUTERS owns `state` ────────────────────────
 
 describe('HOST_COMMAND_ROUTERS registry', () => {
-  test('owns `state` as an own property mapping to a function', () => {
-    assert.ok(
-      Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, 'state'),
-      'HOST_COMMAND_ROUTERS must own `state`',
-    );
-    assert.strictEqual(typeof HOST_COMMAND_ROUTERS.state, 'function', 'state entry must be a function');
+  test('owns all 6 migrated Tier-1 host commands as function entries', () => {
+    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify']) {
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, cmd),
+        `HOST_COMMAND_ROUTERS must own \`${cmd}\``,
+      );
+      assert.strictEqual(typeof HOST_COMMAND_ROUTERS[cmd], 'function', `${cmd} entry must be a function`);
+    }
   });
 
   test('does NOT own prototype-pollution keys', () => {
