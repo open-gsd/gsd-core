@@ -20,6 +20,25 @@ const fc = require('fast-check');
 
 const MODULE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'api-coverage.cjs');
 
+// Shared row-shape generators for the coverage-matrix property tests below
+// (the parse/render bijection and the #2371 document-shaped property both
+// build matrices from the same canonical row shape — a single declaration
+// here means the two properties can't silently desync).
+const capabilityGen = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/);
+const rowGen = fc.record({
+  capability: capabilityGen,
+  decision: fc.constantFrom('INTEGRATE', 'OPT-OUT'),
+  // Reasons are short prose (e.g. "not needed yet"). The matrix is a
+  // markdown table, so cell text is format-safe: no pipes / newlines.
+  reason: fc.stringMatching(/^[a-z0-9 ,.\-!?]{0,20}$/),
+});
+// OPT-OUT rows must carry a non-empty reason for the round-trip to validate.
+const validRowGen = rowGen.map((r) =>
+  r.decision === 'OPT-OUT' && r.reason.trim() === ''
+    ? { ...r, reason: 'because' }
+    : { ...r, reason: r.reason.trim() }
+);
+
 describe('detectApiIntegration — pure detector (#1562)', () => {
   let mod;
   try {
@@ -346,20 +365,6 @@ describe('coverage matrix — parse/render bijection (fast-check)', () => {
   const { renderCoverageMatrix, validateCoverageMatrix } = mod;
 
   test('any valid row set renders and re-validates to the same counts', () => {
-    const capabilityGen = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/);
-    const rowGen = fc.record({
-      capability: capabilityGen,
-      decision: fc.constantFrom('INTEGRATE', 'OPT-OUT'),
-      // Reasons are short prose (e.g. "not needed yet"). The matrix is a
-      // markdown table, so cell text is format-safe: no pipes / newlines.
-      reason: fc.stringMatching(/^[a-z0-9 ,.\-!?]{0,20}$/),
-    });
-    // OPT-OUT rows must carry a non-empty reason for the round-trip to validate.
-    const validRowGen = rowGen.map((r) =>
-      r.decision === 'OPT-OUT' && r.reason.trim() === ''
-        ? { ...r, reason: 'because' }
-        : { ...r, reason: r.reason.trim() }
-    );
     const matrixGen = fc.uniqueArray(validRowGen, {
       minLength: 1,
       maxLength: 8,
@@ -399,19 +404,9 @@ describe('coverage matrix — document-shaped fast-check (extract-exactly-canoni
   }
   const { parseCoverageMatrix, renderCoverageMatrix } = mod;
 
-  // Same row/matrix generators as the bijection test above, so both properties
-  // exercise the same canonical-row space.
-  const capabilityGen = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/);
-  const rowGen = fc.record({
-    capability: capabilityGen,
-    decision: fc.constantFrom('INTEGRATE', 'OPT-OUT'),
-    reason: fc.stringMatching(/^[a-z0-9 ,.\-!?]{0,20}$/),
-  });
-  const validRowGen = rowGen.map((r) =>
-    r.decision === 'OPT-OUT' && r.reason.trim() === ''
-      ? { ...r, reason: 'because' }
-      : { ...r, reason: r.reason.trim() }
-  );
+  // Uses the shared capabilityGen/rowGen/validRowGen declared at module scope
+  // above (same generators the bijection test uses), so the two properties
+  // exercise the same canonical-row space and can't silently desync.
   const canonicalMatrixGen = fc.uniqueArray(validRowGen, {
     minLength: 1,
     maxLength: 5,

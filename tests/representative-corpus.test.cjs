@@ -168,6 +168,18 @@ describe('representative corpus — audit-uat (#2286, fixed by #2317)', () => {
       j.summary.total_items >= manifest.expectedTotalItems,
       `expected total_items >= ${manifest.expectedTotalItems}, got ${JSON.stringify(j.summary)}`,
     );
+    // Per-fixture check (not just the aggregate): a regression that moves
+    // items between files while preserving the total would slip past the
+    // total_items check above but not this one.
+    for (const fx of manifest.fixtures) {
+      const fileName = `01${fx.filenameSuffix}`;
+      const fileResult = j.results.find((r2) => r2.file === fileName);
+      assert.ok(fileResult, `expected a result entry for ${fileName}, got ${JSON.stringify(j.results)}`);
+      assert.ok(
+        fileResult.items.length >= fx.expectedMinItems,
+        `${fileName}: expected items.length >= ${fx.expectedMinItems}, got ${fileResult.items.length}`,
+      );
+    }
   });
 });
 
@@ -190,7 +202,7 @@ describe('representative corpus — decision-coverage guard (#2347)', () => {
       assert.ok(r.success, `gate should succeed (JSON). stderr: ${r.error}`);
       const j = JSON.parse(r.output);
       assert.strictEqual(j.passed, fx.expectedPassed, `${fx.file}: passed. Got ${JSON.stringify(j)}`);
-      assert.strictEqual(j.reason, fx.expectedOutcome, `${fx.file}: reason. Got ${JSON.stringify(j)}`);
+      assert.strictEqual(j.reason, fx.expectedReason, `${fx.file}: reason. Got ${JSON.stringify(j)}`);
     });
   }
 });

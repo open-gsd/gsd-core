@@ -4,7 +4,6 @@
   "fixtures": [
     {
       "file": "multi-table-with-summary.md",
-      "role": "coverage-matrix",
       "pairedPlan": "Integrate the Stripe API for payment processing.",
       "expectedCounts": { "surface": 3, "integrate": 1, "optout": 2 },
       "expectedErrorCount": 0,

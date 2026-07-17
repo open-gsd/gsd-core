@@ -5,14 +5,12 @@
   "fixtures": [
     {
       "file": "gaps-section-uat.md",
-      "role": "uat",
       "filenameSuffix": "-UAT.md",
       "expectedMinItems": 1,
       "note": "A '## Gaps' bullet entry with status: open. Before #2317, parseUatItems never scanned this section at all, so this file's real outstanding item was silently invisible."
     },
     {
       "file": "human-verification-frontmatter.md",
-      "role": "verification",
       "filenameSuffix": "-VERIFICATION.md",
       "expectedMinItems": 1,
       "note": "Frontmatter declares status: human_needed with a populated human_verification: array. Before #2317, parseVerificationItems never read the frontmatter's structured array and only recognized specific body shapes, so this file read as zero items."
