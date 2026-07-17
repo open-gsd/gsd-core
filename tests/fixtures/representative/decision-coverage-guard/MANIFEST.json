@@ -1,0 +1,18 @@
+{
+  "gate": "check.decision-coverage-plan",
+  "sourceIssue": "#2347",
+  "fixtures": [
+    {
+      "file": "d5-prefix-context.md",
+      "expectedReason": "could-not-parse",
+      "expectedPassed": false,
+      "currentBuggyOutput": {
+        "passed": true,
+        "skipped": true,
+        "reason": "no trackable decisions",
+        "total": 0
+      },
+      "note": "A <decisions> block using the D5-01 ID-prefix shape from #2347's own reproduction ('- **D5-01:** some decision'), repeated twice so 'populated but 0 extracted' is unambiguous. The original report used 23 real decisions under a project-specific D5- prefix convention; this fixture preserves the exact grammar mismatch, not the count. The #1365 guard's evidence test (/\\bD-[A-Za-z0-9]/) shares the parser's own D- grammar, so it is blind to exactly the input class it exists to catch: both see nothing, and the gate reports passed:true, skipped:true, reason:'no trackable decisions' instead of failing loud."
+    }
+  ]
+}

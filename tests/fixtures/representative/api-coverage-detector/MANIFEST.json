@@ -1,0 +1,29 @@
+{
+  "gate": "api-coverage.verify-pre",
+  "sourceIssue": "#2365",
+  "fixtures": [
+    {
+      "file": "nextjs-route-path.txt",
+      "expectedDetected": false,
+      "currentBuggyOutput": { "detected": true, "signal": { "verb": "integration", "noun": "api" } },
+      "note": "First-party Next.js route path. The noun-boundary class [^a-zA-Z0-9] treats '/' as a word boundary, so 'api' inside the path matches as if it were prose. Highest blast radius: any Next.js project names a route file."
+    },
+    {
+      "file": "unrelated-verb-noun.txt",
+      "expectedDetected": false,
+      "currentBuggyOutput": { "detected": true, "signal": { "verb": "wiring", "noun": "endpoint" } },
+      "note": "'wiring' and 'endpoint' co-occur on one line in unrelated clauses, reverse semantic order, no integration described. The verb/noun regexes are independently exec'd over the whole line with no proximity or grammatical relation."
+    },
+    {
+      "file": "threat-model-prose.txt",
+      "expectedDetected": false,
+      "currentBuggyOutput": { "detected": true, "signal": { "verb": "(surface)", "noun": "api" } },
+      "note": "Threat-model table cell describing a LOCAL interface. SERVICE_SURFACE_API_RE matches any capitalized word before API/SDK/REST/GraphQL; the stopword denylist cannot enumerate every ordinary English word that precedes 'API' in a sentence."
+    },
+    {
+      "file": "non-integration-assertion.txt",
+      "expectedDetected": false,
+      "note": "This line explicitly ASSERTS non-integration ('no new command/dependency') and is still read as an integration signal in the real $gsd-verify-work occurrence this was drawn from — but in isolation it already returns detected:false today (the multi-signal real occurrence needed the OTHER lines' signals to trip the gate). No currentBuggyOutput: this fixture already passes for the right reason."
+    }
+  ]
+}

@@ -20,6 +20,25 @@ const fc = require('fast-check');
 
 const MODULE_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'lib', 'api-coverage.cjs');
 
+// Shared row-shape generators for the coverage-matrix property tests below
+// (the parse/render bijection and the #2371 document-shaped property both
+// build matrices from the same canonical row shape — a single declaration
+// here means the two properties can't silently desync).
+const capabilityGen = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/);
+const rowGen = fc.record({
+  capability: capabilityGen,
+  decision: fc.constantFrom('INTEGRATE', 'OPT-OUT'),
+  // Reasons are short prose (e.g. "not needed yet"). The matrix is a
+  // markdown table, so cell text is format-safe: no pipes / newlines.
+  reason: fc.stringMatching(/^[a-z0-9 ,.\-!?]{0,20}$/),
+});
+// OPT-OUT rows must carry a non-empty reason for the round-trip to validate.
+const validRowGen = rowGen.map((r) =>
+  r.decision === 'OPT-OUT' && r.reason.trim() === ''
+    ? { ...r, reason: 'because' }
+    : { ...r, reason: r.reason.trim() }
+);
+
 describe('detectApiIntegration — pure detector (#1562)', () => {
   let mod;
   try {
@@ -346,20 +365,6 @@ describe('coverage matrix — parse/render bijection (fast-check)', () => {
   const { renderCoverageMatrix, validateCoverageMatrix } = mod;
 
   test('any valid row set renders and re-validates to the same counts', () => {
-    const capabilityGen = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/);
-    const rowGen = fc.record({
-      capability: capabilityGen,
-      decision: fc.constantFrom('INTEGRATE', 'OPT-OUT'),
-      // Reasons are short prose (e.g. "not needed yet"). The matrix is a
-      // markdown table, so cell text is format-safe: no pipes / newlines.
-      reason: fc.stringMatching(/^[a-z0-9 ,.\-!?]{0,20}$/),
-    });
-    // OPT-OUT rows must carry a non-empty reason for the round-trip to validate.
-    const validRowGen = rowGen.map((r) =>
-      r.decision === 'OPT-OUT' && r.reason.trim() === ''
-        ? { ...r, reason: 'because' }
-        : { ...r, reason: r.reason.trim() }
-    );
     const matrixGen = fc.uniqueArray(validRowGen, {
       minLength: 1,
       maxLength: 8,
@@ -377,6 +382,121 @@ describe('coverage matrix — parse/render bijection (fast-check)', () => {
       { numRuns: 100 }
     );
   });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Document-shaped property (#2371): the bijection test above generates ROWS and
+// renders them through the writer, so the document shape is a constant — it
+// cannot generate a second table, a decoy table, or surrounding prose, and so
+// cannot fail against #2366's bugs. This property generates the DOCUMENT
+// space instead: a canonical matrix interleaved with content a real
+// COVERAGE.md may legitimately contain that is NOT the matrix. See
+// tests/fixtures/representative/README.md and CONTRIBUTING.md's "Fixture
+// provenance" section for the full rationale.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('coverage matrix — document-shaped fast-check (extract-exactly-canonical, #2371)', () => {
+  let mod;
+  try {
+    mod = require(MODULE_PATH);
+  } catch (err) {
+    throw new Error(`Could not require ${MODULE_PATH}. Run "npm run build:lib" first. Underlying: ${err.message}`);
+  }
+  const { parseCoverageMatrix, renderCoverageMatrix } = mod;
+
+  // Uses the shared capabilityGen/rowGen/validRowGen declared at module scope
+  // above (same generators the bijection test uses), so the two properties
+  // exercise the same canonical-row space and can't silently desync.
+  const canonicalMatrixGen = fc.uniqueArray(validRowGen, {
+    minLength: 1,
+    maxLength: 5,
+    selector: (r) => r.capability.toLowerCase(),
+  });
+
+  // Decoy blocks: content a document may legitimately contain that is NOT the
+  // canonical matrix. Kept to three explicit, independently-readable shapes
+  // rather than a generic "random markdown" generator — a combinatorial but
+  // opaque generator is exactly the kind of cleverness that's unrunnable to
+  // debug when it fails (Kernighan's Law).
+  const proseDecoyGen = fc.constantFrom(
+    '## Notes\n\nSee the ADR for background.',
+    'This phase also touches the auth helper.',
+    '## Risks\n\n- Rollout risk is low.',
+  );
+
+  const summaryTableDecoyGen = fc
+    .record({
+      label: fc.stringMatching(/^[a-z][a-z0-9 ]{0,10}$/),
+      integrateCount: fc.nat({ max: 50 }),
+      optoutCount: fc.nat({ max: 50 }),
+    })
+    .map(
+      ({ label, integrateCount, optoutCount }) =>
+        `## Coverage summary\n\n| tier | INTEGRATE | OPT-OUT |\n|---|---|---|\n` +
+        `| ${label} | ${integrateCount} | ${optoutCount} |`
+    );
+
+  const secondSectionMatrixGen = fc
+    .uniqueArray(validRowGen, { minLength: 1, maxLength: 3, selector: (r) => r.capability.toLowerCase() })
+    .map((rows) => `## Transferred to a later phase\n\n${renderCoverageMatrix(rows)}`);
+
+  const decoyGen = fc.oneof(proseDecoyGen, summaryTableDecoyGen, secondSectionMatrixGen);
+
+  const documentGen = fc.record({
+    canonicalRows: canonicalMatrixGen,
+    decoysBefore: fc.array(decoyGen, { maxLength: 2 }),
+    decoysAfter: fc.array(decoyGen, { maxLength: 2 }),
+  });
+
+  // #2371's own test-runner (gsd-test / gsd-test-runner v1.6.2) has no concept
+  // of node:test's `todo` option: its JSONL result parser
+  // (internal/pipeline/parse.go's parseJSONL, gsd-test-runner repo) only
+  // recognizes `kind: "pass" | "fail"` and hard-errors on anything else, so a
+  // `{ todo: true }` test whose body throws is still counted as a failure in
+  // the tool's own verdict — verified directly against that source, not
+  // assumed. So this property uses fc's non-throwing `fc.check` (returns
+  // `RunDetails` instead of throwing — see fast-check's runners docs) and
+  // asserts on `.failed` directly: today the invariant genuinely does NOT
+  // hold (that is #2366), so `report.failed === true` is an honest,
+  // non-vacuous, currently-PASSING characterization of today's known-broken
+  // reality — not a fake pass. The moment #2366 makes the invariant hold for
+  // real, `report.failed` becomes `false` and THIS assertion fails loudly,
+  // forcing whoever's fix landed to notice and flip it. The fix itself stays
+  // owned by #2366.
+  test(
+    'given a document containing exactly one canonical matrix plus arbitrary other content, ' +
+      'the parser extracts exactly that matrix\'s rows and ignores everything else ' +
+      '(currently violated — #2366)',
+    () => {
+      const report = fc.check(
+        fc.property(documentGen, ({ canonicalRows, decoysBefore, decoysAfter }) => {
+          const canonicalBlock = renderCoverageMatrix(canonicalRows);
+          const doc = [...decoysBefore, canonicalBlock, ...decoysAfter].join('\n\n');
+
+          const result = parseCoverageMatrix(doc);
+
+          const expectedByCap = new Map(canonicalRows.map((r) => [r.capability.toLowerCase(), r]));
+          const actualByCap = new Map(result.rows.map((r) => [r.capability.toLowerCase(), r]));
+
+          if (actualByCap.size !== expectedByCap.size) return false;
+          for (const [cap, expected] of expectedByCap) {
+            const actual = actualByCap.get(cap);
+            if (!actual || actual.decision !== expected.decision) return false;
+          }
+          return result.errors.length === 0;
+        }),
+        { numRuns: 100 }
+      );
+      assert.strictEqual(
+        report.failed,
+        true,
+        'This property is expected to be VIOLATED today (#2366 — a decoy summary table or a ' +
+          'second canonical-schema section corrupts the result or spuriously errors). If this ' +
+          'assertion fails, the property now HOLDS — #2366 appears fixed; replace this ' +
+          'characterization with a real fc.assert of the invariant.'
+      );
+    }
+  );
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
