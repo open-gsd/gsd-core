@@ -34,11 +34,12 @@ function runHook(payload, timeoutMs = 5000) {
       timeout: timeoutMs,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return { exitCode: 0, stdout: stdout.trim() };
+    return { exitCode: 0, stdout: stdout.trim(), stderr: '' };
   } catch (err) {
     return {
       exitCode: err.status ?? 1,
       stdout: (err.stdout || '').toString().trim(),
+      stderr: (err.stderr || '').toString().trim(),
     };
   }
 }
@@ -77,6 +78,10 @@ describe('#2304: Kimi tool vocabulary engages the workflow guard', () => {
       r.stdout.includes('WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'),
       'block payload should carry the force-add code'
     );
+    assert.ok(
+      r.stderr.includes('must not run git add -f'),
+      'reason must reach stderr — that is what Kimi feeds back to the model on exit 2'
+    );
   });
 
   test('module-qualified kimi_cli.tools.shell:Shell is recognized', () => {
@@ -107,5 +112,28 @@ describe('#2304: Kimi tool vocabulary engages the workflow guard', () => {
     });
     assert.equal(r.exitCode, 2);
     assert.ok(r.stdout.includes('WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'));
+  });
+
+  test('WriteFile outside .planning/ gets the workflow advisory like Write', () => {
+    const r = runHook({
+      tool_name: 'WriteFile',
+      tool_input: { path: path.join(repoDir, 'src', 'app.js'), content: 'x' },
+      cwd: repoDir,
+    });
+    assert.equal(r.exitCode, 0);
+    assert.ok(
+      r.stdout.includes('WORKFLOW ADVISORY'),
+      'Kimi WriteFile should reach the write branch and emit the advisory'
+    );
+  });
+
+  test('StrReplaceFile editing .planning/ passes silently', () => {
+    const r = runHook({
+      tool_name: 'StrReplaceFile',
+      tool_input: { path: path.join(repoDir, '.planning', 'notes.md'), edit: { old: 'a', new: 'b' } },
+      cwd: repoDir,
+    });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.stdout, '');
   });
 });
