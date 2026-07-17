@@ -276,7 +276,7 @@ COPILOT_CONFIG_DIR=~/.copilot-alt npx @opengsd/gsd-core@latest --copilot --globa
 npx @opengsd/gsd-core@latest --cursor --global
 ```
 
-Skills land in `~/.cursor/`. GSD installs skills, agents, and rule references.
+Artifacts land in `~/.cursor/`. GSD installs slash commands (`~/.cursor/commands/gsd-*.md`), skills (`~/.cursor/skills/gsd-*/SKILL.md`), agents, and rule references. Each GSD action appears once in Cursor's `/` menu: the command surface is the single `/` entry point, and the skills are installed with `user-invocable: false` so they stay model-invocable background knowledge without duplicating the `/` entries.
 
 **Override the install directory:**
 
