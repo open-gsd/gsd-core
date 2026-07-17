@@ -316,8 +316,8 @@ describe('applySurface', () => {
   // (matching installRuntimeArtifacts/_copyStaged behaviour) and must NOT prune
   // user-created command files that install would preserve.
   //
-  // Affected runtimes have a FLAT command dir (opencode `command/`, cursor
-  // `commands/`, augment `commands/`, kilo `command/`) with kind.prefix='gsd-'.
+  // Affected runtimes have a FLAT command dir (opencode `commands/` — #2329,
+  // cursor `commands/`, augment `commands/`, kilo `command/`) with kind.prefix='gsd-'.
   // _copyStaged names files `gsd-<stem>.md` but the buggy _syncGsdDir copies
   // them as `<stem>.md` (unprefixed) and also deletes ALL .md files not in the
   // staged set, including user files.
@@ -333,7 +333,7 @@ describe('applySurface', () => {
       explicitRemoves: [],
     });
 
-    // Determine the command dest dir for opencode: commandsKind destSubpath='command'
+    // Determine the command dest dir for opencode: commandsKind destSubpath='commands' (#2329)
     const layout = resolveRuntimeArtifactLayout('opencode', configDir, 'global');
     const commandsKind = layout.kinds.find(k => k.kind === 'commands');
     assert.ok(commandsKind, 'opencode layout must have a commands kind');
@@ -384,8 +384,8 @@ describe('applySurface', () => {
   // against future drift between _syncGsdDir (surface) and _copyStaged (install)
   // command-naming logic.
   //
-  // Matrix: opencode/kilo = flat command/ + prefix gsd-;
-  //         cursor/augment = flat commands/ + prefix gsd-.
+  // Matrix: opencode/cursor/augment = flat commands/ + prefix gsd- (#2329: opencode
+  //         moved from singular command/ to commands/); kilo = flat command/ + prefix gsd-.
   // For each runtime we: run install into installDir, run applySurface into
   // surfaceDir (same 'standard' profile both sides), then compare sorted .md
   // filename sets in the commands dest dir. On a fresh dir (no superseded files)
