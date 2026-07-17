@@ -573,7 +573,264 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
 // Consulted in runCommand's `default` case, after capability + overlay
 // dispatch, before the unknown-command error. A migrated command's `case` arm
 // is removed at cutover so it reaches here; an unmigrated command still hits
-// its `case` (collision structurally impossible, same property as ADR-959).
+  // its `case` (collision structurally impossible, same property as ADR-959).
+
+  // ─── ADR-2346 P3: resolve/git/config/research host routers ────────────────
+  // Each body was relocated VERBATIM from its `case` arm (cutover: the arm is
+  // removed so dispatch reaches HOST_COMMAND_ROUTERS). Closures over module-
+  // scope libs (commands/config/output/error/_dispatchNonFamily) are preserved;
+  // only per-dispatch values (args/cwd/raw/defaultValue/workstreamContext)
+  // arrive via the destructured context.
+
+  function routeResolveModel({ args, cwd, raw }) {
+    commands.cmdResolveModel(cwd, args[1], raw);
+  }
+
+  function routeResolveGranularity({ args, cwd, raw }) {
+    const granArgs = args.slice(1);
+    let granOverride;
+    const granPositionals = [];
+    for (let i = 0; i < granArgs.length; i++) {
+      const a = granArgs[i];
+      if (a === '--granularity' && granArgs[i + 1] !== undefined && !granArgs[i + 1].startsWith('--')) {
+        if (granOverride === undefined) { granOverride = granArgs[++i]; } else { ++i; }
+      } else {
+        granPositionals.push(a);
+      }
+    }
+    commands.cmdResolveGranularity(cwd, granPositionals[0], raw, granOverride);
+  }
+
+  function routeResolveExecution({ args, cwd, raw }) {
+    const execArgs = args.slice(1);
+    let effortOverride;
+    let fastModeOverride;
+    let attempt;
+    const positionals = [];
+    for (let i = 0; i < execArgs.length; i++) {
+      const a = execArgs[i];
+      if (a.startsWith('--effort=')) {
+        effortOverride = a.slice('--effort='.length);
+        continue;
+      }
+      if (a.startsWith('--fast-mode=')) {
+        const v = a.slice('--fast-mode='.length);
+        fastModeOverride = v === 'true' ? true : v === 'false' ? false : undefined;
+        continue;
+      }
+      if (a.startsWith('--attempt=')) {
+        const v = a.slice('--attempt='.length);
+        const n = parseInt(v, 10);
+        if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
+        attempt = n;
+        continue;
+      }
+      if (a === '--effort') {
+        const val = execArgs[i + 1];
+        if (val === undefined || val.startsWith('--')) error('Missing value for --effort', ERROR_REASON.USAGE);
+        effortOverride = val;
+        i++;
+        continue;
+      }
+      if (a === '--fast-mode') {
+        const val = execArgs[i + 1];
+        if (val === undefined || val.startsWith('--')) error('Missing value for --fast-mode', ERROR_REASON.USAGE);
+        fastModeOverride = val === 'true' ? true : val === 'false' ? false : undefined;
+        i++;
+        continue;
+      }
+      if (a === '--attempt') {
+        const val = execArgs[i + 1];
+        if (val === undefined || val.startsWith('--')) error('Missing value for --attempt', ERROR_REASON.USAGE);
+        const n = parseInt(val, 10);
+        if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
+        attempt = n;
+        i++;
+        continue;
+      }
+      if (a === '--raw') continue;
+      if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
+      positionals.push(a);
+    }
+    if (positionals.length === 0) error('agent-type required', ERROR_REASON.USAGE);
+    if (positionals.length > 1) error(`resolve-execution requires exactly one agent-type argument; got: ${positionals.join(', ')}`, ERROR_REASON.USAGE);
+    const agentTypeArg = positionals[0];
+    commands.cmdResolveExecution(cwd, agentTypeArg, raw, {
+      effortOverride,
+      fastModeOverride,
+      attempt,
+    });
+  }
+
+  function routeGit({ args, cwd }) {
+    const subcommand = args[1];
+    if (subcommand !== 'base-branch') {
+      error(
+        `Unknown git subcommand: ${subcommand || '(none)'}. Available: base-branch`,
+        ERROR_REASON.SDK_UNKNOWN_COMMAND,
+      );
+      return;
+    }
+    cmdGitBaseBranch(cwd, args.slice(2));
+  }
+
+  function routeConfigEnsureSection({ args, cwd, raw }) {
+    const handled = _dispatchNonFamily({
+      registryCommand: 'config-ensure-section',
+      registryArgs: args.slice(1),
+      legacyCommand: 'config-ensure-section',
+      legacyArgs: args.slice(1),
+      cwd,
+      raw,
+      error,
+      output: output,
+    });
+    if (!handled) config.cmdConfigEnsureSection(cwd, raw);
+  }
+
+  function routeConfigSet({ args, cwd, raw }) {
+    const handled = _dispatchNonFamily({
+      registryCommand: 'config-set',
+      registryArgs: args.slice(1),
+      legacyCommand: 'config-set',
+      legacyArgs: args.slice(1),
+      cwd,
+      raw,
+      error,
+      output: output,
+    });
+    if (!handled) config.cmdConfigSet(cwd, args[1], args[2], raw);
+  }
+
+  function routeConfigSetModelProfile({ args, cwd, raw }) {
+    const handled = _dispatchNonFamily({
+      registryCommand: 'config-set-model-profile',
+      registryArgs: args.slice(1),
+      legacyCommand: 'config-set-model-profile',
+      legacyArgs: args.slice(1),
+      cwd,
+      raw,
+      error,
+      output: output,
+    });
+    if (!handled) config.cmdConfigSetModelProfile(cwd, args[1], raw);
+  }
+
+  function routeConfigGet({ args, cwd, raw, defaultValue }) {
+    const configGetSdkArgs = defaultValue !== undefined
+      ? [args[1], '--default', defaultValue]
+      : args.slice(1);
+    const handled = _dispatchNonFamily({
+      registryCommand: 'config-get',
+      registryArgs: configGetSdkArgs,
+      legacyCommand: 'config-get',
+      legacyArgs: args.slice(1),
+      cwd,
+      raw,
+      error,
+      output: output,
+    });
+    if (!handled) config.cmdConfigGet(cwd, args[1], raw, defaultValue);
+  }
+
+  function routeConfigNewProject({ args, cwd, raw }) {
+    const handled = _dispatchNonFamily({
+      registryCommand: 'config-new-project',
+      registryArgs: args.slice(1),
+      legacyCommand: 'config-new-project',
+      legacyArgs: args.slice(1),
+      cwd,
+      raw,
+      error,
+      output: output,
+    });
+    if (!handled) config.cmdConfigNewProject(cwd, args[1], raw);
+  }
+
+  function routeConfigPath({ cwd, raw, workstreamContext }) {
+    config.cmdConfigPath(cwd, raw, workstreamContext);
+  }
+
+  async function routeMigrateConfig({ cwd, raw }) {
+    await config.cmdMigrateConfig(cwd, raw);
+  }
+
+  function routeResearchStore({ args, cwd, raw }) {
+    const researchStore = require('./lib/research-store.cjs');
+    const subcommand = args[1];
+    const homeDir = process.env.HOME || require('os').homedir();
+    if (subcommand === 'get') {
+      const key = args[2];
+      if (!key || key.startsWith('--')) {
+        error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
+      }
+      if (!researchStore.isValidResearchKey(key)) {
+        error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
+      }
+      const result = researchStore.getResearch(cwd, key, { homeDir });
+      output(result, raw);
+    } else if (subcommand === 'put') {
+      const key = args[2];
+      if (!key || key.startsWith('--')) {
+        error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
+      }
+      if (!researchStore.isValidResearchKey(key)) {
+        error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
+      }
+      const contentIdx = args.indexOf('--content');
+      const sourceIdx = args.indexOf('--source');
+      const providerIdx = args.indexOf('--provider');
+      const confidenceIdx = args.indexOf('--confidence');
+      const kindIdx = args.indexOf('--kind');
+      function getFlagValue(idx, flagName) {
+        if (idx === -1) return null;
+        const val = args[idx + 1];
+        if (val === undefined || val.startsWith('--')) {
+          error(`research-store put: missing value for ${flagName}`, ERROR_REASON.USAGE);
+        }
+        return val;
+      }
+      const content = getFlagValue(contentIdx, '--content');
+      const source = getFlagValue(sourceIdx, '--source');
+      const provider = getFlagValue(providerIdx, '--provider');
+      const confidence = getFlagValue(confidenceIdx, '--confidence');
+      const kind = getFlagValue(kindIdx, '--kind');
+      if (!content || !source || !provider || !confidence || !kind) {
+        error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
+      }
+      const entry = researchStore.putResearch(cwd, key, { content, source, provider, confidence, kind }, { homeDir });
+      output(entry, raw);
+    } else {
+      error('Unknown research-store subcommand. Available: get, put', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+    }
+  }
+
+  function routeResearchPlan({ args, cwd, raw }) {
+    const researchProvider = require('./lib/research-provider.cjs');
+    const inputIdx = args.indexOf('--input');
+    const inputPath = inputIdx !== -1 ? args[inputIdx + 1] : null;
+    if (!inputPath || inputPath.startsWith('--')) {
+      error('Usage: gsd-tools research-plan --input <path>', ERROR_REASON.USAGE);
+    }
+    let planInput;
+    try {
+      const raw_ = fs.readFileSync(path.resolve(inputPath), 'utf8');
+      planInput = JSON.parse(raw_);
+    } catch (readErr) {
+      error(`research-plan: cannot read/parse --input file: ${inputPath}`, ERROR_REASON.USAGE);
+    }
+    if (planInput === null || typeof planInput !== 'object' || Array.isArray(planInput)) {
+      error('research-plan: --input must be an object with a questions array', ERROR_REASON.USAGE);
+    }
+    if (!Array.isArray(planInput.questions)) {
+      error('research-plan: --input must be an object with a questions array', ERROR_REASON.USAGE);
+    }
+    const { ecosystem = '', config: planConfig = {}, questions } = planInput;
+    const homeDir = process.env.HOME || require('os').homedir();
+    const plan = researchProvider.planResearch({ questions, ecosystem, config: planConfig, cwd, homeDir });
+    output(plan, raw);
+  }
+
 const HOST_COMMAND_ROUTERS = {
   // Each entry wraps its `route*Command` router so it receives the module-scope
   // lib the old `case` arm passed, plus the per-dispatch context
@@ -596,13 +853,28 @@ const HOST_COMMAND_ROUTERS = {
   // awaits it. The router imports its own io/cli-exit/deps, so no module
   // injection needed — it receives {args,cwd,raw} (+error, ignored).
   capability: routeCapabilityCommand,
+  // ADR-2346 P3: resolve/git/config/research host routers. Each body was
+  // relocated verbatim from its `case` arm to a module-scope function above.
+  'resolve-model': routeResolveModel,
+  'resolve-granularity': routeResolveGranularity,
+  'resolve-execution': routeResolveExecution,
+  git: routeGit,
+  'config-ensure-section': routeConfigEnsureSection,
+  'config-set': routeConfigSet,
+  'config-set-model-profile': routeConfigSetModelProfile,
+  'config-get': routeConfigGet,
+  'config-new-project': routeConfigNewProject,
+  'config-path': routeConfigPath,
+  'migrate-config': routeMigrateConfig,
+  'research-store': routeResearchStore,
+  'research-plan': routeResearchPlan,
 };
 
 // Returns true when consumed (suppress "Unknown command"), false to fall
 // through. Prototype-pollution-safe: own-property lookup rejects
 // `__proto__`/`constructor`/`prototype` command keys (same guard as
 // dispatchCapabilityCommand).
-async function dispatchHostCommand({ command, args, cwd, raw, error }) {
+async function dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext }) {
   if (
     command === '__proto__' ||
     command === 'constructor' ||
@@ -617,7 +889,7 @@ async function dispatchHostCommand({ command, args, cwd, raw, error }) {
   if (typeof router !== 'function') return false;
   // `await` so async host routers (e.g. capability's install/upgrade ops)
   // complete before runCommand returns; sync routers pass through unchanged.
-  await router({ args, cwd, raw, error });
+  await router({ args, cwd, raw, error, defaultValue, workstreamContext });
   return true; // consumed — don't emit "Unknown command"
 }
 
@@ -936,105 +1208,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'resolve-model': {
-      commands.cmdResolveModel(cwd, args[1], raw);
-      break;
-    }
 
-    case 'resolve-granularity': {
-      // Parse optional --granularity <val> flag (space form only); positional is phase-type.
-      // The =form (--granularity=<val>) is intentionally not supported: parseNamedArgs and
-      // the /gsd:plan-phase + init plan-phase paths accept only the space form, so supporting
-      // = here alone would create an inconsistency (#703).
-      const granArgs = args.slice(1);
-      let granOverride;
-      const granPositionals = [];
-      for (let i = 0; i < granArgs.length; i++) {
-        const a = granArgs[i];
-        if (a === '--granularity' && granArgs[i + 1] !== undefined && !granArgs[i + 1].startsWith('--')) {
-          if (granOverride === undefined) { granOverride = granArgs[++i]; } else { ++i; }
-        } else {
-          granPositionals.push(a);
-        }
-      }
-      commands.cmdResolveGranularity(cwd, granPositionals[0], raw, granOverride);
-      break;
-    }
-
-    case 'resolve-execution': {
-      // Deterministic flag parsing: consume --flag <value> pairs first,
-      // then the AGENT is the single remaining positional.
-      // Supports both orderings: <agent> --flag val  AND  --flag val <agent>.
-      // Also supports --flag=value form (same convention as --cwd= above).
-      const execArgs = args.slice(1);
-      let effortOverride;
-      let fastModeOverride;
-      let attempt;
-      const positionals = [];
-      for (let i = 0; i < execArgs.length; i++) {
-        const a = execArgs[i];
-        // --effort=<val> form
-        if (a.startsWith('--effort=')) {
-          effortOverride = a.slice('--effort='.length);
-          continue;
-        }
-        // --fast-mode=<val> form
-        if (a.startsWith('--fast-mode=')) {
-          const v = a.slice('--fast-mode='.length);
-          fastModeOverride = v === 'true' ? true : v === 'false' ? false : undefined;
-          continue;
-        }
-        // --attempt=<val> form
-        if (a.startsWith('--attempt=')) {
-          const v = a.slice('--attempt='.length);
-          const n = parseInt(v, 10);
-          if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
-          attempt = n;
-          continue;
-        }
-        // --effort <val>
-        if (a === '--effort') {
-          const val = execArgs[i + 1];
-          if (val === undefined || val.startsWith('--')) error('Missing value for --effort', ERROR_REASON.USAGE);
-          effortOverride = val;
-          i++;
-          continue;
-        }
-        // --fast-mode <val>
-        if (a === '--fast-mode') {
-          const val = execArgs[i + 1];
-          if (val === undefined || val.startsWith('--')) error('Missing value for --fast-mode', ERROR_REASON.USAGE);
-          fastModeOverride = val === 'true' ? true : val === 'false' ? false : undefined;
-          i++;
-          continue;
-        }
-        // --attempt <val>
-        if (a === '--attempt') {
-          const val = execArgs[i + 1];
-          if (val === undefined || val.startsWith('--')) error('Missing value for --attempt', ERROR_REASON.USAGE);
-          const n = parseInt(val, 10);
-          if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
-          attempt = n;
-          i++;
-          continue;
-        }
-        // --raw is handled by top-level arg processing; skip it here
-        if (a === '--raw') continue;
-        // Unknown flag
-        if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
-        // Positional
-        positionals.push(a);
-      }
-      if (positionals.length === 0) error('agent-type required', ERROR_REASON.USAGE);
-      if (positionals.length > 1) error(`resolve-execution requires exactly one agent-type argument; got: ${positionals.join(', ')}`, ERROR_REASON.USAGE);
-      const agentTypeArg = positionals[0];
-      commands.cmdResolveExecution(cwd, agentTypeArg, raw, {
-        effortOverride,
-        fastModeOverride,
-        attempt,
-      });
-      break;
-    }
 
     case 'find-phase': {
       // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
@@ -1309,83 +1483,13 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'config-ensure-section': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs. The catalog rebinds
-      // 'config-ensure-section' to configNewProject in
-      // sdk/src/query/command-static-catalog-foundation.ts, restoring the
-      // legacy "no-arg full default init" contract on the SDK path
-      // (configEnsureSection itself stays available as an unbound single-
-      // section helper for future SDK callers).
-      const handled = _dispatchNonFamily({
-        registryCommand: 'config-ensure-section',
-        registryArgs: args.slice(1),
-        legacyCommand: 'config-ensure-section',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) config.cmdConfigEnsureSection(cwd, raw);
-      break;
-    }
 
-    case 'config-set': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      const handled = _dispatchNonFamily({
-        registryCommand: 'config-set',
-        registryArgs: args.slice(1),
-        legacyCommand: 'config-set',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) config.cmdConfigSet(cwd, args[1], args[2], raw);
-      break;
-    }
 
-    case "config-set-model-profile": {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      const handled = _dispatchNonFamily({
-        registryCommand: 'config-set-model-profile',
-        registryArgs: args.slice(1),
-        legacyCommand: 'config-set-model-profile',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) config.cmdConfigSetModelProfile(cwd, args[1], raw);
-      break;
-    }
 
-    case 'config-get': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      // The SDK handler supports --default via the registry args (args.slice(1)
-      // contains the key; defaultValue is handled by the SDK via the --default
-      // flag which was already stripped from args and held in defaultValue).
-      // Pass the full original args.slice(1) so the SDK sees the key; the
-      // defaultValue from the flag is in the global defaultValue variable above.
-      // Since the SDK handler reads --default from registryArgs, re-inject it.
-      const configGetSdkArgs = defaultValue !== undefined
-        ? [args[1], '--default', defaultValue]
-        : args.slice(1);
-      const handled = _dispatchNonFamily({
-        registryCommand: 'config-get',
-        registryArgs: configGetSdkArgs,
-        legacyCommand: 'config-get',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) config.cmdConfigGet(cwd, args[1], raw, defaultValue);
-      break;
-    }
+
+
+
+
 
     case 'normalize-test-command': {
       // #1857: rewrite a resolved test command to a one-shot form so a
@@ -1447,38 +1551,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       break;
     }
 
-    case 'config-new-project': {
-      // Phase 6 (#3575): dispatch via SDK executeForCjs when available.
-      const handled = _dispatchNonFamily({
-        registryCommand: 'config-new-project',
-        registryArgs: args.slice(1),
-        legacyCommand: 'config-new-project',
-        legacyArgs: args.slice(1),
-        cwd,
-        raw,
-        error,
-        output: output,
-      });
-      if (!handled) config.cmdConfigNewProject(cwd, args[1], raw);
-      break;
-    }
 
-    case 'config-path': {
-      // CJS-native: config-path returns the filesystem path to config.json.
-      // The SDK handler (configPath) also exists but requires a projectDir that
-      // is already resolved. Both produce identical output; keeping CJS here is
-      // simpler and avoids sync-bridge overhead for a trivial path lookup.
-      config.cmdConfigPath(cwd, raw, workstreamContext);
-      break;
-    }
-
-    case 'migrate-config': {
-      // CJS-native: migrate-config wraps the Configuration Module migrateOnDisk()
-      // which is async and mutates the filesystem. No SDK counterpart exists in
-      // the command registry (it's a one-shot migration utility). Must await.
-      await config.cmdMigrateConfig(cwd, raw);
-      break;
-    }
 
     case 'agent-skills': {
       // --json emits typed IR { agent_type, block, skills_count } for test assertions
@@ -2153,91 +2226,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     // all other sources write to cwd/.planning/research/.cache.
     // Tests may override the home directory by setting the HOME env var.
 
-    case 'research-store': {
-      const researchStore = require('./lib/research-store.cjs');
-      const subcommand = args[1];
-      const homeDir = process.env.HOME || require('os').homedir();
-      if (subcommand === 'get') {
-        const key = args[2];
-        if (!key || key.startsWith('--')) {
-          error('Usage: gsd-tools research-store get <key> [--kind <k>]', ERROR_REASON.USAGE);
-        }
-        if (!researchStore.isValidResearchKey(key)) {
-          error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
-        }
-        // --kind is accepted but no longer drives tier selection; getResearch searches both tiers
-        const result = researchStore.getResearch(cwd, key, { homeDir });
-        output(result, raw);
-      } else if (subcommand === 'put') {
-        const key = args[2];
-        if (!key || key.startsWith('--')) {
-          error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
-        }
-        if (!researchStore.isValidResearchKey(key)) {
-          error('research-store: <key> must be a 64-char sha256 hex (use research-plan to obtain keys)', ERROR_REASON.USAGE);
-        }
-        const contentIdx = args.indexOf('--content');
-        const sourceIdx = args.indexOf('--source');
-        const providerIdx = args.indexOf('--provider');
-        const confidenceIdx = args.indexOf('--confidence');
-        const kindIdx = args.indexOf('--kind');
-        // For each flag, if the following value is missing or itself starts with '--', reject.
-        function getFlagValue(idx, flagName) {
-          if (idx === -1) return null;
-          const val = args[idx + 1];
-          if (val === undefined || val.startsWith('--')) {
-            error(`research-store put: missing value for ${flagName}`, ERROR_REASON.USAGE);
-          }
-          return val;
-        }
-        const content = getFlagValue(contentIdx, '--content');
-        const source = getFlagValue(sourceIdx, '--source');
-        const provider = getFlagValue(providerIdx, '--provider');
-        const confidence = getFlagValue(confidenceIdx, '--confidence');
-        const kind = getFlagValue(kindIdx, '--kind');
-        if (!content || !source || !provider || !confidence || !kind) {
-          error('Usage: gsd-tools research-store put <key> --content <str> --source <s> --provider <p> --confidence <c> --kind <k>', ERROR_REASON.USAGE);
-        }
-        const entry = researchStore.putResearch(cwd, key, { content, source, provider, confidence, kind }, { homeDir });
-        output(entry, raw);
-      } else {
-        error('Unknown research-store subcommand. Available: get, put', ERROR_REASON.SDK_UNKNOWN_COMMAND);
-      }
-      break;
-    }
 
-    // ─── Research Plan ─────────────────────────────────────────────────────
-    //
-    // research-plan --input <path>
-    //   Read+JSON.parse file; call planResearch({ questions, ecosystem, config, cwd })
-    //   { ecosystem, config, questions: [{ text, kind, library?, version? }] }
-
-    case 'research-plan': {
-      const researchProvider = require('./lib/research-provider.cjs');
-      const inputIdx = args.indexOf('--input');
-      const inputPath = inputIdx !== -1 ? args[inputIdx + 1] : null;
-      if (!inputPath || inputPath.startsWith('--')) {
-        error('Usage: gsd-tools research-plan --input <path>', ERROR_REASON.USAGE);
-      }
-      let planInput;
-      try {
-        const raw_ = fs.readFileSync(path.resolve(inputPath), 'utf8');
-        planInput = JSON.parse(raw_);
-      } catch (readErr) {
-        error(`research-plan: cannot read/parse --input file: ${inputPath}`, ERROR_REASON.USAGE);
-      }
-      if (planInput === null || typeof planInput !== 'object' || Array.isArray(planInput)) {
-        error('research-plan: --input must be an object with a questions array', ERROR_REASON.USAGE);
-      }
-      if (!Array.isArray(planInput.questions)) {
-        error('research-plan: --input must be an object with a questions array', ERROR_REASON.USAGE);
-      }
-      const { ecosystem = '', config: planConfig = {}, questions } = planInput;
-      const homeDir = process.env.HOME || require('os').homedir();
-      const plan = researchProvider.planResearch({ questions, ecosystem, config: planConfig, cwd, homeDir });
-      output(plan, raw);
-      break;
-    }
 
     // ─── Classify Confidence ──────────────────────────────────────────────
     //
@@ -2371,18 +2360,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
     // #1146: single base-branch resolver for all forking workflows.
     // Workflows call `gsd_run query git.base-branch` (dotted form normalised to
     // command='git', args=['git','base-branch']).
-    case 'git': {
-      const subcommand = args[1];
-      if (subcommand !== 'base-branch') {
-        error(
-          `Unknown git subcommand: ${subcommand || '(none)'}. Available: base-branch`,
-          ERROR_REASON.SDK_UNKNOWN_COMMAND,
-        );
-        break;
-      }
-      cmdGitBaseBranch(cwd, args.slice(2));
-      break;
-    }
+
 
     case 'user-story': {
       const subcommand = args[1];
@@ -2517,7 +2495,7 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // commands (state, …) routed via their `route*Command` router instead of
       // a hardcoded `case` arm. Tried after capability/overlay dispatch and
       // before the unknown-command error.
-      if (await dispatchHostCommand({ command, args, cwd, raw, error })) break;
+      if (await dispatchHostCommand({ command, args, cwd, raw, error, defaultValue, workstreamContext })) break;
 
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
