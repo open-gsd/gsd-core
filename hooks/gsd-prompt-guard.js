@@ -52,6 +52,9 @@ function normalizeKimiPayload(data) {
   const mapped = KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)];
   if (!mapped) return data;
   data.tool_name = mapped;
+  if (data.tool_response === undefined && data.tool_output !== undefined) {
+    data.tool_response = data.tool_output;
+  }
   const input = data.tool_input;
   if (input && typeof input === 'object') {
     if (input.file_path === undefined && typeof input.path === 'string') {

@@ -98,6 +98,9 @@ function normalizeKimiPayload(data) {
   const mapped = KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)];
   if (!mapped) return data;
   data.tool_name = mapped;
+  if (data.tool_response === undefined && data.tool_output !== undefined) {
+    data.tool_response = data.tool_output;
+  }
   const input = data.tool_input;
   if (input && typeof input === 'object') {
     if (input.file_path === undefined && typeof input.path === 'string') {
@@ -137,11 +140,14 @@ process.stdin.on('end', () => {
       for (const gitCwd of forceGitAddCwds(command, cwd)) {
         const branch = currentBranch(gitCwd);
         if (branch.startsWith('worktree-agent-')) {
-          process.stdout.write(JSON.stringify({
+          const output = {
             decision: 'block',
             code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN',
             reason: 'worktree-agent branches must not run git add -f or git add --force. Respect the SDK skipped_gitignored/skipped_commit_docs_false contract and leave gitignored files untracked.',
-          }));
+          };
+          process.stdout.write(JSON.stringify(output));
+          // Kimi CLI's exit-2 protocol feeds stderr back to the model (#2304)
+          process.stderr.write(output.reason);
           process.exit(2);
         }
       }
