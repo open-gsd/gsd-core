@@ -562,6 +562,45 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
   return true;
 }
 
+// ─── ADR-2346 (epic #2345): host dispatch table ───────────────────────────────
+// Layer-2 of the two-layer dispatch. Core, non-capability host commands live
+// here — NOT in the capability registry (ADR-959's commandFamilies is reserved
+// for toggleable feature capabilities: graphify/audit/intel). A host command
+// like `state` is core, non-toggleable, carries no tier/activationKey, so it
+// cannot be a capability. Each entry maps a top-level command to its standard
+// `route*Command` router (the same routers the hardcoded `case` arms called).
+// Consulted in runCommand's `default` case, after capability + overlay
+// dispatch, before the unknown-command error. A migrated command's `case` arm
+// is removed at cutover so it reaches here; an unmigrated command still hits
+// its `case` (collision structurally impossible, same property as ADR-959).
+const HOST_COMMAND_ROUTERS = {
+  // `state` → routeStateCommand (the pilot cutover, ADR-2346 P1).
+  // Wraps the router so it receives the module-scope `state` lib the old
+  // `case 'state':` arm passed, plus the per-dispatch context.
+  state: (ctx) => routeStateCommand({ state, ...ctx }),
+};
+
+// Returns true when consumed (suppress "Unknown command"), false to fall
+// through. Prototype-pollution-safe: own-property lookup rejects
+// `__proto__`/`constructor`/`prototype` command keys (same guard as
+// dispatchCapabilityCommand).
+function dispatchHostCommand({ command, args, cwd, raw, error }) {
+  if (
+    command === '__proto__' ||
+    command === 'constructor' ||
+    command === 'prototype'
+  ) {
+    return false;
+  }
+  if (!Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, command)) {
+    return false;
+  }
+  const router = HOST_COMMAND_ROUTERS[command];
+  if (typeof router !== 'function') return false;
+  router({ args, cwd, raw, error });
+  return true; // consumed — don't emit "Unknown command"
+}
+
 // ─── Arg parsing helpers ──────────────────────────────────────────────────────
 
 // ─── CLI Router ───────────────────────────────────────────────────────────────
@@ -874,17 +913,6 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
 
     case 'check': {
       routeCheckCommand({ args, cwd, raw });
-      break;
-    }
-
-    case 'state': {
-      routeStateCommand({
-        state,
-        args,
-        cwd,
-        raw,
-        error,
-      });
       break;
     }
 
@@ -3232,6 +3260,12 @@ async function runCommand(command, args, cwd, raw, defaultValue, originalCommand
       // require()-ing its router FROM the capability's install root (confined to that root).
       if (dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error })) break;
 
+      // ADR-2346 (epic #2345): host dispatch table — core, non-capability
+      // commands (state, …) routed via their `route*Command` router instead of
+      // a hardcoded `case` arm. Tried after capability/overlay dispatch and
+      // before the unknown-command error.
+      if (dispatchHostCommand({ command, args, cwd, raw, error })) break;
+
       // #3243: if the caller passed a dotted form (e.g. "foo.bar"), the shim
       // above split it so `command` here is the head ("foo"). Use
       // originalCommand to reconstruct the original dotted form and suggest
@@ -3263,4 +3297,4 @@ if (require.main === module) {
 // synthetic registry + requireModule injections.
 // ADR-1244 Phase 5: export dispatchOverlayCapabilityCommand + defaultRequireFromInstallRoot for
 // the third-party overlay dispatch + install-root confinement tests.
-module.exports = { dispatchCapabilityCommand, dispatchOverlayCapabilityCommand, defaultRequireFromInstallRoot };
+module.exports = { dispatchCapabilityCommand, dispatchOverlayCapabilityCommand, defaultRequireFromInstallRoot, dispatchHostCommand, HOST_COMMAND_ROUTERS };
