@@ -483,6 +483,7 @@ Start next version cycle.
 |----------|----------|-------------|
 | `name` | No | Milestone name |
 | `--reset-phase-numbers` | No | Restart the new milestone at Phase 1 and archive old phase dirs before roadmapping |
+| `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` write |
 
 **Prerequisites:** Previous milestone completed
 **Produces:** Updated `PROJECT.md`, new `REQUIREMENTS.md`, new `ROADMAP.md`
@@ -491,6 +492,7 @@ Start next version cycle.
 /gsd-new-milestone                  # Interactive
 /gsd-new-milestone "v2.0 Mobile"    # Named milestone
 /gsd-new-milestone --reset-phase-numbers "v2.0 Mobile"  # Restart milestone numbering at 1
+/gsd-new-milestone --ws search "v2.0 Search"  # Scope to a workstream
 ```
 
 ---

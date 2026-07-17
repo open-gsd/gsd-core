@@ -10,7 +10,7 @@
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
@@ -563,3 +563,162 @@ test('execute-phase.md: awk extracts resolves_phase from YAML frontmatter', () =
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #2308 / #2334 follow-up: new-milestone.md must not clobber the shared
+// PROJECT.md when a workstream is active, and must propagate ${GSD_WS} to
+// downstream routing. Step 1 and Step 6's bash fences are extracted and
+// EXECUTED (not grepped) so these tests fail on an inert guard — e.g. the
+// step-6 conditional merely being PRESENT (`if [ -n "$GSD_WS" ]`) is not
+// enough if GSD_WS was never re-derived and is always empty at runtime.
+// ────────────────────────────────────────────────────────────────────────
+describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
+  const content = fs.readFileSync(workflowPath, 'utf8');
+
+  // Locate the first ```bash fence strictly between two headings.
+  function extractFenceBetween(markdown, startHeading, endHeading) {
+    const startIdx = markdown.indexOf(startHeading);
+    const endIdx = markdown.indexOf(endHeading);
+    assert.ok(startIdx !== -1, `heading not found: ${startHeading}`);
+    assert.ok(endIdx !== -1, `heading not found: ${endHeading}`);
+    assert.ok(startIdx < endIdx, `${startHeading} must precede ${endHeading}`);
+    const section = markdown.slice(startIdx, endIdx);
+    const match = section.match(/```bash\r?\n([\s\S]*?)```/);
+    assert.ok(match, `no bash fence found between "${startHeading}" and "${endHeading}"`);
+    return match[1];
+  }
+
+  // Step 6 has multiple ```bash fences; locate the one containing `marker`.
+  function extractFenceContaining(markdown, startHeading, endHeading, marker) {
+    const startIdx = markdown.indexOf(startHeading);
+    const endIdx = markdown.indexOf(endHeading);
+    assert.ok(startIdx !== -1 && endIdx !== -1 && startIdx < endIdx, 'headings not found in order');
+    const section = markdown.slice(startIdx, endIdx);
+    const fenceRe = /```bash\r?\n([\s\S]*?)```/g;
+    let m;
+    while ((m = fenceRe.exec(section)) !== null) {
+      if (m[1].includes(marker)) return m[1];
+    }
+    assert.fail(`no bash fence containing "${marker}" found between "${startHeading}" and "${endHeading}"`);
+    return null;
+  }
+
+  describe('step 1: --ws parsing is real, executable shell (not prose)', () => {
+    const step1Fence = extractFenceBetween(content, '## 1. Load Context', '## 2. Gather Milestone Goals');
+
+    function runStep1(argumentsValue) {
+      const script = `ARGUMENTS=${JSON.stringify(argumentsValue)}\n${step1Fence}\n` +
+        'printf \'GSD_WS=[%s]\\nMILESTONE_ARG=[%s]\\n\' "$GSD_WS" "$MILESTONE_ARG"';
+      const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+      return {
+        gsdWs: /GSD_WS=\[(.*)\]/.exec(out)[1],
+        milestoneArg: /MILESTONE_ARG=\[(.*)\]/.exec(out)[1],
+      };
+    }
+
+    test('parses --ws <name> into GSD_WS and strips it from the milestone name (finding 6)', () => {
+      const { gsdWs, milestoneArg } = runStep1('--ws search v2.0 Search');
+      assert.strictEqual(gsdWs, '--ws search');
+      assert.strictEqual(milestoneArg, 'v2.0 Search');
+    });
+
+    test('leaves GSD_WS empty when --ws is absent, milestone name unaffected', () => {
+      const { gsdWs, milestoneArg } = runStep1('v2.0 Search');
+      assert.strictEqual(gsdWs, '');
+      assert.strictEqual(milestoneArg, 'v2.0 Search');
+    });
+  });
+
+  describe('step 6: commit stages PROJECT.md in both modes, with no cross-step guard', () => {
+    const step6CommitFence = extractFenceContaining(
+      content,
+      '## 6. Cleanup and Commit',
+      '## 7. Load Context and Resolve Models',
+      'docs: start milestone v[X.Y] [Name]'
+    );
+
+    function runStep6Commit(argumentsValue) {
+      const gsdRunStub = 'gsd_run() { printf "%s\\n" "gsd_run_call:$*"; }\n';
+      const script = `ARGUMENTS=${JSON.stringify(argumentsValue)}\n${gsdRunStub}${step6CommitFence}`;
+      return execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    }
+
+    // Step 4 Part A's guard — not this commit — is what protects the shared
+    // heading. Part B's Evolution backfill DOES write PROJECT.md in workstream
+    // mode, so a ws-mode branch that dropped PROJECT.md from --files would
+    // strand that edit uncommitted.
+    for (const [mode, args] of [['ws', '--ws search v2.0 Search'], ['flat', 'v2.0 Search']]) {
+      test(`${mode} mode: --files stages PROJECT.md so Part B's Evolution backfill is committed`, () => {
+        const out = runStep6Commit(args);
+        assert.ok(
+          out.includes('--files .planning/PROJECT.md .planning/STATE.md'),
+          `expected PROJECT.md + STATE.md --files in ${mode} mode, got: ${out}`
+        );
+      });
+    }
+
+    test('does not guard the commit on GSD_WS — a cross-step variable is always empty here', () => {
+      // Regression guard for the inert-guard trap: GSD_WS is assigned in Step
+      // 1's shell, and each step's bash block runs in its own shell (the same
+      // reason Step 5 round-trips OUTGOING_MILESTONE through a file). A
+      // `[ -n "$GSD_WS" ]` branch here reads an unset variable, always takes
+      // the flat branch, and only appears to work.
+      assert.ok(
+        !/\[\s*-n\s*"\$GSD_WS"\s*\]/.test(step6CommitFence),
+        `step 6 must not branch on a cross-step GSD_WS; got fence:\n${step6CommitFence}`
+      );
+    });
+  });
+
+  test('routing interpolations still propagate ${GSD_WS} at the documented lines', () => {
+    assert.ok(
+      content.includes('/gsd:new-milestone --reset-phase-numbers ${GSD_WS}'),
+      'reset-phase-numbers rerun hint should propagate ${GSD_WS}'
+    );
+    assert.ok(
+      content.includes('/gsd:discuss-phase [N] ${GSD_WS}'),
+      'discuss-phase routing hint should propagate ${GSD_WS}'
+    );
+    assert.ok(
+      content.includes('/gsd:plan-phase [N] ${GSD_WS}'),
+      'plan-phase routing hint should propagate ${GSD_WS}'
+    );
+  });
+
+  test('success criteria reflects PROJECT.md update is skipped in workstream mode', () => {
+    assert.match(
+      content,
+      /PROJECT\.md updated with Current Milestone section.*skipped.*workstream/i,
+      'success criteria should note the PROJECT.md step is skipped in workstream mode'
+    );
+  });
+
+  test('step 4 scopes the workstream skip to the milestone-state write only; Evolution repair always runs (finding 2)', () => {
+    const step4Idx = content.indexOf('## 4. Update PROJECT.md');
+    const step5Idx = content.indexOf('## 5. Update STATE.md');
+    assert.ok(step4Idx !== -1 && step5Idx !== -1 && step4Idx < step5Idx, 'steps 4 and 5 should be locatable');
+    const step4Body = content.slice(step4Idx, step5Idx);
+
+    const partAIdx = step4Body.indexOf('Part A');
+    const partBIdx = step4Body.indexOf('Part B');
+    assert.ok(partAIdx !== -1 && partBIdx !== -1 && partAIdx < partBIdx, 'step 4 should have distinct Part A / Part B sections');
+
+    const partABody = step4Body.slice(partAIdx, partBIdx);
+    const partBBody = step4Body.slice(partBIdx);
+
+    assert.match(partABody, /skip/i, 'Part A should describe the workstream skip');
+    assert.ok(partABody.includes('GSD_WS'), 'Part A guard should be keyed on GSD_WS');
+    assert.match(
+      step4Body,
+      /shared/i,
+      'step 4 should justify the guard by pointing at PROJECT.md being the shared file'
+    );
+
+    // The Evolution structural repair must be reachable OUTSIDE Part A's skip,
+    // and Part B's own text must state it is unconditional.
+    assert.ok(!partABody.includes('## Evolution'), 'Evolution repair must NOT be nested inside the guarded Part A');
+    assert.ok(partBBody.includes('## Evolution'), 'Part B must contain the Evolution section template');
+    assert.match(partBBody, /always runs/i, 'Part B must state it always runs regardless of GSD_WS');
+  });
+});
