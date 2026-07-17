@@ -2046,6 +2046,7 @@ const { createTempDir, cleanup } = require('./helpers.cjs');
 const {
   convertClaudeCommandToCodebuddyCommand,
   convertClaudeCommandToCodebuddySkill,
+  convertClaudeCommandToCursorSkill,
 } = require('../bin/install.js');
 
 const {
@@ -2231,6 +2232,57 @@ describe('enh-789 — installRuntimeArtifacts codebuddy emits commands and skill
 
     const after = fs.readFileSync(srcHelpPath, 'utf8');
     assert.strictEqual(before, after, 'source commands/gsd/help.md must not be mutated by the install');
+  });
+});
+
+// ─── #2341: extend the #789 de-dup to Cursor ─────────────────────────────────
+// Cursor installs BOTH a skills surface and a commands surface (#785/#803), and
+// surfaces both in its '/' menu — so every /gsd-* appeared twice. The #789 fix
+// (skills user-invocable:false → model-invocable but out of '/') was scoped to
+// CodeBuddy only and never applied to Cursor. Cursor honors the same SKILL.md
+// `user-invocable` convention (verified: user-invocable:false hides a skill from
+// '/' while keeping it model-invocable, distinct from disable-model-invocation).
+// Fix: emit Cursor skills with user-invocable:false so commands are the single
+// '/' entry point.
+describe('fix-2341 — Cursor skills marked user-invocable:false', () => {
+  test('convertClaudeCommandToCursorSkill emits user-invocable: false', () => {
+    const src = [
+      '---',
+      'name: gsd:help',
+      'description: Show help',
+      '---',
+      '',
+      '# body',
+      '',
+    ].join('\n');
+    const out = convertClaudeCommandToCursorSkill(src, 'gsd-help');
+    assert.ok(/^user-invocable:\s*false\s*$/m.test(out),
+      `Cursor SKILL.md frontmatter must hide skill from '/' menu (user-invocable: false). Got:\n${out}`);
+  });
+
+  test('installed cursor skills/gsd-help/SKILL.md is hidden from the / menu', (t) => {
+    const configDir = createTempDir('gsd-fix2341-skillhide-');
+    t.after(() => cleanup(configDir));
+
+    installRuntimeArtifacts('cursor', configDir, 'global', RESOLVED_CORE);
+
+    const skill = fs.readFileSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md'), 'utf8');
+    assert.ok(/^user-invocable:\s*false\s*$/m.test(skill),
+      'installed Cursor SKILL.md must set user-invocable: false so it is not a duplicate / entry');
+  });
+
+  test('cursor still installs the commands surface (the single / entry point)', (t) => {
+    const configDir = createTempDir('gsd-fix2341-cmd-');
+    t.after(() => cleanup(configDir));
+
+    installRuntimeArtifacts('cursor', configDir, 'global', RESOLVED_CORE);
+
+    // The commands surface stays user-invocable — de-dup hides the skill, not the command.
+    assert.ok(fs.existsSync(path.join(configDir, 'commands', 'gsd-help.md')),
+      'commands/gsd-help.md (the / entry point) must still be installed');
+    const cmd = fs.readFileSync(path.join(configDir, 'commands', 'gsd-help.md'), 'utf8');
+    assert.ok(!/^user-invocable:\s*false\s*$/m.test(cmd),
+      'the command surface must remain user-invocable (only the skill is hidden)');
   });
 });
 
