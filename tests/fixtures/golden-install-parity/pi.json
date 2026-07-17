@@ -315,7 +315,7 @@
   "hooks/gsd-windsurf-pre-write.js": "92d4dbfbc36ab0cf",
   "hooks/gsd-workflow-guard.js": "91ae24a15d2bca6f",
   "hooks/gsd-worktree-path-guard.js": "2a2a7515c01ef998",
-  "hooks/gsd-write-guard.js": "233de1bfae642c4f",
+  "hooks/gsd-write-guard.js": "dbb7def9bb00a52f",
   "hooks/lib/git-cmd.js": "268ba15992ca0b23",
   "hooks/lib/gsd-graphify-rebuild.sh": "66af89601074d2a9",
   "hooks/managed-hooks-registry.cjs": "2d8ce04cfa0f0e66",
