@@ -34,6 +34,19 @@ the checkpoint entirely and continue planning. Do not raise it with the user.
 **If `detected` is `true`:** an external-API integration is in scope. You MUST
 produce a **coverage matrix** before the plan is finalized.
 
+**If `detected` is `true` but the phase genuinely integrates no external API**
+(the detector is deterministic, not infallible — confirm by re-reading the phase
+scope, not by preference): do NOT fabricate a matrix row for a capability that
+does not exist. Write a reasoned declaration to `${PHASE_DIR}/COVERAGE.md`
+instead:
+
+```markdown
+No external API integration: <one-line reason — what the phase touches instead>.
+```
+
+The reason is required, exactly like an `OPT-OUT` reason. The seal-time gate
+accepts this declaration in place of a matrix.
+
 ## Produce the coverage matrix
 
 Enumerate the external API's full **capability surface** — the verb/endpoint/method
@@ -81,7 +94,8 @@ This checkpoint is enforced. At `verify:pre` the `api-coverage.verify-pre` gate
 runs `check api-coverage.verify-pre <phase-dir>`:
 
 - If `COVERAGE.md` exists, it is validated — every row needs a valid decision and
-  every `OPT-OUT` a reason. A malformed/partial matrix **blocks the seal**.
+  every `OPT-OUT` a reason. A malformed/partial matrix **blocks the seal**. A
+  reasoned `No external API integration: …` declaration (and no rows) passes.
 - If `COVERAGE.md` is absent, the detector runs again over the phase scope. If a
   strong external-API-integration signal is found, the seal is **blocked** until a
   matrix is produced. If no signal is found, the phase is treated as a non-API

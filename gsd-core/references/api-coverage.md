@@ -24,13 +24,20 @@ treated as an external-API integration when **either**:
 1. a `COVERAGE.md` matrix is present in the phase directory (the planner produced
    one at `plan:pre`), **or**
 2. the phase scope shows a strong external-API-integration signal (an integration
-   verb co-occurring with an external-API noun, or an explicit `<Service>
-   API|SDK|REST|GraphQL` surface) and no matrix yet exists.
+   verb and an external-API noun **in the same clause, close together**, or an
+   explicit `<Service> API|SDK|REST|GraphQL` surface in proper-noun position)
+   and no matrix yet exists.
 
 Non-API phases (refactors, bug fixes, internal-only work, features that merely
 *mention* an existing internal API) do **not** fire the gate — the trigger
 requires a compound signal, so a bare word like "api" in "the public API of
-UserController" is intentionally ignored.
+UserController" is intentionally ignored. Since #2365 the detector also
+excludes non-prose spans before matching: fenced code blocks, inline
+`` `code` `` spans, and path-shaped tokens (a first-party
+`src/app/api/profile/route.ts` route reference is a file path, not an external
+API), and it does not treat an ordinary capitalized sentence starter
+("Resolver-only API …") as a service name — a clause-initial `<Word> API` needs
+dependency evidence (a URL or package reference) on the same line to count.
 
 ## The two touch points
 
@@ -69,6 +76,20 @@ Rules enforced at seal time: the matrix must be non-empty; every capability name
 must be non-empty and unique; every decision must be `INTEGRATE` or `OPT-OUT`;
 every `OPT-OUT` must have a reason. Violations block the seal with a precise
 error.
+
+### Declaring "no external API integration" (#2365)
+
+A phase that integrates no external API/SDK/service — but was still asked for a
+matrix (e.g. the detector over-fired, or a team wants the decision on record) —
+declares it instead of fabricating a row:
+
+```markdown
+No external API integration: UI-only phase, no third-party surface.
+```
+
+The reason is **required**, exactly like an `OPT-OUT` reason — the declaration
+is a reasoned decision, not a bypass. A `COVERAGE.md` containing both the
+declaration and coverage rows is contradictory and blocks the seal.
 
 ## A second integration against the same need
 

@@ -239,6 +239,34 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     assert.strictEqual(j.counts.surface, 1);
   });
 
+  // ── #2365: detector false positives must not block, and a phase may declare
+  // "no external API integration" instead of fabricating a matrix row.
+  test('#2365 phase naming a first-party route path → does NOT block', () => {
+    fresh();
+    writePlan(
+      phaseDir,
+      '01-PLAN.md',
+      '# Plan\nRun integration tests for src/app/api/profile/route.test.ts.'
+    );
+    const r = runGate(tmpDir, phaseDir);
+    assert.ok(r.success, `gate should succeed. stderr: ${r.error}`);
+    const j = JSON.parse(r.output);
+    assert.strictEqual(j.block, false, 'a first-party route path is not an external API');
+    assert.strictEqual(j.detected, false);
+  });
+
+  test('#2365 COVERAGE.md declaring no external API integration → passes the gate', () => {
+    fresh();
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nRender the export page.');
+    writeCoverage(phaseDir, 'No external API integration: UI-only phase, no third-party surface.\n');
+    const r = runGate(tmpDir, phaseDir);
+    assert.ok(r.success, `gate should succeed. stderr: ${r.error}`);
+    const j = JSON.parse(r.output);
+    assert.strictEqual(j.block, false, 'a reasoned no-integration declaration satisfies the gate');
+    assert.strictEqual(j.coverage_present, true);
+    assert.strictEqual(j.none_declared, true);
+  });
+
   // ── Security (#1562 security review S1/S2): the phase arg is taken only as a
   // token resolved under .planning/phases/. Traversal / unresolvable args must
   // NOT read files outside the phase dir, and — since the phases tree exists —

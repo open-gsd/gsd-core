@@ -4,9 +4,10 @@
  * Behavioral tests for markdown-sectionizer.cjs
  *
  * Module: gsd-core/bin/lib/markdown-sectionizer.cjs
- * Exports: stripFencedCode, extractFencedBlock, tokenizeHeadings, collectSections,
- *          collectSection, iterateBullets, updateBullet, extractTaggedBlocks,
- *          stripTaggedBlocks, replaceSection, withSection, deleteSection
+ * Exports: stripFencedCode, stripInlineCode, extractFencedBlock, tokenizeHeadings,
+ *          collectSections, collectSection, iterateBullets, updateBullet,
+ *          extractTaggedBlocks, stripTaggedBlocks, replaceSection, withSection,
+ *          deleteSection
  *
  * Covers the parser QA matrix from CONTRIBUTING.md §'Parser and project-file inputs':
  *   - LF vs CRLF line endings
@@ -42,7 +43,48 @@ const {
   replaceSection,
   withSection,
   deleteSection,
+  stripInlineCode,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+
+// ─── stripInlineCode (#2365) ──────────────────────────────────────────────────
+
+describe('stripInlineCode', () => {
+  test('removes a single-backtick inline span, delimiters included', () => {
+    assert.strictEqual(stripInlineCode('Verify the `api` helper'), 'Verify the   helper');
+  });
+
+  test('removes a double-backtick span (CommonMark same-length closer)', () => {
+    assert.strictEqual(stripInlineCode('see ``a `nested` tick`` here'), 'see   here');
+  });
+
+  test('an unmatched backtick run is left as literal text', () => {
+    assert.strictEqual(stripInlineCode('a ` stray backtick'), 'a ` stray backtick');
+  });
+
+  test('a longer closing run does not close a shorter opener (CommonMark §6.1)', () => {
+    // `x`` — no run of exactly 1 backtick follows, so nothing is stripped.
+    assert.strictEqual(stripInlineCode('a `x`` b'), 'a `x`` b');
+  });
+
+  test('multiple spans on one line are all removed', () => {
+    assert.strictEqual(stripInlineCode('`a` and `b` remain not'), '  and   remain not');
+  });
+
+  test('spans do not cross line boundaries', () => {
+    assert.strictEqual(stripInlineCode('open `here\nstill` open'), 'open `here\nstill` open');
+  });
+
+  test('non-string / empty input degrades to empty string without throwing', () => {
+    assert.strictEqual(stripInlineCode(undefined), '');
+    assert.strictEqual(stripInlineCode(null), '');
+    assert.strictEqual(stripInlineCode(''), '');
+  });
+
+  test('text without backticks is returned unchanged', () => {
+    const s = 'plain prose, no code spans at all';
+    assert.strictEqual(stripInlineCode(s), s);
+  });
+});
 
 // ─── stripFencedCode ──────────────────────────────────────────────────────────
 

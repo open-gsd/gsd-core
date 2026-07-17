@@ -1151,7 +1151,10 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
           coverage_present: true,
           matrix: coverageFile,
           counts: v.counts,
-          message: `api-coverage: matrix present (${v.counts.surface} capabilities, ${v.counts.optout} opt-out)`,
+          ...(v.none_declared ? { none_declared: true } : {}),
+          message: v.none_declared
+            ? 'api-coverage: COVERAGE.md declares no external API integration — matrix not required'
+            : `api-coverage: matrix present (${v.counts.surface} capabilities, ${v.counts.optout} opt-out)`,
         },
         raw,
         undefined,

@@ -157,6 +157,67 @@ export function stripFencedCode(content: string): StripFencedResult {
   return { text: kept.join('\n'), unterminatedFence: openFence !== null };
 }
 
+// ─── stripInlineCode ──────────────────────────────────────────────────────────
+
+/**
+ * Remove CommonMark inline code spans (§6.1) from prose, line by line.
+ *
+ * A span opens with a run of N backticks and closes at the next run of EXACTLY
+ * N backticks on the same line (a longer or shorter run is span content, per
+ * CommonMark). The whole span — delimiters and content — is replaced by a
+ * single space so the surrounding words do not join. A run with no matching
+ * closer is literal text and is kept. Spans never cross line boundaries here:
+ * multi-line code in planning prose is fenced-block territory
+ * (`stripFencedCode`).
+ *
+ * Companion to `stripFencedCode` for term-matching callers (#2365): strip
+ * fenced blocks first, then inline spans, so a trigger term inside backticks
+ * is code, not prose evidence.
+ */
+export function stripInlineCode(content: string): string {
+  if (typeof content !== 'string' || content.length === 0) return '';
+  return content.split('\n').map(stripInlineCodeLine).join('\n');
+}
+
+function stripInlineCodeLine(line: string): string {
+  if (line.indexOf('`') === -1) return line;
+  let out = '';
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] !== '`') {
+      out += line[i];
+      i++;
+      continue;
+    }
+    let n = 0;
+    while (i + n < line.length && line[i + n] === '`') n++;
+    // Find the next backtick run of EXACTLY n — the CommonMark closer.
+    let j = i + n;
+    let closeStart = -1;
+    while (j < line.length) {
+      if (line[j] === '`') {
+        let m = 0;
+        while (j + m < line.length && line[j + m] === '`') m++;
+        if (m === n) {
+          closeStart = j;
+          break;
+        }
+        j += m;
+      } else {
+        j++;
+      }
+    }
+    if (closeStart === -1) {
+      out += line.slice(i, i + n);
+      i += n;
+    } else {
+      out += ' ';
+      i = closeStart + n;
+    }
+  }
+  return out;
+}
+
 // ─── extractFencedBlock ───────────────────────────────────────────────────────
 
 /** A fenced code block located by `scanFencedBlocks`: line-index span + info string. */

@@ -168,6 +168,123 @@ describe('detectApiIntegration — pure detector (#1562)', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// #2365 — detector false positives (first-party paths, unrelated same-line
+// clauses, descriptive "API" prose) + the no-integration declaration.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('#2365 detector false positives + no-integration declaration', () => {
+  let mod;
+  try {
+    mod = require(MODULE_PATH);
+  } catch (err) {
+    throw new Error(`Could not require ${MODULE_PATH}. Run "npm run build:lib". Underlying: ${err.message}`);
+  }
+  const { detectApiIntegration, parseCoverageMatrix, validateCoverageMatrix } = mod;
+
+  // ── acceptance #1: first-party framework route paths are not integration prose
+  for (const [label, scope] of [
+    ['Next.js route file in prose', 'Run integration tests for src/app/api/profile/route.test.ts'],
+    ['route handler path with verb', 'Wire the src/app/api/profile/route.ts handler into the settings page'],
+    ['inline-code span', 'Verify the `api` helper wiring end to end'],
+  ]) {
+    test(`NEGATIVE path/inline-code (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `unexpected detection for [${label}]: ${scope}`);
+    });
+  }
+
+  // ── acceptance #2: verb + noun in unrelated clauses of one line
+  test('NEGATIVE unrelated clauses: verb and noun in different clauses do not compound', () => {
+    const r = detectApiIntegration(
+      'Render the page and prove label endpoint, filename, and CSV/XLSX wiring.'
+    );
+    assert.strictEqual(r.detected, false);
+  });
+
+  test('NEGATIVE distant same-clause pair: verb and noun far apart do not compound', () => {
+    const r = detectApiIntegration(
+      'Wiring the settings drawer means the profile page the sidebar and the account menu all reach the same internal endpoint'
+    );
+    assert.strictEqual(r.detected, false);
+  });
+
+  // ── acceptance #3: descriptive/local "API" prose (threat-model shape)
+  for (const [label, scope] of [
+    ['threat-model table cell', '| Tampering | Resolver-only API rejects arbitrary caller URLs. |'],
+    ['compound-modifier mid-sentence', 'The Resolver-only API rejects arbitrary caller URLs.'],
+    ['clause-initial capitalized prose', 'Internal API surface stays unchanged in this phase.'],
+    ['localhost URL', 'Run integration tests against https://localhost:3000/api/profile'],
+    ['non-API URL', 'Wire the docs link to https://github.com/org/repo into the footer'],
+  ]) {
+    test(`NEGATIVE descriptive API prose (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `unexpected detection for [${label}]: ${scope}`);
+    });
+  }
+
+  // ── acceptance #4: true positives preserved (the fail-open guard — a fix that
+  // silences these is strictly worse than the false positives it removes).
+  for (const [label, scope] of [
+    ['canonical compound', 'integrate the Stripe API'],
+    ['compound with trailing prose', 'Integrate the Stripe API for payment processing'],
+    ['surface rule, no verb', 'Add a Spotify API client'],
+    ['widest default-suite word gap', 'Consume the billing service over gRPC'],
+    ['clause-initial service + URL corroboration', 'Stripe API — docs at https://stripe.com/docs/api'],
+    ['webhook compound', 'Wire up the Slack webhook for deploy notifications'],
+    ['verb + API-naming URL', 'Connect the app to https://api.stripe.com/v1 for charges'],
+    ['slashed noun shorthand', 'Integrate the Stripe API/SDK for payments'],
+  ]) {
+    test(`POSITIVE still fires (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, true, `true-positive regression [${label}]: ${scope}`);
+    });
+  }
+
+  // ── acceptance #5: a legitimate, non-fabricated "no external API" declaration
+  test('declaration-only COVERAGE.md is VALID with zero rows (none_declared)', () => {
+    const md = '# API Coverage\n\nNo external API integration: UI-only phase, no third-party surface.\n';
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, true, `expected valid, errors: ${v.errors.join('; ')}`);
+    assert.strictEqual(v.none_declared, true);
+    assert.deepStrictEqual(v.counts, { surface: 0, integrate: 0, optout: 0 });
+  });
+
+  test('declaration accepts the bold/em-dash form', () => {
+    const md = '**No external API integration** — resolver work is local-only.\n';
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, true);
+    assert.strictEqual(v.none_declared, true);
+  });
+
+  test('declaration WITHOUT a reason is not recognized (reasoned opt-out, like OPT-OUT rows)', () => {
+    const v = validateCoverageMatrix('No external API integration\n');
+    assert.strictEqual(v.valid, false);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  test('declaration PLUS coverage rows is contradictory → invalid', () => {
+    const md = [
+      'No external API integration: nothing external here.',
+      '',
+      '| capability | decision | reason |',
+      '|---|---|---|',
+      '| search | INTEGRATE | |',
+    ].join('\n');
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, false);
+    assert.ok(v.errors.some((e) => /declar/i.test(e)), `errors: ${v.errors.join('; ')}`);
+  });
+
+  test('declaration inside a fenced code block is NOT recognized', () => {
+    const md = '```markdown\nNo external API integration: example only.\n```\n';
+    const p = parseCoverageMatrix(md);
+    assert.notStrictEqual(p.declaration && p.declaration.none, true);
+    const v = validateCoverageMatrix(md);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Matrix parse / validate / render
 // ──────────────────────────────────────────────────────────────────────────────
 
