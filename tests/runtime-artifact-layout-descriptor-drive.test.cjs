@@ -194,13 +194,17 @@ const GOLDEN = {
 
   // ── opencode ─────────────────────────────────────────────────────────────────
   // Old switch: no scope branch → local == global. 5b backfill restores this.
+  // #2329: destSubpath corrected from singular 'command' to plural 'commands' —
+  // OpenCode discovers slash commands from commands/ (plural); the singular
+  // command/ dir GSD previously wrote to is not scanned by OpenCode 1.17.13,
+  // so none of the ~71 /gsd-* commands ever appeared in the OpenCode TUI.
   'opencode/global': [
-    { kind: 'commands', destSubpath: 'command', prefix: 'gsd-' },
-    { kind: 'skills',   destSubpath: 'skills',  prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
+    { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
   ],
   'opencode/local': [
-    { kind: 'commands', destSubpath: 'command', prefix: 'gsd-' },
-    { kind: 'skills',   destSubpath: 'skills',  prefix: 'gsd-' },
+    { kind: 'commands', destSubpath: 'commands', prefix: 'gsd-' },
+    { kind: 'skills',   destSubpath: 'skills',   prefix: 'gsd-' },
   ],
 
   // ── kilo ─────────────────────────────────────────────────────────────────────

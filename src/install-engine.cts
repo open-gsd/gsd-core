@@ -27,6 +27,7 @@ import runtimeArtifactLayout = require('./runtime-artifact-layout.cjs');
 import runtimeArtifactInstallPlan = require('./runtime-artifact-install-plan.cjs');
 import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 import installProfiles = require('./install-profiles.cjs');
+import installerMigrations = require('./installer-migrations.cjs');
 import { posixNormalize } from './shell-command-projection.cjs';
 
 const { processAttribution } = runtimeArtifactConversion;
@@ -620,6 +621,10 @@ function installRuntimeArtifacts(
   // previously lived inline in bin/install.js.
   const behaviors = _hostBehaviors(runtime);
   if (behaviors.combinedFamilyInstall) {
+    // #2329: combined-family runtimes (OpenCode/Kilo) bypass
+    // _runLegacyInstallMigrations below entirely (early return), so their
+    // legacy-directory cleanup needs its own pre-materialization hook here.
+    _migrateLegacyOpencodeCommandDir(runtime, configDir, behaviors);
     installOpencodeFamilyArtifacts(runtime, configDir, scope, resolvedProfile, resolveAttribution, behaviors);
     return;
   }
@@ -938,6 +943,76 @@ function _installNativePluginIfDeclared(
 }
 
 // ---------------------------------------------------------------------------
+// _migrateLegacyOpencodeCommandDir
+// ---------------------------------------------------------------------------
+
+/**
+ * #2329: migrate a pre-fix OpenCode install's legacy singular `command/`
+ * command directory into the current descriptor-driven destination (plural
+ * `commands/` for OpenCode — the dir OpenCode actually discovers slash
+ * commands from; unaffected for Kilo, whose descriptor still declares
+ * `command`, so `currentName === LEGACY_NAME` short-circuits below).
+ *
+ * Runs BEFORE materialization writes the fresh command set to the new
+ * location (mirroring `_runLegacyInstallMigrations`'s ordering for the
+ * generic branch, which combined-family runtimes otherwise skip entirely).
+ *
+ * Ownership safety mirrors installer-migrations 003
+ * (rename-get-shit-done-to-gsd-core): only files present, and unchanged or
+ * locally modified, in the PRIOR install manifest under the legacy
+ * `command/<file>` key are removed here — the materialization call
+ * immediately following writes the current command set fresh into the new
+ * location, so removing the stale copies is safe. Anything not proven
+ * manifest-managed (unrelated user content someone dropped into `command/`)
+ * is left untouched, never deleted. The emptied legacy directory is removed
+ * only once nothing else is left inside it.
+ *
+ * Implemented as inline pre-materialization cleanup rather than a
+ * `src/installer-migrations/*.cts` record: the formal migrations framework
+ * only ever DELETES individual files (never directories, and never a
+ * relocate/move primitive — see docs/installer-migrations.md's Action
+ * Types), so the empty-directory removal below would need this same
+ * hand-written glue regardless. It also intentionally is NOT reachable via
+ * combinedFamilyInstall's early return above `_runLegacyInstallMigrations`,
+ * matching the existing precedent that OpenCode/Kilo's bespoke install path
+ * owns its own legacy cleanup rather than routing through the generic
+ * layout-driven migrations hook.
+ */
+function _migrateLegacyOpencodeCommandDir(runtime: string, configDir: string, behaviors: any): void {
+  const LEGACY_NAME = 'command';
+  const currentName = behaviors.flatCommandDir || LEGACY_NAME;
+  if (currentName === LEGACY_NAME) return; // e.g. Kilo — legacy IS the current location; nothing to migrate
+  const legacyDir = path.join(configDir, LEGACY_NAME);
+  if (!fs.existsSync(legacyDir)) return;
+  // Never follow a symlinked legacy dir out of configDir.
+  if (fs.lstatSync(legacyDir).isSymbolicLink()) return;
+
+  const manifest = installerMigrations.readInstallManifest(configDir);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(legacyDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    // command/ is a flat directory of gsd-*.md files; skip anything that
+    // isn't a plain file (nested dirs, symlinks) rather than guess intent.
+    if (!entry.isFile()) continue;
+    const relPath = `${LEGACY_NAME}/${entry.name}`;
+    const { classification } = installerMigrations.classifyArtifact(configDir, relPath, manifest);
+    if (classification === 'managed-pristine' || classification === 'managed-modified') {
+      try { fs.unlinkSync(path.join(legacyDir, entry.name)); } catch { /* best-effort */ }
+    }
+    // 'unknown' (not manifest-tracked) is left untouched — GSD cannot prove
+    // ownership, so it must never be deleted as collateral damage.
+  }
+
+  try {
+    if (fs.readdirSync(legacyDir).length === 0) fs.rmdirSync(legacyDir);
+  } catch { /* best-effort — a non-empty or otherwise-busy dir is left in place */ }
+}
+
+// ---------------------------------------------------------------------------
 // installOpencodeFamilyArtifacts
 // ---------------------------------------------------------------------------
 
@@ -981,7 +1056,17 @@ function installOpencodeFamilyArtifacts(
     homeDir: posixNormalize(os.homedir()),
   });
 
-  const commandDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, 'command');
+  // #2329: destDir is derived from the SAME hostBehaviors.flatCommandDir
+  // descriptor value read by writeManifest's manifest-key prefix and by
+  // resolveRuntimeArtifactLayout's commands-kind destSubpath — a hardcoded
+  // literal here would silently diverge from the descriptor the moment either
+  // is edited (Generative Fix Divergence guard). OpenCode uses 'commands'
+  // (plural, the dir OpenCode actually discovers slash commands from); Kilo
+  // keeps its own descriptor value ('command', singular) unchanged.
+  const commandDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(
+    configDir,
+    behaviors.flatCommandDir || 'command',
+  );
   installOpencodeFamilyCommands(runtime, commandDir, rawCommandsDir, pathPrefix, resolveAttribution);
   installOpencodeFamilySkills(runtime, configDir, rawCommandsDir, pathPrefix, resolveAttribution);
 

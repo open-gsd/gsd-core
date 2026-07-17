@@ -370,14 +370,19 @@ describe('installRuntimeArtifacts — cline skills (#782)', () => {
 });
 
 describe('installRuntimeArtifacts — opencode / kilo flat commands', () => {
+  // #2329: OpenCode discovers commands from the PLURAL `commands/` dir — the
+  // singular `command/` made all /gsd-* commands invisible to OpenCode. Kilo
+  // is deliberately unaffected and still uses the singular `command/` dir
+  // (see tests/opencode-command-dir-plural.test.cjs).
+  const RUNTIME_COMMAND_DIRS = { opencode: 'commands', kilo: 'command' };
   for (const runtime of ['opencode', 'kilo']) {
-    test(`${runtime}: command/gsd-help.md exists`, (t) => {
+    test(`${runtime}: ${RUNTIME_COMMAND_DIRS[runtime]}/gsd-help.md exists`, (t) => {
       const configDir = createTempDir(`gsd-ial-${runtime}-`);
       t.after(() => cleanup(configDir));
 
       installRuntimeArtifacts(runtime, configDir, 'global', RESOLVED_CORE);
 
-      const commandDir = path.join(configDir, 'command');
+      const commandDir = path.join(configDir, RUNTIME_COMMAND_DIRS[runtime]);
       assert.ok(fs.existsSync(commandDir));
       assert.ok(fs.existsSync(path.join(commandDir, 'gsd-help.md')));
     });
