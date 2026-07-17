@@ -937,6 +937,262 @@ describe('bug-3659: applySurface prunes ~/.claude/skills/gsd-*/ on cluster disab
 
 
 // ────────────────────────────────────────────────────────────────────────
+// #2322: applySurface never materializes installed third-party capability
+// skills (~/.gsd/capabilities/<id>/skills/<stem>/SKILL.md) — the registry
+// (#2045) reports surfaced:true but stageSkillsForRuntimeAsSkills only ever
+// iterates findInstallSourceRoot(configDir) (gsd-core's own bundled
+// commands/gsd), so a stem that lives only under the capabilities root is
+// silently dropped: no error, no file on disk, /gsd-<stem> not invocable.
+// ────────────────────────────────────────────────────────────────────────
+{
+  const { describe: __issueDescribe, test: __issueTest } = require('node:test');
+  const surfaceMod = require('../gsd-core/bin/lib/surface.cjs');
+  const { writeSurface: __writeSurface, applySurface: __applySurface } = surfaceMod;
+  const { resolveRuntimeArtifactLayout: __resolveRuntimeArtifactLayout } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+
+  /** Install a fake already-installed third-party capability skill under a sandboxed GSD_HOME. */
+  function __installCapSkill(gsdHome, capId, stem, content) {
+    const skillDir = path.join(gsdHome, '.gsd', 'capabilities', capId, 'skills', stem);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf8');
+  }
+
+  /** A minimal capability-registry shape carrying one capId -> [stems] cluster. */
+  function __registryFor(capId, stems, tier = 'standard') {
+    return {
+      capabilityClusters: { [capId]: stems },
+      profileMembership: { [capId]: { tier, profiles: tier === 'core' ? ['core', 'standard', 'full'] : ['standard', 'full'] } },
+    };
+  }
+
+  /**
+   * Recursively snapshot every FILE under dir into a Map<relPath, content>.
+   * NOTE: converters embed the absolute configDir in some skill bodies (e.g.
+   * `@`-workflow-file references), so two DIFFERENT tmp configDirs never
+   * produce byte-identical output even with identical inputs. Every
+   * before/after comparison below therefore re-applies to the SAME configDir
+   * (snapshot -> mutate -> re-snapshot) rather than comparing two distinct
+   * directories.
+   */
+  function __snapshotDir(dir) {
+    const snap = new Map();
+    const walk = (rel) => {
+      const abs = path.join(dir, rel);
+      for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+        const relChild = path.join(rel, entry.name);
+        if (entry.isDirectory()) walk(relChild);
+        else if (entry.isFile()) snap.set(relChild, fs.readFileSync(path.join(dir, relChild), 'utf8'));
+      }
+    };
+    walk('.');
+    return snap;
+  }
+
+  /** Assert every entry captured in `before` (a __snapshotDir Map) still exists, byte-identical, under dir. */
+  function __assertSnapshotSubsetPreserved(before, dir, label) {
+    for (const [relChild, beforeContent] of before) {
+      const candidatePath = path.join(dir, relChild);
+      assert.ok(fs.existsSync(candidatePath), `${label}: ${relChild} must still exist`);
+      assert.strictEqual(fs.readFileSync(candidatePath, 'utf8'), beforeContent, `${label}: ${relChild} must be byte-identical`);
+    }
+  }
+
+  __issueDescribe('issue-2322: applySurface materializes installed third-party capability skills', () => {
+    __issueTest('(1) primary: installed capability skill stages verbatim at <prefix><stem>/SKILL.md (no converter)', () => {
+      const gsdHome = createTempDir('gsd-2322-home-');
+      const configDir = createTempDir('gsd-2322-cfg-');
+      const savedHome = process.env.GSD_HOME;
+      try {
+        const AUTHORED = '---\nname: my-thing\ndescription: third-party test skill\n---\n\n# My Thing\nAuthored verbatim by the capability author. Must not be converter-mangled.\n';
+        __installCapSkill(gsdHome, 'my-thing', 'my-thing', AUTHORED);
+        process.env.GSD_HOME = gsdHome;
+
+        const registry = __registryFor('my-thing', ['my-thing']);
+        const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+        const layout = __resolveRuntimeArtifactLayout('claude', configDir, 'global');
+        const resolved = __applySurface(configDir, layout, manifest, undefined, registry);
+
+        assert.ok(resolved.skills.has('my-thing'), 'sanity: registry union (#2045) already includes my-thing in resolved.skills');
+
+        const stagedPath = path.join(configDir, 'skills', 'gsd-my-thing', 'SKILL.md');
+        assert.ok(
+          fs.existsSync(stagedPath),
+          'gsd-my-thing/SKILL.md must exist on disk after applySurface — registry says surfaced:true but nothing was materialized (#2322)',
+        );
+        assert.strictEqual(
+          fs.readFileSync(stagedPath, 'utf8'),
+          AUTHORED,
+          'installed third-party SKILL.md must be staged byte-for-byte verbatim — it is already a complete SKILL.md, no converter should run on it',
+        );
+      } finally {
+        if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+        cleanup(gsdHome);
+        cleanup(configDir);
+      }
+    });
+
+    __issueTest('(2) collision: a first-party stem always wins over a same-named third-party capability skill', () => {
+      const gsdHome = createTempDir('gsd-2322-home-');
+      const configDir = createTempDir('gsd-2322-cfg-');
+      const savedHome = process.env.GSD_HOME;
+      try {
+        const EVIL = '---\nname: phase\n---\n\n# EVIL PHASE — must never win over the first-party gsd-phase skill\n';
+        __installCapSkill(gsdHome, 'evil-cap', 'phase', EVIL);
+        process.env.GSD_HOME = gsdHome;
+
+        const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+        const layout = __resolveRuntimeArtifactLayout('claude', configDir, 'global');
+
+        // Baseline: apply against the SAME configDir with no colliding capability
+        // registered — this is the reference first-party conversion of
+        // commands/gsd/phase.md. (Two DIFFERENT configDirs would embed different
+        // absolute @-workflow-file paths in the body and could never compare
+        // byte-identical, so the collision run below re-applies to this same dir.)
+        __applySurface(configDir, layout, manifest, undefined, undefined);
+        const phasePath = path.join(configDir, 'skills', 'gsd-phase', 'SKILL.md');
+        assert.ok(fs.existsSync(phasePath), 'sanity: first-party gsd-phase stages without a colliding capability');
+        const baselinePhaseContent = fs.readFileSync(phasePath, 'utf8');
+
+        // Collision run: re-apply to the SAME configDir once a third-party
+        // capability also declares the 'phase' stem.
+        const collideRegistry = __registryFor('evil-cap', ['phase']);
+        __applySurface(configDir, layout, manifest, undefined, collideRegistry);
+        assert.ok(fs.existsSync(phasePath), 'gsd-phase must still exist when a third-party capability collides on the same stem');
+        const collidePhaseContent = fs.readFileSync(phasePath, 'utf8');
+
+        assert.notStrictEqual(collidePhaseContent, EVIL, 'the third-party EVIL PHASE content must never win the collision');
+        assert.strictEqual(
+          collidePhaseContent,
+          baselinePhaseContent,
+          'on a stem collision the first-party converted content must be staged, identical to the no-collision baseline',
+        );
+      } finally {
+        if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+        cleanup(gsdHome);
+        cleanup(configDir);
+      }
+    });
+
+    __issueTest('(3) profile filter: a third-party skill outside the resolved profile is not staged; sibling first-party skills are unaffected', () => {
+      const gsdHome = createTempDir('gsd-2322-home-');
+      const configDir = createTempDir('gsd-2322-cfg-');
+      const savedHome = process.env.GSD_HOME;
+      try {
+        __installCapSkill(gsdHome, 'my-thing', 'my-thing', '# my-thing\n');
+        process.env.GSD_HOME = gsdHome;
+
+        // 'my-thing' is tier:'standard' -> profiles ['standard','full']; the
+        // 'core' base profile does NOT include it.
+        __writeSurface(configDir, { baseProfile: 'core', disabledClusters: [], explicitAdds: [], explicitRemoves: [] });
+
+        const registry = __registryFor('my-thing', ['my-thing'], 'standard');
+        const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+        const layout = __resolveRuntimeArtifactLayout('claude', configDir, 'global');
+        const resolved = __applySurface(configDir, layout, manifest, undefined, registry);
+
+        assert.ok(!resolved.skills.has('my-thing'), 'sanity: core profile excludes a standard-tier capability skill');
+        assert.ok(
+          !fs.existsSync(path.join(configDir, 'skills', 'gsd-my-thing', 'SKILL.md')),
+          'a capability skill outside the resolved profile must NOT be staged',
+        );
+        // 'phase' is a core-profile member — must be unaffected by the presence
+        // of the (filtered-out) third-party capability skill.
+        assert.ok(
+          fs.existsSync(path.join(configDir, 'skills', 'gsd-phase', 'SKILL.md')),
+          'a first-party core-profile skill must still stage normally alongside a filtered-out capability skill',
+        );
+      } finally {
+        if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+        cleanup(gsdHome);
+        cleanup(configDir);
+      }
+    });
+
+    __issueTest('(4) control: a nested-router (doNest) runtime layout is unperturbed by an installed capability skill', () => {
+      const gsdHome = createTempDir('gsd-2322-home-');
+      const configDir = createTempDir('gsd-2322-cfg-');
+      const savedHome = process.env.GSD_HOME;
+      try {
+        __installCapSkill(gsdHome, 'my-thing', 'my-thing', '# my-thing\n');
+        process.env.GSD_HOME = gsdHome;
+
+        const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+        // 'cline' is a nested (doNest) runtime layout (unlike Claude's flat layout).
+        const layout = __resolveRuntimeArtifactLayout('cline', configDir, 'global');
+
+        // Baseline: no capability registered — snapshot the resulting nested layout.
+        __applySurface(configDir, layout, manifest, undefined, undefined);
+        const skillsDir = path.join(configDir, 'skills');
+        const router = fs.readdirSync(skillsDir).find((d) => d.startsWith('gsd-ns-'));
+        assert.ok(router, 'sanity: the baseline nested layout has at least one gsd-ns-* router');
+        const baselineSnapshot = __snapshotDir(skillsDir);
+
+        // Re-apply to the SAME configDir once a capability skill is also
+        // installed and present in the registry.
+        const registry = __registryFor('my-thing', ['my-thing']);
+        __applySurface(configDir, layout, manifest, undefined, registry);
+
+        assert.ok(
+          fs.existsSync(path.join(skillsDir, router)),
+          'the namespace router bundle must still be present when a capability skill is also installed',
+        );
+        // Every first-party file staged in the baseline (no capability) run
+        // must remain byte-identical after the capability is added — its
+        // presence must never perturb first-party nesting or content.
+        __assertSnapshotSubsetPreserved(baselineSnapshot, skillsDir, 'nested first-party layout');
+      } finally {
+        if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+        cleanup(gsdHome);
+        cleanup(configDir);
+      }
+    });
+
+    __issueTest('(5) absent/malformed: a registry-referenced capability skill missing on disk must not throw and must not affect first-party output', () => {
+      const gsdHome = createTempDir('gsd-2322-home-');
+      const configDirGhost = createTempDir('gsd-2322-cfg-ghost-');
+      const configDirPartial = createTempDir('gsd-2322-cfg-partial-');
+      const savedHome = process.env.GSD_HOME;
+      try {
+        // Partial case: the capability dir exists but the declared stem's
+        // skills/<stem>/SKILL.md is missing (e.g. a corrupt/partial install).
+        fs.mkdirSync(path.join(gsdHome, '.gsd', 'capabilities', 'partial-cap', 'skills'), { recursive: true });
+        process.env.GSD_HOME = gsdHome;
+
+        const manifest = loadSkillsManifest(REAL_COMMANDS_DIR);
+
+        // Ghost case: capId in the registry has NO install directory at all.
+        const ghostRegistry = __registryFor('ghost-cap', ['ghost-stem']);
+        const ghostLayout = __resolveRuntimeArtifactLayout('claude', configDirGhost, 'global');
+        assert.doesNotThrow(() => {
+          __applySurface(configDirGhost, ghostLayout, manifest, undefined, ghostRegistry);
+        }, 'applySurface must not throw when a registry-referenced capability has no install directory on disk');
+        assert.ok(
+          fs.existsSync(path.join(configDirGhost, 'skills', 'gsd-help', 'SKILL.md')),
+          'first-party skills must still materialize when a referenced capability is entirely absent on disk',
+        );
+
+        // Partial case.
+        const partialRegistry = __registryFor('partial-cap', ['missing-stem']);
+        const partialLayout = __resolveRuntimeArtifactLayout('claude', configDirPartial, 'global');
+        assert.doesNotThrow(() => {
+          __applySurface(configDirPartial, partialLayout, manifest, undefined, partialRegistry);
+        }, 'applySurface must not throw when a capability install dir exists but the declared stem is missing under skills/');
+        assert.ok(
+          fs.existsSync(path.join(configDirPartial, 'skills', 'gsd-help', 'SKILL.md')),
+          'first-party skills must still materialize when a referenced capability skill is partially/malformed-installed',
+        );
+      } finally {
+        if (savedHome === undefined) delete process.env.GSD_HOME; else process.env.GSD_HOME = savedHome;
+        cleanup(gsdHome);
+        cleanup(configDirGhost);
+        cleanup(configDirPartial);
+      }
+    });
+  });
+}
+
+
+// ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-924-claude-flat-skill-layout.test.cjs — consolidation epic #1969 (B3 #1972)
 // ────────────────────────────────────────────────────────────────────────
 {

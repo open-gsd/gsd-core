@@ -1084,3 +1084,81 @@ describe('capability consent store (#1459)', () => {
     assert.match(`${r.error}\n${r.output}`, /trust/i);
   });
 });
+
+// ─── issue #2322: capability set --runtime materializes installed skills ──────
+
+describe('issue-2322: capability set --runtime materializes an installed third-party capability skill end-to-end', () => {
+  /**
+   * A conformant local capability source that declares one owned skill
+   * (`skills: [stem]`) and ships that skill's already-authored SKILL.md
+   * verbatim under `skills/<stem>/SKILL.md` — mirroring the real on-disk
+   * shape `capability install` copies into `~/.gsd/capabilities/<id>/`.
+   */
+  function writeCapSourceWithSkill(id, stem, skillContent, { tier = 'standard' } = {}) {
+    const src = tmpDir(`cap-cli-src-${id}-`);
+    const cap = {
+      id,
+      role: 'feature',
+      version: '1.0.0',
+      title: id,
+      description: 'test capability with a skill',
+      tier,
+      requires: [],
+      runtimeCompat: { supported: ['*'], unsupported: [] },
+      skills: [stem],
+      agents: [],
+      hooks: [],
+      config: {},
+      steps: [],
+      contributions: [],
+      gates: [],
+    };
+    fs.writeFileSync(path.join(src, 'capability.json'), JSON.stringify(cap, null, 2));
+    const skillDir = path.join(src, 'skills', stem);
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContent, 'utf8');
+    return src;
+  }
+
+  test('reproduces #2322: capability state reports surfaced:true but the skill is not written to <config-dir>/skills/', () => {
+    const home = tmpDir('cap-cli-home-');
+    const cwd = makeCwd();
+    const AUTHORED = '---\nname: my-thing\ndescription: third-party test skill\n---\n\n# My Thing\nAuthored verbatim by the capability author — must reach disk unmodified.\n';
+    const src = writeCapSourceWithSkill('my-thing', 'my-thing', AUTHORED);
+
+    // Step 2 of the issue repro: capability install ./capabilities/my-thing --yes
+    const install = runGsdTools(['capability', 'install', src, '--scope', 'global', '--raw'], cwd, scopeEnv(home));
+    assert.equal(install.success, true, `install failed: ${install.error || install.output}`);
+    assert.equal(parse(install.output).status, 'installed');
+    assert.ok(fs.existsSync(path.join(capDir(home, 'my-thing'), 'skills', 'my-thing', 'SKILL.md')), 'sanity: install copies the skill verbatim into the capabilities root');
+
+    // Step 3 of the issue repro: capability set my-thing --runtime claude --scope global
+    const rcd = tmpDir('cap-cli-rcd-');
+    const setResult = runGsdTools(
+      ['capability', 'set', 'my-thing', '--runtime', 'claude', '--scope', 'global', '--config-dir', rcd, '--raw'],
+      cwd,
+      scopeEnv(home),
+    );
+    assert.equal(setResult.success, true, `capability set failed: ${setResult.error || setResult.output}`);
+    const setOut = parse(setResult.output);
+    assert.deepEqual(setOut.errors, [], `capability set reported errors: ${JSON.stringify(setOut.errors)}`);
+
+    // Step 4 of the issue repro: capability state --raw -> installed:true, surfaced:true
+    const myThing = setOut.capabilities.find((c) => c.id === 'my-thing');
+    assert.ok(myThing, 'my-thing present in the returned capability state');
+    assert.equal(myThing.installed, true, 'installed:true (matches issue step 4)');
+    assert.equal(myThing.surfaced, true, 'surfaced:true (matches issue step 4 — #2045 registry union already works)');
+
+    // Step 5 of the issue repro: ls ~/.claude/skills/gsd-my-thing/ -> No such file or directory (THE BUG)
+    const stagedPath = path.join(rcd, 'skills', 'gsd-my-thing', 'SKILL.md');
+    assert.ok(
+      fs.existsSync(stagedPath),
+      `gsd-my-thing/SKILL.md must exist under ${rcd}/skills/ — capability state reports surfaced:true but nothing was materialized to disk (#2322)`,
+    );
+    assert.equal(
+      fs.readFileSync(stagedPath, 'utf8'),
+      AUTHORED,
+      'the staged SKILL.md must be byte-for-byte the capability-authored file (no converter should touch an already-authored third-party skill)',
+    );
+  });
+});
