@@ -220,6 +220,100 @@ describe('extractDecisions — typed outcome (#1364 + #1365)', () => {
   });
 });
 
+// ─── #2347: evidence test must not reuse the parser's own D- grammar ──────────
+// #1365's fail-loud guard used `/\bD-[A-Za-z0-9]/` as its "is this decision-
+// shaped?" evidence test — the SAME D- prefix the parser requires. So for any
+// ID prefix the parser can't read (e.g. `D5-01`), BOTH the parser and the guard
+// see nothing, the outcome collapses to none-present (clean pass) instead of
+// could-not-parse, and the gate fails OPEN against a populated block of real
+// decisions. Fix: a bold-lead-in bullet (`- **...**`, any ID) is format-agnostic
+// evidence of a decision entry. Note none of these bullet texts contain a
+// literal "D-" token, so they isolate the bold-bullet evidence from the old
+// D--token path.
+describe('extractDecisions — format-agnostic evidence test (#2347)', () => {
+  test('populated <decisions> block with a non-D- ID prefix is could-not-parse, not none-present', () => {
+    const md = '<decisions>\n'
+      + '- **D5-01:** choose the primary datastore\n'
+      + '- **D5-02:** pick the queue technology\n'
+      + '- **D5-03:** settle on the auth model\n'
+      + '</decisions>\n';
+    const r = extractDecisions(md);
+    assert.strictEqual(r.decisions.length, 0, 'parser cannot read the D5- prefix (0 extracted)');
+    assert.strictEqual(r.outcome, 'could-not-parse',
+      'a populated block the parser cannot read must FAIL LOUD, not pass as none-present');
+  });
+
+  test('decisions HEADING section with a non-D- ID prefix is could-not-parse', () => {
+    const md = '## Decisions\n\n- **DEC-01: the chosen approach** rationale\n';
+    const r = extractDecisions(md);
+    assert.strictEqual(r.decisions.length, 0);
+    assert.strictEqual(r.outcome, 'could-not-parse',
+      'a decision-shaped heading section the parser cannot read must fail loud');
+  });
+
+  test('em-dash bullet with a non-D- ID prefix is still evidence (could-not-parse)', () => {
+    const md = '<decisions>\n- **DEC-02 — the chosen approach** body\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'could-not-parse');
+  });
+
+  // ── Regression guards: the broadened evidence must NOT create false fail-loud ─
+  test('empty <decisions> scaffold stays none-present (no false fail-loud)', () => {
+    assert.strictEqual(extractDecisions('<decisions>\n</decisions>\n').outcome, 'none-present');
+    assert.strictEqual(
+      extractDecisions('<decisions>\n\n(no decisions this phase)\n\n</decisions>\n').outcome,
+      'none-present',
+      'a prose-only scaffold with no bold-lead-in bullet must still pass cleanly');
+  });
+
+  test('an all-prose decisions block with no bold bullet stays none-present', () => {
+    const md = '<decisions>\n\nThis phase inherits every prior decision; nothing new.\n\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present');
+  });
+
+  test('canonical D- decisions still parse (no regression)', () => {
+    const md = '<decisions>\n- **D-01:** a real decision\n</decisions>\n';
+    const r = extractDecisions(md);
+    assert.strictEqual(r.outcome, 'parsed');
+    assert.strictEqual(r.decisions.length, 1);
+  });
+
+  // ── The evidence must be ID-SHAPED, not "any bold bullet" ────────────────────
+  // A decisions block / discretion section legitimately uses bold LABELS on prose
+  // bullets (- **Why:** …, - **Scope:** …). Those are not decision entries; a
+  // false could-not-parse here hard-blocks the plan gate. Guards against the
+  // over-broad evidence regex an earlier iteration shipped.
+  test('bold prose-label bullets (Why/Note/Scope) are NOT evidence — stay none-present', () => {
+    const md = '<decisions>\n'
+      + '- **Why:** rationale for inheriting prior decisions\n'
+      + '- **Scope:** everything from the previous phase carries over\n'
+      + '- **Note:** nothing new was decided here\n'
+      + '</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'bold LABELS on prose bullets must not be mistaken for decision entries');
+  });
+
+  test("a Claude's Discretion sub-section with bold-label bullets stays none-present", () => {
+    const md = '<decisions>\n'
+      + "### Claude's Discretion\n"
+      + '- **Scope:** left to judgment, no specific preference\n'
+      + '- **Follow-up:** revisit if performance regresses\n'
+      + '</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'a discretion section of bold-label prose bullets must pass the gate cleanly');
+  });
+
+  test('a bold ALL-CAPS label with no id-shape (TODO/NOTE) is not evidence', () => {
+    const md = '<decisions>\n- **TODO:** decide the datastore next phase\n- **NOTE:** blocked on infra\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'a bold ALL-CAPS label with no -<alnum> id structure is not a decision entry');
+  });
+
+  test('heading path: bold prose-label bullets under a Decisions heading stay none-present', () => {
+    const md = '## Decisions\n\n- **Why:** we kept the prior stack\n- **Scope:** no new choices this phase\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present');
+  });
+});
+
 // ─── QA matrix for parser correctness ────────────────────────────────────────
 
 describe('parseDecisions — parser QA matrix', () => {
