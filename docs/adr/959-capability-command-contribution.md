@@ -1,19 +1,11 @@
 # ADR-959: Capability Command Contribution
 
-- **Status:** Proposed
+- **Status:** Accepted (graduated from Proposed by ADR-2346, 2026-07-17 — the cutover mechanism proven by full switch dissolution)
 - **Issue:** [#959](https://github.com/open-gsd/gsd-core/issues/959)
 - **Epic:** [#857](https://github.com/open-gsd/gsd-core/issues/857) (Capability system) — rollout phase 4d
 - **Amends:** [ADR-894](894-capability-declaration-format.md) (adds the deferred `commands` field)
 - **Realizes:** [ADR-857](857-capability-system.md) decision 7 (in-tree code modules become Capabilities via an opened `runCommand` entrypoint)
 - **Builds on:** [ADR-0012](0012-command-routing-hub.md) / [ADR-0174](0174-retire-gsd-sdk-package-boundary.md) (CommandRoutingHub)
-
-## Why this is still `Proposed` (audited 2026-07-17)
-
-**What shipped.** The mechanism this ADR designs is real and working, not just planned: `dispatchCapabilityCommand` (`gsd-core/bin/gsd-tools.cjs:365`, wired into `runCommand`'s `default` case at line 3228) discovers command families from the generated `commandFamilies` index (`scripts/gen-capability-registry.cjs:536-627` builds it; `gsd-core/bin/lib/capability-registry.cjs:5589` is the emitted table, re-exported at :5804). All three rollout targets named in this ADR have cut over: `case 'graphify'`, `case 'intel'`, `case 'audit-uat'`, and `case 'audit-open'` are confirmed absent from the switch, and `graphify-command-router.cjs`, `intel-command-router.cjs`, `audit-command-router.cjs` exist under `gsd-core/bin/lib/` and are declared through each capability's `capability.json` `commands` array exactly per the §1 schema. Four cutover/dispatch test files back this with real coverage, not scaffolding: `tests/graphify-command-cutover.test.cjs`, `tests/intel-command-cutover.test.cjs`, `tests/audit-command-cutover.test.cjs`, `tests/capability-command-dispatch.test.cjs` run 755-1095 lines each, with 34-48 `test()` cases and 104-144 `assert.` calls apiece.
-
-**The blocker.** This ADR scopes itself narrowly on purpose — its own "Out of scope" section says, verbatim, "the remaining phase-6 per-feature cutovers" are not decided here. That remaining work already has a maintainer-approved home: issue [#2346](https://github.com/open-gsd/gsd-core/issues/2346), "ADR: Command Dispatch Completion (graduate ADR-959 Proposed→Accepted)" (OPEN, labeled `enhancement` + `approved-enhancement`), states verbatim that this ADR "does not decide: 1. dissolving the switch entirely... and 2. adding a leaf-verb dispatch layer," and that a new ADR must "decide[] the two things ADR-959 does not, and graduate[] ADR-959 to Accepted as its capstone proof." Its parent epic, [#2345](https://github.com/open-gsd/gsd-core/issues/2345) (also OPEN), lists four phases toward finishing the dissolution — all still `#TBD`, all unchecked. The companion ADR that plan requires, `docs/adr/2346-command-dispatch-completion.md`, does not exist on this branch — but it is already drafted: commit `0c731c3e4` ("docs(#2346): Command Dispatch Completion ADR + graduate ADR-959 to Accepted", 2026-07-16, same author) sits on local branch `docs/2346-command-dispatch-completion` and is not an ancestor of this branch's HEAD or of `origin/next`. It has not landed anywhere yet.
-
-**Unblock condition.** Land the PR that closes #2346 (whether that is commit `0c731c3e4` as-is or its successor) — it drafts ADR-2346 and, per its own commit message, graduates this ADR to Accepted in the same change. Until that PR merges to `next`, ADR-959 covers only the family-discovery mechanism plus the `graphify`/`intel`/`audit` pilot cutovers it scoped for itself — not the full switch dissolution epic #2345 still has open.
 
 ## Context
 
@@ -138,3 +130,9 @@ A synthetic fixture proves the *plumbing* but not the *model*; only a real comma
 ## Out of scope
 
 The build (4d-impl); migrating commands other than the `graphify` pilot; third-party / out-of-tree command modules; phase 5 (runtime descriptors); the remaining phase-6 per-feature cutovers.
+
+---
+
+## Amendment — 2026-07-17 (ADR-2346): Status `Proposed → Accepted`
+
+This ADR's mechanism — *"a capability command family is just a router, discovered via the registry instead of hardcoded,"* consulted in `runCommand`'s `default` case — is **accepted**. The proof is ADR-2346 (epic #2345), which completes the cutover and dissolves the 73-case switch entirely into a two-layer dispatch (registry for families + a leaf-verb table filling the `_dispatchNonFamily` seam this ADR named). ADR-2346 records the two decisions this ADR deliberately left open (full dissolution; where leaf verbs belong); it does not alter this ADR's mechanism, the `commands` contribution field, or the `default`-case placement that makes collision structurally impossible. See [ADR-2346](2346-command-dispatch-completion.md).

@@ -176,6 +176,38 @@ describe('changeset lint: pure verdict (#2975)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// src/ is user-facing (#2070 fix 2): post-ADR-457 the .cts sources under
+// src/ are the product source of truth — gsd-core/bin/lib/*.cjs is a
+// gitignored build artifact, so a src/-only PR previously had zero
+// USER_FACING_PREFIXES coverage and could merge with no release note.
+// ---------------------------------------------------------------------------
+describe('changeset lint: src/ is user-facing (#2070)', () => {
+  test('FAIL_MISSING_FRAGMENT when only a src/*.cts file changes without a fragment', () => {
+    const verdict = evaluateLint({
+      changedFiles: ['src/verify.cts'],
+      labels: [],
+    });
+    assert.deepEqual(verdict, { ok: false, reason: LINT_REASON.FAIL_MISSING_FRAGMENT });
+  });
+
+  test('OK_FRAGMENT_PRESENT when a src/*.cts change is accompanied by a fragment', () => {
+    const verdict = evaluateLint({
+      changedFiles: ['src/verify.cts', '.changeset/silly-bears-dance.md'],
+      labels: [],
+    });
+    assert.deepEqual(verdict, { ok: true, reason: LINT_REASON.OK_FRAGMENT_PRESENT });
+  });
+
+  test('OK_NO_USER_FACING_CHANGES when only a tests/*.test.cjs file changes (tests are not user-facing)', () => {
+    const verdict = evaluateLint({
+      changedFiles: ['tests/foo.test.cjs'],
+      labels: [],
+    });
+    assert.deepEqual(verdict, { ok: true, reason: LINT_REASON.OK_NO_USER_FACING_CHANGES });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // End-to-end integration: real main() wiring via temp git repo (#1006)
 // ---------------------------------------------------------------------------
 describe('changeset lint: main() end-to-end wiring (#1006)', () => {

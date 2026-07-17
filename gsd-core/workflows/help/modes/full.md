@@ -250,11 +250,13 @@ Start a new milestone through unified flow.
 - Requirements definition with scoping
 - Roadmap creation with phase breakdown
 - Optional `--reset-phase-numbers` flag restarts numbering at Phase 1 and archives old phase dirs first for safety
+- Optional `--ws <name>` flag scopes the milestone to a workstream and skips the shared `PROJECT.md` write
 
 Mirrors `/gsd:new-project` flow for brownfield projects (existing PROJECT.md).
 
 Usage: `/gsd:new-milestone "v2.0 Features"`
 Usage: `/gsd:new-milestone --reset-phase-numbers "v2.0 Features"`
+Usage: `/gsd:new-milestone --ws search "v2.0 Search"`
 
 **`/gsd:complete-milestone <version>`**
 Archive completed milestone and prepare for next version.

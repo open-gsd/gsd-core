@@ -27,6 +27,7 @@ const OPT_OUT_LABEL = 'no-changelog';
 const USER_FACING_PREFIXES = [
   'bin/',
   'gsd-core/',
+  'src/',
   'agents/',
   'commands/',
   'hooks/',

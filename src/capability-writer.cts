@@ -355,10 +355,15 @@ function setCapabilityState(
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const runtimeArtifactLayout = require('./runtime-artifact-layout.cjs') as {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        resolveRuntimeArtifactLayout: (runtime: string, configDir: string, scope: string) => any;
+        resolveRuntimeArtifactLayout: (runtime: string, configDir: string, scope: string, capabilityRegistry?: unknown) => any;
       };
+      // #2322: thread the SAME composed registry (loaded above, includeInstalled:true)
+      // into layout resolution so the skills kind's stage() closure can bind a
+      // third-party capability skill to its declaring capId at staging time —
+      // required for BOTH the '*' (full-profile) fill-in and the ownership binding
+      // (see resolveRuntimeArtifactLayout's #2322 doc comment).
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, resolvedConfigDir, scope);
+      const layout = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, resolvedConfigDir, scope, registry);
       const commandsGsdDir = _resolveCommandsGsdDir();
       const manifest = _resolveManifest(commandsGsdDir, resolvedConfigDir);
       // #1575: applySurface now accepts opts.resolveAttribution so surface-path

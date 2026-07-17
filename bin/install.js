@@ -414,6 +414,32 @@ try {
   _capabilityRegistry = undefined;
 }
 
+// #2322 BLOCKER 2: `_capabilityRegistry` above is the FROZEN first-party registry
+// (capability-registry.cjs, built at publish time) — it never reflects an
+// INSTALLED third-party overlay capability, so a fresh `gsd install` could never
+// stage an installed third-party capability's skill regardless of registration,
+// even on the DEFAULT `--profile full`. `_installedCapabilityRegistry` composes
+// the overlay via capability-loader's `loadRegistry({includeInstalled:true})` —
+// the SAME call capability-writer.cts's `capability set --runtime` path already
+// uses — so a fresh install and a post-install `capability set` agree on
+// third-party skill availability. Used ONLY for skill-profile resolution and
+// runtime-artifact-layout staging below; `_capabilityRegistry` (frozen) remains
+// the source for gsd-core's OWN runtime/host-behavior descriptors (unaffected —
+// those are always first-party). A load failure degrades to the frozen
+// `_capabilityRegistry` (no overlay data -> no third-party skills staged; never
+// a crash and never a scan-and-guess fallback).
+let _installedCapabilityRegistry;
+try {
+  const _capabilityLoader = require(path.join(_gsdLibDir, 'capability-loader.cjs'));
+  _installedCapabilityRegistry = _capabilityLoader.loadRegistry({
+    includeInstalled: true,
+    cwd: process.cwd(),
+    gsdHome: process.env['GSD_HOME'],
+  });
+} catch (_) {
+  _installedCapabilityRegistry = _capabilityRegistry;
+}
+
 // Fail-safe floor for the reference host's #338-privacy-critical behaviors, used
 // ONLY when the first-party capability registry cannot be loaded (a broken bundle).
 // Without it, a registry-load failure would make `_hostBehaviors('claude')` return
@@ -9944,14 +9970,24 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const _effectiveInstallMode = _isCoreProfileAlias ? 'minimal' : 'full';
   // Load the manifest and compute resolved profile for named profiles.
   // For --minimal/core: use an empty manifest (core profile has no transitive
-  // deps) to produce a resolvedProfile with the core skill set.  Registry IS
-  // consulted so tier:core capability skills are included when registered.
+  // deps) to produce a resolvedProfile with the core skill set.  For core/
+  // standard profiles, resolveProfile's `registry` arg IS consulted (via
+  // _capabilitySkillsForMode) so tier:core/tier:standard capability skills are
+  // unioned in when registered. #2322 correction: for the DEFAULT `full`
+  // profile, resolveProfile short-circuits to the `{skills:'*'}` sentinel
+  // BEFORE ever reading `registry` (there is nothing to union — '*' already
+  // means "everything"), so the registry consultation that matters for `full`
+  // happens LATER, at staging time (stageSkillsForRuntimeAsSkills's '*'
+  // fill-in, resolveRuntimeArtifactLayout's `capabilityRegistry` param below) —
+  // not here. `_installedCapabilityRegistry` (not the frozen `_capabilityRegistry`)
+  // is passed so an INSTALLED third-party capability (not just a first-party
+  // one) is honored on every profile, `full` included (#2322 blocker 2).
   const _commandsDir = path.join(src, 'commands', 'gsd');
   const _skillsManifest = _isCoreProfileAlias ? new Map() : loadSkillsManifest(_commandsDir);
   const _resolvedProfile = resolveProfile({
     modes: [_activeProfileName],
     manifest: _skillsManifest,
-    registry: _capabilityRegistry,
+    registry: _installedCapabilityRegistry,
   });
   // Unified staging function: all profiles use stageSkillsForProfile with the
   // registry-aware _resolvedProfile (ADR-857 phase 4c cutover).
@@ -10311,7 +10347,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
         resolveAttribution: getCommitAttribution,
       });
     } else {
-      installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile, getCommitAttribution);
+      // #2322: fallback path (adapter unavailable) — thread the composed
+      // registry too, so this path stages third-party capability skills
+      // identically to the primary adapter path above.
+      installRuntimeArtifacts(runtime, targetDir, scope, _resolvedProfile, getCommitAttribution, _installedCapabilityRegistry);
     }
 
     // #1326 — Codex only: remove stale agents/openai.yaml sidecars from managed
