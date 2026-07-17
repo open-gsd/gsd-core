@@ -17,6 +17,7 @@ const {
   writeInstallState,
 } = require('../gsd-core/bin/lib/installer-migrations.cjs');
 const firstTimeBaselineMigration = require('../gsd-core/bin/lib/installer-migrations/000-first-time-baseline.cjs');
+const opencodeBaselineCommandsDirMigration = require('../gsd-core/bin/lib/installer-migrations/005-opencode-baseline-commands-dir.cjs');
 
 function createTempInstall() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-installer-migrations-'));
@@ -310,6 +311,194 @@ test('records known generated agent artifacts so profile cleanup can remove them
     assert.equal(fs.readFileSync(path.join(configDir, 'agents/gsd-executor.md'), 'utf8'), 'old generated agent\n');
     assert.equal(fs.readFileSync(path.join(configDir, 'agents/gsd-executor.toml'), 'utf8'), 'old generated agent config\n');
     assert.equal(fs.readFileSync(path.join(configDir, 'agents/gsd-local-experiment.md'), 'utf8'), 'user experiment\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Migration 005: OpenCode commands/ (plural) baseline scan (#2329 follow-up)
+//
+// 000-first-time-baseline.cts's RUNTIME_SURFACES.opencode is a shipped,
+// immutable body that still only names the legacy singular `command/`
+// directory (see docs/installer-migrations.md#state-files). These tests
+// pin migration 005's widened scan of the plural `commands/` surface.
+// ---------------------------------------------------------------------------
+
+test('baselines pre-existing OpenCode commands/ files: managed, unknown, and stale-GSD-looking', () => {
+  const configDir = createTempInstall();
+  try {
+    writeFile(configDir, 'commands/gsd-plan-phase.md', 'managed command\n');
+    writeFile(configDir, 'commands/my-custom-command.md', 'user command\n');
+    writeFile(configDir, 'commands/gsd-retired-command.md', 'stale gsd-looking file, not in manifest\n');
+    writeManifest(configDir, {
+      'commands/gsd-plan-phase.md': sha256('managed command\n'),
+    });
+
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:00.000Z',
+    });
+
+    assert.deepEqual(
+      result.plan.actions.map((action) => ({
+        type: action.type,
+        relPath: action.relPath,
+        classification: action.classification,
+      })),
+      [
+        {
+          type: 'record-baseline',
+          relPath: 'commands/gsd-plan-phase.md',
+          classification: 'managed-pristine',
+        },
+        {
+          type: 'baseline-preserve-user',
+          relPath: 'commands/my-custom-command.md',
+          classification: 'unknown',
+        },
+        {
+          type: 'prompt-user',
+          relPath: 'commands/gsd-retired-command.md',
+          classification: 'stale-gsd-looking',
+        },
+      ]
+    );
+    // The stale-GSD-looking file blocks the plan (needs explicit user choice),
+    // so nothing was applied and no install state was written yet.
+    assert.deepEqual(result.appliedMigrationIds, []);
+    assert.equal(fs.existsSync(path.join(configDir, INSTALL_STATE_NAME)), false);
+    // Every file on disk is untouched — baseline-preserve-user/record-baseline/
+    // prompt-user are all non-mutating classification actions.
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-plan-phase.md'), 'utf8'), 'managed command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/my-custom-command.md'), 'utf8'), 'user command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-retired-command.md'), 'utf8'), 'stale gsd-looking file, not in manifest\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+test('OpenCode commands/ baseline is idempotent — a second run does not re-plan already-applied files', () => {
+  const configDir = createTempInstall();
+  try {
+    writeFile(configDir, 'commands/gsd-plan-phase.md', 'managed command\n');
+    writeFile(configDir, 'commands/my-custom-command.md', 'user command\n');
+    writeManifest(configDir, {
+      'commands/gsd-plan-phase.md': sha256('managed command\n'),
+    });
+
+    const first = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:01.000Z',
+    });
+    assert.deepEqual(first.appliedMigrationIds, ['2026-07-17-opencode-baseline-commands-dir']);
+    assert.deepEqual(readInstallState(configDir).appliedMigrations.map((entry) => entry.id), [
+      '2026-07-17-opencode-baseline-commands-dir',
+    ]);
+
+    // Second run: the migration id is now applied, so it must never re-run,
+    // regardless of what baselineScan is passed.
+    const second = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:02.000Z',
+    });
+    assert.deepEqual(second.appliedMigrationIds, []);
+    assert.deepEqual(second.plan.actions, []);
+    assert.deepEqual(readInstallState(configDir).appliedMigrations.map((entry) => entry.id), [
+      '2026-07-17-opencode-baseline-commands-dir',
+    ]);
+    // Files remain untouched across both runs.
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-plan-phase.md'), 'utf8'), 'managed command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/my-custom-command.md'), 'utf8'), 'user command\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+test('OpenCode commands/ baseline migration is scoped to opencode and never plans for Kilo', () => {
+  const configDir = createTempInstall();
+  try {
+    // Kilo's descriptor keeps the singular `command/` dir; a `commands/` (plural)
+    // directory here would be unrelated to Kilo's install surface. This proves the
+    // migration's `runtimes: ['opencode']` scoping keeps Kilo installs untouched.
+    writeFile(configDir, 'commands/gsd-plan-phase.md', 'managed command\n');
+    writeFile(configDir, 'command/gsd-plan-phase.md', 'kilo managed command\n');
+    writeManifest(configDir, {
+      'commands/gsd-plan-phase.md': sha256('managed command\n'),
+      'command/gsd-plan-phase.md': sha256('kilo managed command\n'),
+    });
+
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'kilo',
+      scope: 'global',
+      migrations: [opencodeBaselineCommandsDirMigration],
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:03.000Z',
+    });
+
+    // migrationMatchesContext filters this migration out entirely for kilo
+    // (runtimes: ['opencode']) before plan() is ever invoked: it is not
+    // "pending", produces zero actions, is never applied, and no install-state
+    // file is written for this run at all.
+    assert.deepEqual(result.plan.actions, []);
+    assert.deepEqual(result.appliedMigrationIds, []);
+    assert.equal(fs.existsSync(path.join(configDir, INSTALL_STATE_NAME)), false);
+    assert.equal(fs.readFileSync(path.join(configDir, 'commands/gsd-plan-phase.md'), 'utf8'), 'managed command\n');
+    assert.equal(fs.readFileSync(path.join(configDir, 'command/gsd-plan-phase.md'), 'utf8'), 'kilo managed command\n');
+  } finally {
+    cleanup(configDir);
+  }
+});
+
+test('regression (#2329 follow-up): pre-existing unmanifested commands/gsd-*.md is no longer silently destroyed', () => {
+  const configDir = createTempInstall();
+  try {
+    // Simulates a pre-existing, non-GSD file sitting under OpenCode's commands/
+    // directory before GSD's first-ever migration-tracked run against this
+    // configDir (no manifest, no install state yet).
+    writeFile(configDir, 'commands/gsd-retired-plan.md', 'pre-existing file, not GSD-written\n');
+
+    // Full default migration set (all shipped migrations, including 000 AND 005),
+    // matching production: bin/install.js calls runInstallerMigrations with no
+    // explicit `migrations` override.
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'opencode',
+      scope: 'global',
+      baselineScan: true,
+      now: () => '2026-07-17T00:00:04.000Z',
+    });
+
+    // Before this fix, RUNTIME_SURFACES.opencode omitted `commands/`, so this file
+    // was invisible to every migration and ordinary materialization would delete it
+    // unconditionally with a clean exit. Now it is caught and blocks the install
+    // pending an explicit user choice — the same protection the legacy `command/`
+    // surface already had.
+    assert.deepEqual(result.appliedMigrationIds, []);
+    assert.ok(Array.isArray(result.blocked) && result.blocked.length > 0, 'expected a blocked prompt-user action');
+    const blockedForFile = result.blocked.find((action) => action.relPath === 'commands/gsd-retired-plan.md');
+    assert.ok(blockedForFile, 'expected commands/gsd-retired-plan.md to be blocked pending user choice');
+    assert.equal(blockedForFile.type, 'prompt-user');
+    assert.equal(blockedForFile.migrationId, '2026-07-17-opencode-baseline-commands-dir');
+    // The file itself was never touched — migrations only classify, they do not
+    // mutate disk.
+    assert.equal(
+      fs.readFileSync(path.join(configDir, 'commands/gsd-retired-plan.md'), 'utf8'),
+      'pre-existing file, not GSD-written\n'
+    );
   } finally {
     cleanup(configDir);
   }
@@ -1468,6 +1657,14 @@ test('shipped installer-migration checksums are locked to a committed baseline (
     // Migration 004: prune stale gsd-pristine/get-shit-done/ snapshots (#934) // gsd-allow-legacy-name
     '2026-06-09-prune-stale-pristine-get-shit-done': // gsd-allow-legacy-name
       'sha256:6555dd044659276fbc204e81793cd92c5315d54e7316bcdd82d2c98d15a7e9e8',
+    // Migration 005 (NEW, added here per this test's own sanctioned "adding a new
+    // migration" case — not a shipped-body edit): baseline OpenCode's commands/
+    // (plural) directory during the first-time scan. #2329 moved OpenCode command
+    // materialization from legacy command/ to commands/, but 000's RUNTIME_SURFACES
+    // is a shipped, immutable body that still only names command/, so this
+    // fix-forward migration widens the scanned surface without touching 000.
+    '2026-07-17-opencode-baseline-commands-dir':
+      'sha256:0f6080b5f9b75fb5adbe9664a71152e23a5336813453b0a77e4df6fd483ad38e',
   };
 
   const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');
