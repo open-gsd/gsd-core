@@ -404,16 +404,22 @@ const GROUPS = [
 /**
  * Render ADR-authored text (a title) into a markdown table cell.
  *
- * Two hazards, both from text this script does not control:
+ * Three hazards, all from text this script does not control:
  *   - `|` would split the cell and corrupt the row.
  *   - An HTML comment would be emitted verbatim into README.md. A title
  *     containing the END marker relocates it, so the NEXT `--write` splices
  *     against the wrong boundary and silently eats the rest of the file.
- * Escaping `<`/`>` makes a comment sequence unformable, which also blocks any
- * other HTML injected through a title.
+ *     Escaping `<`/`>` makes a comment sequence unformable, which also blocks
+ *     any other HTML injected through a title.
+ *   - A backslash is markdown's own escape character, so it MUST be escaped
+ *     first. Escaping `|` → `\|` without it turns the input `\|` into `\\|`,
+ *     which markdown reads as a literal backslash followed by an UNESCAPED
+ *     pipe — re-opening the cell break the pipe escape exists to prevent.
+ *     Order is load-bearing: backslash first, then everything that emits one.
  */
 function cellText(text) {
   return String(text)
+    .replace(/\\/g, '\\\\')
     .replace(/\|/g, '\\|')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

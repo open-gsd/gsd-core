@@ -386,6 +386,26 @@ test('a title cannot inject raw HTML into the generated index', (t) => {
   assert.match(readme, /&lt;script&gt;/);
 });
 
+test('a backslash-pipe in a title cannot break out of its table cell', (t) => {
+  // CodeQL js/incomplete-sanitization: escaping `|` -> `\|` without escaping the
+  // backslash FIRST turns the input `\|` into `\\|`, which markdown reads as a
+  // literal backslash plus an UNESCAPED pipe — re-opening the very cell break the
+  // pipe escape exists to prevent.
+  const root = makeRepo(t, {
+    '0001-alpha.md': adr('Alpha \\| Accepted \\| forged', ['**Status:** Proposed']),
+  });
+  assert.equal(run(root, ['--write']).status, 0);
+  const readme = fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8');
+
+  const row = readme.split(/\r?\n/).find((l) => l.includes('0001-alpha.md'));
+  assert.ok(row, 'the ADR must still have a row');
+  // 4 pipes = the row's own delimiters (| id | title | status | read-first |) = 5.
+  // Any unescaped pipe from the title would add a 6th boundary and shift the cells.
+  const unescaped = [...row.matchAll(/(?<!\\)\|/g)].length;
+  assert.equal(unescaped, 5, `title pipes must stay escaped; row was: ${row}`);
+  assert.match(readme, /Proposed \(1\)/, 'the forged cell must not land the ADR in Active');
+});
+
 test('a pipe in a title cannot break out of its table cell', (t) => {
   const root = makeRepo(t, {
     '0001-alpha.md': adr('Alpha | Accepted | fake', ['**Status:** Proposed']),
