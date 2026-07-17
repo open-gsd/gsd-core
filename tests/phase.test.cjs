@@ -8967,9 +8967,21 @@ describe('issue #2316: phase complete ghost REQ-ID / silent-discard defects', ()
  * Build a 2-phase fixture where REQUIREMENTS.md has ONE body section (name
  * controlled by `heading`) containing a REQ-ID (PRESET-01) that is absent from
  * the Traceability table. `heading` is the only variable across callers, so
- * this isolates the DEFERRED_HEADING_RE regex behavior precisely.
+ * this isolates the DEFERRED_HEADING_RE / milestone-aware-version-heading
+ * behavior precisely.
+ *
+ * `milestone` (default `v1.3`, #2334 BLOCKER regression guard) is written
+ * into STATE.md's `milestone:` frontmatter so a `## v<N> ...` heading resolves
+ * deterministically against the current milestone's MAJOR version instead of
+ * silently exercising the "milestone unresolved" fail-safe path. Pass `null`
+ * to omit the field entirely (fail-safe probe).
+ *
+ * `bodyProse`, when given, is inserted as its own paragraph directly under
+ * `heading` and above the PRESET-01 line — used to pin the shipped
+ * `templates/requirements.md` shape, where the deferred-ness lives in body
+ * prose ("Deferred to future release...") rather than in the heading text.
  */
-function build2316HeadingFixture(heading) {
+function build2316HeadingFixture(heading, milestone = 'v1.3', bodyProse = null) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2316-heading-'));
   const planDir = path.join(tmpDir, '.planning');
   const phasesDir = path.join(planDir, 'phases');
@@ -8983,6 +8995,7 @@ function build2316HeadingFixture(heading) {
     '',
     heading,
     '',
+    ...(bodyProse ? [bodyProse, ''] : []),
     '- **PRESET-01** Body requirement missing from traceability table.',
     '',
     '## Traceability',
@@ -9018,6 +9031,7 @@ function build2316HeadingFixture(heading) {
   ].join('\n'));
 
   fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    ...(milestone !== null ? ['---', `milestone: ${milestone}`, '---'] : []),
     '# State',
     '',
     '**Current Phase:** 01',
@@ -9074,6 +9088,51 @@ describe('issue #2316 (Secondary A): DEFERRED_HEADING_RE\'s bare `v\\d+` alterna
     },
   );
 
+  test(
+    '#2334 BLOCKER: "## v2 Requirements" heading with the shipped templates/requirements.md body prose ("Deferred to future release. Tracked but not in current roadmap."), milestone v1.3 -> the bare v\\d+ heading must be treated as deferred (SAME major-version mismatch: v2 != v1) and NOT surface the body-vs-table warning',
+    () => {
+      // Fixture copied VERBATIM from gsd-core/templates/requirements.md:35-37.
+      const tmpDir = build2316HeadingFixture(
+        '## v2 Requirements',
+        'v1.3',
+        'Deferred to future release. Tracked but not in current roadmap.',
+      );
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+        assert.strictEqual(
+          traceWarnings.length, 0,
+          `#2334 BLOCKER FAILED: "## v2 Requirements" under milestone v1.3 (the shipped template's OWN deferred ` +
+          `section — #1159's original fix target) must stay suppressed, got: ${JSON.stringify(traceWarnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2334 BLOCKER (milestone-unresolved fail-safe): "## v1 Requirements" heading with NO milestone field in STATE.md must fall back to the OLD pre-#2316-4a behavior and suppress the warning (a false "deferred" only ever suppresses, never spams)',
+    () => {
+      const tmpDir = build2316HeadingFixture('## v1 Requirements', /* milestone */ null);
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        const traceWarnings = warnings.filter((w) => /Traceability/i.test(w));
+        assert.strictEqual(
+          traceWarnings.length, 0,
+          `#2334 fail-safe FAILED: with no resolvable milestone, "## v1 Requirements" must fall back to treating ` +
+          `v\\d+ as deferred (suppress), got: ${JSON.stringify(traceWarnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
   for (const heading of ['## Deferred', '## Backlog', '## Future']) {
     test(
       `#2316-5: genuinely deferred heading "${heading}" must still suppress the body-vs-table warning (regression guard — #1159 introduced this filter deliberately; the v\\d+ fix must not remove deferred/backlog/future detection)`,
@@ -9095,4 +9154,196 @@ describe('issue #2316 (Secondary A): DEFERRED_HEADING_RE\'s bare `v\\d+` alterna
       },
     );
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2334 HIGH 2 / HIGH 3: ghost-REQ-ID classification must probe the ACTUAL
+// write surfaces (checkbox + Traceability row, case-insensitive — mirroring
+// milestone.cts's notFound/hasRow/doneCheckbox classification), not set-diff
+// the deferred-filtered/case-sensitive bodyReqIds/tableReqIds indexes; and the
+// cited-REQ-ID tokenizer must be filtered to the REQ-ID shape before it ever
+// feeds a warning.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function build2334GhostSurfaceFixture({ reqBody, roadmapRequirementsLine, traceabilityRows = [] }) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2334-ghost-surface-'));
+  const planDir = path.join(tmpDir, '.planning');
+  const phasesDir = path.join(planDir, 'phases');
+  const phase1Dir = path.join(phasesDir, '01-preset');
+  const phase2Dir = path.join(phasesDir, '02-next');
+  fs.mkdirSync(phase1Dir, { recursive: true });
+  fs.mkdirSync(phase2Dir, { recursive: true });
+
+  fs.writeFileSync(path.join(planDir, 'REQUIREMENTS.md'), [
+    '# Requirements',
+    '',
+    ...reqBody,
+    '',
+    '## Traceability',
+    '',
+    '| Requirement | Phase | Status |',
+    '|-------------|-------|--------|',
+    ...traceabilityRows,
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'ROADMAP.md'), [
+    '# Roadmap',
+    '',
+    '- [ ] Phase 01: Preset',
+    '- [ ] Phase 02: Next',
+    '',
+    '### Phase 01: Preset',
+    '**Goal:** Build preset',
+    `**Requirements**: ${roadmapRequirementsLine}`,
+    '**Plans:** 1 plans',
+    '',
+    '### Phase 02: Next',
+    '**Goal:** whatever',
+    '**Requirements:** TBD',
+    '**Plans:** 1 plans',
+    '',
+    '## Progress',
+    '',
+    '| Phase | Plans Complete | Status | Completed |',
+    '|-------|----------------|--------|-----------|',
+    '| 01. Preset | 0/1 | Not started | - |',
+    '| 02. Next | 0/1 | Not started | - |',
+    '',
+  ].join('\n'));
+
+  fs.writeFileSync(path.join(planDir, 'STATE.md'), [
+    '---', 'milestone: v1.3', '---',
+    '# State',
+    '',
+    '**Current Phase:** 01',
+    '**Completed Phases:** 0',
+    '**Total Phases:** 2',
+    '**Progress:** 0%',
+    '',
+  ].join('\n'));
+
+  for (const [dir, n] of [[phase1Dir, '01'], [phase2Dir, '02']]) {
+    fs.writeFileSync(path.join(dir, `${n}-01-PLAN.md`), '# Plan\nDo the work.\n');
+    fs.writeFileSync(path.join(dir, `${n}-01-SUMMARY.md`), '# Summary\nDone.\n');
+  }
+
+  return tmpDir;
+}
+
+describe('issue #2334: ghost-REQ-ID classification must probe write surfaces, not lossy indexes', () => {
+  test(
+    '#2334 HIGH 2a: an ID under "## Deferred" whose checkbox this run TICKS must NOT be reported as a ghost',
+    () => {
+      const tmpDir = build2334GhostSurfaceFixture({
+        reqBody: ['## Deferred', '', '- [ ] **KNOWN-01**: some deferred requirement'],
+        roadmapRequirementsLine: '[KNOWN-01]',
+      });
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        const reqContent = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+        assert.ok(
+          /-\s*\[x\]\s*\*\*KNOWN-01\*\*/i.test(reqContent),
+          `#2334 HIGH 2a FAILED (fixture invariant): checkbox for KNOWN-01 must have been ticked.\n${reqContent}`,
+        );
+        assert.ok(
+          !warnings.some((w) => /not registered anywhere/i.test(w) && /KNOWN-01/i.test(w)),
+          `#2334 HIGH 2a FAILED: KNOWN-01 (checkbox ticked this run, under a Deferred heading) must not be ` +
+          `reported as a ghost, got: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2334 HIGH 2b: a case-mismatched citation ("known-01" vs "**KNOWN-01**") whose write lands must NOT be reported as a ghost',
+    () => {
+      const tmpDir = build2334GhostSurfaceFixture({
+        reqBody: ['## Active', '', '- [ ] **KNOWN-01**: some active requirement'],
+        roadmapRequirementsLine: '[known-01]',
+        traceabilityRows: ['| KNOWN-01 | Phase 1 | Pending |'],
+      });
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        const reqContent = fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+        assert.ok(
+          /-\s*\[x\]\s*\*\*KNOWN-01\*\*/i.test(reqContent),
+          `#2334 HIGH 2b FAILED (fixture invariant): checkbox must have been ticked.\n${reqContent}`,
+        );
+        assert.ok(
+          /\|\s*KNOWN-01\s*\|[^|]*\|\s*Complete\s*\|/i.test(reqContent),
+          `#2334 HIGH 2b FAILED (fixture invariant): Traceability row must have flipped to Complete.\n${reqContent}`,
+        );
+        assert.strictEqual(parsed.requirements_updated, true, '#2334 HIGH 2b FAILED: requirements_updated must be true');
+        assert.ok(
+          !warnings.some((w) => /not registered anywhere/i.test(w)),
+          `#2334 HIGH 2b FAILED: a case-mismatched citation whose write landed must not warn as a ghost, ` +
+          `got: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2334 HIGH 3: the shipped templates/roadmap.md inline-HTML-comment Requirements line must not warn to register "<!--", "brackets", "optional", "parser", "handles", "both", "formats", or "-->"',
+    () => {
+      const tmpDir = build2334GhostSurfaceFixture({
+        reqBody: ['## Active', '', '- [ ] **REQ-01**: something'],
+        roadmapRequirementsLine: '[REQ-01, REQ-02]  <!-- brackets optional, parser handles both formats -->',
+        traceabilityRows: ['| REQ-01 | Phase 1 | Pending |'],
+      });
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        const junkTokens = ['<!--', 'brackets', 'optional', 'parser', 'handles', 'both', 'formats', '-->'];
+        for (const token of junkTokens) {
+          assert.ok(
+            !warnings.some((w) => w.includes(token)),
+            `#2334 HIGH 3 FAILED: warnings must not name the non-REQ-ID token "${token}" from the inline HTML ` +
+            `comment, got: ${JSON.stringify(warnings)}`,
+          );
+        }
+        // REQ-02 is a genuine, shape-valid, unregistered REQ-ID — it MUST
+        // still be flagged (the shape filter must not over-broaden to
+        // silence real ghosts).
+        assert.ok(
+          warnings.some((w) => /not registered anywhere/i.test(w) && /REQ-02/.test(w)),
+          `#2334 HIGH 3 FAILED: REQ-02 (real, shape-valid, unregistered REQ-ID) must still be flagged as a ` +
+          `ghost, got: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
+
+  test(
+    '#2334 HIGH 3 (boundary): "**Requirements:** None" must not warn to register the literal word "None"',
+    () => {
+      const tmpDir = build2334GhostSurfaceFixture({
+        reqBody: ['## Active'],
+        roadmapRequirementsLine: 'None',
+      });
+      try {
+        const { output } = runVerifiedPhaseComplete(['phase', 'complete', '1'], tmpDir);
+        const parsed = JSON.parse(output);
+        const warnings = parsed.warnings || [];
+        assert.ok(
+          !warnings.some((w) => /\bNone\b/.test(w)),
+          `#2334 HIGH 3 boundary FAILED: "None" must not be treated as a cited REQ-ID, got: ${JSON.stringify(warnings)}`,
+        );
+      } finally {
+        cleanup(tmpDir);
+      }
+    },
+  );
 });

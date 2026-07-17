@@ -499,6 +499,41 @@ describe('issue #2316 (Secondary B): all-unregistered phaseReqIds must still emi
       assert.strictEqual(out.enabled, true, '#2316-6b FAILED: enabled must still be true');
     },
   );
+
+  test(
+    '#2334 HIGH 1: all-ghost REQ-IDs + a malformed CONTEXT.md <decisions> line (could-not-parse) must still return the ghost rows, not silently drop to the mismatch-only message',
+    () => {
+      // Same "items.length === 0" defect #2316-6b fixed ~34 lines below in
+      // runGapAnalysis, but in the sibling `ctxExtraction.outcome ===
+      // 'could-not-parse'` branch a few lines ABOVE it: that branch gated its
+      // own ghost-row inclusion on the unguarded `items.length > 0`, so a
+      // malformed <decisions> line made both ghost rows vanish and `total`
+      // drop 2 -> 0 for the exact same all-ghost phase #2316-6b already
+      // covers on the happy (non-malformed) CONTEXT.md path.
+      fs.writeFileSync(
+        path.join(phaseDir, 'CONTEXT.md'),
+        '# Phase Context\n\n<decisions>\n## Implementation Decisions\n\n' +
+        '- **D-01 this line is malformed and has no closing bold/colon\n</decisions>\n',
+      );
+      const r = runGapCheck([phaseDir, 'ORPHAN-01,ORPHAN-02'], tmpDir);
+      assert.ok(r.success, `check failed: ${r.error}`);
+      const out = JSON.parse(r.output);
+      assert.ok(
+        !/No requirements or decisions to check/.test(out.table),
+        `#2334 HIGH 1 FAILED: all-ghost + could-not-parse must not collapse to the empty-state message.\nFull table: ${out.table}`,
+      );
+      assert.ok(
+        out.table.includes('ORPHAN-01') && out.table.includes('ORPHAN-02'),
+        `#2334 HIGH 1 FAILED: table must still list both ghost REQ-IDs despite the malformed decisions line, got: ${out.table}`,
+      );
+      assert.ok(
+        /format mismatch/i.test(out.table),
+        `#2334 HIGH 1 FAILED: the could-not-parse signal must still be present in the table, got: ${out.table}`,
+      );
+      assert.strictEqual(out.counts.total, 2, '#2334 HIGH 1 FAILED: total must count both ghost REQ-IDs, not 0');
+      assert.strictEqual(out.counts.uncovered, 2, '#2334 HIGH 1 FAILED: uncovered must count both ghost REQ-IDs, not 0');
+    },
+  );
 });
 
 // ─── Section 4: Pure resolver tests against real registry ────────────────────
