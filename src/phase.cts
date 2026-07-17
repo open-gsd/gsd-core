@@ -1919,14 +1919,29 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const originalReqContent = fs.readFileSync(reqPath, 'utf-8');
           let reqContent = originalReqContent;
 
+          // #2316: `citedReqIds` — the REQ-IDs ROADMAP's own **Requirements:**
+          // line for this phase actually cites — is hoisted out of the
+          // `if (reqMatch)` block (previously scoped only inside it) so the
+          // ghost-ID cross-check below (~#2316-1) can consult it. `TBD` is the
+          // literal placeholder `phase.add`/`-batch`/`-insert` seed
+          // (`**Requirements**: TBD`, src/phase.cts:833,920,1078) — never a
+          // real REQ-ID, so it is filtered out wherever a cited-ID list feeds
+          // a warning (#2316-7 boundary).
+          const isPlaceholderReqId = (id: string): boolean => id.toUpperCase() === 'TBD';
+          let citedReqIds: string[] = [];
+          // #2316-1: Traceability-row writes that matched NO row (ghost or
+          // otherwise) — the `if (reqUpdate.ok)` below previously had no
+          // `else`, discarding this fact silently instead of surfacing it.
+          const traceabilityWriteMisses: string[] = [];
+
           if (reqMatch) {
-            const reqIds = reqMatch[1]
+            citedReqIds = reqMatch[1]
               .replace(/[\[\]]/g, '')
               .split(/[,\s]+/)
               .map((r) => r.trim())
               .filter(Boolean);
 
-            for (const reqId of reqIds) {
+            for (const reqId of citedReqIds) {
               const reqEscaped = escapeRegex(reqId);
               reqContent = reqContent.replace(
                 new RegExp(`(-\\s*\\[)[ ](\\]\\s*\\*\\*${reqEscaped}\\*\\*)`, 'gi'),
@@ -1951,7 +1966,11 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               // updateTableCell call both probes and writes.
               const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) =>
                 /^(?:pending|in progress)$/i.test(current.trim()) ? ' Complete ' : current);
-              if (reqUpdate.ok) reqContent = reqUpdate.value;
+              if (reqUpdate.ok) {
+                reqContent = reqUpdate.value;
+              } else if (!isPlaceholderReqId(reqId)) {
+                traceabilityWriteMisses.push(reqId);
+              }
             }
           }
 
@@ -1966,7 +1985,13 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // opens a same-or-shallower heading that does NOT match the pattern.
           // Lines inside fenced code blocks (``` or ~~~) are treated as content, not
           // headings, to avoid false deferred-section detection from code examples.
-          const DEFERRED_HEADING_RE = /\b(?:deferred|backlog|future|v\d+)\b/i;
+          // #2316-4a: dropped the bare `v\d+` alternative — it over-matched an
+          // ACTIVE heading like "## v1 Requirements" (zeroing bodyReqIds for
+          // that whole section). `deferred`/`backlog`/`future` are unaffected —
+          // a genuinely deferred heading always spells one of those words too
+          // (see #2316-5 regression guard: "## Deferred v2 Requirements",
+          // "## Future Backlog", "## Deferred", "## Backlog", "## Future").
+          const DEFERRED_HEADING_RE = /\b(?:deferred|backlog|future)\b/i;
           const bodyReqIds: string[] = [];
           // deferredDepth: the heading level that opened the current deferred block,
           // or 0 when we are in an active section.
@@ -2031,8 +2056,45 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             );
           }
 
+          // #2316-1: ghost REQ-IDs — cited by ROADMAP's own **Requirements:**
+          // line for this phase, but registered NOWHERE in REQUIREMENTS.md
+          // (neither its body nor its Traceability table). The `unregistered`
+          // check above only ever compares REQUIREMENTS.md's own body against
+          // its own Traceability table; it never consults `citedReqIds`, so an
+          // ID that ROADMAP cites but REQUIREMENTS.md never defines at all was
+          // previously invisible to every guard. `TBD` (the phase.add/-batch/
+          // -insert placeholder) is excluded — see #2316-7 boundary.
+          const ghostReqIds = citedReqIds.filter(
+            (id) => !isPlaceholderReqId(id) && !bodyReqIds.includes(id) && !tableReqIds.has(id),
+          );
+          if (ghostReqIds.length > 0) {
+            warnings.push(
+              `ROADMAP Phase ${phaseNum} cites REQ-ID(s) not registered anywhere in REQUIREMENTS.md (neither body nor Traceability table): ${ghostReqIds.join(', ')} — add them to REQUIREMENTS.md or correct the ROADMAP citation`,
+            );
+          }
+
+          // #2316-1 cont.: a cited ID whose Traceability-row write matched no
+          // row for a reason OTHER than being a ghost (e.g. a malformed table)
+          // still deserves a warning instead of a silent discard — but skip
+          // IDs already reported above as ghosts to avoid a duplicate message
+          // for the same root cause.
+          const traceabilityWriteFailures = traceabilityWriteMisses.filter(
+            (id) => !ghostReqIds.includes(id),
+          );
+          if (traceabilityWriteFailures.length > 0) {
+            warnings.push(
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${traceabilityWriteFailures.join(', ')}`,
+            );
+          }
+
           writes.push({ filePath: reqPath, before: originalReqContent, after: reqContent });
-          requirementsUpdated = true;
+          // #2316-3: `requirements_updated` must reflect whether REQUIREMENTS.md
+          // content actually CHANGED, not merely that the file existed in the
+          // transaction — mirrors the `writes.push({filePath,before,after})`
+          // diff-tracking pattern used for the ROADMAP write above. A phase
+          // whose citations match nothing (ghost REQ-IDs only) must report
+          // `false`, not a bare "the file was present" `true`.
+          requirementsUpdated = reqContent !== originalReqContent;
         }
       }
 

@@ -362,7 +362,13 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   }
 
   // #1365: if no items at all, surface a clean no-check message.
-  if (items.length === 0) {
+  // #2316-6b: this must NOT fire when `ghostReqIds` is non-empty — a phase
+  // whose EVERY cited REQ-ID is unregistered has `items.length === 0` (all
+  // its requirement items were filtered out at ~line 297) but still has real
+  // ghost rows to report below. Without this guard, an all-orphan phase
+  // reported LESS than a partially-orphan one (which falls through to the
+  // general path further down and correctly surfaces its ghost rows).
+  if (items.length === 0 && ghostReqIds.length === 0) {
     return {
       enabled: true,
       rows: [],
