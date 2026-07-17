@@ -1053,6 +1053,43 @@ describe('list-todos command', () => {
     assert.strictEqual(output.todos[0].area, 'general', 'missing area defaults to general');
     assert.strictEqual(output.todos[0].created, 'unknown', 'missing created defaults to unknown');
   });
+
+  // ── #2337: severity must be surfaced when present, omitted when absent ──────
+  // cmdListTodos parsed created/title/area but silently dropped severity, so
+  // audit-open and status summaries could not triage by blocker/major/minor/
+  // cosmetic even for todos an agent had correctly hand-tagged.
+  test('surfaces severity when the frontmatter carries it (#2337)', () => {
+    const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+
+    fs.writeFileSync(path.join(pendingDir, 'crash.md'),
+      'title: Fix data-loss crash\narea: core\ncreated: 2026-02-01\nseverity: blocker\n');
+
+    const result = runGsdTools('list-todos', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const todo = output.todos.find(t => t.file === 'crash.md');
+    assert.ok(todo, 'crash.md should be in results');
+    assert.strictEqual(todo.severity, 'blocker', 'severity must be surfaced verbatim');
+  });
+
+  test('omits the severity key for todos with no severity line — backward compatible (#2337)', () => {
+    const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+
+    fs.writeFileSync(path.join(pendingDir, 'legacy.md'),
+      'title: Legacy todo\narea: docs\ncreated: 2026-02-02\n');
+
+    const result = runGsdTools('list-todos', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const todo = output.todos.find(t => t.file === 'legacy.md');
+    assert.ok(todo, 'legacy.md should be in results');
+    assert.ok(!('severity' in todo),
+      'severity key must be ABSENT (not null/empty) for a todo with no severity line');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
