@@ -49,8 +49,8 @@ function normalizeKimiPayload(data) {
     const edits = Array.isArray(input.edit) ? input.edit
       : (input.edit && typeof input.edit === 'object') ? [input.edit] : [];
     if (edits.length) {
-      if (input.old_string === undefined && edits[0].old !== undefined) {
-        input.old_string = String(edits[0].old);
+      if (input.old_string === undefined) {
+        input.old_string = edits.map((e) => String(e.old ?? '')).join('\n');
       }
       if (input.new_string === undefined) {
         input.new_string = edits.map((e) => String(e.new ?? '')).join('\n');
