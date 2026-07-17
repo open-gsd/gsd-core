@@ -105,6 +105,43 @@ function isExcludedPath(filePath) {
   );
 }
 
+// Kimi CLI delivers the tool vocabulary the matcher was registered with —
+// the scanner's Kimi matcher is 'ReadFile' (runtime-hooks-surface.cts), so
+// tool_name arrives as 'ReadFile' (possibly module-qualified) and tool_input
+// carries `path` (kimi-cli src/kimi_cli/tools/file/read.py Params), not
+// `file_path`. Without normalization the SCANNED_TOOLS check below never
+// matches on Kimi and the scanner is silently dormant (#2304). This block is
+// kept byte-identical with the copies in gsd-prompt-guard.js,
+// gsd-read-guard.js, and gsd-worktree-path-guard.js — a parity test binds
+// them (tests/kimi-guard-normalization-parity.test.cjs). Inlined per guard
+// (not hooks/lib/): hook scripts are staged as standalone files, and a
+// sibling require is a staging dependency that can fail silently.
+const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit', ReadFile: 'Read' };
+function normalizeKimiPayload(data) {
+  const raw = data.tool_name;
+  if (typeof raw !== 'string') return data;
+  const mapped = KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)];
+  if (!mapped) return data;
+  data.tool_name = mapped;
+  const input = data.tool_input;
+  if (input && typeof input === 'object') {
+    if (input.file_path === undefined && typeof input.path === 'string') {
+      input.file_path = input.path;
+    }
+    const edits = Array.isArray(input.edit) ? input.edit
+      : (input.edit && typeof input.edit === 'object') ? [input.edit] : [];
+    if (edits.length) {
+      if (input.old_string === undefined) {
+        input.old_string = edits.map((e) => String(e.old ?? '')).join('\n');
+      }
+      if (input.new_string === undefined) {
+        input.new_string = edits.map((e) => String(e.new ?? '')).join('\n');
+      }
+    }
+  }
+  return data;
+}
+
 let inputBuf = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 5000);
 process.stdin.setEncoding('utf8');
@@ -112,7 +149,7 @@ process.stdin.on('data', chunk => { inputBuf += chunk; });
 process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
-    const data = JSON.parse(inputBuf);
+    const data = normalizeKimiPayload(JSON.parse(inputBuf));
 
     const toolName = data.tool_name;
     const SCANNED_TOOLS = new Set(['Read', 'WebFetch', 'WebSearch']);

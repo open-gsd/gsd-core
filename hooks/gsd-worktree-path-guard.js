@@ -50,7 +50,7 @@ function nearestExistingDir(start) {
 // names; unknown names fall through untouched. Inlined per guard (not
 // hooks/lib/): hook scripts are staged as standalone files, and a sibling
 // require is a staging dependency that can fail silently.
-const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit' };
+const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit', ReadFile: 'Read' };
 function normalizeKimiPayload(data) {
   const raw = data.tool_name;
   if (typeof raw !== 'string') return data;
