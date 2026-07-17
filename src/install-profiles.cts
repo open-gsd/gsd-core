@@ -11,6 +11,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { platformWriteSync } from './shell-command-projection.cjs';
+// #2322: reuse the existing pure path-containment seam (ADR-1239 Phase C-2)
+// instead of hand-rolling a new traversal check for capability skill stems.
+import { isPathConfined } from './external-descriptor-trust.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import conversionModule = require('./runtime-artifact-conversion.cjs');
 const {
@@ -470,6 +473,73 @@ function transformRouterBodyToNested(converted: string): string {
   return out.join('\n');
 }
 
+/**
+ * #2322 SECURITY: a third-party `capability.json`'s `skills[]` entries are only
+ * validated for being non-empty, non-reserved-name strings (capability-validator.cjs
+ * validateFeatureBody) — NOT for a safe path-segment shape. Once unioned into
+ * resolveSurface's `resolved.skills` (#2045), a stem carrying a path separator,
+ * `..`, an absolute path, or a NUL byte must never reach fs.readFileSync/writeFileSync
+ * as a literal path component, or it can escape the capabilities root on read (or
+ * stageDir on write). Reject anything but a single, ordinary path segment.
+ */
+function isSafeCapabilitySkillStem(stem: string): boolean {
+  if (typeof stem !== 'string' || stem.length === 0) return false;
+  if (stem.includes('\0')) return false;
+  if (stem === '.' || stem === '..') return false;
+  if (stem.includes('/') || stem.includes('\\')) return false;
+  if (path.isAbsolute(stem)) return false;
+  return true;
+}
+
+/**
+ * Look up an installed third-party capability's already-authored SKILL.md for
+ * `stem` under the capabilities root — `<GSD_HOME>/.gsd/capabilities/<capId>/skills/<stem>/SKILL.md`,
+ * the SAME convention capability-loader.cts:324-325 (overlayRoots) and
+ * capability-source.cts:670 (stageValidated finalDir) use to compute the
+ * per-capability install root. This is a self-contained lookup (no registry
+ * plumbing through Layout/ArtifactKind.stage): the resolved profile's `skills`
+ * Set already tells us WHICH stems are wanted (#2045 unions capability stems
+ * into it); this only needs to find WHERE an unresolved stem's SKILL.md lives.
+ *
+ * Total/non-throwing (#2322 requirement 5): a missing capabilities root, an
+ * unreadable capability dir, a missing/corrupt SKILL.md, or an unsafe stem all
+ * degrade to `null` (skip that stem) rather than throwing — a partial/corrupt
+ * third-party install must never break first-party staging. Scans every
+ * installed capability dir in deterministic sorted order and returns the FIRST
+ * match's content verbatim (no converter — an installed capability skill is
+ * already a complete, runtime-targeted SKILL.md).
+ */
+function readInstalledCapabilitySkill(stem: string): string | null {
+  if (!isSafeCapabilitySkillStem(stem)) return null;
+  const home = process.env['GSD_HOME'] || os.homedir();
+  const capabilitiesRoot = path.join(home, '.gsd', 'capabilities');
+  let capIds: string[];
+  try {
+    capIds = fs.readdirSync(capabilitiesRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return null; // no capabilities root on this GSD_HOME -> nothing to find
+  }
+  for (const capId of capIds) {
+    const capDir = path.join(capabilitiesRoot, capId);
+    const relSkillPath = path.join('skills', stem, 'SKILL.md');
+    // Defense-in-depth: isSafeCapabilitySkillStem already rejects separators/
+    // '..'/absolute stems, but re-confirm the resolved read path stays under
+    // this capability's own directory before ever touching the filesystem.
+    if (!isPathConfined(relSkillPath, capDir)) continue;
+    const skillPath = path.join(capDir, relSkillPath);
+    try {
+      if (!fs.statSync(skillPath).isFile()) continue;
+      return fs.readFileSync(skillPath, 'utf8');
+    } catch {
+      continue; // missing / unreadable / corrupt entry for this capId -> try next
+    }
+  }
+  return null;
+}
+
 function stageSkillsForRuntimeAsSkills(
   srcCommandsDir: string,
   resolvedProfile: ResolvedProfile,
@@ -496,6 +566,11 @@ function stageSkillsForRuntimeAsSkills(
     }
   }
 
+  // #2322: stems actually staged from gsd-core's OWN bundled commands/gsd dir
+  // this call, so the third-party fill-in pass below can enforce "first-party
+  // ALWAYS wins on collision" without re-deriving membership.
+  const firstPartyStems = new Set<string>();
+
   const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-profile-runtime-skills-'));
   try {
     const entries = fs.readdirSync(srcCommandsDir, { withFileTypes: true });
@@ -504,6 +579,7 @@ function stageSkillsForRuntimeAsSkills(
       if (!entry.name.endsWith('.md')) continue;
       const stem = entry.name.slice(0, -3);
       if (resolvedProfile.skills !== '*' && !(resolvedProfile.skills).has(stem)) continue;
+      firstPartyStems.add(stem);
       const content = fs.readFileSync(path.join(srcCommandsDir, entry.name), 'utf8');
       const skillName = `${prefix}${stem}`;
       const converted = converter(content, skillName);
@@ -534,6 +610,32 @@ function stageSkillsForRuntimeAsSkills(
       const destDir = path.join(stageDir, skillName);
       fs.mkdirSync(destDir, { recursive: true });
       fs.writeFileSync(path.join(destDir, 'SKILL.md'), converted);
+    }
+
+    // #2322: materialize installed THIRD-PARTY capability skills. The registry
+    // union (#2045) already put every accepted-capability stem into
+    // resolvedProfile.skills, but srcCommandsDir only ever holds gsd-core's own
+    // bundled commands — so any stem with no first-party file here was silently
+    // dropped (registry says surfaced:true, nothing on disk). For every resolved
+    // stem NOT already staged first-party, look it up under the installed
+    // capabilities root and stage it VERBATIM: it is already a complete,
+    // runtime-authored SKILL.md, unlike gsd-core's flat command .md which still
+    // needs `converter`. Skipped entirely for the `'*'` sentinel (an unfiltered
+    // fresh-install call with no registry in scope has no resolved stem list to
+    // reconcile against). Nesting (#69) never applies to a capability skill — it
+    // was never a child of any ns-* router's `requires:` list — so it always
+    // lands flat at the top level, exactly like an unrouted first-party skill.
+    if (resolvedProfile.skills !== '*') {
+      for (const stem of resolvedProfile.skills) {
+        if (firstPartyStems.has(stem)) continue; // first-party always wins
+        const capabilityContent = readInstalledCapabilitySkill(stem);
+        if (capabilityContent === null) continue; // absent/malformed -> skip gracefully
+        const skillName = `${prefix}${stem}`;
+        if (!isPathConfined(skillName, stageDir)) continue; // defense-in-depth
+        const destDir = path.join(stageDir, skillName);
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.writeFileSync(path.join(destDir, 'SKILL.md'), capabilityContent);
+      }
     }
   } catch (err) {
     try { fs.rmSync(stageDir, { recursive: true, force: true }); } catch { /* best-effort */ }

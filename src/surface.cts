@@ -468,6 +468,19 @@ function pruneSkillDirs(skillsDir: string, retainedNames: Set<string>, prefix: s
         // Does not match prefix at all — user-owned, preserve.
         continue;
       }
+      // #2322: an entry in THIS apply's retained set is unambiguously wanted —
+      // check that BEFORE the first-party-manifest-membership gate below. The
+      // manifest only ever knows gsd-core's own bundled stems; a materialized
+      // third-party capability skill (retained via the resolved profile's
+      // registry union, #2045/#2322) has no manifest entry at all, so without
+      // this early check it fell into the "unknown, preserve with warning"
+      // branch on EVERY apply — misreporting a live, GSD-managed capability
+      // skill as "user-owned or unknown" noise. This does not change any
+      // deletion outcome (a retained entry was always preserved — see the
+      // `retainedNames.has(entry)` check further below); it only short-
+      // circuits the ambiguous-ownership warning for entries we already know,
+      // this apply, are wanted.
+      if (retainedNames.has(entry)) continue;
       if (!canonicalStems) {
         // No manifest available: cannot confirm ownership — preserve conservatively.
         continue;
