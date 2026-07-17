@@ -501,6 +501,14 @@ Required cases where relevant:
 
 Property-style parser tests are encouraged for high-risk parsers. They must be deterministic: pin the seed, bound the iteration count, and print replay data on failure.
 
+##### Fixture provenance (#2371)
+
+**A gate's fixtures may not be derived from the gate's own writer, grammar, or docstring examples. A negative fixture must come from a source that does not know the gate exists.**
+
+This is stricter than the adversarial-input rule above and exists because of it: `tests/fixtures/adversarial/` covers hostile input, but a fixture written by the parser's own author — even a deliberately "realistic" one — is still drawn from the author's mental model of the format. It can only ever confirm what the author already believed, never surface what they didn't anticipate. A property-test generator has the same failure mode one level up: seeding the generator from the writer/render function that produces the same format makes the document shape a constant, so the property can never explore a document the writer wouldn't produce (see the document-shaped vs. writer-seeded property tests in `tests/api-coverage.test.cjs` for a worked example — the writer-seeded one cannot fail against a decoy table; the document-shaped one can).
+
+For a gate whose fixtures come from real user reports, put them under `tests/fixtures/representative/<gate>/` with a `MANIFEST.json` labeling each fixture's source issue and expected gate verdict, and drive them through the gate's real CLI entrypoint (gate-verdict altitude), not the parser function in isolation — see `tests/fixtures/representative/README.md` and `tests/representative-corpus.test.cjs`. If the gate is not yet fixed, mark the assertion `{ todo: '#NNNN' }` (node:test's `todo` option executes the test and reports its failure without affecting the process exit code) rather than skipping it or deferring the fixture — the gap should be visible in every run, not just noted in a comment.
+
 #### Filesystem writes and installers
 
 Changes to install/uninstall flows, generated artifact writers, state/config writers, worktree safety, or any code that writes under `.planning`, runtime config dirs, `.claude`, `.codex`, `hooks`, or generated files must include fault-injection coverage where the seam allows it.

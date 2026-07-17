@@ -380,6 +380,124 @@ describe('coverage matrix — parse/render bijection (fast-check)', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Document-shaped property (#2371): the bijection test above generates ROWS and
+// renders them through the writer, so the document shape is a constant — it
+// cannot generate a second table, a decoy table, or surrounding prose, and so
+// cannot fail against #2366's bugs. This property generates the DOCUMENT
+// space instead: a canonical matrix interleaved with content a real
+// COVERAGE.md may legitimately contain that is NOT the matrix. See
+// tests/fixtures/representative/README.md and CONTRIBUTING.md's "Fixture
+// provenance" section for the full rationale.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('coverage matrix — document-shaped fast-check (extract-exactly-canonical, #2371)', () => {
+  let mod;
+  try {
+    mod = require(MODULE_PATH);
+  } catch (err) {
+    throw new Error(`Could not require ${MODULE_PATH}. Run "npm run build:lib" first. Underlying: ${err.message}`);
+  }
+  const { parseCoverageMatrix, renderCoverageMatrix } = mod;
+
+  // Same row/matrix generators as the bijection test above, so both properties
+  // exercise the same canonical-row space.
+  const capabilityGen = fc.stringMatching(/^[a-z][a-z0-9-]{0,14}$/);
+  const rowGen = fc.record({
+    capability: capabilityGen,
+    decision: fc.constantFrom('INTEGRATE', 'OPT-OUT'),
+    reason: fc.stringMatching(/^[a-z0-9 ,.\-!?]{0,20}$/),
+  });
+  const validRowGen = rowGen.map((r) =>
+    r.decision === 'OPT-OUT' && r.reason.trim() === ''
+      ? { ...r, reason: 'because' }
+      : { ...r, reason: r.reason.trim() }
+  );
+  const canonicalMatrixGen = fc.uniqueArray(validRowGen, {
+    minLength: 1,
+    maxLength: 5,
+    selector: (r) => r.capability.toLowerCase(),
+  });
+
+  // Decoy blocks: content a document may legitimately contain that is NOT the
+  // canonical matrix. Kept to three explicit, independently-readable shapes
+  // rather than a generic "random markdown" generator — a combinatorial but
+  // opaque generator is exactly the kind of cleverness that's unrunnable to
+  // debug when it fails (Kernighan's Law).
+  const proseDecoyGen = fc.constantFrom(
+    '## Notes\n\nSee the ADR for background.',
+    'This phase also touches the auth helper.',
+    '## Risks\n\n- Rollout risk is low.',
+  );
+
+  const summaryTableDecoyGen = fc
+    .record({
+      label: fc.stringMatching(/^[a-z][a-z0-9 ]{0,10}$/),
+      integrateCount: fc.nat({ max: 50 }),
+      optoutCount: fc.nat({ max: 50 }),
+    })
+    .map(
+      ({ label, integrateCount, optoutCount }) =>
+        `## Coverage summary\n\n| tier | INTEGRATE | OPT-OUT |\n|---|---|---|\n` +
+        `| ${label} | ${integrateCount} | ${optoutCount} |`
+    );
+
+  const secondSectionMatrixGen = fc
+    .uniqueArray(validRowGen, { minLength: 1, maxLength: 3, selector: (r) => r.capability.toLowerCase() })
+    .map((rows) => `## Transferred to a later phase\n\n${renderCoverageMatrix(rows)}`);
+
+  const decoyGen = fc.oneof(proseDecoyGen, summaryTableDecoyGen, secondSectionMatrixGen);
+
+  const documentGen = fc.record({
+    canonicalRows: canonicalMatrixGen,
+    decoysBefore: fc.array(decoyGen, { maxLength: 2 }),
+    decoysAfter: fc.array(decoyGen, { maxLength: 2 }),
+  });
+
+  test(
+    'given a document containing exactly one canonical matrix plus arbitrary other content, ' +
+      'the parser extracts exactly that matrix\'s rows and ignores everything else',
+    {
+      todo:
+        '#2366 — parseCoverageMatrix scans every |-prefixed line file-wide with no table scoping; ' +
+        'a decoy summary table or a second canonical-schema section corrupts the result or spuriously ' +
+        'errors. Remove this todo once #2366 lands — a still-red result after removal means the fix ' +
+        'did not cover this case.',
+    },
+    () => {
+      fc.assert(
+        fc.property(documentGen, ({ canonicalRows, decoysBefore, decoysAfter }) => {
+          const canonicalBlock = renderCoverageMatrix(canonicalRows);
+          const doc = [...decoysBefore, canonicalBlock, ...decoysAfter].join('\n\n');
+
+          const result = parseCoverageMatrix(doc);
+
+          const expectedByCap = new Map(canonicalRows.map((r) => [r.capability.toLowerCase(), r]));
+          const actualByCap = new Map(result.rows.map((r) => [r.capability.toLowerCase(), r]));
+
+          assert.strictEqual(
+            actualByCap.size,
+            expectedByCap.size,
+            `expected exactly ${expectedByCap.size} row(s), got ${actualByCap.size}: ${JSON.stringify(result.rows)}`
+          );
+          for (const [cap, expected] of expectedByCap) {
+            const actual = actualByCap.get(cap);
+            assert.ok(actual, `canonical capability "${cap}" missing from parsed rows`);
+            assert.strictEqual(actual.decision, expected.decision);
+          }
+          assert.strictEqual(
+            result.errors.length,
+            0,
+            `decoy content must be ignored, not error: ${JSON.stringify(result.errors)}`
+          );
+          return true;
+        }),
+        { numRuns: 100 }
+      );
+    }
+  );
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // CLI entry point (STDIN → exit codes mirror grep, like assumption-delta)
 // ──────────────────────────────────────────────────────────────────────────────
 

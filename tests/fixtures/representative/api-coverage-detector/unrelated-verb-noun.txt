@@ -1,0 +1,1 @@
+Render the page and prove label endpoint, filename, and CSV/XLSX wiring.
