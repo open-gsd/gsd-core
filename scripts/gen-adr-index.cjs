@@ -143,6 +143,36 @@ function headerBlock(text) {
   return (stop === -1 ? body : body.slice(0, stop)).join('\n');
 }
 
+/**
+ * A relation may also be declared as a whole SECTION rather than a header field.
+ * ADR-0174 is the exemplar: a `## Supersedes` heading over a table whose first
+ * column links each superseded ADR and whose remaining columns explain why.
+ * That is the richest form in the corpus and must count — reading only the
+ * header block would report the repo's best-documented supersession as missing.
+ *
+ * Returns { supersedes: [file…], subsumes: [file…] } from matching sections.
+ */
+const RELATION_SECTION_RE = /^##\s+(Supersedes|Subsumes)\b[^\n]*$/i;
+
+function relationSections(text) {
+  const lines = text.split(/\r?\n/);
+  const out = { supersedes: [], subsumes: [] };
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(RELATION_SECTION_RE);
+    if (!m) continue;
+    const kind = m[1].toLowerCase() === 'supersedes' ? 'supersedes' : 'subsumes';
+    // Collect until the next heading of any level.
+    let j = i + 1;
+    const body = [];
+    for (; j < lines.length && !/^#{1,6}\s/.test(lines[j]); j++) body.push(lines[j]);
+    const chunk = body.join('\n');
+    if (NEGATED_RELATION_RE.test(chunk.trim())) continue;
+    out[kind].push(...linkedAdrFiles(chunk));
+    i = j - 1;
+  }
+  return out;
+}
+
 /** All markdown links to sibling ADR files inside a chunk of text. */
 function linkedAdrFiles(text) {
   const out = [];
@@ -215,6 +245,13 @@ function parseAdr(file) {
     relations.supersedes.in.push({ field: 'Status', value: statusRaw, links: linkedAdrFiles(statusRaw), bare: bareAdrRefs(statusRaw) });
   }
 
+  // `## Supersedes` / `## Subsumes` sections count as OUT claims (ADR-0174's table).
+  const sections = relationSections(text);
+  for (const kind of ['supersedes', 'subsumes']) {
+    if (sections[kind].length === 0) continue;
+    relations[kind].out.push({ field: `## ${kind === 'supersedes' ? 'Supersedes' : 'Subsumes'} section`, value: '', links: sections[kind], bare: [] });
+  }
+
   return { file, fileId, displayId, title, declaredId, statusRaw, statusToken, relations, text };
 }
 
@@ -279,11 +316,20 @@ function validate({ adrs, byFile, byId, nonConforming }) {
           // The synthetic relation lifted out of the Status line is already covered by
           // the dedicated Superseded check above; reporting it again just duplicates.
           if (rel.field === 'Status') continue;
+          // Ids already linked ANYWHERE in this field. A field legitimately
+          // reads "…([ADR-58](58-x.md)) — see 'Relation to ADR-58' below": the
+          // trailing prose repeats an id that is linked earlier, and flagging
+          // that would be noise. But an id that appears ONLY bare is an
+          // unchecked claim — and testing `rel.links.length` instead of the
+          // specific id silently dropped every bare claim in a field that
+          // happened to carry one link.
+          const linkedIds = new Set(rel.links.map((l) => (byFile.get(l) || {}).fileId).filter(Boolean));
           for (const b of rel.bare) {
+            if (linkedIds.has(b)) continue;
             const candidates = byId.get(b) || [];
             if (candidates.length === 0) {
               add(a.file, `"${rel.field}" names ADR-${b}, which does not exist in docs/adr/. If it is an ISSUE number, write "#${b}" — not "ADR-${b}".`);
-            } else if (!rel.links.length) {
+            } else {
               add(
                 a.file,
                 `"${rel.field}" names ADR-${b} without a file link` +
@@ -307,9 +353,16 @@ function validate({ adrs, byFile, byId, nonConforming }) {
   // back-links at exactly the right moment.
   const OPPOSITE = { out: 'in', in: 'out' };
   for (const a of adrs) {
-    if (a.statusToken !== 'Accepted') continue;
     for (const kind of Object.keys(RELATION_SPEC)) {
       for (const dir of ['out', 'in']) {
+        // The ratification guard applies to the OUT direction only: an unratified
+        // ADR's claim over someone else is prospective and must not obligate the
+        // target. The IN direction is this ADR's statement about ITSELF ("I am
+        // superseded by X") and is always owed a reciprocal — guarding it too
+        // would skip every Superseded ADR (statusToken !== 'Accepted') and leave
+        // dangling one-way claims unchecked, which is the bug this gate exists
+        // to catch.
+        if (dir === 'out' && a.statusToken !== 'Accepted') continue;
         for (const target of new Set(a.relations[kind][dir].flatMap((r) => r.links))) {
           const b = byFile.get(target);
           if (!b) continue;

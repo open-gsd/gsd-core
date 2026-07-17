@@ -229,11 +229,69 @@ test('"Supersedes: nothing" asserts no relation even when it name-drops an ADR',
 });
 
 test('an em-dash relation value asserts no relation', (t) => {
+  // Vacuous unless the negated field also carries a LINK: with a bare em-dash
+  // there is nothing to mis-parse, so the test passes whether or not negation
+  // works. Linking an ADR after the em-dash makes it discriminating — if the
+  // field were read as a real claim, symmetry would demand 0001 record it.
   const root = makeRepo(t, {
-    '900-beta.md': '# Beta\n\n| | |\n|---|---|\n| **Status** | Accepted |\n| **Supersedes** | — |\n\n## Context\n\nBody.\n',
+    '900-beta.md': '# Beta\n\n| | |\n|---|---|\n| **Status** | Accepted |\n| **Supersedes** | — see [ADR-0001](0001-alpha.md) for context |\n\n## Context\n\nBody.\n',
+    '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
   });
   assert.equal(run(root, ['--write']).status, 0);
-  assert.equal(run(root, ['--check']).status, 0);
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 0, `an em-dash field must assert nothing: ${check.stderr}`);
+  assert.doesNotMatch(check.stderr, /does not record it/);
+});
+
+test('a mixed field with one link and one bare id still flags the bare id', (t) => {
+  // Regression: testing `rel.links.length` instead of the specific id meant a
+  // field carrying ANY link silently dropped every bare claim beside it.
+  const root = makeRepo(t, {
+    '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** [ADR-0001](0001-alpha.md), ADR-0002']),
+    '0001-alpha.md': adr('Alpha', ['**Status:** Superseded by [ADR-900](900-beta.md)']),
+    '0002-gamma.md': adr('Gamma', ['**Status:** Accepted']),
+  });
+  const res = run(root, ['--check']);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /names ADR-2 without a file link/);
+});
+
+test('a bare id repeated in prose beside its own link is not flagged', (t) => {
+  // The corpus legitimately writes "…([ADR-0001](0001-alpha.md)) — see ADR-0001
+  // below". That repeat must not be noise.
+  const root = makeRepo(t, {
+    '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** Alpha ([ADR-0001](0001-alpha.md)) — see the ADR-0001 note below']),
+    '0001-alpha.md': adr('Alpha', ['**Status:** Superseded by [ADR-900](900-beta.md)']),
+  });
+  assert.equal(run(root, ['--write']).status, 0);
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 0, `a linked-and-repeated id must not be flagged: ${check.stderr}`);
+});
+
+test('a dangling "Superseded by" is caught even though the ADR is not Accepted', (t) => {
+  // Regression: the ratification guard skipped every non-Accepted ADR, which
+  // killed the IN direction entirely — a Superseded ADR pointing at a successor
+  // that never claims it went unchecked.
+  const root = makeRepo(t, {
+    '0001-alpha.md': adr('Alpha', ['**Status:** Superseded by [ADR-900](900-beta.md)']),
+    '900-beta.md': adr('Beta', ['**Status:** Accepted']),
+  });
+  const res = run(root, ['--check']);
+  assert.equal(res.status, 1, 'a one-way superseded-by must fail');
+  assert.match(res.stderr, /does not claim it|does not record it/);
+});
+
+test('a `## Supersedes` table section counts as the claim (ADR-0174 shape)', (t) => {
+  // The richest form in the corpus declares supersession as a section+table, not
+  // a header field. Reading only the header block reported the repo's
+  // best-documented supersession as missing.
+  const root = makeRepo(t, {
+    '900-beta.md': '# Beta\n\n- **Status:** Accepted\n\n## Supersedes\n\n| ADR | What it said | Why superseded |\n|---|---|---|\n| [ADR-0001](0001-alpha.md) | a thing | a reason |\n\n## Context\n\nBody.\n',
+    '0001-alpha.md': adr('Alpha', ['**Status:** Superseded by [ADR-900](900-beta.md)']),
+  });
+  assert.equal(run(root, ['--write']).status, 0);
+  const check = run(root, ['--check']);
+  assert.equal(check.status, 0, `a ## Supersedes table must satisfy symmetry: ${check.stderr}`);
 });
 
 test('a title id that disagrees with the filename is rejected', (t) => {
