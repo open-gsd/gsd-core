@@ -300,8 +300,9 @@ describe('#2304: Kimi tool vocabulary engages the write guard', () => {
       tool_input: { path: roadmapPath, content: lines(16) },
     });
     assert.equal(r.status, 2);
-    assert.ok(r.stderr.includes('GSD_ALLOW_PLANNING_SHRINK'),
-      `stderr must carry the block reason incl. the override name. Got: ${r.stderr}`);
+    assert.ok(r.stderr.length > 0, 'stderr must be non-empty — it is the channel Kimi feeds back');
+    assert.equal(r.stderr, JSON.parse(r.stdout).reason,
+      'stderr must carry exactly the typed reason — the same contract, without pinning prose');
   });
 
   test('Kimi StrReplaceFile stays exempt (Edit-class, out of scope by design)', () => {
