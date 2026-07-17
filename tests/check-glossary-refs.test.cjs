@@ -158,6 +158,27 @@ test('a ~/-rooted path and a bare filename are both skipped', (t) => {
   assert.equal(res.status, 0, `home path and bare filename must be skipped, not asserted missing: ${res.stderr}`);
 });
 
+test('a `..`-traversal token cannot escape ROOT into a filesystem-existence probe', (t) => {
+  // Security review finding: `src/../../../etc/passwd` passes PATH_TOKEN_RE (`.`
+  // is a legal segment char) and the `src/` prefix, so without a confinement
+  // check `path.join(ROOT, token)` normalizes out of the tree and existsSync
+  // probes it — a doc lint turned filesystem oracle. It must be skipped, so the
+  // gate neither errors nor reports a finding about an out-of-tree path.
+  const context = [
+    '# Context',
+    '',
+    'Escape attempt: `src/../../../../../../etc/passwd` and `src/../../etc/hosts`.',
+    '',
+    `${allRuntimesSentence(17, REAL_RUNTIMES)}.`,
+    '',
+  ].join('\n');
+  const root = makeRepo(t, { contextBody: context });
+
+  const res = run(root, ['--check']);
+  assert.equal(res.status, 0, `..-traversal tokens must be confined to ROOT and skipped: ${res.stderr}`);
+  assert.doesNotMatch(res.stderr, /etc\/passwd|etc\/hosts/, 'a confined gate must not name out-of-tree paths');
+});
+
 test('the real script runs cleanly against the real repo without crashing', () => {
   // Does NOT assert the exit code — CONTEXT.md may still be mid-edit — only
   // that the gate itself runs to a real verdict (0 or 1), not an unhandled

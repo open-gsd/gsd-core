@@ -79,6 +79,20 @@ function isTracked(token) {
 }
 
 /**
+ * True if joining `token` to ROOT stays inside ROOT. `PATH_TOKEN_RE` admits `.`
+ * inside a segment, so a token like `src/../../../etc/passwd` matches and (via
+ * the `src/` prefix) reads as "tracked" — `path.join(ROOT, token)` would then
+ * normalize to an out-of-tree absolute path and `fs.existsSync` would probe it,
+ * turning a doc lint into a filesystem-existence oracle on the CI host. A
+ * CONTEXT.md reference is always a plain in-repo path, so a `..` escape is never
+ * legitimate: confine to ROOT and drop anything that climbs out.
+ */
+function isWithinRoot(token) {
+  const resolved = path.resolve(ROOT, token);
+  return resolved === ROOT || resolved.startsWith(ROOT + path.sep);
+}
+
+/**
  * Every distinct, trackable file-path token referenced in `text`, with any
  * trailing `:<line>` suffix stripped.
  */
@@ -91,6 +105,7 @@ function extractTrackedRefs(text) {
     if (!PATH_TOKEN_RE.test(raw)) continue;
     const token = raw.replace(/:\d+$/, '');
     if (!isTracked(token)) continue;
+    if (!isWithinRoot(token)) continue;
     tokens.add(token);
   }
   return tokens;
