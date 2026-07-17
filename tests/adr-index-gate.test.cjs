@@ -12,9 +12,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SCRIPT_REL = path.join('scripts', 'gen-adr-index.cjs');
@@ -25,10 +26,13 @@ const END = '<!-- ADR-INDEX:END -->';
 /**
  * Build a throwaway repo whose docs/adr/ contains exactly `files`, and whose
  * scripts/ holds a copy of the generator + its cli-exit dependency. A unique
- * mkdtemp per call keeps parallel tests from colliding.
+ * mkdtemp per call keeps parallel tests from colliding, and the dir is removed
+ * via `t.after()` so a failing assertion cannot leak it.
  */
-function makeRepo(files) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-adr-index-'));
+function makeRepo(t, files) {
+  // helpers.cleanup (not raw fs.rmSync) carries the Windows-EBUSY retry budget.
+  const root = createTempDir('gsd-adr-index-');
+  t.after(() => cleanup(root));
   fs.mkdirSync(path.join(root, 'docs', 'adr'), { recursive: true });
   fs.mkdirSync(path.join(root, 'scripts', 'lib'), { recursive: true });
 
@@ -67,8 +71,8 @@ function run(root, args = []) {
 
 const adr = (title, fields) => `# ${title}\n\n${fields.map((f) => `- ${f}`).join('\n')}\n\n## Context\n\nBody.\n`;
 
-test('a clean corpus generates an index and --check passes', () => {
-  const root = makeRepo({
+test('a clean corpus generates an index and --check passes', (t) => {
+  const root = makeRepo(t, {
     '0001-alpha.md': adr('Alpha module', ['**Status:** Accepted', '**Date:** 2026-01-01']),
     '900-beta.md': adr('ADR-900: Beta module', ['**Status:** Proposed', '**Date:** 2026-01-02']),
   });
@@ -86,8 +90,8 @@ test('a clean corpus generates an index and --check passes', () => {
   assert.match(readme, /Proposed \(1\)/);
 });
 
-test('--check fails when an ADR is added but the index is not regenerated', () => {
-  const root = makeRepo({ '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']) });
+test('--check fails when an ADR is added but the index is not regenerated', (t) => {
+  const root = makeRepo(t, { '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']) });
   assert.equal(run(root, ['--write']).status, 0);
 
   // A new ADR lands without re-running --write. This is the exact drift that let
@@ -99,25 +103,25 @@ test('--check fails when an ADR is added but the index is not regenerated', () =
   assert.match(check.stderr, /stale/i);
 });
 
-test('a status outside the vocabulary is rejected and names the offender', () => {
-  const root = makeRepo({ '0001-alpha.md': adr('Alpha', ['**Status:** Draft']) });
+test('a status outside the vocabulary is rejected and names the offender', (t) => {
+  const root = makeRepo(t, { '0001-alpha.md': adr('Alpha', ['**Status:** Draft']) });
   const res = run(root, ['--check']);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /0001-alpha\.md/);
   assert.match(res.stderr, /"Draft" is not one of/);
 });
 
-test('an ADR with no status field at all is rejected', () => {
-  const root = makeRepo({ '0001-alpha.md': '# Alpha\n\nNo header fields.\n\n## Context\n\nBody.\n' });
+test('an ADR with no status field at all is rejected', (t) => {
+  const root = makeRepo(t, { '0001-alpha.md': '# Alpha\n\nNo header fields.\n\n## Context\n\nBody.\n' });
   const res = run(root, ['--check']);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /no `- \*\*Status:\*\* <Token>` field/);
 });
 
-test('the table header form is parsed as legitimately as the bullet form', () => {
+test('the table header form is parsed as legitimately as the bullet form', (t) => {
   // ADR-2008 uses a markdown table for its header. Treating that as "missing a
   // status" would flag a correct ADR.
-  const root = makeRepo({
+  const root = makeRepo(t, {
     '0001-alpha.md': '# Alpha\n\n| | |\n|---|---|\n| **Status** | Accepted |\n| **Date** | 2026-01-01 |\n\n## Context\n\nBody.\n',
   });
   const res = run(root, ['--write']);
@@ -125,8 +129,8 @@ test('the table header form is parsed as legitimately as the bullet form', () =>
   assert.match(fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8'), /Active decisions \(1\)/);
 });
 
-test('Superseded must name its successor as a file link, not a bare id', () => {
-  const root = makeRepo({
+test('Superseded must name its successor as a file link, not a bare id', (t) => {
+  const root = makeRepo(t, {
     '0001-alpha.md': adr('Alpha', ['**Status:** Superseded by ADR-900 (2026-02-01)']),
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** [ADR-0001](0001-alpha.md)']),
   });
@@ -135,15 +139,15 @@ test('Superseded must name its successor as a file link, not a bare id', () => {
   assert.match(res.stderr, /not as a markdown link/);
 });
 
-test('Superseded with no successor at all is rejected', () => {
-  const root = makeRepo({ '0001-alpha.md': adr('Alpha', ['**Status:** Superseded']) });
+test('Superseded with no successor at all is rejected', (t) => {
+  const root = makeRepo(t, { '0001-alpha.md': adr('Alpha', ['**Status:** Superseded']) });
   const res = run(root, ['--check']);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /names no successor/);
 });
 
-test('a one-way supersession is rejected and the message names the fix', () => {
-  const root = makeRepo({
+test('a one-way supersession is rejected and the message names the fix', (t) => {
+  const root = makeRepo(t, {
     // Beta claims Alpha; Alpha says nothing back.
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
@@ -155,8 +159,8 @@ test('a one-way supersession is rejected and the message names the fix', () => {
   assert.match(res.stderr, /\*\*Superseded by:\*\* \[ADR-900\]\(900-beta\.md\)/);
 });
 
-test('a symmetric supersession pair passes', () => {
-  const root = makeRepo({
+test('a symmetric supersession pair passes', (t) => {
+  const root = makeRepo(t, {
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Superseded by [ADR-900](900-beta.md) (2026-02-01)']),
   });
@@ -165,10 +169,10 @@ test('a symmetric supersession pair passes', () => {
   assert.equal(run(root, ['--check']).status, 0, 'a symmetric pair must pass');
 });
 
-test('subsumption is symmetry-checked but does NOT mark the target superseded', () => {
+test('subsumption is symmetry-checked but does NOT mark the target superseded', (t) => {
   // The EoS case: ADR-1239 subsumes ADR-1016 as an adapter. ADR-1016 stays
   // Accepted — collapsing this into supersession would kill a live decision.
-  const root = makeRepo({
+  const root = makeRepo(t, {
     '900-eos.md': adr('EoS', ['**Status:** Accepted', '**Subsumes as adapters:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted', '**Subsumed by:** [ADR-900](900-eos.md)']),
   });
@@ -180,8 +184,8 @@ test('subsumption is symmetry-checked but does NOT mark the target superseded', 
   assert.match(readme, /\| \[ADR-0001\]\(0001-alpha\.md\) \|[^|]*\| Accepted \| \[ADR-900\]\(900-eos\.md\) \|/);
 });
 
-test('a missing subsumption back-link is rejected', () => {
-  const root = makeRepo({
+test('a missing subsumption back-link is rejected', (t) => {
+  const root = makeRepo(t, {
     '900-eos.md': adr('EoS', ['**Status:** Accepted', '**Subsumes:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
   });
@@ -190,10 +194,10 @@ test('a missing subsumption back-link is rejected', () => {
   assert.match(res.stderr, /\*\*Subsumed by:\*\* \[ADR-900\]\(900-eos\.md\)/);
 });
 
-test("a Proposed ADR's supersession claim is prospective — no back-link demanded", () => {
+test("a Proposed ADR's supersession claim is prospective — no back-link demanded", (t) => {
   // ADR-857 is Proposed and claims to generalize live ADRs. Demanding the
   // back-link would stamp an Accepted decision as superseded by an unratified one.
-  const root = makeRepo({
+  const root = makeRepo(t, {
     '900-beta.md': adr('Beta', ['**Status:** Proposed', '**Supersedes:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
   });
@@ -202,8 +206,8 @@ test("a Proposed ADR's supersession claim is prospective — no back-link demand
   assert.equal(check.status, 0, `a Proposed claimant must not force a back-link: ${check.stderr}`);
 });
 
-test('ratifying that Proposed ADR to Accepted then demands the back-link', () => {
-  const root = makeRepo({
+test('ratifying that Proposed ADR to Accepted then demands the back-link', (t) => {
+  const root = makeRepo(t, {
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
   });
@@ -212,10 +216,10 @@ test('ratifying that Proposed ADR to Accepted then demands the back-link', () =>
   assert.match(res.stderr, /does not record it/);
 });
 
-test('"Supersedes: nothing" asserts no relation even when it name-drops an ADR', () => {
+test('"Supersedes: nothing" asserts no relation even when it name-drops an ADR', (t) => {
   // ADR-2264 says "Supersedes: nothing; amends the ADR-1239 harness". Reading that
   // as a supersession claim invents a link the author never made.
-  const root = makeRepo({
+  const root = makeRepo(t, {
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** nothing; amends the [ADR-0001](0001-alpha.md) harness']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
   });
@@ -224,24 +228,24 @@ test('"Supersedes: nothing" asserts no relation even when it name-drops an ADR',
   assert.equal(check.status, 0, `a negated relation field must assert nothing: ${check.stderr}`);
 });
 
-test('an em-dash relation value asserts no relation', () => {
-  const root = makeRepo({
+test('an em-dash relation value asserts no relation', (t) => {
+  const root = makeRepo(t, {
     '900-beta.md': '# Beta\n\n| | |\n|---|---|\n| **Status** | Accepted |\n| **Supersedes** | — |\n\n## Context\n\nBody.\n',
   });
   assert.equal(run(root, ['--write']).status, 0);
   assert.equal(run(root, ['--check']).status, 0);
 });
 
-test('a title id that disagrees with the filename is rejected', () => {
+test('a title id that disagrees with the filename is rejected', (t) => {
   // The real ADR-218 case: renamed to the issue# convention, title left behind.
-  const root = makeRepo({ '218-release.md': adr('ADR-0175: Harden release validation', ['**Status:** Accepted']) });
+  const root = makeRepo(t, { '218-release.md': adr('ADR-0175: Harden release validation', ['**Status:** Accepted']) });
   const res = run(root, ['--check']);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /H1 declares ADR-175 but the filename says 218/);
 });
 
-test('a relation link to a nonexistent ADR is rejected', () => {
-  const root = makeRepo({
+test('a relation link to a nonexistent ADR is rejected', (t) => {
+  const root = makeRepo(t, {
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted', '**Supersedes:** [ADR-404](404-ghost.md)']),
   });
   const res = run(root, ['--check']);
@@ -249,10 +253,10 @@ test('a relation link to a nonexistent ADR is rejected', () => {
   assert.match(res.stderr, /does not exist in docs\/adr\//);
 });
 
-test('a bare id naming a nonexistent ADR is steered toward issue syntax', () => {
+test('a bare id naming a nonexistent ADR is steered toward issue syntax', (t) => {
   // ADR-1610 says "superseding the #597 tier-max ratchet" — #597 is an ISSUE.
   // Written as "ADR-597" it would be an unresolvable reference.
-  const root = makeRepo({
+  const root = makeRepo(t, {
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted', '**Supersedes:** ADR-597 tier-max ratchet']),
   });
   const res = run(root, ['--check']);
@@ -260,8 +264,8 @@ test('a bare id naming a nonexistent ADR is steered toward issue syntax', () => 
   assert.match(res.stderr, /If it is an ISSUE number, write "#597"/);
 });
 
-test('an ambiguous bare id reports every file it could mean', () => {
-  const root = makeRepo({
+test('an ambiguous bare id reports every file it could mean', (t) => {
+  const root = makeRepo(t, {
     '0011-one.md': adr('One', ['**Status:** Accepted']),
     '0011-two.md': adr('Two', ['**Status:** Accepted']),
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** ADR-0011']),
@@ -273,18 +277,18 @@ test('an ambiguous bare id reports every file it could mean', () => {
   assert.match(res.stderr, /0011-two\.md/);
 });
 
-test('--check fails loudly when the README markers are missing', () => {
-  const root = makeRepo({ '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']) });
+test('--check fails loudly when the README markers are missing', (t) => {
+  const root = makeRepo(t, { '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']) });
   fs.writeFileSync(path.join(root, 'docs', 'adr', 'README.md'), '# ADRs\n\nNo markers here.\n');
   const res = run(root, ['--check']);
   assert.equal(res.status, 1);
   assert.match(res.stderr, /missing the index markers/);
 });
 
-test('--write still emits the index while reporting outstanding violations', () => {
+test('--write still emits the index while reporting outstanding violations', (t) => {
   // --write must remain usable as a repair tool on a corpus that is not yet clean,
   // but must not pretend the corpus is healthy.
-  const root = makeRepo({
+  const root = makeRepo(t, {
     '900-beta.md': adr('Beta', ['**Status:** Accepted', '**Supersedes:** [ADR-0001](0001-alpha.md)']),
     '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
   });
@@ -292,6 +296,61 @@ test('--write still emits the index while reporting outstanding violations', () 
   assert.equal(res.status, 0, '--write proceeds');
   assert.match(res.stderr, /lifecycle violation\(s\) remain/);
   assert.match(fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8'), /Active decisions \(2\)/);
+});
+
+test('an ADR title cannot hijack the README splice with an index marker', (t) => {
+  // Review finding: a title carrying the literal END marker was emitted verbatim
+  // into the table cell, relocating the boundary so the NEXT --write spliced
+  // against the wrong marker and ate the rest of README.md.
+  const root = makeRepo(t, {
+    '0001-alpha.md': adr(`Evil ${END} title`, ['**Status:** Accepted']),
+  });
+  assert.equal(run(root, ['--write']).status, 0);
+
+  const readme = fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8');
+  const endCount = readme.split(END).length - 1;
+  assert.equal(endCount, 1, 'exactly one END marker must survive — the title must not forge another');
+
+  // The splice must remain stable across repeated writes.
+  assert.equal(run(root, ['--write']).status, 0);
+  const again = fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8');
+  assert.equal(again.split(END).length - 1, 1);
+  assert.equal(run(root, ['--check']).status, 0, 'a hostile title must not leave the index permanently stale');
+});
+
+test('a title cannot inject raw HTML into the generated index', (t) => {
+  const root = makeRepo(t, {
+    '0001-alpha.md': adr('Alpha <script>x</script> module', ['**Status:** Accepted']),
+  });
+  assert.equal(run(root, ['--write']).status, 0);
+  const readme = fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8');
+  assert.ok(!readme.includes('<script>'), 'angle brackets must be escaped, not emitted raw');
+  assert.match(readme, /&lt;script&gt;/);
+});
+
+test('a pipe in a title cannot break out of its table cell', (t) => {
+  const root = makeRepo(t, {
+    '0001-alpha.md': adr('Alpha | Accepted | fake', ['**Status:** Proposed']),
+  });
+  assert.equal(run(root, ['--write']).status, 0);
+  const readme = fs.readFileSync(path.join(root, 'docs', 'adr', 'README.md'), 'utf8');
+  assert.match(readme, /Alpha \\\| Accepted \\\| fake/, 'pipes must be escaped');
+  assert.match(readme, /Proposed \(1\)/, 'the forged cell must not land the ADR in Active');
+});
+
+test('a file that does not match the naming convention is reported, not crashed on', (t) => {
+  // Review finding: `notes.md` hit `file.match(/^([0-9]+)-/)[1]` → TypeError on
+  // null. An unparseable name is also invisible to the index — the exact failure
+  // this gate exists to prevent — so it must surface as a violation.
+  const root = makeRepo(t, {
+    '0001-alpha.md': adr('Alpha', ['**Status:** Accepted']),
+    'notes.md': '# Scratch notes\n\nNot an ADR.\n',
+  });
+  const res = run(root, ['--check']);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /notes\.md/);
+  assert.match(res.stderr, /does not match the .*convention/);
+  assert.doesNotMatch(res.stderr, /TypeError|Cannot read propert/, 'must be a gate violation, not a crash');
 });
 
 test('the real repo corpus is clean and its index is current', () => {

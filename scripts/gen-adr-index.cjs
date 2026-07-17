@@ -110,12 +110,30 @@ function canonicalId(raw) {
   return String(raw).replace(/^0+(?=\d)/, '');
 }
 
+/** The documented filename shape: `<issue#>-<kebab-slug>.md`. */
+const ADR_FILENAME_RE = /^[0-9]+-[a-z0-9-]+\.md$/;
+
 function adrFiles() {
   return fs
     .readdirSync(ADR_DIR)
     .filter((f) => f.endsWith('.md') && f !== 'README.md')
     .filter((f) => fs.statSync(path.join(ADR_DIR, f)).isFile())
     .sort();
+}
+
+/**
+ * Split the directory into files this tool can parse and files it cannot.
+ *
+ * A file without a numeric prefix is not merely unparseable — it is invisible
+ * to the index, which is the failure this gate exists to prevent. Report it as
+ * a violation naming the convention, rather than crashing on `match(...)[1]`
+ * or silently skipping it.
+ */
+function partitionAdrFiles() {
+  const conforming = [];
+  const nonConforming = [];
+  for (const f of adrFiles()) (ADR_FILENAME_RE.test(f) ? conforming : nonConforming).push(f);
+  return { conforming, nonConforming };
 }
 
 /** Extract the leading bullet-field header block (everything before the first `##`). */
@@ -201,19 +219,28 @@ function parseAdr(file) {
 }
 
 function buildCorpus() {
-  const adrs = adrFiles().map(parseAdr);
+  const { conforming, nonConforming } = partitionAdrFiles();
+  const adrs = conforming.map(parseAdr);
   const byFile = new Map(adrs.map((a) => [a.file, a]));
   const byId = new Map();
   for (const a of adrs) {
     if (!byId.has(a.fileId)) byId.set(a.fileId, []);
     byId.get(a.fileId).push(a);
   }
-  return { adrs, byFile, byId };
+  return { adrs, byFile, byId, nonConforming };
 }
 
-function validate({ adrs, byFile, byId }) {
+function validate({ adrs, byFile, byId, nonConforming }) {
   const errors = [];
   const add = (file, msg) => errors.push(`${file}: ${msg}`);
+
+  for (const f of nonConforming) {
+    add(
+      f,
+      'filename does not match the `<issue#>-<kebab-slug>.md` convention, so it cannot appear in the index. ' +
+        'Rename it (see docs/adr/README.md "Naming Convention"), or move it out of docs/adr/ if it is not an ADR.',
+    );
+  }
 
   for (const a of adrs) {
     if (!a.statusToken) {
@@ -321,6 +348,26 @@ const GROUPS = [
   },
 ];
 
+/**
+ * Render ADR-authored text (a title) into a markdown table cell.
+ *
+ * Two hazards, both from text this script does not control:
+ *   - `|` would split the cell and corrupt the row.
+ *   - An HTML comment would be emitted verbatim into README.md. A title
+ *     containing the END marker relocates it, so the NEXT `--write` splices
+ *     against the wrong boundary and silently eats the rest of the file.
+ * Escaping `<`/`>` makes a comment sequence unformable, which also blocks any
+ * other HTML injected through a title.
+ */
+function cellText(text) {
+  return String(text)
+    .replace(/\|/g, '\\|')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, ' ')
+    .trim();
+}
+
 function linkCell(files, byFile) {
   if (files.length === 0) return '—';
   return files.map((l) => `[ADR-${(byFile.get(l) || {}).displayId || '?'}](${l})`).join(', ');
@@ -345,8 +392,7 @@ function renderIndex(corpus) {
       isHistorical ? '|-----|-------|--------|-------------|' : '|-----|-------|--------|------------|',
     );
     for (const a of rows) {
-      const title = a.title.replace(/\|/g, '\\|');
-      const cells = [`[ADR-${a.displayId}](${a.file})`, title, a.statusToken];
+      const cells = [`[ADR-${a.displayId}](${a.file})`, cellText(a.title), a.statusToken];
       cells.push(
         isHistorical
           ? linkCell([...new Set(a.relations.supersedes.in.flatMap((r) => r.links))], byFile)
