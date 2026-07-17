@@ -148,13 +148,12 @@ These govern the system as it stands. Cite these.
 | [ADR-2207](2207-status-field-lifecycle-ownership.md) | STATE.md `Status` lifecycle — phase-completion writes an intermediate state; milestone-close owns termination | Accepted | — |
 | [ADR-3660](3660-runtime-artifact-layout-module.md) | Runtime Artifact Layout Module owns per-runtime artifact placement | Accepted | [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) |
 
-### Proposed (20)
+### Proposed (19)
 
 Decided in principle, not yet ratified. Do not cite as settled architecture.
 
 | ADR | Title | Status | Read first |
 |-----|-------|--------|------------|
-| [ADR-0010](0010-skill-surface-budget-module.md) | Skill Surface Budget Module owns install-time skill listing curation | Proposed | — |
 | [ADR-0011](0011-review-default-reviewers.md) | `review.default_reviewers` config key scopes the no-flag `/gsd-review` fan-out | Proposed | — |
 | [ADR-15](15-autonomous-cross-ai-convergence.md) | Cross-AI Plan Convergence via Existing Orchestration Commands | Proposed | — |
 | [ADR-22](22-plan-drift-guard.md) | Plan-vs-codebase drift guard: defaults and symbol-resolver seam | Proposed | — |
@@ -175,7 +174,7 @@ Decided in principle, not yet ratified. Do not cite as settled architecture.
 | [ADR-1990](1990-existing-code-onboarding.md) | Existing Code Onboarding Module owns deterministic repo-state detection and onboarding route selection | Proposed | — |
 | [ADR-2264](2264-golden-parity-redesign.md) | Redesign golden-install-parity — single-source manifest builder + split invariant | Proposed | — |
 
-### Superseded, Retired, and Legacy (6)
+### Superseded, Retired, and Legacy (7)
 
 Historical record. **Do not follow these** — each names what replaced it, or why it was retired.
 
@@ -184,6 +183,7 @@ Historical record. **Do not follow these** — each names what replaced it, or w
 | [ADR-0005](0005-sdk-architecture-seam-map.md) | SDK Architecture seam map for query/runtime surfaces | Superseded | [ADR-0174](0174-retire-gsd-sdk-package-boundary.md) |
 | [ADR-0007](0007-sdk-package-seam-module.md) | SDK Package Seam Module owns SDK-to-get-shit-done-redux compatibility | Superseded | [ADR-0174](0174-retire-gsd-sdk-package-boundary.md) |
 | [ADR-0010](0010-file-operation-engine-module.md) | File Operation Engine Module owns safe runtime/config file mutations | Superseded | [ADR-0009](0009-shell-command-projection-module.md) |
+| [ADR-0010](0010-skill-surface-budget-module.md) | Skill Surface Budget Module owns install-time skill listing curation | Superseded | [ADR-0011](0011-skill-surface-budget-module.md) |
 | [ADR-0011](0011-review-default-reviewers-prd.md) | PRD — `review.default_reviewers` config key for `/gsd-review` reviewer selection | Legacy | — |
 | [ADR-0012](0012-command-routing-hub.md) | CommandRoutingHub as single dispatch seam for CJS command families | Superseded | [ADR-0174](0174-retire-gsd-sdk-package-boundary.md) |
 | [ADR-3524](3524-cjs-sdk-hard-seam.md) | CJS↔SDK hard seam — one source of truth per Shared Module | Superseded | [ADR-0174](0174-retire-gsd-sdk-package-boundary.md) |

@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SCRIPT_REL = path.join('scripts', 'gen-adr-index.cjs');
@@ -48,23 +48,21 @@ function makeRepo(files) {
   return root;
 }
 
-/** Run the generator in `root`; never throws — returns {status, stdout, stderr}. */
+/**
+ * Run the generator in `root`; never throws — returns {status, stdout, stderr}.
+ *
+ * spawnSync (not execFileSync) because BOTH streams matter on BOTH outcomes:
+ * `--write` exits 0 while reporting outstanding violations on stderr, and
+ * execFileSync only surfaces stderr via the thrown error on non-zero exit.
+ */
 function run(root, args = []) {
-  try {
-    const stdout = execFileSync(process.execPath, [path.join(root, SCRIPT_REL), ...args], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30_000,
-    });
-    return { status: 0, stdout, stderr: '' };
-  } catch (err) {
-    return {
-      status: typeof err.status === 'number' ? err.status : 1,
-      stdout: err.stdout || '',
-      stderr: err.stderr || '',
-    };
-  }
+  const res = spawnSync(process.execPath, [path.join(root, SCRIPT_REL), ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (res.error) throw res.error;
+  return { status: res.status, stdout: res.stdout || '', stderr: res.stderr || '' };
 }
 
 const adr = (title, fields) => `# ${title}\n\n${fields.map((f) => `- ${f}`).join('\n')}\n\n## Context\n\nBody.\n`;
