@@ -70,6 +70,8 @@ See **[CONTRIBUTING.md — "Proposing an ADR or PRD"](../../CONTRIBUTING.md#prop
 | [2164-statusline-scope-boundary.md](2164-statusline-scope-boundary.md) | Statusline draws its data boundary at local, read-only sources (no external/credentialed data) | Accepted |
 | [612-bracket-phase-id-convention.md](612-bracket-phase-id-convention.md) | Bracket phase-ID convention — lift the milestone into a `[PROJECT.MM]` prefix; terminal deprecation of M-NN | Proposed |
 | [2264-golden-parity-redesign.md](2264-golden-parity-redesign.md) | Redesign golden-install-parity: single-source manifest builder + split invariant | Proposed |
+| [959-capability-command-contribution.md](959-capability-command-contribution.md) | Capability Command Contribution — `commands` field; family routers discovered via registry in `runCommand` default case | Accepted (graduated by ADR-2346) |
+| [2346-command-dispatch-completion.md](2346-command-dispatch-completion.md) | Command Dispatch Completion — dissolve the 73-case `runCommand` switch into a two-layer (registry + leaf-table) dispatch | Accepted |
 
 ## Seam map
 

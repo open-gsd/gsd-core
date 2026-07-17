@@ -1,6 +1,6 @@
 # ADR-959: Capability Command Contribution
 
-- **Status:** Proposed
+- **Status:** Accepted (graduated from Proposed by ADR-2346, 2026-07-17 — the cutover mechanism proven by full switch dissolution)
 - **Issue:** [#959](https://github.com/open-gsd/gsd-core/issues/959)
 - **Epic:** [#857](https://github.com/open-gsd/gsd-core/issues/857) (Capability system) — rollout phase 4d
 - **Amends:** [ADR-894](894-capability-declaration-format.md) (adds the deferred `commands` field)
@@ -130,3 +130,9 @@ A synthetic fixture proves the *plumbing* but not the *model*; only a real comma
 ## Out of scope
 
 The build (4d-impl); migrating commands other than the `graphify` pilot; third-party / out-of-tree command modules; phase 5 (runtime descriptors); the remaining phase-6 per-feature cutovers.
+
+---
+
+## Amendment — 2026-07-17 (ADR-2346): Status `Proposed → Accepted`
+
+This ADR's mechanism — *"a capability command family is just a router, discovered via the registry instead of hardcoded,"* consulted in `runCommand`'s `default` case — is **accepted**. The proof is ADR-2346 (epic #2345), which completes the cutover and dissolves the 73-case switch entirely into a two-layer dispatch (registry for families + a leaf-verb table filling the `_dispatchNonFamily` seam this ADR named). ADR-2346 records the two decisions this ADR deliberately left open (full dissolution; where leaf verbs belong); it does not alter this ADR's mechanism, the `commands` contribution field, or the `default`-case placement that makes collision structurally impossible. See [ADR-2346](2346-command-dispatch-completion.md).
