@@ -195,12 +195,30 @@ const SERVICE_STOPWORDS = new Set([
  *  end a clause. `-` is deliberately absent (it would split hyphenated words).
  *
  *  MAX_COMPOUND_WORD_GAP: even inside one clause, a verb and a noun with many
- *  words between them describe different things. The widest genuine default-
- *  vocabulary pairing ("Consume the billing service over gRPC") has 4 words
- *  between the terms; 6 leaves headroom without re-admitting essay-length
- *  lines. */
+ *  words between them describe different things. Genuine single-clause
+ *  integration prose runs long ("Connect our checkout to Stripe's hosted
+ *  payment processing service through its v1 endpoints" — 11 words between);
+ *  12 keeps that while still rejecting essay-length lines.
+ *
+ *  MAX_CROSS_CLAUSE_WORD_GAP: a verb may bind a noun in the IMMEDIATELY
+ *  FOLLOWING clause ("Integrate Stripe, exposing its endpoints …") — but only
+ *  when the verb's own clause names a service object (a capitalized
+ *  non-stopword after the verb), and only within a tight gap. Without the
+ *  service-object requirement this would re-admit the "unrelated clauses"
+ *  false-positive class (#2365 acceptance #2). */
 const CLAUSE_BOUNDARY_RE = /[,;:.!?|()—–]/;
-const MAX_COMPOUND_WORD_GAP = 6;
+const MAX_COMPOUND_WORD_GAP = 12;
+const MAX_CROSS_CLAUSE_WORD_GAP = 6;
+/** Locality descriptors — a noun/service qualified as first-party is the
+ *  opposite of external-API evidence ("the internal endpoint", "internal
+ *  Payments API"). Bounded by design: locality words, not English glue. */
+const INTERNAL_DESCRIPTORS = new Set(['internal', 'in-house', 'local', 'first-party']);
+/** Object words that corroborate a clause-initial `<Service> API|SDK` as an
+ *  integration surface ("Stripe API client for payments." as a whole scope
+ *  line): the follower names the thing being built against the surface. */
+const SURFACE_OBJECT_FOLLOWERS = new Set([
+    'client', 'clients', 'integration', 'wrapper', 'adapter', 'connector', 'bindings',
+]);
 /** A capitalized compound modifier ("Resolver-only", "Read-only", "E-commerce"
  *  — lowercase letter right after the hyphen) is an adjective phrase, not a
  *  service name. Real hyphenated services capitalize the second segment
@@ -211,15 +229,15 @@ const COMPOUND_MODIFIER_RE = /^[A-Z][A-Za-z0-9]*-[a-z]/;
  *  so alone it is not proper-noun evidence — but an actual external address or
  *  package reference on the same line is. */
 const SERVICE_CORROBORATION_RES = [
-    /\bhttps?:\/\/\S/i,
-    /(?:^|\s)@[a-z0-9][\w.-]*\/[a-z0-9]/i,
+    /\b[a-z][a-z0-9+.-]*:\/\/\S/i,
+    /(?:^|[\s`("'])@[a-z0-9][\w.-]*\/[a-z0-9]/i,
     /\b(?:npm|pnpm|yarn|pip|pipx|uv|cargo|gem|composer|go)\s+(?:install|add|get|i)\b/i,
 ];
 function hasDependencyEvidence(line) {
     return SERVICE_CORROBORATION_RES.some((re) => re.test(line));
 }
-const URL_TOKEN_RE = /^[([<"'`]*https?:\/\//i;
-const LOCAL_URL_RE = /^[([<"'`]*https?:\/\/(?:localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0|\[::1\])(?=[:/?#]|$)/i;
+const URL_TOKEN_RE = /^[([<"'`]*[a-z][a-z0-9+.-]*:\/\//i;
+const LOCAL_URL_RE = /^[([<"'`]*[a-z][a-z0-9+.-]*:\/\/(?:localhost|127(?:\.\d{1,3}){1,3}|0\.0\.0\.0|\[::1\])(?=[:/?#]|$)/i;
 /** Mask whitespace-delimited tokens with an interior `/` — file paths, framework
  *  routes (`src/app/api/...`), URLs. They are references, not integration prose
  *  (#2365 root cause 2: `/` counted as a word boundary, so first-party route
@@ -240,13 +258,14 @@ function scanLineTokens(line, nounRe, nounSet) {
         const tok = m[0];
         masked += line.slice(last, m.index);
         last = m.index + tok.length;
-        if (!/\S\/\S/.test(tok)) {
+        if (!/\S[\\/]\S/.test(tok)) {
             masked += tok;
             continue;
         }
-        const segments = tok.split('/').map((s) => s.replace(/[^A-Za-z0-9]/g, ''));
-        if (segments.every((s) => s.length > 0 && nounSet.has(s.toLowerCase()))) {
-            masked += tok; // "API/SDK" — noun shorthand, not a path
+        const segments = tok.split(/[\\/]/).map((s) => s.replace(/[^A-Za-z0-9]/g, ''));
+        if (segments.every((s) => s.length > 0 && (nounSet.has(s.toLowerCase()) || /^v\d+$/i.test(s))) &&
+            segments.some((s) => nounSet.has(s.toLowerCase()))) {
+            masked += tok; // "API/SDK", "API/v2" — noun shorthand, not a path
             continue;
         }
         if (nounRe && URL_TOKEN_RE.test(tok) && !LOCAL_URL_RE.test(tok)) {
@@ -274,16 +293,79 @@ function collectTermMatches(re, clause) {
     }
     return out;
 }
-/** Whole words strictly between two term matches in a clause. */
-function wordGap(clause, a, b) {
-    const lo = Math.min(a.end, b.end);
-    const hi = Math.max(a.start, b.start);
-    if (hi <= lo)
-        return 0;
-    return clause
-        .slice(lo, hi)
-        .split(/\s+/)
-        .filter(Boolean).length;
+/** Start offsets of every whitespace-delimited word in `line`. Computed ONCE
+ *  per line so each verb/noun pair costs O(log W), not a fresh substring split
+ *  — a hostile line repeating a term pair thousands of times must not go
+ *  quadratic (#2365 review S-2). */
+function computeWordStarts(line) {
+    const starts = [];
+    let inWord = false;
+    for (let i = 0; i < line.length; i++) {
+        const ws = line[i] === ' ' || line[i] === '\t';
+        if (!ws && !inWord)
+            starts.push(i);
+        inWord = !ws;
+    }
+    return starts;
+}
+/** Ordinal (word index) of the word containing/preceding `offset`. */
+function wordOrdinalAt(wordStarts, offset) {
+    let lo = 0;
+    let hi = wordStarts.length - 1;
+    let ans = 0;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (wordStarts[mid] <= offset) {
+            ans = mid;
+            lo = mid + 1;
+        }
+        else {
+            hi = mid - 1;
+        }
+    }
+    return ans;
+}
+function groupByTerm(matches, wordStarts) {
+    const out = new Map();
+    for (const t of matches) {
+        const ord = [
+            wordOrdinalAt(wordStarts, t.start),
+            wordOrdinalAt(wordStarts, Math.max(t.end - 1, t.start)),
+        ];
+        const g = out.get(t.term);
+        if (g) {
+            g.ords.push(ord);
+            if (t.start < g.first.start)
+                g.first = t;
+        }
+        else {
+            out.set(t.term, { ords: [ord], first: t });
+        }
+    }
+    for (const g of out.values())
+        g.ords.sort((x, y) => x[0] - y[0]);
+    return out;
+}
+/** Smallest whole-word gap between any match of `a` and any match of `b` —
+ *  a linear merge walk over the two position-sorted ordinal lists. */
+function minWordGap(a, b) {
+    let best = Infinity;
+    let j = 0;
+    for (const [as, ae] of a.ords) {
+        while (j < b.ords.length && b.ords[j][0] < as)
+            j++;
+        if (j < b.ords.length) {
+            const gap = b.ords[j][0] - ae - 1;
+            best = Math.min(best, gap > 0 ? gap : 0);
+        }
+        if (j > 0) {
+            const gap = as - b.ords[j - 1][1] - 1;
+            best = Math.min(best, gap > 0 ? gap : 0);
+        }
+        if (best === 0)
+            break;
+    }
+    return best;
 }
 /** Split a line into clause segments, keeping each segment's start offset so
  *  line-level spans (masked URL tokens) can be mapped into their clause. */
@@ -302,15 +384,21 @@ function splitClauses(masked) {
  * Detect whether phase-scope prose describes integrating an external API/SDK.
  *
  * Fires when EITHER:
- *   (a) a compound verb+noun signal shares one CLAUSE of a line, with at most
- *       MAX_COMPOUND_WORD_GAP words between the terms (#2365 — co-occurrence
- *       anywhere on a line is not a compound action), OR
+ *   (a) a compound verb+noun signal shares one CLAUSE of a line within a
+ *       bounded word gap (#2365 — co-occurrence anywhere on a line is not a
+ *       compound action), or the verb's clause names a service object and the
+ *       noun sits in the immediately following clause ("Integrate Stripe,
+ *       exposing its endpoints …"), OR
  *   (b) an explicit `<Service> API|SDK|REST|GraphQL` surface appears in
  *       proper-noun position (mid-clause), or clause-initial WITH dependency
- *       evidence (a URL / package reference) on the same line.
+ *       evidence (a URL / package reference) or an integration-object follower
+ *       ("Stripe API client …") on the same line.
  *
  * Fenced code blocks, inline code spans, and path-shaped tokens are excluded
- * before matching — code and file references are not integration prose.
+ * before matching — code and file references are not integration prose. A
+ * package-shaped inline span (`@stripe/stripe-js`, `stripe-sdk`) still counts
+ * as dependency/noun evidence. Nouns qualified as first-party ("the internal
+ * endpoint") are negative evidence and never pair.
  *
  * Non-string inputs degrade to `{ detected: false }` without throwing.
  */
@@ -319,7 +407,7 @@ function detectApiIntegration(text, terms) {
     if (typeof text !== 'string') {
         return { detected: false, signals: [], terms: effective };
     }
-    const stripped = (0, markdown_sectionizer_cjs_1.stripInlineCode)((0, markdown_sectionizer_cjs_1.stripFencedCode)(text.replace(/\r\n/g, '\n')).text);
+    const stripped = (0, markdown_sectionizer_cjs_1.stripFencedCode)(text.replace(/\r\n/g, '\n')).text;
     if (stripped.trim().length === 0) {
         return { detected: false, signals: [], terms: effective };
     }
@@ -335,69 +423,168 @@ function detectApiIntegration(text, terms) {
     const nounRe = hasCompoundTerms
         ? new RegExp('(^|[^a-zA-Z0-9])(' + effective.nouns.map(escapeRegex).join('|') + ')(?=[^a-zA-Z0-9]|$)', 'gi')
         : null;
+    const surfaceRe = new RegExp(SERVICE_SURFACE_API_RE.source, 'g');
     const nounSet = new Set(effective.nouns);
-    for (const line of lines) {
+    for (const rawLine of lines) {
+        // Inline code spans are code, not prose — mask them (length-preserving so
+        // offsets keep lining up), but keep package-shaped span content as noun
+        // evidence (#2365 review FN-4: `stripe-sdk` names a dependency).
+        const inlineSpans = (0, markdown_sectionizer_cjs_1.scanInlineCodeSpans)(rawLine);
+        let line = rawLine;
+        const spanNouns = [];
+        for (const s of inlineSpans) {
+            line = line.slice(0, s.start) + ' '.repeat(s.end - s.start) + line.slice(s.end);
+            const content = s.content.trim();
+            if (content.length === 0 || /\s/.test(content))
+                continue;
+            const segs = content.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+            if (segs.length < 2)
+                continue; // a bare `api` span is a code identifier
+            const hit = segs.find((seg) => nounSet.has(seg));
+            if (hit)
+                spanNouns.push({ term: hit, start: s.start, end: s.end });
+        }
         // Path-shaped tokens (routes, file names, URLs) are references, not prose.
         const { masked, urlNouns } = scanLineTokens(line, nounRe, nounSet);
         const clauses = splitClauses(masked);
-        // (a) compound verb+noun: same clause, bounded word gap.
+        const wordStarts = computeWordStarts(masked);
+        const extraNouns = urlNouns.concat(spanNouns);
+        // (a) compound verb+noun: same clause (bounded gap), or verb clause with a
+        // service object binding a noun in the immediately following clause.
         if (verbRe && nounRe) {
-            for (const clause of clauses) {
-                const verbs = collectTermMatches(verbRe, clause.text);
-                if (verbs.length === 0)
-                    continue;
-                const nouns = collectTermMatches(nounRe, clause.text);
-                // URL-borne nouns whose span lies in this clause, mapped clause-local.
-                for (const u of urlNouns) {
+            const clauseVerbs = [];
+            const clauseNouns = [];
+            for (let ci = 0; ci < clauses.length; ci++) {
+                const clause = clauses[ci];
+                // Line-level offsets throughout so one wordStarts array serves all pairs.
+                const verbs = collectTermMatches(verbRe, clause.text).map((t) => ({
+                    term: t.term,
+                    start: t.start + clause.start,
+                    end: t.end + clause.start,
+                }));
+                const nouns = collectTermMatches(nounRe, clause.text)
+                    .map((t) => ({ term: t.term, start: t.start + clause.start, end: t.end + clause.start }))
+                    .filter((t) => !isInternallyQualified(masked, t.start));
+                for (const u of extraNouns) {
                     if (u.start >= clause.start && u.end <= clause.start + clause.text.length) {
-                        nouns.push({ term: u.term, start: u.start - clause.start, end: u.end - clause.start });
+                        nouns.push(u);
                     }
                 }
-                for (const v of verbs) {
-                    for (const n of nouns) {
-                        if (wordGap(clause.text, v, n) > MAX_COMPOUND_WORD_GAP)
-                            continue;
-                        const key = `${v.term}+${n.term}`;
+                clauseVerbs.push(verbs);
+                clauseNouns.push(nouns);
+            }
+            // Pairing is by TERM GROUP with a nearest-pair merge walk, not a match×
+            // match cross product — a hostile line repeating one pair thousands of
+            // times stays linear (#2365 review S-2).
+            for (let ci = 0; ci < clauses.length; ci++) {
+                const verbGroups = groupByTerm(clauseVerbs[ci], wordStarts);
+                if (verbGroups.size === 0)
+                    continue;
+                const sameGroups = groupByTerm(clauseNouns[ci], wordStarts);
+                const crossGroups = ci + 1 < clauses.length && clauseNouns[ci + 1].length > 0
+                    ? groupByTerm(clauseNouns[ci + 1], wordStarts)
+                    : null;
+                for (const [vTerm, vGroup] of verbGroups) {
+                    const tryPair = (nTerm, nGroup, cap) => {
+                        const key = `${vTerm}+${nTerm}`;
                         if (seen.has(key))
-                            continue;
+                            return;
+                        if (minWordGap(vGroup, nGroup) > cap)
+                            return;
                         seen.add(key);
-                        signals.push({ verb: v.term, noun: n.term, snippet: makeSnippet(line, n.term) });
+                        signals.push({ verb: vTerm, noun: nTerm, snippet: makeSnippet(rawLine, nTerm) });
+                    };
+                    for (const [nTerm, nGroup] of sameGroups)
+                        tryPair(nTerm, nGroup, MAX_COMPOUND_WORD_GAP);
+                    if (crossGroups && clauseHasServiceObjectAfter(clauses[ci], vGroup.first)) {
+                        for (const [nTerm, nGroup] of crossGroups) {
+                            tryPair(nTerm, nGroup, MAX_CROSS_CLAUSE_WORD_GAP);
+                        }
                     }
                 }
             }
         }
-        // (b) explicit <Service> API|SDK|REST|GraphQL surface.
-        for (const { text: clause } of clauses) {
-            const m = SERVICE_SURFACE_API_RE.exec(clause);
-            if (!m)
-                continue;
-            const svc = m[1] || '';
-            // Reject ordinary capitalized sentence starters ("The API …", "Our REST …").
-            if (SERVICE_STOPWORDS.has(svc.toLowerCase()))
-                continue;
-            // Reject compound modifiers ("Resolver-only API" describes a local
-            // interface, not a third-party service).
-            if (COMPOUND_MODIFIER_RE.test(svc))
-                continue;
-            // Clause-initial capitalization is ordinary English, not proper-noun
-            // evidence — require dependency corroboration on the line for it.
-            const clauseInitial = /^[^A-Za-z0-9]*$/.test(clause.slice(0, m.index));
-            if (clauseInitial && !hasDependencyEvidence(line))
-                continue;
-            const noun = (m[2] || '').toLowerCase();
-            const key = `surface+${noun}`;
-            if (seen.has(key))
-                continue;
-            seen.add(key);
-            signals.push({ verb: '(surface)', noun, snippet: makeSnippet(line, svc) });
+        // (b) explicit <Service> API|SDK|REST|GraphQL surface — every candidate in
+        // every clause (a rejected first candidate must not shadow a later genuine
+        // service; #2365 review C-1).
+        for (const clause of clauses) {
+            surfaceRe.lastIndex = 0;
+            let m;
+            while ((m = surfaceRe.exec(clause.text)) !== null) {
+                const svc = m[1] || '';
+                const svcLower = svc.toLowerCase();
+                // Reject ordinary capitalized sentence starters ("The API …", "Our REST …")
+                // and locality descriptors ("Internal API …" describes first-party code).
+                if (SERVICE_STOPWORDS.has(svcLower) || INTERNAL_DESCRIPTORS.has(svcLower))
+                    continue;
+                // Reject compound modifiers ("Resolver-only API" describes a local
+                // interface, not a third-party service).
+                if (COMPOUND_MODIFIER_RE.test(svc))
+                    continue;
+                // Reject services qualified as first-party ("internal Payments API").
+                if (isInternallyQualified(masked, clause.start + m.index))
+                    continue;
+                // Clause-initial capitalization is ordinary English, not proper-noun
+                // evidence — require dependency corroboration on the line, or an
+                // integration-object follower ("Stripe API client …").
+                const clauseInitial = /^[^A-Za-z0-9]*$/.test(clause.text.slice(0, m.index));
+                if (clauseInitial && !hasDependencyEvidence(rawLine)) {
+                    const followerMatch = /^[^A-Za-z0-9]*([A-Za-z0-9'-]+)/.exec(clause.text.slice(m.index + m[0].length));
+                    const follower = followerMatch ? followerMatch[1].toLowerCase() : '';
+                    if (!SURFACE_OBJECT_FOLLOWERS.has(follower))
+                        continue;
+                }
+                const noun = (m[2] || '').toLowerCase();
+                const key = `surface+${noun}`;
+                if (seen.has(key))
+                    continue;
+                seen.add(key);
+                signals.push({ verb: '(surface)', noun, snippet: makeSnippet(rawLine, svc) });
+            }
         }
     }
     return { detected: signals.length > 0, signals, terms: effective };
 }
+/** True when the word immediately before `offset` is a locality descriptor
+ *  ("the internal endpoint", "internal Payments API") — first-party
+ *  qualification is negative evidence for an EXTERNAL-API signal. Looks back
+ *  through a BOUNDED window, not the whole prefix — this runs per match and a
+ *  full-prefix slice would be quadratic on hostile input (#2365 review S-2). */
+const QUALIFIER_LOOKBACK = 24; // longest descriptor ("first-party") + separators
+function isInternallyQualified(masked, offset) {
+    const from = offset > QUALIFIER_LOOKBACK ? offset - QUALIFIER_LOOKBACK : 0;
+    const window = masked.slice(from, offset);
+    const m = /([A-Za-z0-9'-]+)[^A-Za-z0-9]*$/.exec(window);
+    if (!m)
+        return false;
+    // A word truncated by the window start is not a descriptor match (its real
+    // start lies before the window) — fail toward detection.
+    if (from > 0 && m.index === 0 && /[A-Za-z0-9'-]/.test(masked[from - 1]))
+        return false;
+    return INTERNAL_DESCRIPTORS.has(m[1].toLowerCase());
+}
+/** True when the clause names a service object after the verb — a capitalized
+ *  non-stopword token ("Integrate Stripe, …"). Gates cross-clause verb↔noun
+ *  binding so unrelated coordinated clauses do not pair. */
+function clauseHasServiceObjectAfter(clause, verb) {
+    const after = clause.text.slice(verb.end - clause.start);
+    const re = /\b([A-Z][A-Za-z0-9_-]+)/g;
+    let m;
+    while ((m = re.exec(after)) !== null) {
+        const tok = m[1].toLowerCase();
+        if (!SERVICE_STOPWORDS.has(tok) && !INTERNAL_DESCRIPTORS.has(tok))
+            return true;
+    }
+    return false;
+}
 /** Matches a declaration line such as
  *  `No external API integration: <reason>` (also `**bold**` and em-dash
- *  separators). The reason is REQUIRED — a bare declaration does not parse. */
-const NO_INTEGRATION_DECLARATION_RE = /^\s*(?:>\s*)?(?:\*\*)?no external api integration(?:\*\*)?\s*(?:[:—–-]|--)\s*(\S[^\n]*)$/im;
+ *  separators). The reason is REQUIRED — a bare declaration does not parse.
+ *  Deliberately NOT matched: blockquoted lines (`> No external …` is quoted
+ *  text, not a declaration) and anything inside fenced code or HTML comments
+ *  (both stripped before the scan; #2365 review C-3). */
+const NO_INTEGRATION_DECLARATION_RE = /^\s*(?:\*\*)?no external api integration(?:\*\*)?\s*(?:[:—–-]|--)\s*(\S[^\n]*)$/im;
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 const VALID_DECISIONS = new Set(['INTEGRATE', 'OPT-OUT']);
 /**
  * Parse a coverage matrix from COVERAGE.md. Accepts two bijective formats:
@@ -422,8 +609,9 @@ function parseCoverageMatrix(text) {
         return out;
     const src = text.replace(/\r\n/g, '\n');
     // #2365 acceptance #5: a "no external API integration" declaration. Scanned
-    // on fence-stripped text so an example inside a code block does not count.
-    const declMatch = NO_INTEGRATION_DECLARATION_RE.exec((0, markdown_sectionizer_cjs_1.stripFencedCode)(src).text);
+    // on fence-stripped, comment-stripped text so an example inside a code block
+    // or an HTML comment does not count.
+    const declMatch = NO_INTEGRATION_DECLARATION_RE.exec((0, markdown_sectionizer_cjs_1.stripFencedCode)(src).text.replace(HTML_COMMENT_RE, ''));
     if (declMatch) {
         out.declaration = { none: true, reason: (declMatch[1] || '').trim() };
     }

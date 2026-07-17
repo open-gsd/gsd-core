@@ -265,6 +265,21 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     assert.strictEqual(j.block, false, 'a reasoned no-integration declaration satisfies the gate');
     assert.strictEqual(j.coverage_present, true);
     assert.strictEqual(j.none_declared, true);
+    assert.strictEqual(j.detected, false, 'a non-API plan shows no overridden signals');
+  });
+
+  test('#2365 declaration overriding live detection passes but SURFACES the contradiction', () => {
+    fresh();
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API for payments.');
+    writeCoverage(phaseDir, 'No external API integration: detector over-fired; this phase is UI-only.\n');
+    const r = runGate(tmpDir, phaseDir);
+    assert.ok(r.success, `gate should succeed. stderr: ${r.error}`);
+    const j = JSON.parse(r.output);
+    assert.strictEqual(j.block, false, 'the declaration is the human overrule — it must win');
+    assert.strictEqual(j.none_declared, true);
+    assert.strictEqual(j.detected, true, 'the contradiction must be visible, not silent');
+    assert.ok(Array.isArray(j.signals) && j.signals.length > 0);
+    assert.ok(/overrid/i.test(j.message), `message should surface the override: ${j.message}`);
   });
 
   // ── Security (#1562 security review S1/S2): the phase arg is taken only as a

@@ -179,13 +179,40 @@ export function stripInlineCode(content: string): string {
   return content.split('\n').map(stripInlineCodeLine).join('\n');
 }
 
-function stripInlineCodeLine(line: string): string {
-  if (line.indexOf('`') === -1) return line;
-  let out = '';
+/** An inline code span located by `scanInlineCodeSpans`: [start, end) covers
+ *  the WHOLE span including both backtick delimiters; `content` is the inner
+ *  text between them. */
+export interface InlineCodeSpan {
+  start: number;
+  end: number;
+  content: string;
+}
+
+/**
+ * Locate every inline code span in `content`, per line (offsets are into the
+ * full string; spans never cross a `\n`). Callers that need the span CONTENT
+ * (e.g. api-coverage's dependency-evidence scan, #2365) use this; callers that
+ * just want spans gone use `stripInlineCode`.
+ */
+export function scanInlineCodeSpans(content: string): InlineCodeSpan[] {
+  if (typeof content !== 'string' || content.length === 0) return [];
+  const out: InlineCodeSpan[] = [];
+  let lineStart = 0;
+  for (const line of content.split('\n')) {
+    for (const s of scanSpansInLine(line)) {
+      out.push({ start: lineStart + s.start, end: lineStart + s.end, content: s.content });
+    }
+    lineStart += line.length + 1;
+  }
+  return out;
+}
+
+function scanSpansInLine(line: string): InlineCodeSpan[] {
+  const spans: InlineCodeSpan[] = [];
+  if (line.indexOf('`') === -1) return spans;
   let i = 0;
   while (i < line.length) {
     if (line[i] !== '`') {
-      out += line[i];
       i++;
       continue;
     }
@@ -208,14 +235,25 @@ function stripInlineCodeLine(line: string): string {
       }
     }
     if (closeStart === -1) {
-      out += line.slice(i, i + n);
-      i += n;
+      i += n; // unmatched run → literal text
     } else {
-      out += ' ';
+      spans.push({ start: i, end: closeStart + n, content: line.slice(i + n, closeStart) });
       i = closeStart + n;
     }
   }
-  return out;
+  return spans;
+}
+
+function stripInlineCodeLine(line: string): string {
+  const spans = scanSpansInLine(line);
+  if (spans.length === 0) return line;
+  let out = '';
+  let prev = 0;
+  for (const s of spans) {
+    out += line.slice(prev, s.start) + ' ';
+    prev = s.end;
+  }
+  return out + line.slice(prev);
 }
 
 // ─── extractFencedBlock ───────────────────────────────────────────────────────

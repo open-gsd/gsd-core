@@ -1144,6 +1144,34 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
     }
     const v = validateCoverageMatrix(matrixText);
     if (v.valid) {
+      if (v.none_declared) {
+        // The declaration is the human override for the detector — it PASSES
+        // even when detection fires (that is acceptance #5's point: the
+        // detector is fallible and the declaration is the reasoned overrule).
+        // But a contradiction must be VISIBLE, not silent: re-run detection
+        // over the phase scope and surface any signals it still finds
+        // (#2365 review S-1).
+        const declDetection = detectApiIntegration(readPhaseScope(projectDir, resolvedDir, phaseNumber));
+        const declSignals = declDetection.signals.map((s) => ({ verb: s.verb, noun: s.noun }));
+        output(
+          {
+            block: false,
+            passed: true,
+            coverage_present: true,
+            matrix: coverageFile,
+            counts: v.counts,
+            none_declared: true,
+            detected: declDetection.detected,
+            ...(declDetection.detected ? { signals: declSignals } : {}),
+            message: declDetection.detected
+              ? `api-coverage: COVERAGE.md declares no external API integration, overriding ${declSignals.length} detected signal(s) — confirm the declaration is accurate`
+              : 'api-coverage: COVERAGE.md declares no external API integration — matrix not required',
+          },
+          raw,
+          undefined,
+        );
+        return;
+      }
       output(
         {
           block: false,
@@ -1151,10 +1179,7 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
           coverage_present: true,
           matrix: coverageFile,
           counts: v.counts,
-          ...(v.none_declared ? { none_declared: true } : {}),
-          message: v.none_declared
-            ? 'api-coverage: COVERAGE.md declares no external API integration — matrix not required'
-            : `api-coverage: matrix present (${v.counts.surface} capabilities, ${v.counts.optout} opt-out)`,
+          message: `api-coverage: matrix present (${v.counts.surface} capabilities, ${v.counts.optout} opt-out)`,
         },
         raw,
         undefined,

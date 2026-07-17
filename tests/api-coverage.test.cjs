@@ -215,6 +215,13 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     ['clause-initial capitalized prose', 'Internal API surface stays unchanged in this phase.'],
     ['localhost URL', 'Run integration tests against https://localhost:3000/api/profile'],
     ['non-API URL', 'Wire the docs link to https://github.com/org/repo into the footer'],
+    ['internal-qualified noun', 'Wire the settings form to the internal endpoint.'],
+    ['internal-qualified service', 'The internal Payments API remains unchanged.'],
+    ['descriptor service + unrelated URL', 'Internal API surface stays unchanged; see https://example.com/style-guide.'],
+    ['Windows path', 'Wire tests for src\\app\\api\\profile\\route.ts.'],
+    ['loopback shorthand URL', 'Connect tests to http://127.1:3000/api/profile.'],
+    ['coordinated internal noun', 'Wire the form and document the internal API.'],
+    ['cross-clause without service object', 'Wire the header, then update the endpoint docs'],
   ]) {
     test(`NEGATIVE descriptive API prose (${label}): "${scope}"`, () => {
       const r = detectApiIntegration(scope);
@@ -233,6 +240,15 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     ['webhook compound', 'Wire up the Slack webhook for deploy notifications'],
     ['verb + API-naming URL', 'Connect the app to https://api.stripe.com/v1 for charges'],
     ['slashed noun shorthand', 'Integrate the Stripe API/SDK for payments'],
+    ['cross-clause service object', 'Integrate Stripe, exposing its endpoints for payment capture.'],
+    ['long single-clause gap', "Connect our checkout to Stripe's hosted payment processing service through its v1 endpoints."],
+    ['non-http URI scheme', 'Connect the realtime client to wss://api.openai.com/v1/realtime.'],
+    ['versioned noun shorthand', 'Integrate Stripe API/v2 for legacy payments.'],
+    ['clause-initial service + object follower', 'Stripe API client for payments.'],
+    ['inline-code package corroboration', 'Stripe SDK client via `@stripe/stripe-js` for payment intents.'],
+    ['inline-code package as only noun', 'Integrate `stripe-sdk` for payment intents.'],
+    ['later surface after rejected first candidate', 'Internal API facade around Stripe SDK payment flows.'],
+    ['later surface after rejected modifier', 'Resolver-only API facade delegates to Stripe SDK for payments.'],
   ]) {
     test(`POSITIVE still fires (${label}): "${scope}"`, () => {
       const r = detectApiIntegration(scope);
@@ -281,6 +297,29 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     assert.notStrictEqual(p.declaration && p.declaration.none, true);
     const v = validateCoverageMatrix(md);
     assert.notStrictEqual(v.none_declared, true);
+  });
+
+  test('declaration inside an HTML comment is NOT recognized', () => {
+    const md = '<!--\nNo external API integration: quoted example only.\n-->\n';
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, false);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  test('blockquoted declaration is NOT recognized (quoted text is not a decision)', () => {
+    const v = validateCoverageMatrix('> No external API integration: copied from the old PLAN.md.\n');
+    assert.strictEqual(v.valid, false);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  // ── S-2: a hostile line repeating a verb+noun pair must not go quadratic.
+  test('hostile repeated-term line stays fast', () => {
+    const s = 'integrate api '.repeat(10000); // 140 KB single line
+    const t0 = Date.now();
+    const r = detectApiIntegration(s);
+    const ms = Date.now() - t0;
+    assert.strictEqual(r.detected, true);
+    assert.ok(ms < 3000, `detector took ${ms}ms on a 140 KB hostile line`);
   });
 });
 

@@ -44,6 +44,7 @@ const {
   withSection,
   deleteSection,
   stripInlineCode,
+  scanInlineCodeSpans,
 } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 // ─── stripInlineCode (#2365) ──────────────────────────────────────────────────
@@ -83,6 +84,26 @@ describe('stripInlineCode', () => {
   test('text without backticks is returned unchanged', () => {
     const s = 'plain prose, no code spans at all';
     assert.strictEqual(stripInlineCode(s), s);
+  });
+});
+
+describe('scanInlineCodeSpans', () => {
+  test('returns spans covering the delimiters with inner content', () => {
+    const spans = scanInlineCodeSpans('use `api` and ``x``');
+    assert.deepStrictEqual(spans, [
+      { start: 4, end: 9, content: 'api' },
+      { start: 14, end: 19, content: 'x' },
+    ]);
+  });
+
+  test('offsets are into the full multi-line string; spans never cross lines', () => {
+    const spans = scanInlineCodeSpans('a `x`\nno `span\nhere');
+    assert.deepStrictEqual(spans, [{ start: 2, end: 5, content: 'x' }]);
+  });
+
+  test('non-string / empty input yields no spans', () => {
+    assert.deepStrictEqual(scanInlineCodeSpans(undefined), []);
+    assert.deepStrictEqual(scanInlineCodeSpans(''), []);
   });
 });
 

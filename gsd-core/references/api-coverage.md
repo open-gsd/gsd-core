@@ -89,7 +89,10 @@ No external API integration: UI-only phase, no third-party surface.
 
 The reason is **required**, exactly like an `OPT-OUT` reason — the declaration
 is a reasoned decision, not a bypass. A `COVERAGE.md` containing both the
-declaration and coverage rows is contradictory and blocks the seal.
+declaration and coverage rows is contradictory and blocks the seal. When the
+detector still finds integration signals in the phase scope, the declaration
+wins (it is the human overrule for a fallible detector) but the gate output
+surfaces the overridden signals so the contradiction is visible, not silent.
 
 ## A second integration against the same need
 
