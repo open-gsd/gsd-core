@@ -112,11 +112,11 @@ async function routeCapabilityCommand({ args, cwd, raw }) {
   const capHostVersion = () => {
     const SEMVER_PREFIX = /^\d+\.\d+\.\d+/;
     try {
-      const v = fs.readFileSync(path.join(__dirname, '..', 'VERSION'), 'utf8').trim();
+      const v = fs.readFileSync(path.join(__dirname, '..', '..', 'VERSION'), 'utf8').trim();
       if (SEMVER_PREFIX.test(v)) return v;
     } catch { /* not an installed tree (no gsd-core/VERSION) */ }
     try {
-      const pkg = require(path.join(__dirname, '..', '..', 'package.json')); // gsd-core/bin/ -> repo root is two up
+      const pkg = require(path.join(__dirname, '..', '..', '..', 'package.json')); // gsd-core/bin/lib/ -> repo root is three up
       if (pkg && typeof pkg.version === 'string' && SEMVER_PREFIX.test(pkg.version)) return pkg.version;
     } catch { /* runtime root has no package.json */ }
     return '0.0.0';
