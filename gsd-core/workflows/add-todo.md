@@ -61,6 +61,34 @@ Infer area from file paths:
 Use existing area from step 2 if similar match exists.
 </step>
 
+<step name="infer_severity">
+Infer a **suggested** severity from the same blocker/major/minor/cosmetic taxonomy `verify-work.md`'s `severity_inference` uses — then CONFIRM it with the user before writing. Never silently auto-assign: a mis-tagged severity silently corrupts backlog triage, which is exactly the signal this field exists to provide.
+
+Suggest from the user's natural-language description:
+
+| User says | Suggest |
+|-----------|---------|
+| "crashes", "error", "exception", "fails completely", "data loss" | blocker |
+| "doesn't work", "nothing happens", "wrong behavior" | major |
+| "works but...", "slow", "weird", "minor issue" | minor |
+| "color", "spacing", "alignment", "looks off" | cosmetic |
+
+Default the suggestion to **major** if unclear.
+
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace the `AskUserQuestion` below with a plain-text numbered list of the four options and ask the user to type their choice number. Required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is unavailable.
+
+Confirm with AskUserQuestion (present the suggested value first):
+- header: "Severity?"
+- question: "Suggested severity: [suggested]. Confirm or change:"
+- options:
+  - "blocker" — breaks a workflow or loses data; fix first
+  - "major" — wrong behavior with no workaround
+  - "minor" — works, but with a workaround or annoyance
+  - "cosmetic" — visual/polish only
+
+Carry the confirmed value into `severity` in the create_file frontmatter.
+</step>
+
 <step name="check_duplicates">
 ```bash
 # Search for key words from title in existing todos
@@ -97,6 +125,7 @@ Write to `.planning/todos/pending/${date}-${slug}.md`:
 created: [timestamp]
 title: [title]
 area: [area]
+severity: [blocker|major|minor|cosmetic — confirmed in infer_severity step]
 files:
   - [file:lines]
 ---

@@ -1013,6 +1013,28 @@ describe('cmdInitTodos', () => {
     assert.strictEqual(task1.path, '.planning/todos/pending/task-1.md');
   });
 
+  // ── #2337: init todos must surface severity too, in parity with list-todos ──
+  test('surfaces severity when present, omits the key when absent (#2337)', () => {
+    const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+
+    fs.writeFileSync(path.join(pendingDir, 'tagged.md'),
+      'title: Crash on save\narea: core\ncreated: 2026-02-25\nseverity: blocker');
+    fs.writeFileSync(path.join(pendingDir, 'untagged.md'),
+      'title: Old todo\narea: docs\ncreated: 2026-02-24');
+
+    const result = runGsdTools('init todos', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const tagged = output.todos.find(t => t.file === 'tagged.md');
+    const untagged = output.todos.find(t => t.file === 'untagged.md');
+    assert.ok(tagged && untagged, 'both todos should be present');
+    assert.strictEqual(tagged.severity, 'blocker', 'severity surfaced verbatim when present');
+    assert.ok(!('severity' in untagged),
+      'severity key ABSENT (backward compatible) for a todo with no severity line');
+  });
+
   test('area filter returns only matching todos', () => {
     const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
     fs.mkdirSync(pendingDir, { recursive: true });
