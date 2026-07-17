@@ -78,6 +78,45 @@ function workflowGuardEnabled(cwd) {
   }
 }
 
+// Kimi CLI delivers the tool vocabulary the matcher was registered with —
+// this guard's Kimi matcher is 'Shell|WriteFile|StrReplaceFile'
+// (runtime-hooks-surface.cts), so tool_name arrives in Kimi vocabulary
+// (possibly module-qualified) and neither the Bash branch nor the
+// Write/Edit/MultiEdit allowlist below ever matched on Kimi (#2304).
+// kimi-cli's Shell.Params names its field `command`
+// (src/kimi_cli/tools/shell/__init__.py), same as Claude's Bash, so the
+// Shell leg needs only the name mapping. This block is kept byte-identical
+// with the copies in gsd-prompt-guard.js, gsd-read-guard.js,
+// gsd-worktree-path-guard.js, and gsd-read-injection-scanner.js — a parity
+// test binds them (tests/kimi-guard-normalization-parity.test.cjs). Inlined
+// per guard (not hooks/lib/): hook scripts are staged as standalone files,
+// and a sibling require is a staging dependency that can fail silently.
+const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit', ReadFile: 'Read', Shell: 'Bash' };
+function normalizeKimiPayload(data) {
+  const raw = data.tool_name;
+  if (typeof raw !== 'string') return data;
+  const mapped = KIMI_TOOL_NAMES[raw.slice(raw.lastIndexOf(':') + 1)];
+  if (!mapped) return data;
+  data.tool_name = mapped;
+  const input = data.tool_input;
+  if (input && typeof input === 'object') {
+    if (input.file_path === undefined && typeof input.path === 'string') {
+      input.file_path = input.path;
+    }
+    const edits = Array.isArray(input.edit) ? input.edit
+      : (input.edit && typeof input.edit === 'object') ? [input.edit] : [];
+    if (edits.length) {
+      if (input.old_string === undefined) {
+        input.old_string = edits.map((e) => String(e.old ?? '')).join('\n');
+      }
+      if (input.new_string === undefined) {
+        input.new_string = edits.map((e) => String(e.new ?? '')).join('\n');
+      }
+    }
+  }
+  return data;
+}
+
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
 process.stdin.setEncoding('utf8');
@@ -85,7 +124,7 @@ process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
-    const data = JSON.parse(input);
+    const data = normalizeKimiPayload(JSON.parse(input));
     const toolName = data.tool_name;
     const cwd = data.cwd || process.cwd();
     const isWorkflowGuardEnabled = workflowGuardEnabled(cwd);

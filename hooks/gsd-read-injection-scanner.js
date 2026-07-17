@@ -116,7 +116,7 @@ function isExcludedPath(filePath) {
 // them (tests/kimi-guard-normalization-parity.test.cjs). Inlined per guard
 // (not hooks/lib/): hook scripts are staged as standalone files, and a
 // sibling require is a staging dependency that can fail silently.
-const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit', ReadFile: 'Read' };
+const KIMI_TOOL_NAMES = { WriteFile: 'Write', StrReplaceFile: 'Edit', ReadFile: 'Read', Shell: 'Bash' };
 function normalizeKimiPayload(data) {
   const raw = data.tool_name;
   if (typeof raw !== 'string') return data;
