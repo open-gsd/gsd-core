@@ -285,8 +285,6 @@ const { routeInitCommand } = require('./lib/init-command-router.cjs');
 // here, invoked from case 'init' below.
 const { warnIfStaleBake } = require('./lib/stale-bake-guard.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
-const capabilityState = require('./lib/capability-state.cjs');
-const capabilityWriter = require('./lib/capability-writer.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
