@@ -305,6 +305,8 @@ See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
 
 CJS command family routers dispatch through `CommandRoutingHub`. The hub owns the no-throw pure-result contract (`hub.dispatch()` catches internal exceptions and returns `{ ok: false, kind, ...typedPayload }`) and the closed runtime error taxonomy (`UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`). Router adapters remain thin CLI translators — they build the hub, call `dispatch`, then map the Result to `output()`/`error()` calls. The runtime is single-path (no dual-runtime mode selection). See `docs/adr/0174-retire-gsd-sdk-package-boundary.md`.
 
+> **Planned (ADR-2346 / epic #2345):** the `runCommand` 73-case switch is being dissolved into a two-layer dispatch — families via the `commandFamilies` registry (ADR-959 mechanism, completed) and single-purpose leaf verbs via a table filling the prepared `_dispatchNonFamily` seam — collapsing `runCommand` to a ~15-line dispatcher. Behavior-preserving; tracked phase-by-phase under epic #2345. The current-state description above holds until each phase lands.
+
 ### Capability Command Dispatch (`gsd-core/bin/gsd-tools.cjs`, ADR-1244 D7)
 
 Command families declared by capabilities (`commands: [{ family, module, router }]`) are dispatched from the registry rather than a hardcoded switch. The `runCommand` default arm tries, in order:
