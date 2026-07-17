@@ -24,20 +24,26 @@ treated as an external-API integration when **either**:
 1. a `COVERAGE.md` matrix is present in the phase directory (the planner produced
    one at `plan:pre`), **or**
 2. the phase scope shows a strong external-API-integration signal (an integration
-   verb and an external-API noun **in the same clause, close together**, or an
-   explicit `<Service> API|SDK|REST|GraphQL` surface in proper-noun position)
-   and no matrix yet exists.
+   verb and an external-API noun **in the same clause**, or an explicit
+   `<Service> API|SDK|REST|GraphQL` surface naming a real service) and no matrix
+   yet exists.
 
-Non-API phases (refactors, bug fixes, internal-only work, features that merely
-*mention* an existing internal API) do **not** fire the gate — the trigger
-requires a compound signal, so a bare word like "api" in "the public API of
-UserController" is intentionally ignored. Since #2365 the detector also
-excludes non-prose spans before matching: fenced code blocks, inline
-`` `code` `` spans, and path-shaped tokens (a first-party
-`src/app/api/profile/route.ts` route reference is a file path, not an external
-API), and it does not treat an ordinary capitalized sentence starter
-("Resolver-only API …") as a service name — a clause-initial `<Word> API` needs
-dependency evidence (a URL or package reference) on the same line to count.
+The detector is deliberately **fail-closed**: it leans toward firing, because a
+false positive is dismissed by a one-line `COVERAGE.md` "no external API
+integration" declaration, whereas a false *negative* silently lets a real
+external-API phase past this blocking gate — strictly worse. So it suppresses
+only prose that is unambiguously not external integration. A bare word like
+"api" in "the public API of UserController" is ignored (no integration verb +
+named service); the clause boundary is the whole relationship test, so an
+integration verb and an API noun in **different** clauses do not pair. Since
+#2365 the detector also excludes non-prose spans before matching: fenced code
+blocks, inline `` `code` `` spans, and path-shaped tokens (a first-party
+`src/app/api/profile/route.ts` route is a file path, not an external API, while
+an external host like `api.stripe.com/v1` still counts). In the
+`<Service> API` surface position it rejects capitalized sentence starters
+("The API"), locality/protocol descriptors ("Internal API", "REST API"),
+compound modifiers ("Resolver-only API"), and first-party-qualified services
+("internal Payments API") — a real vendor name is none of these.
 
 ## The two touch points
 

@@ -210,35 +210,45 @@ export function scanInlineCodeSpans(content: string): InlineCodeSpan[] {
 function scanSpansInLine(line: string): InlineCodeSpan[] {
   const spans: InlineCodeSpan[] = [];
   if (line.indexOf('`') === -1) return spans;
-  let i = 0;
-  while (i < line.length) {
-    if (line[i] !== '`') {
-      i++;
-      continue;
-    }
-    let n = 0;
-    while (i + n < line.length && line[i + n] === '`') n++;
-    // Find the next backtick run of EXACTLY n — the CommonMark closer.
-    let j = i + n;
-    let closeStart = -1;
-    while (j < line.length) {
-      if (line[j] === '`') {
-        let m = 0;
-        while (j + m < line.length && line[j + m] === '`') m++;
-        if (m === n) {
-          closeStart = j;
-          break;
-        }
-        j += m;
-      } else {
-        j++;
-      }
-    }
-    if (closeStart === -1) {
-      i += n; // unmatched run → literal text
+  // Collect the maximal backtick RUNS once, then match openers to closers using
+  // a per-length forward cursor. A naive "search the rest of the line for the
+  // closer" loop is O(n²) on a line of many unmatched increasing-length runs
+  // (#2365 review 9); precomputing runs makes the whole scan linear while
+  // preserving CommonMark semantics (closer = next run of EXACTLY the same len).
+  const runs: Array<[number, number]> = [];
+  for (let i = 0; i < line.length; ) {
+    if (line[i] === '`') {
+      let n = 1;
+      while (i + n < line.length && line[i + n] === '`') n++;
+      runs.push([i, n]);
+      i += n;
     } else {
-      spans.push({ start: i, end: closeStart + n, content: line.slice(i + n, closeStart) });
-      i = closeStart + n;
+      i++;
+    }
+  }
+  const runsByLen = new Map<number, number[]>();
+  for (let k = 0; k < runs.length; k++) {
+    const len = runs[k][1];
+    const arr = runsByLen.get(len);
+    if (arr) arr.push(k);
+    else runsByLen.set(len, [k]);
+  }
+  const cursorByLen = new Map<number, number>();
+  let k = 0;
+  while (k < runs.length) {
+    const [openPos, n] = runs[k];
+    const candidates = runsByLen.get(n)!; // n came from this map, always present
+    let ci = cursorByLen.get(n) ?? 0;
+    while (ci < candidates.length && candidates[ci] <= k) ci++;
+    if (ci < candidates.length) {
+      const closeK = candidates[ci];
+      const closePos = runs[closeK][0];
+      spans.push({ start: openPos, end: closePos + n, content: line.slice(openPos + n, closePos) });
+      cursorByLen.set(n, ci + 1);
+      k = closeK + 1; // resume after the closer — runs inside the span are code
+    } else {
+      cursorByLen.set(n, ci);
+      k++; // unmatched run → literal text, next run is a fresh opener
     }
   }
   return spans;

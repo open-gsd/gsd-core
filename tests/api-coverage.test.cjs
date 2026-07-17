@@ -201,27 +201,26 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     assert.strictEqual(r.detected, false);
   });
 
-  test('NEGATIVE distant same-clause pair: verb and noun far apart do not compound', () => {
-    const r = detectApiIntegration(
-      'Wiring the settings drawer means the profile page the sidebar and the account menu all reach the same internal endpoint'
-    );
-    assert.strictEqual(r.detected, false);
-  });
-
-  // ── acceptance #3: descriptive/local "API" prose (threat-model shape)
+  // ── acceptance #3: descriptive/local "API" prose (threat-model shape).
+  //    NOTE: the detector is FAIL-CLOSED — the classes below stay clean because
+  //    they are unambiguously NOT external integration (no integration verb + a
+  //    named service, or a first-party-qualified surface). Prose that pairs an
+  //    integration VERB with an API noun ("wire … the internal endpoint") is a
+  //    fail-closed POSITIVE now (see the "#2365 review — fail-open fixes" group);
+  //    a one-line COVERAGE.md declaration dismisses it if it is a false alarm.
   for (const [label, scope] of [
     ['threat-model table cell', '| Tampering | Resolver-only API rejects arbitrary caller URLs. |'],
     ['compound-modifier mid-sentence', 'The Resolver-only API rejects arbitrary caller URLs.'],
     ['clause-initial capitalized prose', 'Internal API surface stays unchanged in this phase.'],
     ['localhost URL', 'Run integration tests against https://localhost:3000/api/profile'],
     ['non-API URL', 'Wire the docs link to https://github.com/org/repo into the footer'],
-    ['internal-qualified noun', 'Wire the settings form to the internal endpoint.'],
-    ['internal-qualified service', 'The internal Payments API remains unchanged.'],
+    ['internal-qualified service (no verb)', 'The internal Payments API remains unchanged.'],
     ['descriptor service + unrelated URL', 'Internal API surface stays unchanged; see https://example.com/style-guide.'],
     ['Windows path', 'Wire tests for src\\app\\api\\profile\\route.ts.'],
     ['loopback shorthand URL', 'Connect tests to http://127.1:3000/api/profile.'],
-    ['coordinated internal noun', 'Wire the form and document the internal API.'],
-    ['cross-clause without service object', 'Wire the header, then update the endpoint docs'],
+    ['protocol-only surface', 'Document the REST API behavior for maintainers.'],
+    ['protocol-only surface (GraphQL)', 'Review the GraphQL API schema naming conventions.'],
+    ['cross-clause coordinate action', 'Wire the header, then update the endpoint docs'],
   ]) {
     test(`NEGATIVE descriptive API prose (${label}): "${scope}"`, () => {
       const r = detectApiIntegration(scope);
@@ -253,6 +252,44 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     test(`POSITIVE still fires (${label}): "${scope}"`, () => {
       const r = detectApiIntegration(scope);
       assert.strictEqual(r.detected, true, `true-positive regression [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review — fail-open fixes. Codex's second-round review found the
+  //    round-2 tightening had over-corrected into FAIL-OPEN false negatives:
+  //    realistic external-API prose that a BLOCKING gate silently let through.
+  //    Under the fail-closed decision these MUST detect. This is the guard the
+  //    handoff flagged in bold — a fix that lets these slip is strictly worse
+  //    than the false positives it removes.
+  for (const [label, scope] of [
+    ['clause-initial service, plain follower (F1)', 'Stripe API for payment processing.'],
+    ['scheme-less external host (F2)', 'Connect the client to api.stripe.com/v1 for charges.'],
+    ["vendor's first-party SDK (F3)", "Integrate Shopify's first-party SDK for checkout."],
+    ['long single integration clause (F4)', "Integrate Stripe's hosted payment processing service into checkout using the vendor-recommended asynchronous flow for recurring subscriptions and one-time card payments through its API."],
+    ['lowercase cross-clause service (F5)', 'Integrate stripe, exposing its endpoints for payment capture.'],
+    // Fail-closed reversal of the round-2 "internal" negatives: an integration
+    // verb bound to an API noun detects even when the noun is "internal"-qualified
+    // (Codex F3: "internal" can name the vendor's own API). Dismissed by declaration.
+    ['integration verb + internal noun', 'Wire the settings form to the internal endpoint.'],
+    ['coordinated integration verb + internal noun', 'Wire the form and document the internal API.'],
+    ['distant same-clause verb+noun', 'Wiring the settings drawer means the profile page the sidebar and the account menu all reach the same internal endpoint'],
+  ]) {
+    test(`POSITIVE fail-open guard (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, true, `fail-open regression [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review — false-positive fixes. The same review found new false
+  //    positives from the round-2 heuristics; these MUST stay clean.
+  for (const [label, scope] of [
+    ['URL token swallowing a clause comma (F6)', 'Integrate the design tokens from https://example.com, document the endpoint terminology.'],
+    ['capitalized internal component cross-clause (F7)', 'Wire the SettingsForm, then document the endpoint props.'],
+    ['protocol name as service (F8)', 'Document the REST API behavior for maintainers.'],
+  ]) {
+    test(`NEGATIVE fail-closed FP guard (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `new false positive [${label}]: ${scope}`);
     });
   }
 
