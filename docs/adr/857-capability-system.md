@@ -1,26 +1,39 @@
 # ADR-857: Capability system — five-step loop as core, features as plug-ins behind Loop Extension Points [Proposed]
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-08); see "Ratification" below
 - **Date:** 2026-06-08
 - **Issue:** #857
-- **Supersedes (generalizes):** Skill Surface Budget Module ([ADR-0011](0011-skill-surface-budget-module.md)), Runtime Install Policy Module ([ADR-58](58-runtime-install-policy-module.md)) — **prospective**: this ADR is still `Proposed`, so neither target is marked superseded. See "Status caveat" below.
+- **Subsumes (generalizes):** Skill Surface Budget Module ([ADR-0011](0011-skill-surface-budget-module.md)), Runtime Install Policy Module ([ADR-58](58-runtime-install-policy-module.md)) — both remain **Accepted and live**; this ADR generalizes them, it does not replace them. See "Relation to ADR-0011 and ADR-58" below.
 - **Builds on:** CommandRoutingHub (ADR-0012), Runtime Artifact Layout Module (ADR-3660), generated-cjs single source (ADR-457)
 - **Amended:** 2026-06-12 — phase-6 boundary settled before the Migrate phase freezes it: the **verifier↔predicate contract** is classified as core verification substrate (not an off-by-default Feature Capability). See *Verification substrate vs. plug-in tier (the predicate boundary)* below. Prompted by @davesienkowski's boundary analysis on #857; coordinates with ADR-550 (spec-phase probe contract).
 
-## Status caveat (2026-07-16): `Proposed` is stale — pending maintainer ratification
+## Ratification (2026-07-17): Proposed → Accepted
 
-This ADR still reads `Proposed`, but the capability system it decides **shipped** and is the architecture of the 1.6.0/1.7.0 product:
+Ratified by maintainer directive. This ADR read `Proposed` for over a month while the capability system it decides **was the shipped architecture of 1.6.0/1.7.0** — a label that invited contributors and agents to treat the live plug-in architecture as an unbuilt idea.
 
-- `src/capability-lifecycle.cts` implements `installCapability` / `upgradeCapability` / `removeCapability` / `bindProjectConsent`, with trust gates, consent binding, integrity pinning, and reserved first-party namespaces.
-- `src/capability-state.cts` resolves capability state; `capability-validator.cjs` validates descriptors; `scripts/gen-capability-registry.cjs` generates the registry.
-- The owning epic [#857](https://github.com/open-gsd/gsd-core/issues/857) is **closed**.
+**Evidence the decision shipped** (each item verified against the tree, then independently re-verified by two reviewers instructed to refute this ratification; neither could):
 
-The `Proposed` label is therefore materially misleading: it invites a contributor or agent to treat the shipped capability system as an unbuilt idea, and to treat [ADR-0011](0011-skill-surface-budget-module.md) / [ADR-58](58-runtime-install-policy-module.md) as the live architecture instead of the decisions this ADR generalizes.
+- **The lifecycle exists.** `src/capability-lifecycle.cts:880-1053` implements `installCapability`, plus `upgradeCapability` / `removeCapability` / `bindProjectConsent`. `src/capability-state.cts` resolves capability state; `gsd-core/bin/lib/capability-validator.cjs` validates descriptors; `scripts/gen-capability-registry.cjs` generates the registry into `gsd-core/bin/lib/capability-registry.cjs`.
+- **The plug-in split is real, not notional.** `capabilities/` holds 30+ descriptors spanning `role: feature` (research, ui, security, code-review, graphify, intel, audit, profile-pipeline, tdd, schema-gate, drift, gap-analysis, nyquist, pattern-mapper, ai-integration, mempalace, assumption-delta, external-job) and `role: runtime` (claude, codex, antigravity, cline, cursor, windsurf, kilo, qwen, hermes, pi, trae, augment, copilot, codebuddy, opencode, vscode).
+- **The god-module is gone.** `src/core.cts` — the 2271-line module named in this ADR's Context — no longer exists; it decomposed into `io.cts`, `config-loader.cts`, `phase-locator.cts`, `model-resolver.cts`, `roadmap-parser.cts`. Epic #1267 ("retire the core.cjs re-export spine") is closed. Corroborated independently at [`612-bracket-phase-id-convention.md`](612-bracket-phase-id-convention.md):165 ("core.cts no longer exists").
+- **The Loop Extension Points are wired.** All 12 named points (`discuss:pre/post`, `plan:pre/post`, `execute:pre`, `execute:wave:pre/post`, `execute:post`, `verify:pre/post`, `ship:pre/post`) have live render-hook call sites in the host loop.
+- **The workflow bodies shrank, as this ADR's Consequences promised.** `plan-phase.md` is 93,959 bytes against a frozen pre-phase-6 ceiling of 94,519; `execute-phase.md` is 93,363 against 93,600.
+- **Tests exercise it.** 16 dedicated `tests/capability-*.test.cjs` files (largest: `capability-registry.test.cjs` at 297K, `capability-lifecycle.test.cjs` at 184K), plus `tests/phase6-capstone-conformance.test.cjs`, whose three assertions are marked "RED BY DESIGN until phase 6 is actually complete" — added after #1139 was caught closing green on a false completion — and all three pass.
+- **Governance closed.** Epic [#857](https://github.com/open-gsd/gsd-core/issues/857) is CLOSED with `stateReason=COMPLETED` (2026-06-14). All six rollout-phase sub-issue clusters are CLOSED/COMPLETED: #870/#885 (phases 1–2), #894/#896/#903/#910/#918 (phase 3), #942/#945/#959/#961/#1136/#1138/#1213 (phase 4), #1016/#1035/#1056/#1077 (phase 5), #1120/#1135/#1137/#1139/#1820 (phase 6).
+- **The corpus already treats it as live.** 20+ later ADRs (894, 959, 1016, 1056, 1077, 1143, 1213, 1239, 1244, 1372, 1593, 1606, 1671, 1769, 1817, 1820, 550, 58, 612) build on this ADR's capability model as current architecture; none claims to replace it. [`1244-capability-ecosystem.md`](1244-capability-ecosystem.md):12, authored independently, states: "32 capabilities ship today (20 `role:feature`, 12 `role:runtime`). The architecture is in place."
 
-Two things this caveat deliberately does **not** do:
+### Relation to ADR-0011 and ADR-58 — generalized, not replaced
 
-1. **It does not flip the status.** Ratifying an ADR is a maintainer act; this file records the discrepancy rather than resolving it unilaterally.
-2. **It does not mark ADR-0011 or ADR-58 superseded.** While this ADR is `Proposed`, its supersession claim is *prospective* — stamping two live, Accepted decisions as superseded by an unratified ADR would assert something untrue. On ratification, `scripts/gen-adr-index.cjs` will require those back-links.
+This ADR's header field originally read "**Supersedes** (generalizes)". On ratification that wording was corrected to **Subsumes**, because taking "supersedes" literally would have stamped two live decisions as dead:
+
+- [ADR-0011](0011-skill-surface-budget-module.md)'s Skill Surface Budget Module is live — `applySurface` at `src/surface.cts:348`.
+- [ADR-58](58-runtime-install-policy-module.md)'s typed `InstallPlan` seam is live — `src/runtime-artifact-install-plan.cts:82`.
+
+Both keep `Accepted` status and now carry a `Subsumed by` pointer here. The parenthetical "(generalizes)" was always the accurate word; only the field name was wrong.
+
+### What this ratification does not settle
+
+[ADR-959](959-capability-command-contribution.md) (command contribution) stays `Proposed`: issue [#2346](https://github.com/open-gsd/gsd-core/issues/2346) — "ADR: Command Dispatch Completion" — is OPEN and maintainer-approved, and explicitly plans 959's graduation as its own capstone ADR. Ratifying it here would preempt that.
 
 See also [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (EoS, Accepted), which realizes and **inverts** this ADR's Decision 8 — flipping *projection* to *embedding*. For how GSD meets a host, EoS is the current frame.
 

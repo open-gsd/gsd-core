@@ -1,8 +1,25 @@
 # ADR-1577: Untrusted-input boundary + opt-in injection blocking
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-25); see "Ratification" below
 - **Issue:** [#1577](https://github.com/open-gsd/gsd-core/issues/1577)
 - **Part of:** [#1573](https://github.com/open-gsd/gsd-core/issues/1573) (harden the agent layer against documented LLM failure modes)
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive; the Proposed status had gone unconfirmed for 22 days since the ADR landed on 2026-06-25.
+
+**Evidence the decision shipped:**
+
+- Issue #1577 is closed (`state=CLOSED`, `stateReason=COMPLETED`, closed 2026-06-24T21:07:24Z) as split A of the umbrella #1573, scoped exactly to this ADR's decision.
+- `hooks/gsd-read-injection-scanner.js:118` extends the scanner to `SCANNED_TOOLS = new Set(['Read', 'WebFetch', 'WebSearch'])`, wired via `hooks/hooks.json:34`'s `"Read|WebFetch|WebSearch"` matcher — closing the WebFetch/WebSearch gap named in Context.
+- `hooks/gsd-read-injection-scanner.js:212` gates blocking on `cfg.security?.injection_blocking === true`, read directly via `fs.readFileSync`/`JSON.parse` (independent of `src/configuration.cts`'s key whitelist, so no drop risk).
+- `security.injection_blocking` is a registered config key end-to-end: `gsd-core/bin/shared/config-schema.manifest.json:109` lists it and `gsd-core/bin/shared/config-defaults.manifest.json:103` defaults it `false`; `src/configuration.cts:47` builds `VALID_CONFIG_KEYS` from that manifest and `src/config-schema.cts:61` (`isValidConfigKey`) consults it.
+- `gsd-core/references/untrusted-input-boundary.md` exists and is `@`-included by exactly the 10 ingest agents named in the Decision: `gsd-advisor-researcher`, `gsd-ai-researcher`, `gsd-assumptions-analyzer`, `gsd-doc-classifier`, `gsd-doc-synthesizer`, `gsd-domain-researcher`, `gsd-phase-researcher`, `gsd-project-researcher`, `gsd-research-synthesizer`, `gsd-ui-researcher`.
+- `docs/explanation/security-model.md:150-165` documents the PostToolUse pre-filter framing and names all 10 agents; `docs/CONFIGURATION.md:910` documents `security.injection_blocking` with a direct link to ADR-1577.
+- `tests/read-injection-scanner.security.test.cjs` runs `SCAN-WF-01`, `SCAN-WF-02`, `SCAN-WF-03`, and `SCAN-WS-01` against the real hook subprocess for WebFetch/WebSearch payloads and asserts real detections.
+- `tests/injection-blocking-config.test.cjs` asserts `isValidConfigKey('security.injection_blocking')` is true, `isValidConfigKey('security')` is false, and `CONFIG_DEFAULTS.security.injection_blocking === false`.
+
+**Governance state:** owning issue #1577 — CLOSED, stateReason COMPLETED, closed 2026-06-24T21:07:24Z.
 
 ## Context
 

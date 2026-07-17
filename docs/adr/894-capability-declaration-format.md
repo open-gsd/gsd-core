@@ -1,6 +1,6 @@
-# ADR-894: Capability declaration format + registry generation [Proposed]
+# ADR-894: Capability declaration format + registry generation [Accepted]
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-08); see "Ratification" below
 - **Date:** 2026-06-08 (amended same day across two design grillings — see "Grilling amendments")
 - **Issue:** #894
 - **Parent:** [ADR-857](857-capability-system.md) (Capability system) — resolves its Open question #1
@@ -13,9 +13,23 @@
 
 **Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
 
-**Status caveat — pending maintainer ratification.** This ADR still reads `Proposed`, but the format it specifies shipped: `capability.json` descriptors are validated in `capability-validator.cjs`, generated through `scripts/gen-capability-registry.cjs`, and consumed across the installed runtimes. Its owning epic [#857](https://github.com/open-gsd/gsd-core/issues/857) is **closed**. The `Proposed` label is therefore stale and materially misleading — it invites a reader to treat a shipped, load-bearing format as an unbuilt proposal. The status flip is deliberately **not** made here: ratifying an ADR is a maintainer act, and this file records the discrepancy rather than resolving it unilaterally.
-
 Recorded because ADR-1239 declared this subsumption while this file recorded nothing.
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive after independent re-verification of the evidence below; the `Proposed` label had been stale for roughly 39 days (2026-06-08 → 2026-07-17) after the format it specifies had already shipped.
+
+**Evidence the decision shipped:**
+
+- Owning issue [#894](https://github.com/open-gsd/gsd-core/issues/894) and parent epic [#857](https://github.com/open-gsd/gsd-core/issues/857) are both CLOSED / COMPLETED.
+- `scripts/gen-capability-registry.cjs` (886 lines) implements the §4 generator: reads every `capabilities/<id>/capability.json`, validates each via `capability-validator.cjs`, and enforces the one-owner / acyclic / tier-monotone / config-exclusivity / unique-producer invariants.
+- `gsd-core/bin/lib/capability-validator.cjs` (2,346 lines) validates the §2 schema, including the gate `check` discriminator — exactly one of `query` / `predicate` / `agentVerdict` (around lines 1566–1573).
+- 37 real `capabilities/<id>/capability.json` files exist on disk; `capabilities/ui/capability.json` matches the ADR's worked UI example (`tier`/`requires`/`skills`/`agents`/`steps`/`gates`) near-verbatim, plus additive fields (`version`, `engines`, `runtimeCompat`) not in the original text.
+- `capabilities/codex/capability.json` has concrete `role: "runtime"` enums filled in — `commandStyle: "shell-var"`, `hooksSurface: "codex-hooks-json"`, `sandboxTier: "codex-agent-sandbox"` — resolving the ADR's own "deferred to phase 5" open question.
+- `scripts/gen-loop-host-contract.cjs` (18,992 bytes) parses the `<!-- gsd:loop-host … -->` comment markers out of the five step workflows (confirmed at `gsd-core/workflows/plan-phase.md:1`) into the generated host contract.
+- `gsd-core/bin/lib/capability-registry.cjs` (235,826 bytes, generated) contains `byLoopPoint` (line 3033), `configKeys` (line 3578), and `requiresClosure()` (line 5779) — the role-partitioned §5 shape.
+
+**Governance state:** owning issue #894 CLOSED/COMPLETED (closed 2026-06-08); parent epic #857 CLOSED/COMPLETED (closed 2026-06-14).
 
 ## Context
 

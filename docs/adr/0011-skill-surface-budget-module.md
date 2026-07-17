@@ -4,6 +4,7 @@
 - **Date:** 2026-05-12
 - **Decision date:** 2026-05-12
 - **Supersedes:** [ADR-0010](0010-skill-surface-budget-module.md) (Skill Surface Budget Module — earlier draft, install-time skill listing curation)
+- **Subsumed by:** [ADR-857](857-capability-system.md) (Capability system) — generalizes this module; this seam remains live at `src/surface.cts:348` (`applySurface`)
 - **Implementation:** feat/3408-skills-description-dropped-due-to-size, PR <TBD>
 
 Every installed `gsd-*` skill costs eager system-prompt tokens: runtimes (Claude Code, opencode, and others) enumerate all skill descriptions in `<available_skills>` on every turn. With 66 skills and 33 agents, GSD alone consumes roughly 60% of the default 1%-of-context skill-listing budget, causing descriptions to drop when users stack multiple plugins (#3408).

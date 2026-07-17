@@ -37,6 +37,41 @@ addenda. The boundary:
 this ADR, leaving 550 to own the contract and this ADR to own the mechanism. Until that is
 agreed, 550's addenda remain authoritative and this ADR is non-binding.
 
+## Why this is still `Proposed` (audited 2026-07-17)
+
+**What shipped.** The audit confirmed the enforcement mechanism this ADR describes is real
+and in place, not aspirational. All seven Decision points are present in
+`src/prohibition-enforcement.cts` and `src/probe-core.cts`: `runProhibitionEnforcement`
+(`src/prohibition-enforcement.cts:654-732`), `dispositionForProhibition`
+(`src/probe-core.cts:470-516`), the vacuity guards `isNonVacuousNodeTestRed`
+(`src/prohibition-enforcement.cts:351-355`) and `isNonVacuousNodeTestPass`, and
+`defaultProveFailFirst`'s node-test branch (`src/prohibition-enforcement.cts:591-627`) —
+which does implement the #1906 mandatory-`cleanFixture` causation control exactly as
+Decision 4 / the 2026-07-03 addendum describe, not merely as a documented intent. Test
+coverage is substantial (`tests/prohibition-enforcement.test.cjs`, 1336 lines), and all six
+contributing issues (#644, #1259, #1278, #1279, #1346, #1906) are closed as COMPLETED on
+GitHub.
+
+**The blocker.** This ADR names its own precondition for becoming binding, in its own words:
+"on accepting this ADR, replace ADR-550's 2026-06-12 / #1259 / #1279 / #1346 / #1278
+enforcement addenda with a one-line pointer to this ADR ... Until that is agreed, 550's
+addenda remain authoritative and this ADR is non-binding." That dedup has not happened.
+Direct read of `docs/adr/550-spec-phase-probe-contract.md` confirms all four named addenda —
+"Addendum (2026-06-12; updated 2026-06-15)", "Addendum (2026-06-15, #1279)", "Addendum
+(2026-06-21, #1346)", and "Addendum (2026-06-15): optional `check` descriptor ... (#1278)" —
+remain in ADR-550 in full, verbatim; none has been collapsed to a pointer. A later, separate
+addendum in ADR-550 (2026-06-22, from #1607) does cross-reference ADR-1606 for the
+*recall/representation-side* "Alternatives considered," but that is additive scaffolding, not
+the enforcement-addenda dedup this ADR names as its own condition — the four target addenda
+are untouched by it. No commit, PR, or tracked issue was found executing the dedup.
+
+**Unblock condition.** Edit `docs/adr/550-spec-phase-probe-contract.md` to collapse the four
+named addenda (2026-06-12/2026-06-15 update, #1279, #1346, #1278) into the one-line pointer
+this ADR calls for, then flip both ADR-550's cross-reference and this ADR's Status in the
+same PR. To check in minutes: grep `docs/adr/550-spec-phase-probe-contract.md` for
+`## Addendum (2026-06-12`, `#1279`, `#1346`, and `#1278` — if those headings still carry the
+full addendum text rather than a one-line pointer, the precondition remains unmet.
+
 ## Context
 
 ADR-550 D4 originally specified the `test` tier as a "hard gate in both interactive and

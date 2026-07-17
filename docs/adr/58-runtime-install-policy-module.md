@@ -4,6 +4,7 @@
 - **Date:** 2026-06-07
 - **Issue:** #58
 - **Subsumed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (GSD as an Embeddable Orchestration Engine) — read it first; see the amendment below
+- **Subsumed by:** [ADR-857](857-capability-system.md) (Capability system) — generalizes this module's install-plan projection; this seam remains live at `src/runtime-artifact-install-plan.cts:82`
 
 ## Amendment (2026-07-16): subsumed by ADR-1239 (EoS)
 
@@ -13,9 +14,13 @@
 
 **Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
 
-Note: [ADR-857](857-capability-system.md) (Proposed) also claims to generalize this module. That claim is **prospective** — it takes effect only if and when ADR-857 is ratified, and is deliberately not recorded as a supersession here.
-
 Recorded because ADR-1239 declared this subsumption while this file recorded nothing.
+
+## Amendment (2026-07-17): also subsumed by ADR-857 (Capability system)
+
+[ADR-857](857-capability-system.md) was ratified `Proposed → Accepted` on 2026-07-17 and generalizes this module's install-plan projection into the unified Capability model (install composes *active Features × the chosen Runtime* at this ADR's `InstallPlan` seam).
+
+**This ADR remains Accepted and live.** ADR-857's header originally read "Supersedes (generalizes)"; on ratification that was corrected to **Subsumes**, precisely because this seam is not dead — `InstallPlan` is live at `src/runtime-artifact-install-plan.cts:82`. This module is now a component of two broader frames: ADR-857 (what composes an install) and ADR-1239/EoS (how a host loads the engine at all).
 
 ## Context
 
