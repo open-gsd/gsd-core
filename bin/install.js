@@ -9373,9 +9373,14 @@ function writeManifest(configDir, runtime = DEFAULT_RUNTIME, options = {}) {
     }
   }
   if (_hostBehaviors(runtime).flatCommandDir && fs.existsSync(opencodeCommandDir)) {
+    // #2329: derive the manifest key prefix from the SAME descriptor value used
+    // to compute opencodeCommandDir above, instead of a separately-hardcoded
+    // literal — a divergence here would silently break the manifest even after
+    // the destSubpath descriptor is corrected (Generative Fix Divergence guard).
+    const flatCommandDirPrefix = _hostBehaviors(runtime).flatCommandDir || 'command';
     for (const file of fs.readdirSync(opencodeCommandDir)) {
       if (file.startsWith('gsd-') && file.endsWith('.md')) {
-        manifest.files['command/' + file] = fileHash(path.join(opencodeCommandDir, file));
+        manifest.files[flatCommandDirPrefix + '/' + file] = fileHash(path.join(opencodeCommandDir, file));
       }
     }
   }

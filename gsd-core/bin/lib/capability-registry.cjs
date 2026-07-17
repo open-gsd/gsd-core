@@ -1925,7 +1925,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.7.0-rc.6",
     "title": "OpenCode",
-    "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
+    "description": "OpenCode — XDG-based config dir; flat commands/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -1947,7 +1947,7 @@ const capabilities = {
         "global": [
           {
             "kind": "commands",
-            "destSubpath": "command",
+            "destSubpath": "commands",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
@@ -1965,7 +1965,7 @@ const capabilities = {
         "local": [
           {
             "kind": "commands",
-            "destSubpath": "command",
+            "destSubpath": "commands",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
@@ -2010,7 +2010,7 @@ const capabilities = {
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
         "attributionConfigResolver": "opencode",
-        "flatCommandDir": "command",
+        "flatCommandDir": "commands",
         "combinedFamilyInstall": true,
         "frontmatterDialect": "opencode",
         "nativePlugin": {
@@ -4987,7 +4987,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.7.0-rc.6",
     "title": "OpenCode",
-    "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
+    "description": "OpenCode — XDG-based config dir; flat commands/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -5009,7 +5009,7 @@ const runtimes = {
         "global": [
           {
             "kind": "commands",
-            "destSubpath": "command",
+            "destSubpath": "commands",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
@@ -5027,7 +5027,7 @@ const runtimes = {
         "local": [
           {
             "kind": "commands",
-            "destSubpath": "command",
+            "destSubpath": "commands",
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
@@ -5072,7 +5072,7 @@ const runtimes = {
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
         "attributionConfigResolver": "opencode",
-        "flatCommandDir": "command",
+        "flatCommandDir": "commands",
         "combinedFamilyInstall": true,
         "frontmatterDialect": "opencode",
         "nativePlugin": {

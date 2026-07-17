@@ -73,6 +73,77 @@ function gsdMdFiles(dir) {
   return fs.readdirSync(dir).filter((f) => f.startsWith('gsd-') && f.endsWith('.md'));
 }
 
+/**
+ * #2329: fabricate a pre-fix "legacy" OpenCode install fixture.
+ *
+ * Under the FIXED installer, a fresh install lands its command files
+ * straight into commands/ (plural) and never creates command/ (singular) —
+ * that is the fix working correctly. So the pre-fix "existing install with a
+ * populated command/ dir" starting state a real upgrading user has can no
+ * longer be reproduced by simply calling the installer once (as a prior
+ * version of these tests assumed); it must be fabricated by hand-rewriting a
+ * fresh install's output into the shape the OLD, buggy installer actually
+ * left on disk.
+ *
+ * The migration under test (_migrateLegacyOpencodeCommandDir in
+ * src/install-engine.cts) only deletes a command/<file> entry when
+ * classifyArtifact() proves it GSD-managed via gsd-file-manifest.json (key
+ * `command/<file>` present, hash matches or was locally modified — see
+ * installerMigrations.classifyArtifact). A legacyDir populated with files but
+ * no matching manifest entries would classify as 'unknown' and never be
+ * touched, silently turning the migration tests into no-ops. So this helper
+ * also rewrites the manifest's `commands/<file>` keys to `command/<file>`
+ * (matching the OLD writeManifest's opencodeCommandDir-prefix behavior)
+ * alongside physically moving the files, so the fabricated state is exactly
+ * what a pre-fix install would have left: files AND a manifest that proves
+ * GSD manages them at the legacy path.
+ *
+ * @param {string} configDir
+ * @param {object} [opts]
+ * @param {boolean} [opts.keepPluralDir=false] - when true, leaves the
+ *   (now-empty) commands/ dir in place instead of removing it. Used by the
+ *   both-dirs-exist scenario, which separately seeds commands/ with
+ *   unrelated content after calling this helper.
+ * @returns {{legacyDir:string, pluralDir:string, manifestPath:string, movedFiles:string[]}}
+ */
+function fabricateLegacyOpencodeCommandDir(configDir, opts = {}) {
+  const { keepPluralDir = false } = opts;
+  const legacyDir = path.join(configDir, 'command');
+  const pluralDir = path.join(configDir, 'commands');
+  const manifestPath = path.join(configDir, 'gsd-file-manifest.json');
+
+  const movedFiles = gsdMdFiles(pluralDir);
+  assert.ok(
+    movedFiles.length >= 60,
+    `fabricateLegacyOpencodeCommandDir: expected a fresh install to have ` +
+    `populated >=60 gsd-*.md files under ${pluralDir} before fabrication, got ${movedFiles.length}`
+  );
+
+  fs.mkdirSync(legacyDir, { recursive: true });
+  for (const file of movedFiles) {
+    fs.renameSync(path.join(pluralDir, file), path.join(legacyDir, file));
+  }
+  if (!keepPluralDir && fs.existsSync(pluralDir) && fs.readdirSync(pluralDir).length === 0) {
+    fs.rmdirSync(pluralDir);
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  for (const file of movedFiles) {
+    const commandsKey = `commands/${file}`;
+    const legacyKey = `command/${file}`;
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(manifest.files, commandsKey),
+      `fabricateLegacyOpencodeCommandDir: manifest is missing expected key ${commandsKey} — ` +
+      'cannot fabricate a manifest-proven legacy fixture'
+    );
+    manifest.files[legacyKey] = manifest.files[commandsKey];
+    delete manifest.files[commandsKey];
+  }
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+
+  return { legacyDir, pluralDir, manifestPath, movedFiles };
+}
+
 // ---------------------------------------------------------------------------
 // 1 + 2. Command files land under commands/ (plural); command/ (singular)
 //        is never created — both scopes.
@@ -210,18 +281,26 @@ describe('#2329: opencode command-dir declarations are a single source of truth'
 
 describe('#2329: upgrading an install with an orphaned command/ dir migrates it to commands/ safely', () => {
   test('reinstall relocates all gsd-owned files from command/ into commands/ and removes the now-empty orphan', (t) => {
-    // Under CURRENT (unfixed) source, a first install writes into command/ —
-    // this IS the bug, so no fixture fabrication is needed: the first
-    // install call below naturally reproduces the "existing install with a
-    // populated command/ dir" starting state a real upgrading user has.
+    // Under the FIXED source, a first install writes straight into commands/
+    // (plural) — that's the fix working. To exercise the upgrade/migration
+    // path, fabricate the pre-fix "legacy" starting state a real upgrading
+    // user has (populated command/ dir + a manifest that proves GSD manages
+    // those files at the legacy path) by hand-rewriting a fresh install's
+    // output — see fabricateLegacyOpencodeCommandDir's doc comment.
     const { configDir, root } = runMinimalInstall({ runtime: 'opencode', scope: 'global' });
     t.after(() => cleanup(root));
 
     const legacyDir = path.join(configDir, 'command');
     const pluralDir = path.join(configDir, 'commands');
 
-    const filesBefore = new Set(gsdMdFiles(legacyDir).length ? gsdMdFiles(legacyDir) : gsdMdFiles(pluralDir));
+    const { movedFiles } = fabricateLegacyOpencodeCommandDir(configDir);
+    const filesBefore = new Set(movedFiles);
     assert.ok(filesBefore.size >= 60, `sanity: expected >=60 gsd command files from the first install, got ${filesBefore.size}`);
+    // Sanity: the migration must genuinely FIRE against this fixture, not
+    // no-op — confirm the legacy dir is populated and commands/ is gone
+    // before the reinstall runs.
+    assert.ok(gsdMdFiles(legacyDir).length >= 60, 'sanity: legacyDir must be populated before reinstall');
+    assert.ok(!fs.existsSync(pluralDir), 'sanity: pluralDir must not exist before reinstall (fabricated pre-fix state)');
 
     const result = reinstallOpencode(root, 'global');
     assert.strictEqual(
@@ -249,6 +328,12 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
 
     const legacyDir = path.join(configDir, 'command');
     const pluralDir = path.join(configDir, 'commands');
+
+    fabricateLegacyOpencodeCommandDir(configDir);
+    // Sanity: the migration must genuinely fire against this fixture.
+    assert.ok(gsdMdFiles(legacyDir).length >= 60, 'sanity: legacyDir must be populated before reinstall');
+    assert.ok(!fs.existsSync(pluralDir), 'sanity: pluralDir must not exist before reinstall (fabricated pre-fix state)');
+
     const userContent = 'precious user notes — not a GSD-managed file\n';
     const userFileLegacy = path.join(legacyDir, 'my-notes.md');
     fs.writeFileSync(userFileLegacy, userContent, 'utf8');
@@ -295,6 +380,8 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
     const legacyDir = path.join(configDir, 'command');
     const pluralDir = path.join(configDir, 'commands');
 
+    fabricateLegacyOpencodeCommandDir(configDir, { keepPluralDir: true });
+
     // Simulate a commands/ dir that already independently exists (e.g. the
     // user manually created it while working around #2329, or a partial
     // prior migration attempt left it behind) with content GSD does not own.
@@ -305,6 +392,16 @@ describe('#2329: upgrading an install with an orphaned command/ dir migrates it 
 
     const filesBefore = new Set(gsdMdFiles(legacyDir));
     assert.ok(filesBefore.size >= 60, `sanity: expected >=60 gsd command files in command/, got ${filesBefore.size}`);
+    // Sanity: the migration must genuinely fire against this fixture — the
+    // manifest must actually prove ownership of the legacy files (not just
+    // their physical presence), otherwise classifyArtifact would treat them
+    // as 'unknown' and the migration would silently no-op.
+    const manifestBefore = JSON.parse(fs.readFileSync(path.join(configDir, 'gsd-file-manifest.json'), 'utf8'));
+    const legacyManifestKeys = Object.keys(manifestBefore.files).filter((k) => k.startsWith('command/'));
+    assert.ok(
+      legacyManifestKeys.length >= 60,
+      `sanity: manifest must record >=60 "command/" keys before reinstall, got ${legacyManifestKeys.length}`
+    );
 
     const result = reinstallOpencode(root, 'global');
     assert.strictEqual(
