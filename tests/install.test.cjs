@@ -1848,6 +1848,83 @@ describe('normalizeNodePath — mise versioned path → sibling shim (#1619)', (
   });
 });
 
+// ─── normalizeNodePath — volta versioned image path → stable shim (#2335) ────
+//
+// Bug #2335: the volta analog of #977 (fnm) / #1619 (mise) / #2185 (Homebrew).
+// `resolveNodeRunner()` bakes process.execPath into managed hook commands, and
+// node realpaths execPath, so under volta it resolves to the concrete image
+// `<VOLTA_HOME>/tools/image/node/<ver>/bin/node` (Windows: `<...>/<ver>/node.exe`
+// — volta's own layout puts node.exe at the image root, no bin/). `volta
+// uninstall node@<ver>` prunes that image, after which every managed hook 404s.
+// The stable alias is the shim `<VOLTA_HOME>/bin/node`, a symlink to volta-shim
+// that always resolves to the active pin. <VOLTA_HOME> is derived from the path
+// (not env) so a custom VOLTA_HOME and the Windows %LOCALAPPDATA%\Volta default
+// both work — same reasoning as the Homebrew branch (#2185). Rewrite only when
+// the shim exists; otherwise fall back to raw execPath, like the mise branch.
+describe('normalizeNodePath — volta image path → sibling shim (#2335)', () => {
+  const VOLTA_HOME = '/Users/u/.volta';
+  const VOLTA_NODE_PINNED = `${VOLTA_HOME}/tools/image/node/18.17.1/bin/node`;
+  const VOLTA_SHIM = `${VOLTA_HOME}/bin/node`;
+  const VOLTA_WIN_HOME = 'C:/Users/u/AppData/Local/Volta';
+  const VOLTA_WIN_NODE = `${VOLTA_WIN_HOME}/tools/image/node/22.1.0/node.exe`; // no bin/ on Windows
+  const VOLTA_WIN_SHIM = `${VOLTA_WIN_HOME}/bin/node.exe`;
+  const VOLTA_CUSTOM_HOME = '/opt/volta-home';
+  const VOLTA_CUSTOM_NODE = `${VOLTA_CUSTOM_HOME}/tools/image/node/20.0.0/bin/node`;
+  const VOLTA_CUSTOM_SHIM = `${VOLTA_CUSTOM_HOME}/bin/node`;
+
+  test('POSIX pinned image path + shim exists → sibling shim', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_NODE_PINNED, { existsSync: p => p === VOLTA_SHIM }),
+      VOLTA_SHIM);
+  });
+
+  test('Windows node.exe + shim exists → bin/node.exe (.exe preserved)', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_WIN_NODE, { existsSync: p => p === VOLTA_WIN_SHIM }),
+      VOLTA_WIN_SHIM);
+  });
+
+  test('backslash Windows path normalizes the same as forward-slash', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_WIN_NODE.replace(/\//g, '\\'),
+        { existsSync: p => p === VOLTA_WIN_SHIM }),
+      VOLTA_WIN_SHIM);
+  });
+
+  test('custom VOLTA_HOME layout → shim derived from execPath, not env', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_CUSTOM_NODE, { existsSync: p => p === VOLTA_CUSTOM_SHIM }),
+      VOLTA_CUSTOM_SHIM);
+  });
+
+  test('no regression: shim absent → falls back to raw execPath unchanged', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_NODE_PINNED, { existsSync: () => false }),
+      VOLTA_NODE_PINNED);
+  });
+
+  test('volta shim itself is already stable → left unchanged (idempotent)', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_SHIM, { existsSync: () => true }),
+      VOLTA_SHIM);
+  });
+
+  test('a non-node volta image (yarn) is not rewritten to the node shim', () => {
+    const yarnImage = `${VOLTA_HOME}/tools/image/yarn/1.22.19/bin/yarn`;
+    assert.equal(
+      normalizeNodePath(yarnImage, { existsSync: () => true }),
+      yarnImage);
+  });
+
+  test('mise path is unaffected by the volta branch (no cross-manager capture)', () => {
+    const miseShim = '/Users/u/.local/share/mise/shims/node';
+    assert.equal(
+      normalizeNodePath('/Users/u/.local/share/mise/installs/node/26.3.0/bin/node',
+        { existsSync: p => p === miseShim }),
+      miseShim);
+  });
+});
+
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/bug-2256-model-overrides-transport.test.cjs — consolidation epic #1969 (B1 #1970)
