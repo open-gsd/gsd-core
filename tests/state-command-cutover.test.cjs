@@ -42,16 +42,16 @@ function makeErrorRecorder() {
 
 // ─── 1. UNIT — dispatchHostCommand return values + pollution guard ───────────
 
-describe('dispatchHostCommand: unit', () => {
+describe('dispatchHostCommand: unit', async () => {
   const CWD = '/fake/cwd';
   const RAW = false;
 
-  test('returns true for the migrated `state` command (consumed)', () => {
+  test('returns true for the migrated `state` command (consumed)', async () => {
     // routeStateCommand will run against a fake cwd; it may call error() for a
     // missing subcommand — that is fine, we only assert the dispatch returned
     // true (consumed) rather than falling through to "Unknown command".
     const errFn = makeErrorRecorder();
-    const consumed = dispatchHostCommand({
+    const consumed = await dispatchHostCommand({
       command: 'state',
       args: ['state'],
       cwd: CWD,
@@ -61,14 +61,18 @@ describe('dispatchHostCommand: unit', () => {
     assert.strictEqual(consumed, true, 'state must be consumed by the host table');
   });
 
-  test('all migrated Tier-1 host commands are consumed by the host table', () => {
+  test('all migrated Tier-1 host commands are consumed by the host table', async () => {
     // Each migrated router receives its module-scope lib via the table entry;
     // against a fake cwd it may emit an error (missing subcommand), but the
     // dispatch itself must report consumed=true (no fall-through to the
     // unknown-command error).
+    // NOTE: `capability` (P2) is omitted from this INVOCATION loop — it is async
+    // and does FS/config reads, so invoking it against /fake/cwd is fragile.
+    // It is covered by the registry-ownership assertion below (non-invoking)
+    // and by the dedicated capability-lifecycle/consent/trust/state suites.
     for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify']) {
       const errFn = makeErrorRecorder();
-      const consumed = dispatchHostCommand({
+      const consumed = await dispatchHostCommand({
         command: cmd,
         args: [cmd],
         cwd: CWD,
@@ -79,9 +83,9 @@ describe('dispatchHostCommand: unit', () => {
     }
   });
 
-  test('returns false for an unknown command (fall through)', () => {
+  test('returns false for an unknown command (fall through)', async () => {
     const errFn = makeErrorRecorder();
-    const consumed = dispatchHostCommand({
+    const consumed = await dispatchHostCommand({
       command: 'not-a-real-command',
       args: ['not-a-real-command'],
       cwd: CWD,
@@ -92,10 +96,10 @@ describe('dispatchHostCommand: unit', () => {
     assert.strictEqual(errFn.calls.length, 0, 'error must not be called for a miss');
   });
 
-  test('prototype-pollution guard: __proto__/constructor/prototype fall through', () => {
+  test('prototype-pollution guard: __proto__/constructor/prototype fall through', async () => {
     for (const bad of ['__proto__', 'constructor', 'prototype']) {
       const errFn = makeErrorRecorder();
-      const consumed = dispatchHostCommand({
+      const consumed = await dispatchHostCommand({
         command: bad,
         args: [bad],
         cwd: CWD,
@@ -110,7 +114,7 @@ describe('dispatchHostCommand: unit', () => {
 
 // ─── 2 + 3. DISPATCH + BEHAVIOR — end-to-end via runGsdTools ─────────────────
 
-describe('state cutover: end-to-end dispatch via the host table', () => {
+describe('state cutover: end-to-end dispatch via the host table', async () => {
   let tmpDir;
 
   beforeEach(() => {
@@ -121,7 +125,7 @@ describe('state cutover: end-to-end dispatch via the host table', () => {
     cleanup(tmpDir);
   });
 
-  test('`state load` succeeds end-to-end (dispatched via host table, not a case arm)', () => {
+  test('`state load` succeeds end-to-end (dispatched via host table, not a case arm)', async () => {
     // Seed a minimal STATE.md so `state load` has something to read.
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'STATE.md'),
@@ -136,7 +140,7 @@ describe('state cutover: end-to-end dispatch via the host table', () => {
     );
   });
 
-  test('unknown state subcommand surfaces the canonical unknown-subcommand error (non-zero exit)', () => {
+  test('unknown state subcommand surfaces the canonical unknown-subcommand error (non-zero exit)', async () => {
     const result = runGsdTools(['--cwd=' + tmpDir, 'state', 'totally-not-a-subcommand'], process.cwd());
     assert.strictEqual(result.success, false, 'unknown subcommand must exit non-zero');
     assert.ok(
@@ -148,9 +152,9 @@ describe('state cutover: end-to-end dispatch via the host table', () => {
 
 // ─── 5. REGISTRY — HOST_COMMAND_ROUTERS owns `state` ────────────────────────
 
-describe('HOST_COMMAND_ROUTERS registry', () => {
-  test('owns all 6 migrated Tier-1 host commands as function entries', () => {
-    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify']) {
+describe('HOST_COMMAND_ROUTERS registry', async () => {
+  test('owns all 6 migrated Tier-1 host commands as function entries', async () => {
+    for (const cmd of ['state', 'phase', 'init', 'roadmap', 'validate', 'verify', 'capability']) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, cmd),
         `HOST_COMMAND_ROUTERS must own \`${cmd}\``,
@@ -159,7 +163,7 @@ describe('HOST_COMMAND_ROUTERS registry', () => {
     }
   });
 
-  test('does NOT own prototype-pollution keys', () => {
+  test('does NOT own prototype-pollution keys', async () => {
     assert.ok(
       !Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, '__proto__'),
       'HOST_COMMAND_ROUTERS must not own __proto__',
