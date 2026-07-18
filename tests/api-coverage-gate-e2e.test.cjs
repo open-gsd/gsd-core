@@ -172,8 +172,8 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
   });
 
   test('unreadable plan file → BLOCKS fail-closed instead of silently passing (#2365 review)', (t) => {
-    if (process.getuid && process.getuid() === 0) {
-      t.skip('chmod 000 does not deny the root user');
+    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
+      t.skip('chmod 000 does not deny read on Windows or for the root user');
       return;
     }
     fresh();
@@ -194,8 +194,8 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
   });
 
   test('unreadable phase directory → BLOCKS fail-closed (#2365 round-4 review)', (t) => {
-    if (process.getuid && process.getuid() === 0) {
-      t.skip('chmod 000 does not deny the root user');
+    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
+      t.skip('chmod 000 does not deny read on Windows or for the root user');
       return;
     }
     fresh();
@@ -214,8 +214,8 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
   });
 
   test('unreadable ROADMAP.md fallback → BLOCKS fail-closed (#2365 round-5 review)', (t) => {
-    if (process.getuid && process.getuid() === 0) {
-      t.skip('chmod 000 does not deny the root user');
+    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
+      t.skip('chmod 000 does not deny read on Windows or for the root user');
       return;
     }
     fresh(); // phaseDir 01-pay with NO plans → gate falls back to the roadmap
