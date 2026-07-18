@@ -173,29 +173,21 @@ describe('spectrum-based fault localization (#1959, epic #1957 Phase 1B)', () =>
         );
       });
 
-      test('property: ranking is non-increasing and the head holds the max score', () => {
+      test('property: ochiai is non-decreasing in failedExec (holding totalFailed + passedExec fixed)', () => {
+        // Non-trivial: a correct Ochiai must not penalize an element for being
+        // hit by MORE failing tests. An inverted numerator/denominator would fail this.
         fc.assert(
           fc.property(
-            fc.array(
-              fc.record({
-                element: fc.string({ minLength: 1, maxLength: 8 }),
-                failedExec: fc.nat(),
-                passedExec: fc.nat(),
-              }),
-              { maxLength: 20 }
-            ),
-            fc.integer({ min: 1, max: 50 }),
-            (elements, tf) => {
-              const ranked = rankByOchiai(elements, tf);
-              if (ranked.length === 0) return true;
-              for (let i = 1; i < ranked.length; i++) {
-                if (ranked[i - 1].score < ranked[i].score) return false;
-              }
-              const maxScore = Math.max(...ranked.map((r) => r.score));
-              return Math.abs(ranked[0].score - maxScore) <= 1e-9;
+            fc.integer({ min: 1, max: 30 }),
+            fc.nat(30),
+            fc.integer({ min: 0, max: 29 }),
+            (totalFailed, passedExec, failedExecA) => {
+              const failedExecB = Math.min(totalFailed, failedExecA + 1);
+              if (failedExecB === failedExecA) return true; // no room to increase
+              return ochiai(failedExecB, passedExec, totalFailed) >= ochiai(failedExecA, passedExec, totalFailed) - 1e-9;
             }
           ),
-          { numRuns: 200 }
+          { numRuns: 300 }
         );
       });
     }

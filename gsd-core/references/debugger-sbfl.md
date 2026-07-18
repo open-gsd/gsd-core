@@ -77,6 +77,7 @@ auditable).
 |---|---|
 | No test suite for the failing area | **skip** with a logged note in Evidence ("SBFL skipped: no test suite"); Phase 1 proceeds unchanged |
 | Test suite but no failing tests | **skip** with a logged note ("SBFL skipped: no failing tests — no spectrum"); Phase 1 proceeds unchanged |
+| Test suite but no passing tests | **skip** with a logged note ("SBFL skipped: no spectrum — no passing tests"); Phase 1 proceeds unchanged (Tarantula would divide by `totalPassed=0`; do not run it) |
 | Test suite but no per-test coverage | **skip** with a logged note ("SBFL skipped: no per-test coverage available"); Phase 1 proceeds unchanged |
 | Coverage exists but is coarse (file-level, not line/function) | run anyway, rank at the available granularity, and note the granularity in Evidence |
 
@@ -89,8 +90,9 @@ a flaky suite pollutes the spectrum (a "failing" test that sometimes passes
 poisons `failed(s)`), so the ranking becomes noise. When the failure is
 non-deterministic (Phase 2B classifies it), **skip SBFL** and route to
 record-replay or stability-stress instead. If SBFL has already run before
-classification and the class later resolves to Heisenbug/Mandelbug, discard the
-ranking and note why in Evidence.
+classification and the class later resolves to Heisenbug/Mandelbug, mark the
+prior SBFL Evidence entry as revoked (do not delete it — Kernighan
+auditability) and note why in Evidence.
 
 ## Scope boundary (Zawinski's Law)
 
@@ -100,3 +102,9 @@ subsystem. It narrows the LLM's search space; it does not replace hypothesis
 formation, fix-and-verify, or the knowledge base. Coverage acquisition is the
 agent's adaptive job (use whatever coverage the project produces); the formula
 above is the canonical ranking.
+
+**Bound the coverage run** (CLAUDE.md gauntlet — unbounded subprocess): a
+coverage run is often 2–3× slower than a plain test run due to instrumentation,
+so cap it (60s for npm-tier suites; scale with suite size) and **degrade to
+skip with a logged note on timeout** — never let coverage acquisition hang the
+debug session.
