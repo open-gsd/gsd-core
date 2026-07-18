@@ -56,6 +56,7 @@ const {
   CODEX_AGENT_SANDBOX,
   parseTomlToObject,
   resolveNodeRunner,
+  validateCodexConfigSchema,
 } = require('../bin/install.js');
 
 const { resolveInstallPlan } = require('../gsd-core/bin/lib/runtime-config-adapter-registry.cjs');
@@ -833,8 +834,9 @@ describe('generateCodexConfigBlock', () => {
     assert.ok(!result.includes('[features]'), 'no features table');
     assert.ok(!result.includes('multi_agent'), 'no multi_agent');
     assert.ok(!result.includes('default_mode_request_user_input'), 'no request_user_input');
-    // #2088: the managed block DOES pin dispatch depth via a bare [agents]
-    // AgentsToml scalar table (coexisting with the [agents.<name>] role structs).
+    // #2088: the managed block pins dispatch depth via a bare [agents]
+    // AgentsToml scalar table. #2406: this is now the ONLY [agents]-namespaced
+    // content the block emits — no [agents.<name>] role structs.
     assert.match(result, /^\[agents\]$/m, 'emits the [agents] tuning table');
     assert.match(result, /^max_depth = 1$/m, 'pins max_depth = 1');
     // Should not emit [[agents]] sequence format (rejected by Codex 0.124.0).
@@ -843,52 +845,39 @@ describe('generateCodexConfigBlock', () => {
     assert.ok(!result.includes('max_threads'), 'no max_threads (only max_depth is GSD-managed)');
   });
 
-  test('#2727: emits [agents.<name>] struct format (Codex 0.120.0+, replaces #2645 [[agents]])', () => {
+  test('#2406: does not emit [agents.<name>] role tables — the standalone agents/<name>.toml is the sole canonical source', () => {
     const result = generateCodexConfigBlock(agents);
-    // One [agents.<name>] header per agent — no [[agents]] sequence.
-    assert.ok(result.includes('[agents.gsd-executor]'), 'executor has struct header');
-    assert.ok(result.includes('[agents.gsd-planner]'), 'planner has struct header');
-    // Struct format uses the key as the name; no name = field.
-    assert.ok(!result.includes('name = "gsd-executor"'), 'no name field in struct format');
-    assert.ok(!result.includes('name = "gsd-planner"'), 'no name field in struct format');
-    assert.ok(!result.includes('[[agents]]'), 'no sequence format headers');
+    // Codex auto-discovers standalone TOMLs under $CODEX_HOME/agents/. A
+    // config.toml [agents.<name>] table pointing config_file back at that
+    // same file is a SECOND registration of the same role and made Codex log
+    // "Ignoring malformed agent role definition: duplicate agent role name"
+    // once per agent. Zero role headers and zero config_file lines proves
+    // the duplication is gone.
+    assert.ok(!result.includes('[agents.gsd-executor]'), 'no executor role header');
+    assert.ok(!result.includes('[agents.gsd-planner]'), 'no planner role header');
+    assert.ok(!result.includes('config_file'), 'no config_file line at all');
+    assert.ok(!result.includes('description = "Executes plans"'), 'no per-agent description leaks into config.toml');
+    assert.ok(!result.includes('[[agents]]'), 'no [[agents]] sequence format either');
   });
 
-  test('#2727: block is a valid TOML struct shape (no [[agents]] sequence headers)', () => {
+  test('#2406: block is a valid TOML shape with exactly one [agents] table and zero [agents.*] sub-tables', () => {
     const result = generateCodexConfigBlock(agents);
-    // Must not contain [[agents]] array-of-tables syntax (rejected by Codex 0.124.0).
     assert.ok(!result.includes('[[agents]]'), 'no [[agents]] sequence format present');
-    // Must contain [agents.<name>] struct headers.
+    const bareAgentsHeaders = (result.match(/^\[agents\]\s*$/gm) || []).length;
+    assert.strictEqual(bareAgentsHeaders, 1, 'exactly one bare [agents] dispatch-tuning table');
     const structHeaders = (result.match(/^\[agents\.[^\]]+\]\s*$/gm) || []).length;
-    assert.strictEqual(structHeaders, 2, 'one [agents.<name>] struct header per agent');
+    assert.strictEqual(structHeaders, 0, 'zero [agents.<name>] struct headers — role tables removed (#2406)');
   });
 
-  test('includes per-agent sections with relative paths (no targetDir)', () => {
-    const result = generateCodexConfigBlock(agents);
-    assert.ok(result.includes('[agents.gsd-executor]'), 'has executor entry');
-    assert.ok(result.includes('[agents.gsd-planner]'), 'has planner entry');
-    assert.ok(result.includes('config_file = "agents/gsd-executor.toml"'), 'relative config_file without targetDir');
-    assert.ok(result.includes('"Executes plans"'), 'has executor description');
-  });
+  test('#2406: output is unaffected by agents/targetDir — no per-agent content is derived from either', () => {
+    const withAgents = generateCodexConfigBlock(agents);
+    const withoutAgents = generateCodexConfigBlock([]);
+    assert.strictEqual(withAgents, withoutAgents, 'agents list no longer influences the emitted block');
 
-  test('uses absolute config_file paths when targetDir is provided', () => {
-    const result = generateCodexConfigBlock(agents, '/home/user/.codex');
-    assert.ok(result.includes('config_file = "/home/user/.codex/agents/gsd-executor.toml"'), 'absolute executor path');
-    assert.ok(result.includes('config_file = "/home/user/.codex/agents/gsd-planner.toml"'), 'absolute planner path');
-    assert.ok(!result.includes('config_file = "agents/'), 'no relative paths when targetDir given');
-  });
-
-  test('#2727: emits [agents.<name>] struct format by default (Codex 0.124.0+)', () => {
-    const result = generateCodexConfigBlock(agents);
-    // Codex 0.124.0 expects [agents.<name>] struct format, not [[agents]] sequence format.
-    // [[agents]] was introduced in #2645 but is rejected by codex-cli 0.124.0 with
-    // "invalid type: sequence, expected struct AgentsToml".
-    assert.ok(!result.includes('[[agents]]'), 'should not emit [[agents]] sequence format');
-    assert.ok(result.includes('[agents.'), 'should emit [agents.<name>] struct format');
-    assert.ok(result.includes('[agents.gsd-executor]'), 'executor uses struct header');
-    assert.ok(result.includes('[agents.gsd-planner]'), 'planner uses struct header');
-    // Struct format must NOT have a name = field (name is the key, not a value)
-    assert.ok(!result.includes('name = "gsd-executor"'), 'no name field in struct format');
+    const withTargetDir = generateCodexConfigBlock(agents, '/home/user/.codex');
+    assert.strictEqual(withTargetDir, withAgents, 'targetDir no longer influences the emitted block');
+    assert.ok(!withTargetDir.includes('config_file'), 'no config_file even when targetDir is provided');
+    assert.ok(!withTargetDir.includes('/home/user/.codex'), 'targetDir path does not leak into the block');
   });
 });
 
@@ -1404,7 +1393,10 @@ describe('mergeCodexConfig', () => {
     assert.ok(fs.existsSync(configPath), 'file created');
     const content = fs.readFileSync(configPath, 'utf8');
     assert.ok(content.includes(GSD_CODEX_MARKER), 'has marker');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'has agent in struct format');
+    // #2406: config.toml never gets an [agents.gsd-*] role table — the
+    // standalone agents/<name>.toml written by installCodexConfig is the
+    // sole canonical registration Codex auto-discovers.
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
     assert.ok(!content.includes('[features]'), 'no features section');
     assert.ok(!content.includes('multi_agent'), 'no multi_agent');
   });
@@ -1423,8 +1415,10 @@ describe('mergeCodexConfig', () => {
 
     const content = fs.readFileSync(configPath, 'utf8');
     assert.ok(content.includes('[model]'), 'preserves user content');
-    assert.ok(content.includes('Updated description'), 'has new description');
-    assert.ok(content.includes('[agents.gsd-planner]'), 'has new agent in struct format');
+    // #2406: description text is per-agent metadata carried only by the
+    // standalone TOML now — it no longer leaks into config.toml.
+    assert.ok(!content.includes('Updated description'), 'no per-agent description in config.toml');
+    assert.ok(!content.includes('[agents.gsd-planner]'), 'no agent role table (canonical source is the standalone TOML)');
     // Verify no duplicate markers
     const markerCount = (content.match(new RegExp(GSD_CODEX_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
     assert.strictEqual(markerCount, 1, 'exactly one marker');
@@ -1439,7 +1433,7 @@ describe('mergeCodexConfig', () => {
     const content = fs.readFileSync(configPath, 'utf8');
     assert.ok(content.includes('[model]'), 'preserves user content');
     assert.ok(content.includes(GSD_CODEX_MARKER), 'adds marker');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'has agent in struct format');
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
   });
 
   test('case 3 with existing [features]: preserves user features, does not inject GSD keys', () => {
@@ -1453,10 +1447,10 @@ describe('mergeCodexConfig', () => {
     assert.ok(!content.includes('multi_agent'), 'does not inject multi_agent');
     assert.ok(!content.includes('default_mode_request_user_input'), 'does not inject request_user_input');
     assert.ok(content.includes(GSD_CODEX_MARKER), 'adds marker for agents block');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'has agent in struct format');
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
   });
 
-  test('case 3 strips existing [agents.gsd-*] sections before appending fresh block', () => {
+  test('case 3 strips existing [agents.gsd-*] sections before appending fresh block (#2406: fresh block never re-adds them)', () => {
     const configPath = path.join(tmpDir, 'config.toml');
     const existing = [
       '[model]',
@@ -1476,16 +1470,15 @@ describe('mergeCodexConfig', () => {
     mergeCodexConfig(configPath, sampleBlock);
 
     const content = fs.readFileSync(configPath, 'utf8');
-    // After merge, GSD block is after the marker. Count [agents.gsd-executor] headers:
-    // exactly one should exist (the one in the freshly-written GSD block).
+    // The pre-existing legacy [agents.gsd-executor] role table is a leaked
+    // GSD section (stripLeakedGsdCodexSections) and the fresh block never
+    // re-adds one (#2406) — zero role tables should remain anywhere.
     const gsdStructCount = (content.match(/^\[agents\.gsd-executor\]\s*$/gm) || []).length;
     const markerCount = (content.match(new RegExp(GSD_CODEX_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-    // Struct format does not use name = field
-    assert.ok(!content.match(/^name = "gsd-executor"/m), 'no name = field in struct format');
 
     assert.ok(content.includes('[model]'), 'preserves user content');
     assert.ok(content.includes('[agents.custom-agent]'), 'preserves non-GSD agent section');
-    assert.strictEqual(gsdStructCount, 1, 'keeps exactly one [agents.gsd-executor] struct entry');
+    assert.strictEqual(gsdStructCount, 0, 'legacy [agents.gsd-executor] struct entry is removed and not regrown');
     assert.strictEqual(markerCount, 1, 'adds exactly one marker block');
     assert.ok(!/\r?\n{3,}# GSD Agent Configuration/.test(content), 'does not leave extra blank lines before marker block');
   });
@@ -1512,13 +1505,13 @@ describe('mergeCodexConfig', () => {
     const featuresCount = (content.match(/^\[features\]\s*$/gm) || []).length;
     assert.strictEqual(featuresCount, 1, 'exactly one [features] section');
     assert.ok(content.includes('other_feature = true'), 'preserves user feature keys');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'has agent in struct format');
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
     // Verify no duplicate markers
     const markerCount = (content.match(new RegExp(GSD_CODEX_MARKER.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
     assert.strictEqual(markerCount, 1, 'exactly one marker');
   });
 
-  test('case 2 does not inject feature keys', () => {
+  test('case 2 does not inject feature keys, and drops a legacy [agents.gsd-old] role table on reinstall (#2406)', () => {
     const configPath = path.join(tmpDir, 'config.toml');
     const manualContent = '[features]\nother_feature = true\n\n' + GSD_CODEX_MARKER + '\n[agents.gsd-old]\ndescription = "old"\n';
     fs.writeFileSync(configPath, manualContent);
@@ -1529,10 +1522,64 @@ describe('mergeCodexConfig', () => {
     assert.ok(!content.includes('multi_agent'), 'does not inject multi_agent');
     assert.ok(!content.includes('default_mode_request_user_input'), 'does not inject request_user_input');
     assert.ok(content.includes('other_feature = true'), 'preserves user feature');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'has agent from fresh block in struct format');
+    // #2406: the pre-existing managed [agents.gsd-old] role table (below the
+    // marker, from a pre-fix install) is truncated away by Case 2's
+    // marker-truncate, and the fresh block never re-adds a role table.
+    assert.ok(!content.includes('[agents.gsd-old]'), 'legacy managed role table removed');
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
   });
 
-  test('case 2 strips leaked [agents] and [agents.gsd-*] from before content', () => {
+  test('#2406: update over a legacy 1.7.0-shape install removes duplicate [agents.gsd-*] role registrations, preserves unrelated user config, and is idempotent on rerun', () => {
+    const configPath = path.join(tmpDir, 'config.toml');
+    // Simulate a config.toml produced by the pre-fix installer: a managed
+    // block with BOTH the bare [agents] dispatch-tuning table (holding the
+    // user's own max_threads = 4 alongside GSD's stale max_depth = 2) AND
+    // [agents.gsd-*] role tables duplicating what the standalone TOMLs
+    // already register — plus an unrelated user [model] table above the
+    // marker that must survive untouched.
+    const legacyInstall = [
+      '[model]',
+      'name = "o3"',
+      '',
+      GSD_CODEX_MARKER,
+      '',
+      '[agents]',
+      'max_threads = 4',
+      'max_depth = 2',
+      '',
+      '[agents.gsd-executor]',
+      'description = "Executes plans"',
+      'config_file = "agents/gsd-executor.toml"',
+      '',
+      '[agents.gsd-planner]',
+      'description = "Creates plans"',
+      'config_file = "agents/gsd-planner.toml"',
+      '',
+    ].join('\n');
+    fs.writeFileSync(configPath, legacyInstall);
+
+    mergeCodexConfig(configPath, sampleBlock);
+    const first = fs.readFileSync(configPath, 'utf8');
+
+    // Legacy duplicate role registrations removed.
+    assert.strictEqual((first.match(/^\[agents\.gsd-/gm) || []).length, 0, 'zero [agents.gsd-*] role tables remain');
+    assert.ok(!first.includes('config_file'), 'no config_file line remains');
+    // Unrelated user config preserved.
+    assert.ok(first.includes('[model]') && first.includes('name = "o3"'), 'preserves unrelated user [model] table');
+    // User's own AgentsToml scalar tuning preserved; GSD's max_depth re-pinned to 1.
+    assert.ok(first.includes('max_threads = 4'), 'preserves user max_threads scalar');
+    assert.match(first, /max_depth = 1/, 're-pins GSD-managed max_depth to 1');
+    assert.doesNotMatch(first, /max_depth = 2/, 'stale legacy max_depth value is gone');
+    assert.strictEqual((first.match(/^\[agents\]\s*$/gm) || []).length, 1, 'exactly one [agents] table (no duplicate)');
+    assert.equal(validateCodexConfigSchema(first).ok, true, 'the migrated config still validates');
+
+    // Idempotent: running install/merge again produces byte-identical output — no regrowth.
+    mergeCodexConfig(configPath, sampleBlock);
+    const second = fs.readFileSync(configPath, 'utf8');
+    assert.strictEqual(first, second, 'second merge is byte-identical — removed registrations do not regrow');
+  });
+
+  test('case 2 strips leaked [agents] and [agents.gsd-*] from before content, and does not regrow a role table (#2406)', () => {
     const configPath = path.join(tmpDir, 'config.toml');
     const brokenContent = [
       '[features]',
@@ -1559,7 +1606,9 @@ describe('mergeCodexConfig', () => {
 
     const content = fs.readFileSync(configPath, 'utf8');
     assert.ok(content.includes('child_agents_md = false'), 'preserves user feature keys');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'has agent from fresh block in struct format');
+    // #2406: neither the leaked pre-marker role table nor the legacy
+    // post-marker managed one survives — the fresh block emits none.
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table anywhere in the file');
     // Verify the leaked [agents] table header above marker was stripped
     const markerIndex = content.indexOf(GSD_CODEX_MARKER);
     const beforeMarker = content.substring(0, markerIndex);
@@ -1567,7 +1616,7 @@ describe('mergeCodexConfig', () => {
     assert.ok(!beforeMarker.includes('[agents.gsd-'), 'no leaked [agents.gsd-*] above marker');
   });
 
-  test('case 2 strips leaked GSD-managed sections above marker in CRLF files', () => {
+  test('case 2 strips leaked GSD-managed sections above marker in CRLF files, and does not regrow a role table (#2406)', () => {
     const configPath = path.join(tmpDir, 'config.toml');
     const brokenContent = [
       '[features]',
@@ -1599,13 +1648,14 @@ describe('mergeCodexConfig', () => {
     assert.ok(content.includes('child_agents_md = false'), 'preserves user feature keys');
     assert.strictEqual(countMatches(beforeMarker, /^\[agents\]\s*$/gm), 0, 'removes leaked [agents] above marker');
     assert.strictEqual(countMatches(beforeMarker, /^\[agents\.gsd-executor\]\s*$/gm), 0, 'removes leaked GSD agent section above marker');
-    // New struct format: exactly one [agents.gsd-executor] header in the GSD block (after marker)
-    assert.strictEqual(countMatches(content, /^\[agents\.gsd-executor\]\s*$/gm), 1, 'exactly one struct agent header in GSD block');
+    // #2406: the fresh block never emits a role table, so zero remain
+    // anywhere in the file — not just above the marker.
+    assert.strictEqual(countMatches(content, /^\[agents\.gsd-executor\]\s*$/gm), 0, 'zero role tables anywhere');
     assert.strictEqual(countMatches(content, /name = "gsd-executor"/g), 0, 'no name = field in struct format');
     assertUsesOnlyEol(content, '\r\n');
   });
 
-  test('case 2 strips bare [agents] tables (invalid in current Codex schema, #2760) and removes leaked GSD sections in CRLF files', () => {
+  test('case 2 strips bare [agents] tables (invalid in current Codex schema, #2760) and removes leaked GSD sections in CRLF files, without regrowing a role table (#2406)', () => {
     const configPath = path.join(tmpDir, 'config.toml');
     const brokenContent = [
       '[features]',
@@ -1652,8 +1702,9 @@ describe('mergeCodexConfig', () => {
       parsedBefore.features && parsedBefore.features.child_agents_md === false,
       'preserves user feature keys above marker',
     );
-    // New struct format: exactly one [agents.gsd-executor] in the GSD block (after marker)
-    assert.strictEqual(countMatches(content, /^\[agents\.gsd-executor\]\s*$/gm), 1, 'exactly one struct agent header in GSD block');
+    // #2406: the fresh block never emits a role table, so zero remain
+    // anywhere in the file — not just above the marker.
+    assert.strictEqual(countMatches(content, /^\[agents\.gsd-executor\]\s*$/gm), 0, 'zero role tables anywhere');
     assert.strictEqual(countMatches(content, /name = "gsd-executor"/g), 0, 'no name = field in struct format');
     assertUsesOnlyEol(content, '\r\n');
   });
@@ -1726,7 +1777,13 @@ describe('installCodexConfig (integration)', () => {
     assert.ok(fs.existsSync(configPath), 'config.toml exists');
     const config = fs.readFileSync(configPath, 'utf8');
     assert.ok(config.includes(GSD_CODEX_MARKER), 'has GSD marker');
-    assert.ok(config.includes('[agents.gsd-executor]'), 'has executor agent in struct format');
+    // #2406: config.toml must NOT register agent roles — the standalone
+    // agents/<name>.toml (verified below) is the sole canonical source
+    // Codex auto-discovers. A role table here would be a second,
+    // duplicate registration of the same role.
+    assert.ok(!config.includes('[agents.gsd-executor]'), 'no executor role table in config.toml');
+    assert.strictEqual((config.match(/^\[agents\.gsd-/gm) || []).length, 0, 'zero [agents.gsd-*] role tables of any kind');
+    assert.strictEqual((config.match(/^config_file = /gm) || []).length, 0, 'zero config_file lines');
     assert.ok(!config.includes('multi_agent'), 'no feature flags');
 
     // Verify per-agent .toml files
@@ -1895,18 +1952,26 @@ describe('Codex install hook configuration (e2e)', () => {
     assertUsesOnlyEol(content, '\n');
   });
 
-  test('config_file paths are absolute using CODEX_HOME', () => {
+  test('#2406: config.toml carries no config_file entries — standalone agents/*.toml under CODEX_HOME are the sole canonical source', () => {
     runCodexInstall(codexHome);
 
     const content = readCodexConfig(codexHome);
-    const agentsDir = path.join(codexHome, 'agents').replace(/\\/g, '/');
-    // All config_file values should use absolute paths
+    // config.toml previously carried a `config_file = "<absolute agents dir>/<name>.toml"`
+    // line per role, pointing back at the standalone TOML Codex already
+    // auto-discovers under $CODEX_HOME/agents/ — a second, duplicate
+    // registration of the same role that produced one
+    // "Ignoring malformed agent role definition: duplicate agent role name"
+    // warning per agent. That line is gone entirely now.
     const configFileLines = content.split(/\r?\n/).filter(l => l.startsWith('config_file = '));
-    assert.ok(configFileLines.length > 0, 'has config_file entries');
-    for (const line of configFileLines) {
-      assert.ok(line.includes(agentsDir), `absolute path in: ${line}`);
-    }
-    assert.ok(!content.includes('config_file = "agents/'), 'no relative config_file paths');
+    assert.deepStrictEqual(configFileLines, [], 'config.toml has zero config_file entries');
+
+    // The standalone per-agent TOMLs are still written under CODEX_HOME/agents/
+    // and are what Codex auto-discovers.
+    const agentsDir = path.join(codexHome, 'agents');
+    const tomlFiles = fs.existsSync(agentsDir)
+      ? fs.readdirSync(agentsDir).filter((f) => f.startsWith('gsd-') && f.endsWith('.toml'))
+      : [];
+    assert.ok(tomlFiles.length > 0, 'standalone gsd-*.toml files exist under CODEX_HOME/agents/');
   });
 
   test('re-install repairs non-boolean keys trapped under [features] by previous install (#1379)', () => {
@@ -2085,7 +2150,10 @@ describe('Codex install hook configuration (e2e)', () => {
     assert.strictEqual(countMatches(content, /^\[features\]\s*$/gm), 1, 'keeps one [features] section');
     assert.strictEqual(countMatches(content, /^hooks = true$/gm), 1, 'adds one codex_hooks key');
     assert.ok(content.indexOf('hooks = true') > content.indexOf('[features]'), 'adds codex_hooks after the existing EOF features header');
-    assert.ok(content.indexOf('hooks = true') < content.indexOf('[agents.'), 'keeps codex_hooks before the first managed [agents.<name>] struct entry');
+    // #2406: no [agents.<name>] role tables are emitted anymore — anchor on
+    // the GSD marker (which opens the managed block containing the bare
+    // [agents] dispatch-tuning table) instead.
+    assert.ok(content.indexOf('hooks = true') < content.indexOf(GSD_CODEX_MARKER), 'keeps codex_hooks before the managed GSD block');
     assertNoDraftRootKeys(content);
   });
 
@@ -2223,7 +2291,10 @@ describe('Codex install hook configuration (e2e)', () => {
     assert.strictEqual(countMatches(content, /^features\.codex_hooks = true$/gm), 0, 'does not append an invalid dotted codex_hooks key');
     assert.strictEqual(countMatches(content, /^\[features\]\s*$/gm), 0, 'does not prepend a features table');
     assert.strictEqual(countMatches(content, /gsd-check-update\.js/g), 0, 'does not add the GSD hook block when codex_hooks cannot be enabled safely');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'still installs the managed agent block in struct format');
+    // #2406: config.toml no longer carries an [agents.<name>] role table —
+    // it still installs the managed [agents] dispatch-tuning block.
+    assert.ok(content.includes(GSD_CODEX_MARKER), 'still installs the managed GSD block');
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
     assertNoDraftRootKeys(content);
   });
 
@@ -2244,7 +2315,10 @@ describe('Codex install hook configuration (e2e)', () => {
     assert.strictEqual(countMatches(content, /^features\.codex_hooks = true$/gm), 0, 'does not append an invalid dotted codex_hooks key');
     assert.strictEqual(countMatches(content, /^\[features\]\s*$/gm), 0, 'does not prepend a features table');
     assert.strictEqual(countMatches(content, /gsd-check-update\.js/g), 0, 'does not add the GSD hook block when codex_hooks cannot be enabled safely');
-    assert.ok(content.includes('[agents.gsd-executor]'), 'still installs the managed agent block in struct format');
+    // #2406: config.toml no longer carries an [agents.<name>] role table —
+    // it still installs the managed [agents] dispatch-tuning block.
+    assert.ok(content.includes(GSD_CODEX_MARKER), 'still installs the managed GSD block');
+    assert.ok(!content.includes('[agents.gsd-executor]'), 'no agent role table (canonical source is the standalone TOML)');
     assertNoDraftRootKeys(content);
   });
 
@@ -3344,18 +3418,21 @@ describe('#2760 fix 2 — Strip purges invalid legacy [agents] / [[agents]] rega
     const parsed = parseTomlToObject(content);
 
     // Bare [agents] would have left { default, extra_key } as scalar leaves
-    // on parsed.agents. After strip + struct emit, every key under agents
-    // must itself be a table (the gsd-* struct form).
+    // on parsed.agents. After strip + re-emit, only GSD's own managed
+    // AgentsToml scalar (max_depth) remains — #2406 stopped emitting
+    // [agents.<name>] role sub-tables entirely, so `agents` stays a flat
+    // scalar-only object, not a table-of-tables.
     assert.ok(
       parsed.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents),
-      'agents must be a table-of-tables in parsed structure, got: ' + typeof parsed.agents
+      'agents must be an object in parsed structure, got: ' + typeof parsed.agents
     );
     assert.equal(parsed.agents.default, undefined, 'bare [agents] default key must be stripped');
     assert.equal(parsed.agents.extra_key, undefined, 'bare [agents] extra_key must be stripped');
+    assert.equal(parsed.agents.max_depth, 1, 'GSD-managed max_depth is the only surviving [agents] key');
     const gsdAgents = Object.keys(parsed.agents).filter((k) => k.startsWith('gsd-'));
-    assert.ok(
-      gsdAgents.length > 0 && gsdAgents.every((k) => typeof parsed.agents[k] === 'object'),
-      'agents.gsd-* struct form must be present: ' + JSON.stringify(Object.keys(parsed.agents))
+    assert.deepStrictEqual(
+      gsdAgents, [],
+      'no [agents.gsd-*] role sub-tables (#2406) — canonical registration lives only in the standalone TOMLs: ' + JSON.stringify(Object.keys(parsed.agents))
     );
 
     // User's unrelated [model] section preserved structurally.
@@ -3385,16 +3462,18 @@ describe('#2760 fix 2 — Strip purges invalid legacy [agents] / [[agents]] rega
     const parsed = parseTomlToObject(content);
 
     // [[agents]] sequence form would parse to Array — after strip it must be
-    // a table-of-tables with gsd-* struct keys.
+    // a plain object holding only GSD's own managed max_depth scalar (#2406
+    // stopped emitting [agents.<name>] role sub-tables entirely).
     assert.ok(
       parsed.agents && typeof parsed.agents === 'object' && !Array.isArray(parsed.agents),
-      'agents must be a table-of-tables in parsed structure (sequence form must be stripped), got: '
+      'agents must be an object in parsed structure (sequence form must be stripped), got: '
         + (Array.isArray(parsed.agents) ? 'array' : typeof parsed.agents)
     );
+    assert.equal(parsed.agents.max_depth, 1, 'GSD-managed max_depth is the only surviving [agents] key');
     const gsdAgents = Object.keys(parsed.agents).filter((k) => k.startsWith('gsd-'));
-    assert.ok(
-      gsdAgents.length > 0,
-      'agents.gsd-* struct form must be present: ' + JSON.stringify(Object.keys(parsed.agents))
+    assert.deepStrictEqual(
+      gsdAgents, [],
+      'no [agents.gsd-*] role sub-tables (#2406) — canonical registration lives only in the standalone TOMLs: ' + JSON.stringify(Object.keys(parsed.agents))
     );
 
     // User's unrelated [projects."/tmp/x"] section preserved structurally.
