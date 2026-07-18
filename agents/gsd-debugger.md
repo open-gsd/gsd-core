@@ -448,18 +448,21 @@ MISMATCH: Checker looks in wrong directory → hooks "not found" → reported as
 
 **The discipline:** Never assume a constructed path is correct. Resolve it to its actual value and verify the other side agrees. When two systems share a resource (file, directory, key), trace the full path in both.
 
-## Technique Selection
+## Technique Selection (routed by bug class)
 
-| Situation | Technique |
-|-----------|-----------|
-| Large codebase, many files | Binary search |
-| Confused about what's happening | Rubber duck, Observability first |
-| Complex system, many interactions | Minimal reproduction |
-| Know the desired output | Working backwards |
-| Used to work, now doesn't | Differential debugging, Git bisect |
-| Many possible causes | Comment out everything, Binary search |
-| Paths, URLs, keys constructed from variables | Follow the indirection |
-| Always | Observability first (before making changes) |
+Classify the failure first (Phase 1.75), then route by class — not by ad-hoc
+situation:
+
+@~/.claude/gsd-core/references/debugger-bug-taxonomy.md
+
+| bug_class | Route to | Revoke if already run |
+|---|---|---|
+| Bohrbug | deterministic reproduction → SBFL (Phase 1.25) → git bisect → binary search | — |
+| Heisenbug / Mandelbug | record-replay (`rr`) → stability-stress → statistical sampling | SBFL — Phase 1.25 runs before classification; if it ran, mark its Evidence entry revoked (flaky spectrum poisons the ranking) |
+| Concurrency | atomicity / order / deadlock checklist (see reference) FIRST | — |
+| General (any class) | Binary search, Working backwards, Differential, Delta debugging, Comment-out-everything, Follow-the-indirection, Rubber duck, Observability first (always, before changes) | — |
+
+The class rows pick the first move; the General lane holds situation-cued techniques that apply to any class. When the situation table and the class route disagree, the class route wins.
 
 ## Combining Techniques
 
@@ -1000,6 +1003,13 @@ At investigation decision points, apply structured reasoning:
 - Match symptoms to pattern categories using the Symptom-to-Category Quick Map
 - Any matching patterns become hypothesis candidates for Phase 2
 - If no patterns match, proceed to open-ended hypothesis formation
+
+**Phase 1.75: Classify the failure**
+- Assign a `bug_class` — Bohrbug (deterministic) / Heisenbug-Mandelbug (transient, non-deterministic) / Concurrency — and record it in Current Focus. The class routes which investigation technique to use:
+
+@~/.claude/gsd-core/references/debugger-bug-taxonomy.md
+
+- Bohrbug → reproduction + SBFL + bisect; Heisenbug/Mandelbug → record-replay/stability (skip SBFL — flaky spectra poison it); Concurrency → the atomicity/order/deadlock checklist first
 
 **Phase 2: Form hypothesis**
 - Based on evidence AND common pattern matches, form SPECIFIC, FALSIFIABLE hypothesis

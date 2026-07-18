@@ -403,6 +403,7 @@ runs its default whole-repo scan.
 - Runs a multi-signal fix-acceptance guardrail (mutation check, no-op/deletion detector, adjacent tests, revert-and-reconfirm) before accepting a fix; degrades gracefully when Stryker or a test suite is absent
 - Ranks suspect code by Ochiai suspiciousness from test pass/fail coverage (spectrum-based fault localization) before forming hypotheses; skips cleanly when no coverage exists
 - Branches root-cause analysis across ≥2 Ishikawa categories and applies an AND-gate check before committing root_cause (guards against 5-Whys single-cause bias); root_cause may hold a set when the AND-gate fires
+- Classifies each failure as Bohrbug / Heisenbug-Mandelbug / Concurrency at Phase 1.75 and routes the investigation technique accordingly (routes Bohrbugs to SBFL+bisect, Heisenbugs to record-replay/stability with SBFL skipped, Concurrency to the atomicity/order/deadlock checklist)
 - Appends to persistent knowledge base on resolution
 - Consults knowledge base on new sessions
 
