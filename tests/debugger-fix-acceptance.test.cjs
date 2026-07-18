@@ -106,8 +106,8 @@ describe('fix-acceptance guardrail (#1958, epic #1957 Phase 1A)', () => {
     });
 
     test('revert-and-reconfirm must run before a fix is accepted', () => {
-      const content = fs.readFileSync(REFERENCE, 'utf8');
-      assert.ok(/before.*accept|accept.*after.*revert|prior to accept/i.test(content),
+      const flat = fs.readFileSync(REFERENCE, 'utf8').replace(/\s+/g, ' ');
+      assert.ok(/before.*accept|accept.*after.*revert|prior to accept/i.test(flat),
         'revert-and-reconfirm must run before fix acceptance');
     });
   });
