@@ -131,7 +131,11 @@ test('kilo descriptor declares runtime.hostBehaviors (the folded-in behaviors)',
   assert.equal(hb.combinedFamilyInstall, true);
   assert.equal(hb.frontmatterDialect, 'kilo');
   assert.equal(hb.skipUpdateBannerCommand, true);
-  assert.equal(hb.skipSharedHooksInstall, true);
+  // #2305: Kilo must NOT declare skipSharedHooksInstall — its nativePlugin
+  // (below) spawns the shared hooks/*.js guard scripts, so the install has to
+  // stage them (same shape as OpenCode). Declaring both was the descriptor
+  // contradiction that silently no-opped all four PreToolUse guards on Kilo.
+  assert.equal(hb.skipSharedHooksInstall, undefined);
   assert.ok(hb.nativePlugin && typeof hb.nativePlugin === 'object');
   assert.equal(hb.nativePlugin.dir, 'plugins');
   assert.equal(hb.nativePlugin.file, 'gsd-core.js');
