@@ -221,6 +221,7 @@
       "debugger-rca-branching.md",
       "debugger-repro-hardening.md",
       "debugger-sbfl.md",
+      "debugger-semantic-recall.md",
       "decimal-phase-calculation.md",
       "doc-conflict-engine.md",
       "domain-probes.md",
