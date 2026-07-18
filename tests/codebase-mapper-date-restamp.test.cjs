@@ -15,7 +15,11 @@ const WORKFLOW = fs.readFileSync(path.join(ROOT, 'gsd-core', 'workflows', 'map-c
 
 // The pre-fix framing: substitute-the-placeholder-only, which never fires on an
 // Update run because the placeholder was already replaced by a concrete date.
-const STALE_PLACEHOLDER_ONLY = /Use \{date\} for all \[YYYY-MM-DD\] date placeholders/;
+// The two files phrased the bug differently, so each needs its own stale regex;
+// a single regex asserted against both silently passes on the file it never
+// matched, leaving that file's negative guard dead.
+const WORKFLOW_STALE_PLACEHOLDER_ONLY = /Use \{date\} for all \[YYYY-MM-DD\] date placeholders/;
+const MAPPER_STALE_PLACEHOLDER_ONLY = /Replace `?\[YYYY-MM-DD\]`? with the date/i;
 
 describe('map-codebase date restamp (#2279)', () => {
   test('mapper instructs overwriting an existing date on update runs', () => {
@@ -41,12 +45,12 @@ describe('map-codebase date restamp (#2279)', () => {
     // match is not enough.
     assert.doesNotMatch(
       MAPPER,
-      STALE_PLACEHOLDER_ONLY,
+      MAPPER_STALE_PLACEHOLDER_ONLY,
       'gsd-codebase-mapper.md still contains a placeholder-only date instruction',
     );
     assert.doesNotMatch(
       WORKFLOW,
-      STALE_PLACEHOLDER_ONLY,
+      WORKFLOW_STALE_PLACEHOLDER_ONLY,
       'map-codebase.md still contains a placeholder-only date instruction',
     );
     const overwriteSites = WORKFLOW.match(/OVERWRIT(E|ING) any existing date/gi) ?? [];
