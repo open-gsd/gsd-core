@@ -5,7 +5,7 @@
   "add-todo.md": 10734,
   "ai-integration-phase.md": 14805,
   "analyze-dependencies.md": 3887,
-  "audit-fix.md": 11717,
+  "audit-fix.md": 11723,
   "audit-milestone.md": 18448,
   "audit-uat.md": 7469,
   "autonomous.md": 42474,
@@ -88,6 +88,6 @@
   "undo.md": 10431,
   "update.md": 20914,
   "validate-phase.md": 10849,
-  "verify-phase.md": 40923,
+  "verify-phase.md": 40929,
   "verify-work.md": 40247
 }

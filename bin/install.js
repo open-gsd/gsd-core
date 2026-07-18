@@ -11059,13 +11059,15 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     }
 
     // Gate hooks/lib/ install on the same set of runtimes that receive hooks/.
-    // Codex/Copilot/Cursor/Windsurf/Trae/Cline/Kilo do not use the shared
+    // Codex/Copilot/Cursor/Windsurf/Trae/Cline do not use the shared
     // hooks/lib/ helpers (Cursor uses standalone .js hook scripts registered
     // via hooks.json — gated descriptor-driven via
-    // hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise #2090; Kilo
-    // likewise #2093; Trae likewise #2094; Codex uses hooks.json directly;
-    // the others skip hooks entirely); Kilo and ZCode also skip hooks entirely
-    // (hooksSurface:'none' with no plugin surface — #1821). None of the
+    // hostBehaviors.skipSharedHooksInstall, #2089; Cline likewise #2090;
+    // Trae likewise #2094; Codex uses hooks.json directly;
+    // the others skip hooks entirely); ZCode also skips hooks entirely
+    // (hooksSurface:'none' with no plugin surface — #1821). Kilo is NOT
+    // excluded since #2305: its native plugin adapter (#2093) spawns the
+    // staged hooks/*.js scripts, same as OpenCode. None of the
     // excluded runtimes must receive the hooks/lib/ helpers — otherwise the
     // Codex comment downstream ("we deliberately do *not* copy hooks/lib/ for
     // Codex") is contradicted in practice. (Gating lives at the call sites
@@ -11081,18 +11083,21 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     return hooksOk;
   }
 
-  // #1821: Kilo and ZCode declare hooksSurface:'none' AND have no plugin surface,
-  // so the staged hook scripts are dead weight for them — exclude both here.
+  // #1821: ZCode declares hooksSurface:'none' AND has no plugin surface,
+  // so the staged hook scripts are dead weight for it — excluded here.
   // OpenCode also declares hooksSurface:'none' but is deliberately NOT excluded:
   // its native plugin adapter (#1914, installed above under plugins/gsd-core.js)
   // spawns the staged hooks/*.js scripts via OpenCode's event bus and needs both
-  // them and the CommonJS package.json marker written below.
+  // them and the CommonJS package.json marker written below. Kilo is the same
+  // shape since #2093 (a nativePlugin spawning the staged hooks), so it must
+  // NOT skip either — declaring skipSharedHooksInstall:true alongside a
+  // nativePlugin left every guard the plugin spawns a silent no-op (#2305).
   // #2089: Cursor's exclusion is now descriptor-driven via
   // hostBehaviors.skipSharedHooksInstall (was hardcoded !isCursor).
   // #2090: Cline's exclusion is likewise descriptor-driven (cline declares
   // skipSharedHooksInstall:true) — the redundant `&& !isCline` was removed.
-  // #2093: Kilo's exclusion is likewise descriptor-driven (kilo declares
-  // skipSharedHooksInstall:true) — the redundant `&& !isKilo` was removed.
+  // #2093/#2305: Kilo's former exclusion (descriptor-driven via
+  // skipSharedHooksInstall:true) was removed in #2305 — see above.
   // #2094: Trae's exclusion is likewise descriptor-driven (trae declares
   // skipSharedHooksInstall:true) — the redundant `&& !isTrae` was removed.
   // #2101: ZCode's exclusion is likewise descriptor-driven (zcode declares

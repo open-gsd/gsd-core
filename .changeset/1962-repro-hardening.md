@@ -1,0 +1,5 @@
+---
+type: Added
+pr: 2409
+---
+**`gsd-debugger` now hardens regression tests via PBT shrinking, explicit oracle classification, and boundary neighbors** — extending Minimal Reproduction and Test-First Debugging. When a bug triggers on a class of inputs, the debugger wraps the failing input in a property (fast-check for JS/TS, Hypothesis for Python) and lets the shrinker auto-minimize the counterexample, storing the **minimized** input as the regression seed; before writing the assertion it classifies the oracle as `specified` / `derived` (contract/model) / `metamorphic` / `implicit` (crash — weakest, never the silent default) and records it under `Resolution.oracle_type`; and it generates **boundary neighbors** (off-by-one, min/max, empty/singleton) around the fixed defect's equivalence class. Together they turn the regression test into a root-cause check — which is what the Phase 1A mutation guardrail needs to bite. Degrades gracefully to manual minimization when no PBT framework is present. Full rules live in `gsd-core/references/debugger-repro-hardening.md`. (#1962)

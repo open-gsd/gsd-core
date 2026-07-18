@@ -26,13 +26,14 @@
  *   block — the slug Kilo's Task tool dispatches by.
  */
 
-const { test } = require('node:test');
+const { test, before } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { runMinimalInstall } = require('./helpers/install-shared.cjs');
+const { runMinimalInstall, BUILD_SCRIPT } = require('./helpers/install-shared.cjs');
 const { cleanup } = require('./helpers.cjs');
 const { listAgentFiles } = require('./helpers/agent-roster.cjs');
 const { convertClaudeToKiloFrontmatter } = require('../bin/install.js');
@@ -292,4 +293,128 @@ test('capabilities/kilo/capability.json extendedHookEvents is exactly [] (hooksS
   assert.deepEqual(KILO_CAP.runtime.extendedHookEvents, []);
   assert.equal(KILO_CAP.runtime.hooksSurface, 'none');
   assert.equal(KILO_CAP.runtime.hostIntegration.dispatch.subagentToolkit, 'undocumented');
+});
+
+// ---------------------------------------------------------------------------
+// #2305: the shared guard hooks Kilo's native plugin spawns must be STAGED.
+//
+// Kilo's capability descriptor used to declare BOTH hostBehaviors.nativePlugin
+// (a plugin that spawns the shared PreToolUse guard scripts as subprocesses)
+// AND hostBehaviors.skipSharedHooksInstall:true (which suppresses staging of
+// hooks/*.js into the config dir). The plugin's runHook treats an absent hook
+// script as a silent allow, so every guard it spawned no-opped on a normal
+// Kilo install. OpenCode (same plugin, hooks staged) is the reference shape.
+// ---------------------------------------------------------------------------
+
+// hooks/dist is gitignored and built; the scoped CI lane does not run
+// build:hooks, so a real install there would stage no hooks/ dir. Build it
+// idempotently (mirrors golden-install-parity + install-minimal-hooks).
+before(() => {
+  const build = spawnSync(process.execPath, [BUILD_SCRIPT], { encoding: 'utf8' });
+  assert.equal(build.status, 0, `build:hooks failed: ${build.stderr}`);
+});
+
+// The three PreToolUse guards the plugin spawns that ship today. When a new
+// guard lands on the plugin's dispatch path, add it here.
+const PLUGIN_GUARD_HOOKS = [
+  'gsd-prompt-guard.js',
+  'gsd-read-guard.js',
+  'gsd-worktree-path-guard.js',
+  'gsd-workflow-guard.js',
+];
+
+for (const scope of ['global', 'local']) {
+  test(`kilo --${scope}: stages the guard hook scripts where the native plugin resolves them (#2305)`, (t) => {
+    const { manifest, configDir, root } = runMinimalInstall({ runtime: 'kilo', scope });
+    t.after(() => cleanup(root));
+
+    // The shared hooks bundle lands in the config dir, next to gsd-core/.
+    for (const hook of PLUGIN_GUARD_HOOKS) {
+      const hookPath = path.join(configDir, 'hooks', hook);
+      assert.ok(fs.existsSync(hookPath), `${hookPath} must be staged by the install`);
+    }
+    // The CommonJS marker installSharedHooksBundle writes alongside hooks/.
+    const marker = path.join(configDir, 'package.json');
+    assert.ok(fs.existsSync(marker), 'CommonJS package.json marker must be staged');
+    assert.equal(JSON.parse(fs.readFileSync(marker, 'utf8')).type, 'commonjs');
+
+    // Staged hooks are tracked in the manifest (drift/uninstall accounting).
+    assert.ok(manifest && manifest.files['hooks/gsd-prompt-guard.js'],
+      'manifest must track the staged guard hooks');
+
+    // The installed plugin's own walk-up resolution (hooks/ + gsd-core/ both
+    // present) lands on the config dir — i.e. HOOKS_DIR points at the staged
+    // scripts, closing the resolveRepoRoot fallback miss from #2305.
+    const installedPlugin = path.join(configDir, 'plugins', 'gsd-core.js');
+    assert.ok(fs.existsSync(installedPlugin), 'native plugin must be staged');
+    delete require.cache[require.resolve(installedPlugin)];
+    const mod = require(installedPlugin);
+    assert.equal(mod.server._internals.REPO_ROOT, fs.realpathSync(configDir),
+      'plugin REPO_ROOT must resolve to the config dir (hooks/ + gsd-core/ siblings)');
+  });
+}
+
+test('kilo: a disallowed write through the REAL installed tree is rejected by the worktree-path guard (#2305)', async (t) => {
+  const { configDir, root } = runMinimalInstall({ runtime: 'kilo', scope: 'global' });
+  t.after(() => cleanup(root));
+
+  // Build a GSD-shaped executor worktree: gsd-worktree-path-guard hard-blocks
+  // only when cwd is a linked worktree on a worktree-agent-* branch and the
+  // write targets an absolute path outside that worktree's toplevel.
+  const scratch = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kilo-2305-')));
+  t.after(() => cleanup(scratch));
+  const mainRepo = path.join(scratch, 'main');
+  fs.mkdirSync(mainRepo, { recursive: true });
+  const git = (args, cwd) => {
+    const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, encoding: 'utf8' });
+    assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`);
+    return r;
+  };
+  git(['init', '-q'], mainRepo);
+  fs.writeFileSync(path.join(mainRepo, 'seed.md'), 'seed');
+  git(['add', 'seed.md'], mainRepo);
+  git(['commit', '-q', '-m', 'seed'], mainRepo);
+  const wt = path.join(scratch, 'wt');
+  git(['worktree', 'add', '-q', '-b', 'worktree-agent-2305', wt], mainRepo);
+
+  // Load the plugin exactly as installed and pin its cwd to the worktree.
+  const installedPlugin = path.join(configDir, 'plugins', 'gsd-core.js');
+  delete require.cache[require.resolve(installedPlugin)];
+  const mod = require(installedPlugin);
+  const handlers = await mod.server({ directory: wt });
+
+  // A write escaping the worktree back into the main repo must be BLOCKED —
+  // pre-#2305 no hook script was staged, so this silently resolved (allow).
+  await assert.rejects(
+    () => handlers['tool.execute.before'](
+      { tool: 'write' },
+      { args: { filePath: path.join(mainRepo, 'escape.md'), content: 'x' } },
+    ),
+    /./,
+    'guard must reject the out-of-worktree write through the installed Kilo tree',
+  );
+
+  // Control: the same write kept inside the worktree passes.
+  await handlers['tool.execute.before'](
+    { tool: 'write' },
+    { args: { filePath: path.join(wt, 'inside.md'), content: 'x' } },
+  );
+});
+
+// Regression guard for the descriptor-contradiction CLASS, not just Kilo: a
+// runtime whose nativePlugin spawns the shared hooks while its descriptor
+// suppresses staging them re-creates #2305 for that runtime.
+test('no capability declares BOTH hostBehaviors.nativePlugin and skipSharedHooksInstall:true (#2305)', () => {
+  const capsDir = path.join(__dirname, '..', 'capabilities');
+  for (const entry of fs.readdirSync(capsDir)) {
+    const capPath = path.join(capsDir, entry, 'capability.json');
+    if (!fs.existsSync(capPath)) continue;
+    const cap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
+    const hb = cap.runtime && cap.runtime.hostBehaviors;
+    if (!hb || !hb.nativePlugin) continue;
+    assert.notEqual(hb.skipSharedHooksInstall, true,
+      `${entry}: declares a nativePlugin (which spawns the shared hooks) while ` +
+      'also declaring skipSharedHooksInstall:true — the hooks it depends on ' +
+      'would never be staged (#2305)');
+  }
 });

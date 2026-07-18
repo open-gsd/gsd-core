@@ -1603,8 +1603,7 @@ const capabilities = {
           "file": "gsd-core.js",
           "source": ".kilo/plugins/gsd-core.js"
         },
-        "skipUpdateBannerCommand": true,
-        "skipSharedHooksInstall": true
+        "skipUpdateBannerCommand": true
       }
     }
   },
@@ -4889,8 +4888,7 @@ const runtimes = {
           "file": "gsd-core.js",
           "source": ".kilo/plugins/gsd-core.js"
         },
-        "skipUpdateBannerCommand": true,
-        "skipSharedHooksInstall": true
+        "skipUpdateBannerCommand": true
       }
     }
   },

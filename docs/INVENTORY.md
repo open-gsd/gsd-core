@@ -294,6 +294,11 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `ui-brand.md` | Visual output formatting patterns. |
 | `common-bug-patterns.md` | Common bug patterns for code review and verification. |
 | `debugger-philosophy.md` | Evergreen debugging disciplines loaded by `gsd-debugger`. |
+| `debugger-fix-acceptance.md` | Multi-signal fix-acceptance guardrail (anti-overfitting) loaded by `gsd-debugger`. |
+| `debugger-sbfl.md` | Spectrum-based fault localization (Ochiai) pre-filter loaded by `gsd-debugger`. |
+| `debugger-rca-branching.md` | RCA branching (fishbone + AND-gate) anti-single-cause discipline loaded by `gsd-debugger`. |
+| `debugger-bug-taxonomy.md` | Bug-taxonomy classification (Bohrbug/Heisenbug/Concurrency) + technique routing table loaded by `gsd-debugger`. |
+| `debugger-repro-hardening.md` | Regression-test hardening (PBT shrinking + oracle classification + boundary neighbors) loaded by `gsd-debugger`. |
 | `mandatory-initial-read.md` | Shared required-reading boilerplate injected into agent prompts. |
 | `agent-skills-bootstrap.md` | Shared agent_skills self-load contract (query + Read + dedup guard) injected into all 22 consumer agents. |
 | `project-skills-discovery.md` | Shared project-skills-discovery boilerplate injected into agent prompts. |

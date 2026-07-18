@@ -671,19 +671,23 @@ describe('#1755: .sh hooks are copied and executable after install', () => {
   });
 });
 
-// ─── #1821: Kilo/ZCode (hooksSurface:none, no plugin) receive no dead hooks ────
+// ─── #1821/#2305: hooks staged iff a surface consumes them ─────────────────────
 //
 // #1821 reported dead hook scripts staged for runtimes with hooksSurface:'none'.
-// OpenCode and pi ALSO declare hooksSurface:'none', but each has a native plugin
-// adapter that spawns the staged hooks/*.js scripts as subprocesses (OpenCode's
-// #1914 plugins/gsd-core.js via OpenCode's event bus; pi's #2102 Stage 2
-// pi/gsd.cjs → extensions/gsd.cjs via pi.on(...) bridges) — so for both, the
-// hooks are LIVE and must keep being copied. Kilo and ZCode have no plugin
-// surface at all, so their staged hooks are genuinely dead: this is the case
-// the fix removes. These tests assert the split: Kilo/ZCode get no hooks;
-// OpenCode/pi (and Claude) still do.
+// OpenCode, pi — and, corrected by #2305, Kilo — ALSO declare
+// hooksSurface:'none', but each has a native plugin adapter that spawns the
+// staged hooks/*.js scripts as subprocesses (OpenCode's #1914
+// plugins/gsd-core.js via OpenCode's event bus; pi's #2102 Stage 2 pi/gsd.cjs
+// → extensions/gsd.cjs via pi.on(...) bridges; Kilo's plugins/gsd-core.js,
+// byte-identical to OpenCode's) — so for all three, the hooks are LIVE and
+// must keep being copied. ZCode has no plugin surface at all, so its staged
+// hooks are genuinely dead: that is the case #1821's fix removes. (#1821
+// originally excluded Kilo too, on the false premise that it had no plugin
+// surface — #2305 reversed that: the skip flag silently no-opped every guard
+// hook Kilo's plugin spawns.) These tests assert the split: ZCode gets no
+// hooks; Kilo/OpenCode/pi (and Claude) do.
 
-describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep their hooks', () => {
+describe('#1821/#2305: ZCode receives no dead hook files; Kilo/OpenCode/Claude keep their hooks', () => {
   function gsdHookFilesUnder(configDir) {
     const hooksDir = path.join(configDir, 'hooks');
     if (!fs.existsSync(hooksDir)) return [];
@@ -716,16 +720,37 @@ describe('#1821: Kilo/ZCode receive no dead hook files; OpenCode/Claude keep the
     }
   }
 
-  // Kilo and ZCode both declare hooksSurface:'none' with no plugin surface, so
-  // their staged hooks are genuinely dead weight (#1821) — this is the case
-  // the fix removes.
-  for (const runtime of ['kilo', 'zcode']) {
+  // ZCode declares hooksSurface:'none' with no plugin surface, so its staged
+  // hooks are genuinely dead weight (#1821) — this is the case the fix
+  // removes. (Kilo was originally in this loop; #2305 moved it to the
+  // OpenCode group below — its native plugin spawns the staged guard hooks.)
+  for (const runtime of ['zcode']) {
     test(`${runtime} --global install creates no gsd-*.js/.sh hook files or hooks/lib`, () => {
       const { hookFiles, hooksLibExists } = installAndCollect(runtime);
       assert.deepStrictEqual(hookFiles, [], `${runtime} install must not copy any gsd-*.js/.sh hook files, found: ${hookFiles.join(', ')}`);
       assert.ok(!hooksLibExists, `${runtime} install must not create hooks/lib/`);
     });
   }
+
+  // #2305: Kilo's native plugin (plugins/gsd-core.js, byte-identical to
+  // OpenCode's) spawns the staged PreToolUse guard hooks as subprocesses, so
+  // Kilo must receive the shared hooks bundle as a sibling of gsd-core/ —
+  // the shape the plugin's resolveRepoRoot walk requires. #1821 excluded
+  // Kilo on the false premise that it had no plugin surface; with the skip
+  // flag set, every guard silently no-opped on every Kilo install.
+  test('kilo --global install stages the guard hooks its plugin spawns, hooks/lib, and the plugin', () => {
+    const { hookFiles, hooksLibExists, gitCmdExists, pluginExists } = installAndCollect('kilo');
+    const basenames = hookFiles.map((f) => path.basename(f));
+    for (const expected of ['gsd-prompt-guard.js', 'gsd-read-guard.js', 'gsd-worktree-path-guard.js']) {
+      assert.ok(
+        basenames.includes(expected),
+        `kilo install must copy ${expected} (spawned by the plugin's runHook), found: ${basenames.join(', ')}`,
+      );
+    }
+    assert.ok(hooksLibExists, 'kilo install must create hooks/lib/');
+    assert.ok(gitCmdExists, 'kilo install must copy hooks/lib/git-cmd.js (required by the shared hooks)');
+    assert.ok(pluginExists, 'kilo install must install plugins/gsd-core.js (the hook-spawning plugin)');
+  });
 
   // Regression guard for #1914: OpenCode's plugin adapter spawns the staged
   // hooks, so excluding OpenCode from the hook copy would break it. OpenCode
