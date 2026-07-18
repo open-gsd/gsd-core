@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (see #1958)
 // Agent .md + reference .md + template .md files — their text IS what the
 // runtime loads. Testing text content tests the deployed guardrail contract.
 // Per CONTRIBUTING.md exception matrix. Covers epic #1957 Phase 1A (#1958).
