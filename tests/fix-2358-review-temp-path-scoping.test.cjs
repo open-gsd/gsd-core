@@ -28,6 +28,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const { cleanup } = require('./helpers.cjs');
+
 const REVIEW_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
 const SHIP_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
 
@@ -63,7 +65,7 @@ describe('#2358 review.md temp paths are run-scoped, not phase-only', () => {
     );
     // The old isolation key must be gone entirely from path construction.
     assert.ok(
-      !/\/tmp\/gsd-review[^\n]*\{phase\}/.test(content),
+      !/\/tmp\/gsd-review[^\r\n]*\{phase\}/.test(content),
       'no temp path may still be keyed on a bare {phase} placeholder'
     );
     assert.ok(
@@ -152,8 +154,9 @@ describe('#2358 design principle: run-scoped temp dirs never collide across proj
         `phase ${phase} in two different runs must not resolve to the same prompt path`
       );
     } finally {
-      fs.rmSync(runDirA, { recursive: true, force: true });
-      fs.rmSync(runDirB, { recursive: true, force: true });
+      // helpers.cleanup (not raw fs.rmSync) carries the Windows-EBUSY retry budget.
+      cleanup(runDirA);
+      cleanup(runDirB);
     }
   });
 });
