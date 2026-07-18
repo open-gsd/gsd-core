@@ -406,6 +406,7 @@ runs its default whole-repo scan.
 - Classifies each failure as Bohrbug / Heisenbug-Mandelbug / Concurrency at Phase 1.75 and routes the investigation technique accordingly (routes Bohrbugs to SBFL+bisect, Heisenbugs to record-replay/stability with SBFL skipped, Concurrency to the atomicity/order/deadlock checklist)
 - Hardens regression tests via PBT shrinking (minimized counterexample as the seed), explicit oracle classification (specified/derived/metamorphic/implicit), and boundary neighbors around the fixed equivalence class
 - Emits a blameless-postmortem Prevention block at resolution (branching 5-Whys, why-wasn't-this-caught, a concrete recurrence guard) and records `why_not_caught` + `recurrence_guard` in the knowledge base so the same bug class is prevented, not just fixed
+- Recalls prior resolved sessions semantically via MemPalace at Phase 0 (top-k meaning-similar), catching same-root-cause/different-wording cases keyword overlap misses; falls back to keyword matching when MemPalace is absent
 - Appends to persistent knowledge base on resolution
 - Consults knowledge base on new sessions
 

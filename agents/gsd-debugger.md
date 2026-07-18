@@ -822,9 +822,11 @@ At the **end of `archive_session`**, after the session file is moved to `resolve
 
 ## Matching Logic
 
-Matching is keyword overlap, not semantic similarity. Extract nouns and error substrings from `Symptoms.errors` and `Symptoms.actual`. Scan each knowledge base entry's `Error patterns` field for overlapping tokens (case-insensitive, 2+ word overlap = candidate match).
+**Semantic-first, keyword-fallback.** Query MemPalace with the current symptoms and surface the top-k meaning-similar prior resolutions — this catches same-root-cause/different-wording cases keyword overlap misses. Fall back to keyword overlap on `knowledge-base.md` when MemPalace is absent. See:
 
-**Important:** A match is a **hypothesis candidate**, not a confirmed diagnosis. Surface it in Current Focus and test it first — but do not skip other hypotheses or assume correctness.
+@~/.claude/gsd-core/references/debugger-semantic-recall.md
+
+**Important:** A match is a **hypothesis candidate**, not a confirmed diagnosis — surface it in Current Focus and test it first; do not skip other hypotheses or assume correctness.
 
 </knowledge_base_protocol>
 
@@ -984,9 +986,7 @@ At investigation decision points, apply structured reasoning:
 **Autonomous investigation. Update file continuously.**
 
 **Phase 0: Check knowledge base**
-- If `.planning/debug/knowledge-base.md` exists, read it
-- Extract keywords from `Symptoms.errors` and `Symptoms.actual` (nouns, error substrings, identifiers)
-- Scan knowledge base entries for 2+ keyword overlap (case-insensitive)
+- Query MemPalace semantically with the current symptoms (top-k meaning-similar prior resolutions); fall back to reading `.planning/debug/knowledge-base.md` and keyword overlap when MemPalace is absent
 - If match found:
   - Note in Current Focus: `known_pattern_candidate: "{matched slug} — {description}"`
   - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}. Why not caught: {why_not_caught}. Recurrence guard: {recurrence_guard}.` (the last two are absent on old entries — that's fine; consume them when present)
@@ -1250,6 +1250,8 @@ Commit the knowledge base update alongside the resolved session:
 ```bash
 gsd_run query commit "docs: update debug knowledge base with {slug}" --files .planning/debug/knowledge-base.md
 ```
+
+**Index into MemPalace (when available)** for semantic recall: index the resolved session (symptoms + root_cause(s) + fix + recurrence guard) so a future Phase-0 query surfaces it by meaning, not just keyword. Skip with a logged note when MemPalace is absent — the plain-text `knowledge-base.md` entry is the durable fallback.
 
 Report completion and offer next steps.
 </step>
