@@ -73,7 +73,7 @@ files_changed: []
 - If Claude reads this after /clear, it knows exactly where to resume
 - Fields: hypothesis, test, expecting, next_action, reasoning_checkpoint, tdd_checkpoint
 - `next_action`: must be concrete and actionable — bad: "continue investigating"; good: "Add logging at line 47 of auth.js to observe token value before jwt.verify()"
-- `reasoning_checkpoint`: OVERWRITE before every fix_and_verify — five-field structured reasoning record (hypothesis, confirming_evidence, falsification_test, fix_rationale, blind_spots)
+- `reasoning_checkpoint`: OVERWRITE before every fix_and_verify — seven-field structured reasoning record (hypothesis, confirming_evidence, falsification_test, fix_rationale, blind_spots, candidate_causes, and_gate) — see `gsd-debugger.md` Structured Reasoning Checkpoint
 - `tdd_checkpoint`: OVERWRITE during TDD red/green phases — test file, name, status, failure output
 
 **Symptoms:**

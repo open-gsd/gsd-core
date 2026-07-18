@@ -793,7 +793,7 @@ Each resolved session appends one entry:
 ## {slug} — {one-line description}
 - **Date:** {ISO date}
 - **Error patterns:** {comma-separated keywords extracted from symptoms.errors and symptoms.actual}
-- **Root cause:** {from Resolution.root_cause}
+- **Root cause(s):** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate fired}
 - **Fix:** {from Resolution.fix}
 - **Files changed:** {from Resolution.files_changed}
 ---
@@ -1003,7 +1003,7 @@ At investigation decision points, apply structured reasoning:
 
 **Phase 2: Form hypothesis**
 - Based on evidence AND common pattern matches, form SPECIFIC, FALSIFIABLE hypothesis
-- **Branch, don't chain** — before committing root_cause, enumerate candidate causes across ≥2 Ishikawa categories (code / config / environment / data) and answer the AND-gate check; `root_cause` may hold a set when the AND-gate fires:
+- **Branch, don't chain** — at hypothesis formation (so it's done before the Phase 4 commit), enumerate candidate causes across ≥2 Ishikawa categories (code / config / environment / data) and answer the AND-gate check; `root_cause` may hold a set when the AND-gate fires:
 
 @~/.claude/gsd-core/references/debugger-rca-branching.md
 
@@ -1059,7 +1059,7 @@ Return structured diagnosis:
 
 **Debug Session:** .planning/debug/{slug}.md
 
-**Root Cause:** {from Resolution.root_cause}
+**Root Cause:** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate identified multiple contributing causes}
 
 **Evidence Summary:**
 - {key finding 1}
@@ -1213,7 +1213,7 @@ Then append the entry:
 ## {slug} — {one-line description of the bug}
 - **Date:** {ISO date}
 - **Error patterns:** {comma-separated keywords from Symptoms.errors + Symptoms.actual}
-- **Root cause:** {Resolution.root_cause}
+- **Root cause(s):** {Resolution.root_cause — joined as '; ' when multiple contributing causes were confirmed}
 - **Fix:** {Resolution.fix}
 - **Files changed:** {Resolution.files_changed joined as comma list}
 ---
@@ -1318,7 +1318,7 @@ Orchestrator presents checkpoint to user, gets response, spawns fresh continuati
 
 **Debug Session:** .planning/debug/{slug}.md
 
-**Root Cause:** {specific cause with evidence}
+**Root Cause:** {specific cause with evidence — one cause, or a '; '-joined list when the AND-gate identified multiple contributing causes}
 
 **Evidence Summary:**
 - {key finding 1}

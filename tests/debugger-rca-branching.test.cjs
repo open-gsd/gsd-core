@@ -30,6 +30,16 @@ function assertRcaSchemaInvariants(output) {
   for (const id of rootIds) {
     assert.ok(!elimIds.has(id), `cause ${id} appears in BOTH root_causes and eliminated (must be disjoint)`);
   }
+  // AND-gate self-consistency: if the gate fired (yes — failure requires >=2
+  // simultaneous conditions), a single confirmed cause cannot fully account for
+  // the symptom; investigation is incomplete.
+  const andGateYes = /^yes\b/i.test(String(output.and_gate || '').trim());
+  if (andGateYes) {
+    assert.ok(
+      output.root_causes.length >= 2,
+      `and_gate=yes requires >=2 confirmed causes (got ${output.root_causes.length}) — single-cause with AND-gate=yes means investigation is incomplete`
+    );
+  }
 }
 
 describe('RCA branching — anti-single-cause bias (#1960, epic #1957 Phase 2A)', () => {
@@ -114,9 +124,11 @@ describe('RCA branching — anti-single-cause bias (#1960, epic #1957 Phase 2A)'
     });
   });
 
-  describe('RCA output schema — behavioral invariants on fixtures (criteria 1 + 2)', () => {
-    // Each fixture is the RCA-branching output the agent records per the
-    // documented schema, constructed to exercise the data model.
+  describe('RCA output schema — invariant specification (agent-output conformance enforced by the source-text contract tests above)', () => {
+    // The fixtures below exercise the documented data model. They are a
+    // *specification* of the schema invariants (not a test of production code,
+    // which is prompt-level); the Tier-1 source-text contract tests carry the
+    // real enforcement that the agent records conformant output.
 
     test('fixture A — two contributing causes (AND-gate yes): both recorded in root_causes', () => {
       const output = {
@@ -156,6 +168,15 @@ describe('RCA branching — anti-single-cause bias (#1960, epic #1957 Phase 2A)'
         and_gate: 'no',
       };
       assert.throws(() => assertRcaSchemaInvariants(bad), /disjoint/);
+    });
+
+    test('invariant: AND-gate=yes with a single confirmed cause is flagged as incomplete', () => {
+      const incomplete = {
+        root_causes: [{ id: 'only-one', category: 'code', evidence: 'e' }],
+        eliminated: [],
+        and_gate: 'yes — two conditions required simultaneously',
+      };
+      assert.throws(() => assertRcaSchemaInvariants(incomplete), />=2/);
     });
   });
 });

@@ -30,6 +30,8 @@ categories:
 - **environment** — runtime version, OS/platform, timezone, network, dependencies, resource limits
 - **data** — input shape, corrupt/partial record, ordering/encoding, volume/scale
 
+A race or timing bug often **bridges categories** (e.g., a code race amplified by environment load, or by a config-driven scan window) — enumerate it in every category it spans, not just one. That cross-category enumeration is exactly what the AND-gate is designed to surface.
+
 Record each candidate branch in `Current Focus` (under the `reasoning_checkpoint.candidate_causes` field). Two+ categories is the minimum bar — if every candidate lands in the same category, you have not branched; generate at least one candidate from a different category before proceeding.
 
 ### 2. AND-gate check (Fault Tree Analysis)
@@ -49,6 +51,13 @@ Collapse to the confirmed `root_cause` — which may now be **one cause OR a sma
 set of contributing causes**. Append the eliminated branches to the `Eliminated`
 section (never delete them — Kernighan auditability). The recorded set must be
 non-empty (at least one confirmed cause) and disjoint from `Eliminated`.
+
+**Self-consistency with the AND-gate:** the confirmed set must agree with the
+AND-gate answer. If `and_gate: yes` (the failure requires ≥2 simultaneous
+conditions), a single confirmed cause **cannot** fully account for the symptom —
+investigation is incomplete; **return to Phase 3** and find the missing
+co-occurring cause(s) before collapsing. If `and_gate: no`, the confirmed set
+holds exactly one cause.
 
 ## Worked examples
 
@@ -72,10 +81,12 @@ corruption recurs under load.
 ## Backward compatibility
 
 `Resolution.root_cause` may now hold one OR a small set of contributing causes.
-This is **additive**: a single-cause session records exactly one root cause and
-looks identical to today. There is no file-format break — readers that handled
-one cause continue to work (a single-element set is the same shape as a lone
-value to a reader that iterates).
+For a single-cause session it still holds exactly one cause (shape unchanged);
+the `reasoning_checkpoint` block gains two RCA fields (`candidate_causes`,
+`and_gate`) that are populated in **every** session regardless of cause count.
+There is no file-format break — readers that handled one cause continue to work
+(a single-element set is the same shape as a lone value to a reader that
+iterates).
 
 ## Scope boundary (Zawinski's Law)
 
