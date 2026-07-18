@@ -1520,6 +1520,104 @@ describe('phase add command', () => {
       'directory should be 1001-after-one-thousand'
     );
   });
+
+  // #2390 — phase.add title/goal split-or-warn regression coverage.
+  test('phase add with a short, title-shaped description has no warning key', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n`
+    );
+
+    const result = runGsdTools(['phase', 'add', 'Add auth'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.name, 'Add auth');
+    assert.ok(!('warning' in output), 'short title-shaped description should not produce a warning');
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(roadmap.includes('### Phase 2: Add auth'), 'roadmap should include the new phase header');
+  });
+
+  test('phase add with a goal-shaped (long, multi-sentence) description surfaces a warning but still creates the phase (regression #2390)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n`
+    );
+
+    const goalShaped =
+      'Add a comprehensive authentication and authorization system with OAuth2 support. ' +
+      'This will also include session management and rate limiting for the public API.';
+
+    const result = runGsdTools(['phase', 'add', goalShaped], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    // Negative proof: before the #2390 fix, phase.add emitted no `warning` key
+    // for ANY description, however goal-shaped -- the paragraph landed silently
+    // in the phase title with no signal in the JSON result. This assertion
+    // fails on the pre-fix tree.
+    assert.ok(
+      typeof output.warning === 'string' && output.warning.length > 0,
+      'goal-shaped description should surface a warning field'
+    );
+    assert.match(output.warning, /goal-shaped/);
+
+    // The phase must still be created -- the warning surfaces the gap, it
+    // does not block the write or mangle ROADMAP.md (preserves the two-layer
+    // slash-command vs. raw-CLI interface: the CLI stays a strict primitive).
+    assert.strictEqual(output.phase_number, 2);
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.ok(
+      roadmap.includes(`### Phase 2: ${goalShaped}`),
+      'phase should still be created verbatim despite the warning'
+    );
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, output.directory)),
+      'phase directory should still be created'
+    );
+  });
+
+  test('phase add title-length boundary: 79/80/81 chars (regression #2390)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n`
+    );
+
+    const underLimit = 'A'.repeat(79); // limit - 1
+    const atLimit = 'A'.repeat(80); // limit
+    const overLimit = 'A'.repeat(81); // limit + 1
+
+    const underResult = runGsdTools(['phase', 'add', underLimit], tmpDir);
+    assert.ok(underResult.success, `Command failed: ${underResult.error}`);
+    assert.ok(
+      !('warning' in JSON.parse(underResult.output)),
+      '79 chars (limit-1) should not warn'
+    );
+
+    const atResult = runGsdTools(['phase', 'add', atLimit], tmpDir);
+    assert.ok(atResult.success, `Command failed: ${atResult.error}`);
+    assert.ok(!('warning' in JSON.parse(atResult.output)), '80 chars (limit) should not warn');
+
+    const overResult = runGsdTools(['phase', 'add', overLimit], tmpDir);
+    assert.ok(overResult.success, `Command failed: ${overResult.error}`);
+    const overOutput = JSON.parse(overResult.output);
+    assert.ok(
+      typeof overOutput.warning === 'string' && overOutput.warning.length > 0,
+      '81 chars (limit+1) should warn'
+    );
+  });
+
+  test('phase add rejects an empty description (unaffected by the #2390 warning heuristic)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** Setup\n\n---\n`
+    );
+
+    const result = runGsdTools(['phase', 'add', ''], tmpDir);
+    assert.ok(!result.success, 'empty description should still fail');
+    assert.match(result.error, /description required/);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
