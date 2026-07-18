@@ -214,6 +214,7 @@
       "common-bug-patterns.md",
       "context-budget.md",
       "continuation-format.md",
+      "debugger-bug-taxonomy.md",
       "debugger-fix-acceptance.md",
       "debugger-philosophy.md",
       "debugger-rca-branching.md",

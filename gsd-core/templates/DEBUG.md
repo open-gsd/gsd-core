@@ -21,6 +21,7 @@ hypothesis: [current theory being tested]
 test: [how testing it]
 expecting: [what result means if true/false]
 next_action: [immediate next step — be specific, not "continue investigating"]
+bug_class: null  <!-- assigned at Phase 1.75 — bohrbug|heisenbug-mandelbug|concurrency — routes investigation technique (see gsd-core/references/debugger-bug-taxonomy.md) -->
 reasoning_checkpoint: null  <!-- populated before every fix attempt — see structured_returns -->
 tdd_checkpoint: null  <!-- populated when tdd_mode is active after root cause confirmed -->
 

@@ -27,6 +27,7 @@
   "gsd-core/references/common-bug-patterns.md",
   "gsd-core/references/context-budget.md",
   "gsd-core/references/continuation-format.md",
+  "gsd-core/references/debugger-bug-taxonomy.md",
   "gsd-core/references/debugger-fix-acceptance.md",
   "gsd-core/references/debugger-philosophy.md",
   "gsd-core/references/debugger-rca-branching.md",
