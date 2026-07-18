@@ -1873,6 +1873,164 @@ describe('scanPhasePlans — call-site parity on mixed fixture', () => {
     assert.strictEqual(result.hasNestedPlans, true, 'plans/ dir exists with plans');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #2349: plan-level supersession. A plan whose frontmatter declares
+// `status: superseded` was deliberately reassigned / never executed and can
+// never gain a matching SUMMARY. Like a retired phase (#1514, one level up) it
+// must be excluded from BOTH the plan and summary counts, so the phase can still
+// read 100% complete instead of being pinned below it forever. A plan WITHOUT
+// the marker must be counted exactly as before (no over-exclusion).
+// ---------------------------------------------------------------------------
+
+describe('scanPhasePlans — superseded plans (#2349)', () => {
+  const SUPERSEDED_FM =
+    '---\nphase: "1"\nplan: "6"\ntype: implementation\nstatus: superseded\n---\n\n# Superseded plan\n';
+
+  function writePlan(dir, name, body) {
+    fs.writeFileSync(path.join(dir, name), body);
+  }
+
+  test('a plan marked status: superseded is excluded from planCount and planFiles', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md', '01-01-SUMMARY.md');
+    writePlan(dir, '01-06-PLAN.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'superseded plan not counted in planCount');
+    assert.strictEqual(result.summaryCount, 1, 'summaryCount honest at 1');
+    assert.strictEqual(result.completed, true, 'phase completes despite the summary-less superseded plan');
+    assert.ok(!result.planFiles.includes('01-06-PLAN.md'), 'superseded plan absent from planFiles');
+    assert.ok(result.planFiles.includes('01-01-PLAN.md'), 'live plan still present');
+  });
+
+  test('reported case: 13 plans, 2 superseded, 11 summaries → 11/11 completed', () => {
+    const dir = phaseDir();
+    // 11 executed plans, each with its matching summary
+    for (let i = 1; i <= 11; i++) {
+      const n = String(i).padStart(2, '0');
+      touch(dir, `05-${n}-PLAN.md`, `05-${n}-SUMMARY.md`);
+    }
+    // 2 superseded plans, no summaries (work reassigned to later plans)
+    writePlan(dir, '05-12-PLAN.md', SUPERSEDED_FM);
+    writePlan(dir, '05-13-PLAN.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 11, 'denominator excludes the 2 superseded plans');
+    assert.strictEqual(result.summaryCount, 11, 'numerator honest at 11');
+    assert.strictEqual(result.completed, true, 'phase reads complete — no longer pinned below 100%');
+  });
+
+  test('boundary: a live unsummarized plan still blocks completion (limit+1)', () => {
+    const dir = phaseDir();
+    touch(dir, '02-01-PLAN.md', '02-01-SUMMARY.md');
+    touch(dir, '02-02-PLAN.md'); // live plan, no summary → must still block
+    writePlan(dir, '02-09-PLAN.md', SUPERSEDED_FM); // superseded, excluded
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'only the superseded plan is excluded');
+    assert.strictEqual(result.summaryCount, 1);
+    assert.strictEqual(result.completed, false, 'a live unsummarized plan still blocks completion');
+  });
+
+  test('no over-exclusion: a plan without the marker (or with a non-superseded status) is counted', () => {
+    const dir = phaseDir();
+    touch(dir, '03-01-PLAN.md'); // empty file, no frontmatter at all
+    writePlan(dir, '03-02-PLAN.md', '---\nphase: "3"\nplan: "2"\nstatus: complete\n---\n\n# done\n');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'only status: superseded is excluded; other/absent statuses count');
+    assert.ok(result.planFiles.includes('03-01-PLAN.md'));
+    assert.ok(result.planFiles.includes('03-02-PLAN.md'));
+  });
+
+  test('superseded marker is case-insensitive and whitespace-tolerant', () => {
+    const dir = phaseDir();
+    touch(dir, '04-01-PLAN.md', '04-01-SUMMARY.md');
+    writePlan(dir, '04-07-PLAN.md', '---\nphase: "4"\nplan: "7"\nstatus:   Superseded  \n---\n\n# x\n');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'Superseded (mixed-case, padded) still excluded');
+    assert.strictEqual(result.completed, true);
+  });
+
+  test('nested layout: a superseded nested plan is excluded too', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-setup.md', 'SUMMARY-01-setup.md');
+    writePlan(plansDir, 'PLAN-02-dropped.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'nested superseded plan excluded');
+    assert.strictEqual(result.summaryCount, 1);
+    assert.strictEqual(result.completed, true);
+    assert.ok(!result.planFiles.includes('plans/PLAN-02-dropped.md'));
+  });
+
+  test('fail-safe: an unreadable plan path (a directory named *-PLAN.md) is counted, not treated as superseded', () => {
+    const dir = phaseDir();
+    touch(dir, '06-01-PLAN.md', '06-01-SUMMARY.md');
+    // A *directory* whose name matches a plan file: readdir lists it, but reading
+    // it as a file throws EISDIR on every platform (root-independent, leak-safe).
+    // The read-failure path must fail safe to "not superseded" (counted) — never
+    // silently drop a plan whose frontmatter simply could not be read.
+    fs.mkdirSync(path.join(dir, '06-02-PLAN.md'));
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'unreadable plan still counted (fail-safe, not excluded)');
+    assert.strictEqual(result.completed, false, 'the unreadable plan has no summary → still blocks');
+  });
+
+  test('all plans superseded → phase reads complete, not pinned below 100% (0 >= 0)', () => {
+    const dir = phaseDir();
+    // Every plan in the phase was reassigned elsewhere: nothing left to execute.
+    writePlan(dir, '08-01-PLAN.md', SUPERSEDED_FM);
+    writePlan(dir, '08-02-PLAN.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 0, 'all plans excluded');
+    assert.strictEqual(result.summaryCount, 0);
+    assert.strictEqual(result.completed, true, 'a fully-superseded phase has no remaining work → complete');
+  });
+
+  test('a genuinely empty phase (no plans authored) still reads NOT complete', () => {
+    // Regression guard for the all-superseded fix: the completion guard keys off
+    // whether any plans existed on disk, so a phase with zero plans is unaffected.
+    const result = scanPhasePlans(phaseDir());
+    assert.strictEqual(result.planCount, 0);
+    assert.strictEqual(result.completed, false, 'no plans authored → not complete (unchanged)');
+  });
+
+  test('a superseded marker is detected even when the plan body is very large', () => {
+    // Frontmatter sits at byte 0; the scan reads only a bounded prefix, so a large
+    // body must neither hide the marker nor force reading the whole file.
+    const dir = phaseDir();
+    touch(dir, '09-01-PLAN.md', '09-01-SUMMARY.md');
+    const bigBody = 'x'.repeat(200 * 1024); // 200 KB body, well past the read cap
+    writePlan(dir, '09-09-PLAN.md', `---\nphase: "9"\nplan: "9"\nstatus: superseded\n---\n\n${bigBody}\n`);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'superseded plan with a large body still excluded');
+    assert.strictEqual(result.completed, true);
+  });
+
+  test('property: K superseded plans never change the completed verdict of N summarized plans', () => {
+    const fc = require('fast-check');
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 8 }), fc.integer({ min: 0, max: 5 }), (n, k) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-plan-scan-prop-'));
+        try {
+          for (let i = 1; i <= n; i++) {
+            const idx = String(i).padStart(2, '0');
+            fs.writeFileSync(path.join(dir, `07-${idx}-PLAN.md`), '');
+            fs.writeFileSync(path.join(dir, `07-${idx}-SUMMARY.md`), '');
+          }
+          for (let j = 1; j <= k; j++) {
+            fs.writeFileSync(path.join(dir, `07-${String(50 + j)}-PLAN.md`), SUPERSEDED_FM);
+          }
+          const result = scanPhasePlans(dir);
+          assert.strictEqual(result.planCount, n, 'planCount ignores the K superseded plans');
+          assert.strictEqual(result.completed, true, 'N fully-summarized plans stay complete regardless of K');
+        } finally {
+          cleanup(dir);
+        }
+      }),
+      { numRuns: 40 },
+    );
+  });
+});
   });
 }
 
