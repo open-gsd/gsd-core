@@ -807,8 +807,8 @@ Each resolved session appends one entry:
 - **Root cause(s):** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate fired}
 - **Fix:** {from Resolution.fix}
 - **Files changed:** {from Resolution.files_changed}
-- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify) should have caught it — or "no gate existed for this class"}
-- **Recurrence guard:** {the concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / KB pattern}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify/build) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {the concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / type refinement / config-default change / KB pattern}
 ---
 ```
 
@@ -989,7 +989,7 @@ At investigation decision points, apply structured reasoning:
 - Scan knowledge base entries for 2+ keyword overlap (case-insensitive)
 - If match found:
   - Note in Current Focus: `known_pattern_candidate: "{matched slug} — {description}"`
-  - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}.`
+  - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}. Why not caught: {why_not_caught}. Recurrence guard: {recurrence_guard}.` (the last two are absent on old entries — that's fine; consume them when present)
   - Test this hypothesis FIRST in Phase 2 — but treat it as one hypothesis, not a certainty
 - If no match: proceed normally
 
@@ -1240,6 +1240,8 @@ Then append the entry:
 - **Root cause(s):** {Resolution.root_cause — joined as '; ' when multiple contributing causes were confirmed}
 - **Fix:** {Resolution.fix}
 - **Files changed:** {Resolution.files_changed joined as comma list}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify/build) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / KB pattern / type refinement / config-default change}
 ---
 
 ```

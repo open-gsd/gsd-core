@@ -29,6 +29,12 @@ a single linear "why" (the same single-cause bias Phase 2A guards the diagnosis
 against applies to the postmortem). For each branch ask "why" until you reach an
 actionable condition.
 
+**Reuse the diagnosis branches:** the `reasoning_checkpoint.candidate_causes`
+recorded at Phase 2A already enumerated the candidate causes across the four
+categories (**code / config / environment / data** — see
+`debugger-rca-branching.md`); start the postmortem from those branches and the
+AND-gate answer rather than re-deriving a chain from scratch.
+
 **Blame-free:** treat "agent error" / "human error" as a prompt for *"why was
 that error possible?"* — not a terminal cause. A postmortem that stops at "the
 engineer made a mistake" prevents nothing; one that asks "why was the mistake
@@ -48,12 +54,20 @@ strongest applicable:
 
 - a **regression test** (already produced by Test-First Debugging — reference it),
 - an **assertion / precondition** (fail loud at runtime if the bad condition recurs),
+- a **type refinement** (make the bad state unrepresentable — the strongest guard
+  in a typed codebase; e.g., a branded type / exhaustive union that rules out the
+  invalid value at compile time),
+- a **config-default change** (eliminate the misconfiguration that enabled the
+  bug — flip the default so the unsafe path is opt-in, not the path of least resistance),
 - a **lint rule / broken-window ledger entry** (fail the build / surface in review),
 - a **knowledge-base pattern** — this very entry, so a future Phase-0 recall
   surfaces the prior guard when a similar symptom appears.
 
 State the guard concretely (which file, which rule, which test name) — not "add
-a test" but "the regression test at `tests/foo.test.cjs:42` now covers this class."
+a test" but "the regression test at `tests/foo.test.cjs:42` now covers this
+class." **Verify the artifact exists before recording it** (the test passes, the
+type compiles, the lint rule is registered) — a stale or unverified path is worse
+than none, since a future Phase-0 match would surface it as if it were real.
 
 ## Knowledge-base entry: the two structured fields
 

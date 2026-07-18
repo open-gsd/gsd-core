@@ -87,4 +87,34 @@ describe('prevention / blameless-postmortem output (#1963, epic #1957 Phase 3B)'
         'must state the prevention block reuses the existing debug file + knowledge base (no new subsystem)');
     });
   });
+
+  describe('cross-section parity (guards the Critical: Entry-Format fields must also appear in the archive append template)', () => {
+    test('every Entry-Format KB field appears in the archive_session append template', () => {
+      // DEFECT.GENERATIVE-FIX guard: the <knowledge_base_protocol> Entry Format
+      // and the archive_session append template are two parallel surfaces that
+      // must agree. A field declared in one but not the other is dead data.
+      const content = fs.readFileSync(AGENT, 'utf8');
+      const requiredFields = ['Date', 'Error patterns', 'Root cause', 'Fix', 'Files changed', 'Why not caught', 'Recurrence guard'];
+      for (const field of requiredFields) {
+        const re = new RegExp(`\\*\\*${field}`, 'i');
+        const matches = content.match(new RegExp(`\\*\\*${field}`, 'gi'));
+        assert.ok(
+          matches && matches.length >= 2,
+          `KB field "${field}" must appear in BOTH the Entry Format and the archive append template (found ${matches ? matches.length : 0} occurrence(s)) — parallel-surface drift`
+        );
+      }
+    });
+
+    test('Phase 0 consumes the prevention fields (why_not_caught + recurrence_guard) when present', () => {
+      const content = fs.readFileSync(AGENT, 'utf8');
+      // The Phase 0 "Add to Evidence" line must surface the new fields, else they are dead data.
+      assert.ok(/why.?not.?caught/i.test(content) && /recurrence.?guard/i.test(content),
+        'Phase 0 must read why_not_caught + recurrence_guard from matched KB entries');
+      // Specifically in the Phase 0 / knowledge-base-match Evidence line, not just anywhere
+      const phase0Block = content.match(/Phase 0[\s\S]{0,1200}/);
+      assert.ok(phase0Block, 'a Phase 0 block must exist');
+      assert.ok(/why.?not.?caught/i.test(phase0Block[0]) && /recurrence.?guard/i.test(phase0Block[0]),
+        'the Phase 0 Evidence line must include why_not_caught + recurrence_guard (consume when present)');
+    });
+  });
 });

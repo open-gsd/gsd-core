@@ -321,7 +321,7 @@ Return compact summary (terminal — investigation resolved):
 **Cycles:** {N} (investigation) + {M} (fix)
 **TDD:** {yes/no}
 **Specialist review:** {specialist_hint used, or "none"}
-**Prevention:** {one-line recurrence guard from the blameless postmortem — "why not caught: <gate>; guard: <artifact>"}
+**Prevention:** {one-line from the blameless postmortem — "why not caught: <gate, or 'none (no gate existed for this class)'>; guard: <artifact>"}
 ```
 
 If the session was abandoned by user choice, return (terminal — user stopped):
