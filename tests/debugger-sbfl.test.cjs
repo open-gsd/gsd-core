@@ -152,27 +152,47 @@ describe('spectrum-based fault localization (#1959, epic #1957 Phase 1B)', () =>
     });
 
     if (fc) {
-      test('property: ochiai(failedExec, passedExec, totalFailed) ∈ [0, 1] for totalFailed > 0', () => {
+      test('property: ochiai ∈ [0, 1] for valid coverage counts (failedExec ≤ totalFailed)', () => {
+        // Ochiai is defined over coverage counts where failedExec is bounded by
+        // totalFailed (a failing test that executed s is one of the totalFailed
+        // failing tests) and passedExec is bounded by totalPassed. Generate
+        // in-domain inputs via chain.
+        const validCoverage = fc.integer({ min: 1, max: 30 }).chain((totalFailed) =>
+          fc.record({
+            totalFailed: fc.constant(totalFailed),
+            failedExec: fc.integer({ min: 0, max: totalFailed }),
+            passedExec: fc.nat(30),
+          })
+        );
         fc.assert(
-          fc.property(fc.nat(), fc.nat(), fc.integer({ min: 1, max: 1000 }), (f, p, tf) => {
-            const s = ochiai(f, p, tf);
-            return s >= 0 && s <= 1;
+          fc.property(validCoverage, ({ totalFailed, failedExec, passedExec }) => {
+            const s = ochiai(failedExec, passedExec, totalFailed);
+            return s >= 0 && s <= 1 + 1e-9;
           }),
           { numRuns: 200 }
         );
       });
 
-      test('property: ranking is non-increasing and stable', () => {
+      test('property: ranking is non-increasing and the head holds the max score', () => {
         fc.assert(
           fc.property(
-            fc.array(fc.record({ element: fc.string({ minLength: 1, maxLength: 8 }), failedExec: fc.nat(), passedExec: fc.nat() }), { maxLength: 20 }),
+            fc.array(
+              fc.record({
+                element: fc.string({ minLength: 1, maxLength: 8 }),
+                failedExec: fc.nat(),
+                passedExec: fc.nat(),
+              }),
+              { maxLength: 20 }
+            ),
             fc.integer({ min: 1, max: 50 }),
             (elements, tf) => {
               const ranked = rankByOchiai(elements, tf);
+              if (ranked.length === 0) return true;
               for (let i = 1; i < ranked.length; i++) {
                 if (ranked[i - 1].score < ranked[i].score) return false;
               }
-              return true;
+              const maxScore = Math.max(...ranked.map((r) => r.score));
+              return Math.abs(ranked[0].score - maxScore) <= 1e-9;
             }
           ),
           { numRuns: 200 }
