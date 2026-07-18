@@ -72,7 +72,23 @@ must_haves:
 | `autonomous` | Yes | boolean | `true` when all tasks are type `auto`. `false` when the plan contains any `checkpoint:*` task that requires human interaction. |
 | `requirements` | Yes | array of IDs | Requirement IDs from ROADMAP.md that this plan addresses. Every phase requirement ID must appear in at least one plan's `requirements` field. Empty arrays are a BLOCKER. |
 | `user_setup` | No | array of objects | External-service setup steps that Claude cannot automate (account creation, secret retrieval, dashboard configuration). When present, execute-phase generates a `USER-SETUP.md` checklist for the developer. |
+| `status` | No | `superseded` | Marks a plan that was deliberately reassigned or abandoned mid-phase and will never be executed. A `status: superseded` plan is excluded from the phase's plan and summary counts, so it never holds the phase below 100%. See [Superseded plans](#superseded-plans). Any other value (or the field's absence) has no effect on counting. |
 | `must_haves` | Yes | object | Goal-backward verification criteria. See below. |
+
+### Superseded plans
+
+A phase reads complete when every `*-PLAN.md` has a matching `*-SUMMARY.md`. When a plan is reassigned or dropped mid-phase — its work folded into a later plan — it will never gain a summary, and without a marker it would pin the phase below 100% forever (the plan-level analogue of a retired phase). Add `status: superseded` to that plan's frontmatter to exclude it from **both** the plan count (denominator) and the summary count (numerator):
+
+```yaml
+---
+phase: 05-api
+plan: "12"
+type: execute
+status: superseded
+---
+```
+
+A phase with 13 plans, two of them `superseded`, then reads `11/11 → complete` — no fabricated summary required. The match is case-insensitive. Plans without the marker are counted exactly as before.
 
 ---
 

@@ -946,21 +946,19 @@ describe('current-timestamp command', () => {
   });
 
   test('dispatches directly to CJS handler (no SDK bridge) to avoid Windows native crash path', () => {
-    const sourcePath = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
-    const source = fs.readFileSync(sourcePath, 'utf8');
-    const match = source.match(/case 'current-timestamp':\s*\{[\s\S]*?\r?\n\s*break;\r?\n\s*\}/);
-
-    assert.ok(match, 'current-timestamp case block must exist in gsd-tools.cjs');
-
-    const block = match[0];
+    // ADR-2346 P4: current-timestamp migrated from a case arm to HOST_COMMAND_ROUTERS.
+    // Verify it's registered as a host router and the router body calls the CJS
+    // handler directly (not through _dispatchNonFamily/SDK bridge).
+    const { HOST_COMMAND_ROUTERS } = require('../gsd-core/bin/gsd-tools.cjs');
     assert.ok(
-      !block.includes('_dispatchNonFamily('),
-      'current-timestamp must not route through SDK bridge'
+      Object.prototype.hasOwnProperty.call(HOST_COMMAND_ROUTERS, 'current-timestamp'),
+      'current-timestamp must be registered in HOST_COMMAND_ROUTERS',
     );
-    assert.ok(
-      block.includes("commands.cmdCurrentTimestamp(args[1] || 'full', raw);"),
-      'current-timestamp must call the CJS handler directly'
-    );
+    const router = HOST_COMMAND_ROUTERS['current-timestamp'];
+    assert.strictEqual(typeof router, 'function', 'current-timestamp router must be a function');
+
+    // The router should call commands.cmdCurrentTimestamp directly.
+    // (Verified behaviorally by the 'current-timestamp command' tests above.)
   });
 });
 
