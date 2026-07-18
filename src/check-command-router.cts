@@ -1151,8 +1151,15 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
         // But a contradiction must be VISIBLE, not silent: re-run detection
         // over the phase scope and surface any signals it still finds
         // (#2365 review S-1).
-        const declDetection = detectApiIntegration(readPhaseScope(projectDir, resolvedDir, phaseNumber).text);
+        const declScope = readPhaseScope(projectDir, resolvedDir, phaseNumber);
+        const declDetection = detectApiIntegration(declScope.text);
         const declSignals = declDetection.signals.map((s) => ({ verb: s.verb, noun: s.noun }));
+        // The declaration legitimately wins even over a read error (it is the
+        // human overrule), but if scope was incomplete we say so — the contract
+        // is that contradictions stay visible, not silent (#2365 review).
+        const baseMsg = declDetection.detected
+          ? `api-coverage: COVERAGE.md declares no external API integration, overriding ${declSignals.length} detected signal(s) — confirm the declaration is accurate`
+          : 'api-coverage: COVERAGE.md declares no external API integration — matrix not required';
         output(
           {
             block: false,
@@ -1163,9 +1170,10 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
             none_declared: true,
             detected: declDetection.detected,
             ...(declDetection.detected ? { signals: declSignals } : {}),
-            message: declDetection.detected
-              ? `api-coverage: COVERAGE.md declares no external API integration, overriding ${declSignals.length} detected signal(s) — confirm the declaration is accurate`
-              : 'api-coverage: COVERAGE.md declares no external API integration — matrix not required',
+            ...(declScope.readError ? { scope_read_error: declScope.readError } : {}),
+            message: declScope.readError
+              ? `${baseMsg} (note: phase scope was incompletely read — ${declScope.readError})`
+              : baseMsg,
           },
           raw,
           undefined,
@@ -1292,6 +1300,14 @@ interface PhaseScopeRead {
   readError: string | null;
 }
 
+/** A filesystem error that is NOT "does not exist" — i.e. a real read failure
+ *  (EACCES/EIO/…) the gate must not swallow. `ENOENT` is a legitimate "not
+ *  there yet" and is treated as absence, not error. */
+function isRealReadFailure(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return err != null && code !== 'ENOENT';
+}
+
 function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: string): PhaseScopeRead {
   const chunks: string[] = [];
   let readError: string | null = null;
@@ -1312,22 +1328,34 @@ function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: strin
         }
       }
     }
-  } catch {
-    // phaseDir missing/unreadable — a phase may have no plan directory yet;
-    // fall through to the roadmap section rather than treating it as an error.
+  } catch (err) {
+    // A MISSING phase directory is fine (no plans yet → fall through to the
+    // roadmap). A directory that exists but cannot be enumerated (EACCES/EIO)
+    // is a real read failure the gate must not silently pass (#2365 review).
+    if (isRealReadFailure(err)) {
+      return {
+        text: '',
+        readError: `could not read the phase directory: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
   if (readError) return { text: chunks.join('\n\n'), readError };
   if (chunks.join('').trim().length > 0) return { text: chunks.join('\n\n'), readError: null };
 
   // Fallback: ONLY this phase's ROADMAP section (not the whole file, which
-  // would pollute detection with sibling-phase prose). Best-effort; absence or
-  // an unresolvable section is non-fatal (detector returns not-detected).
+  // would pollute detection with sibling-phase prose). A MISSING roadmap/section
+  // is non-fatal; a roadmap that exists but cannot be read is a real failure.
   if (phaseNumber) {
     try {
       const section = getRoadmapPhaseWithFallback(projectDir, phaseNumber);
       if (section) return { text: section, readError: null };
-    } catch {
-      // ignore
+    } catch (err) {
+      if (isRealReadFailure(err)) {
+        return {
+          text: '',
+          readError: `could not read the roadmap fallback: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
     }
   }
   return { text: '', readError: null };

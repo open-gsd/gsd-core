@@ -193,6 +193,26 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     }
   });
 
+  test('unreadable phase directory → BLOCKS fail-closed (#2365 round-4 review)', (t) => {
+    if (process.getuid && process.getuid() === 0) {
+      t.skip('chmod 000 does not deny the root user');
+      return;
+    }
+    fresh();
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API.');
+    fs.chmodSync(phaseDir, 0o000); // directory exists but cannot be enumerated
+    try {
+      const r = runGate(tmpDir, phaseDir);
+      const j = JSON.parse(r.output);
+      // Fail-closed: caught either by phase resolution or by readPhaseScope —
+      // the invariant is that an unreadable directory never silently passes.
+      assert.strictEqual(j.block, true, 'an unreadable phase directory must fail-closed, not pass');
+      assert.match(j.message, /could not (read|resolve)/i);
+    } finally {
+      fs.chmodSync(phaseDir, 0o755); // restore so cleanup can recurse
+    }
+  });
+
   test('#1/#6 API phase WITH a valid matrix → passes (matrix persists on disk)', () => {
     fresh();
     writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API for payment processing.');
