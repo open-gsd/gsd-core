@@ -455,14 +455,14 @@ situation:
 
 @~/.claude/gsd-core/references/debugger-bug-taxonomy.md
 
-| bug_class | Route to | Do NOT use |
+| bug_class | Route to | Revoke if already run |
 |---|---|---|
 | Bohrbug | deterministic reproduction → SBFL (Phase 1.25) → git bisect → binary search | — |
-| Heisenbug / Mandelbug | record-replay (`rr`) → stability-stress → statistical sampling | SBFL (flaky spectrum poisons the ranking) |
+| Heisenbug / Mandelbug | record-replay (`rr`) → stability-stress → statistical sampling | SBFL — Phase 1.25 runs before classification; if it ran, mark its Evidence entry revoked (flaky spectrum poisons the ranking) |
 | Concurrency | atomicity / order / deadlock checklist (see reference) FIRST | — |
+| General (any class) | Binary search, Working backwards, Differential, Delta debugging, Comment-out-everything, Follow-the-indirection, Rubber duck, Observability first (always, before changes) | — |
 
-Always: observability first (before making changes). When the situation table
-and the class route disagree, the class route wins.
+The class rows pick the first move; the General lane holds situation-cued techniques that apply to any class. When the situation table and the class route disagree, the class route wins.
 
 ## Combining Techniques
 

@@ -65,43 +65,78 @@ describe('bug-taxonomy classification + strategy routing (#1961, epic #1957 Phas
   });
 
   describe('routing is an explicit, inspectable table (criterion 4)', () => {
-    test('reference contains a class -> technique routing table', () => {
+    // Row-scoped: parse the markdown table and assert per-row, so a substring
+    // appearing in the wrong cell (e.g. SBFL only in the Heisenbug revoke
+    // column) cannot satisfy the Bohrbug route assertion.
+
+    function tableRows() {
       const content = fs.readFileSync(REFERENCE, 'utf8');
-      // A markdown table with class + technique columns, OR an explicit mapping
-      assert.ok(/class|bug_class/i.test(content), 'table keyed on bug class');
+      const rows = [];
+      for (const line of content.split(/\r?\n/)) {
+        if (/^\|/.test(line) && !/^\|[\s|-]+\|?$/.test(line) && (line.match(/\|/g) || []).length >= 3) {
+          rows.push(line.toLowerCase());
+        }
+      }
+      return rows;
+    }
+
+    function rowFor(cls) {
+      return tableRows().find((r) => r.includes(cls.toLowerCase())) || null;
+    }
+
+    test('there is a markdown table with class + route columns', () => {
+      const content = fs.readFileSync(REFERENCE, 'utf8');
       assert.ok(/rout/i.test(content), 'the word route/routing must appear');
       assert.ok(/\|.*\|.*\|/m.test(content), 'there must be a markdown table (inspectable)');
+      assert.ok(tableRows().length >= 3, 'routing table must have at least 3 class rows');
     });
 
-    test('a Bohrbug routes to reproduction + SBFL + bisection (criterion 2)', () => {
-      const content = fs.readFileSync(REFERENCE, 'utf8');
-      const flat = content.replace(/\s+/g, ' ');
-      assert.ok(/bohrbug[^|]*reproduc/i.test(flat) || /bohrbug.*reproduc/i.test(flat),
-        'Bohrbug route must include deterministic reproduction');
-      assert.ok(/sbfl|spectrum-based|fault localization/i.test(content),
-        'Bohrbug route must include SBFL (Phase 1B)');
-      assert.ok(/bisect/i.test(content), 'Bohrbug route must include git bisect');
+    test('a Bohrbug row routes to reproduction + SBFL + bisection (criterion 2, row-scoped)', () => {
+      const row = rowFor('bohrbug');
+      assert.ok(row, 'there must be a Bohrbug row in the routing table');
+      assert.ok(/reproduc/.test(row), 'Bohrbug row must include reproduction');
+      assert.ok(/sbfl/.test(row), 'Bohrbug row must include SBFL (Phase 1.25, not the epic shorthand Phase 1B)');
+      assert.ok(/bisect/.test(row), 'Bohrbug row must include git bisect');
     });
 
-    test('a Heisenbug/Mandelbug routes to record-replay/stability and SKIPS SBFL (criterion 2, the load-bearing constraint)', () => {
-      const content = fs.readFileSync(REFERENCE, 'utf8');
-      assert.ok(/record-replay|\brr\b|stability/i.test(content),
-        'Heisenbug/Mandelbug route must include record-replay (rr) and/or stability-stress');
-      // The SBFL-skip is THE 1B/2B seam — it must be explicit.
-      assert.ok(/do not (?:trust|use) sbfl|skip sbfl|sbfl.*(skip|not trusted|untrusted|forbidden)/i.test(content),
-        'must explicitly state SBFL is skipped / not trusted on a flaky (Heisenbug) spectrum');
+    test('a Heisenbug row routes to record-replay/stability and revokes SBFL (row-scoped, load-bearing 1B/2B seam)', () => {
+      const row = rowFor('heisenbug');
+      assert.ok(row, 'there must be a Heisenbug/Mandelbug row in the routing table');
+      assert.ok(/record-replay|\brr\b|stability/.test(row),
+        'Heisenbug row must include record-replay (rr) and/or stability-stress');
+      assert.ok(/sbfl/.test(row), 'Heisenbug row must reference SBFL (in the revoke column)');
+      assert.ok(/revoke|revocat/.test(row),
+        'Heisenbug row must state SBFL is REVOKED if already run (Phase 1.25 precedes classification)');
     });
 
-    test('a suspected Concurrency bug surfaces the atomicity/order/deadlock checklist (criterion 3)', () => {
-      const content = fs.readFileSync(REFERENCE, 'utf8');
-      assert.ok(/atomicity/i.test(content), 'checklist: atomicity violation');
-      assert.ok(/\border\b/i.test(content), 'checklist: order violation');
-      assert.ok(/deadlock/i.test(content), 'checklist: deadlock');
+    test('a Concurrency row surfaces the atomicity/order/deadlock checklist (criterion 3, row-scoped)', () => {
+      const row = rowFor('concurrency');
+      assert.ok(row, 'there must be a Concurrency row in the routing table');
+      assert.ok(/atomicity/.test(row), 'Concurrency row must include atomicity');
+      assert.ok(/\border\b/.test(row), 'Concurrency row must include order');
+      assert.ok(/deadlock/.test(row), 'Concurrency row must include deadlock');
     });
   });
 
-  describe('supersede, not append (Zawinski)', () => {
-    test('the reference states the flat technique menu is superseded by routed selection', () => {
+  describe('supersede, not append — no technique is orphaned (criterion 4)', () => {
+    test('the previously-situational techniques now have a General-lane route', () => {
+      // These 6 were orphaned when the flat situation table was reframed; the
+      // General lane re-homes them. Guards against the "supersede" claim
+      // silently dropping them.
+      const ref = fs.readFileSync(REFERENCE, 'utf8').toLowerCase();
+      const previouslyOrphaned = [
+        'rubber duck', 'delta debugging', 'working backwards',
+        'differential', 'comment out everything', 'follow the indirection',
+      ];
+      for (const t of previouslyOrphaned) {
+        assert.ok(
+          ref.includes(t),
+          `technique "${t}" must appear in the bug-taxonomy reference (General lane) — was orphaned by the reframe`
+        );
+      }
+    });
+
+    test('the reference states the flat menu is superseded by class-routed selection', () => {
       const content = fs.readFileSync(REFERENCE, 'utf8');
       assert.ok(/replace|supersede|routed? selection|not.*append/i.test(content),
         'must state the flat menu is replaced/superseded by class-routed selection (not merely appended)');
