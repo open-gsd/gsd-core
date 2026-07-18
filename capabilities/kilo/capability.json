@@ -101,8 +101,7 @@
         "file": "gsd-core.js",
         "source": ".kilo/plugins/gsd-core.js"
       },
-      "skipUpdateBannerCommand": true,
-      "skipSharedHooksInstall": true
+      "skipUpdateBannerCommand": true
     }
   }
 }
