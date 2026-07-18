@@ -983,6 +983,13 @@ At investigation decision points, apply structured reasoning:
 - Run app/tests to observe behavior
 - APPEND to Evidence after each finding
 
+**Phase 1.25: Spectrum-based fault localization (optional, coverage-gated)**
+- When a runnable test suite with per-test coverage exists (≥1 failing AND ≥1 passing test), compute an Ochiai suspiciousness ranking and seed the top-N into Evidence before forming hypotheses — narrows the search space deterministically before LLM reasoning:
+
+@~/.claude/gsd-core/references/debugger-sbfl.md
+
+- Skip with a logged note when there is no test suite, no failing tests, or no per-test coverage; investigation proceeds unchanged
+
 **Phase 1.5: Check common bug patterns**
 - Read @~/.claude/gsd-core/references/common-bug-patterns.md
 - Match symptoms to pattern categories using the Symptom-to-Category Quick Map

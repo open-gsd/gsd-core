@@ -216,6 +216,7 @@
       "continuation-format.md",
       "debugger-fix-acceptance.md",
       "debugger-philosophy.md",
+      "debugger-sbfl.md",
       "decimal-phase-calculation.md",
       "doc-conflict-engine.md",
       "domain-probes.md",
