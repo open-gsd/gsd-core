@@ -53,7 +53,7 @@ started: [when it broke / always broken]
 
 root_cause: [empty until found]
 fix: [empty until applied]
-verification: [empty until verified]
+verification: [empty until verified — holds the per-signal fix-acceptance guardrail record when active; see gsd-core/references/debugger-fix-acceptance.md]
 files_changed: []
 ```
 
