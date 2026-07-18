@@ -176,17 +176,20 @@ describe('spectrum-based fault localization (#1959, epic #1957 Phase 1B)', () =>
       test('property: ochiai is non-decreasing in failedExec (holding totalFailed + passedExec fixed)', () => {
         // Non-trivial: a correct Ochiai must not penalize an element for being
         // hit by MORE failing tests. An inverted numerator/denominator would fail this.
+        // failedExecA is bounded by totalFailed (coverage invariant) via chain.
+        const validStart = fc.integer({ min: 1, max: 30 }).chain((totalFailed) =>
+          fc.record({
+            totalFailed: fc.constant(totalFailed),
+            passedExec: fc.nat(30),
+            failedExecA: fc.integer({ min: 0, max: totalFailed }),
+          })
+        );
         fc.assert(
-          fc.property(
-            fc.integer({ min: 1, max: 30 }),
-            fc.nat(30),
-            fc.integer({ min: 0, max: 29 }),
-            (totalFailed, passedExec, failedExecA) => {
-              const failedExecB = Math.min(totalFailed, failedExecA + 1);
-              if (failedExecB === failedExecA) return true; // no room to increase
-              return ochiai(failedExecB, passedExec, totalFailed) >= ochiai(failedExecA, passedExec, totalFailed) - 1e-9;
-            }
-          ),
+          fc.property(validStart, ({ totalFailed, passedExec, failedExecA }) => {
+            const failedExecB = Math.min(totalFailed, failedExecA + 1);
+            if (failedExecB === failedExecA) return true; // A already at totalFailed
+            return ochiai(failedExecB, passedExec, totalFailed) >= ochiai(failedExecA, passedExec, totalFailed) - 1e-9;
+          }),
           { numRuns: 300 }
         );
       });
