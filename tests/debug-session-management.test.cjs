@@ -196,12 +196,15 @@ describe('debug skill dispatch and sub-orchestrator (#2148, #2151)', () => {
     // Parallel-surface drift guard (DEFECT.GENERATIVE-FIX): the field-count
     // claim in the DEBUG.md section_rules prose must equal the number of keys
     // enumerated in the gsd-debugger.md reasoning_checkpoint YAML block.
-    // CRLF-safe regex/split per DEFECT.WINDOWS-TEST-PORTABILITY.
+    // CRLF-safe regex/split per DEFECT.WINDOWS-TEST-PORTABILITY. Accepts either
+    // digit ("7-field") or word ("seven-field") count form.
+    const NUMWORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
     const debugContent = fs.readFileSync(path.join(process.cwd(), 'gsd-core', 'templates', 'DEBUG.md'), 'utf8');
     const agentContent = fs.readFileSync(path.join(process.cwd(), 'agents', 'gsd-debugger.md'), 'utf8');
-    const debugMatch = debugContent.match(/reasoning_checkpoint[^.\r\n]*?(\d+)-field structured reasoning record/i);
+    const debugMatch = debugContent.match(/reasoning_checkpoint[^.\r\n]*?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)-field structured reasoning record/i);
     assert.ok(debugMatch, 'DEBUG.md must state a "N-field structured reasoning record" claim for reasoning_checkpoint');
-    const claimedCount = parseInt(debugMatch[1], 10);
+    const claimedCount = /^\d+$/.test(debugMatch[1]) ? parseInt(debugMatch[1], 10) : NUMWORDS[debugMatch[1].toLowerCase()];
+    assert.ok(typeof claimedCount === 'number', `unrecognized field-count token: ${debugMatch[1]}`);
     const yamlBlock = agentContent.match(/reasoning_checkpoint:\s*\r?\n([\s\S]*?)```/);
     assert.ok(yamlBlock, 'gsd-debugger.md must define a fenced reasoning_checkpoint YAML block');
     const keys = new Set();
