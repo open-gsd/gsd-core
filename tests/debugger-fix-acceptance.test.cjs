@@ -80,8 +80,10 @@ describe('fix-acceptance guardrail (#1958, epic #1957 Phase 1A)', () => {
   describe('per-signal results recorded to the debug file (Kernighan — auditable)', () => {
     test('reference documents the per-signal verification schema', () => {
       const content = fs.readFileSync(REFERENCE, 'utf8');
-      assert.ok(/verification/i.test(content),
-        'reference must document how per-signal results land in Resolution.verification');
+      assert.ok(/guardrail_verdict/.test(content),
+        'reference must define the guardrail_verdict field in Resolution.verification');
+      assert.ok(/target_test|mutation_check|no_op_deletion|adjacent_tests|revert_and_reconfirm/.test(content),
+        'reference must enumerate the per-signal verification keys');
     });
 
     test('DEBUG.md template acknowledges structured per-signal verification', () => {
@@ -99,10 +101,9 @@ describe('fix-acceptance guardrail (#1958, epic #1957 Phase 1A)', () => {
     });
 
     test('a deletion-only diff is rejected unless the RCA justifies removal', () => {
-      const content = fs.readFileSync(REFERENCE, 'utf8');
-      assert.ok(/delet/i.test(content), 'deletion-only diffs are addressed');
-      assert.ok(/justif|RCA|root.cause/i.test(content),
-        'deletion must require RCA justification to be accepted');
+      const flat = fs.readFileSync(REFERENCE, 'utf8').replace(/\s+/g, ' ');
+      assert.ok(/delet[^]*?(?:reject|justif|rca|root cause)/i.test(flat),
+        'deletion-only diffs must be rejected unless RCA justifies removal');
     });
 
     test('revert-and-reconfirm must run before a fix is accepted', () => {
@@ -113,10 +114,11 @@ describe('fix-acceptance guardrail (#1958, epic #1957 Phase 1A)', () => {
   });
 
   describe('subprocess bounding (CLAUDE.md gauntlet — unbounded subprocess)', () => {
-    test('the mutation/Stryker subprocess is bounded', () => {
+    test('the mutation and git subprocesses are bounded', () => {
       const content = fs.readFileSync(REFERENCE, 'utf8');
-      assert.ok(/timeout|bounded/i.test(content),
-        'mutation check subprocess must be bounded (gauntlet: npm 60s)');
+      assert.ok(/timeout/i.test(content), 'must mention a timeout');
+      assert.ok(/60s|60.?second/i.test(content), 'must state the 60s npm/Stryker bound');
+      assert.ok(/git/i.test(content), 'must bound the git subprocess (signal 5) too');
     });
   });
 });
