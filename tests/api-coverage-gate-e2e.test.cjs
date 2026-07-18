@@ -213,6 +213,25 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     }
   });
 
+  test('unreadable ROADMAP.md fallback → BLOCKS fail-closed (#2365 round-5 review)', (t) => {
+    if (process.getuid && process.getuid() === 0) {
+      t.skip('chmod 000 does not deny the root user');
+      return;
+    }
+    fresh(); // phaseDir 01-pay with NO plans → gate falls back to the roadmap
+    const roadmap = path.join(tmpDir, '.planning', 'ROADMAP.md');
+    fs.writeFileSync(roadmap, '# Roadmap\n\n### Phase 01: Pay\n\nIntegrate the Stripe API.\n', 'utf8');
+    fs.chmodSync(roadmap, 0o000); // exists but unreadable — must not read as "absent"
+    try {
+      const r = runGate(tmpDir, phaseDir);
+      const j = JSON.parse(r.output);
+      assert.strictEqual(j.block, true, 'an unreadable roadmap fallback must fail-closed, not pass');
+      assert.match(j.message, /could not read/i);
+    } finally {
+      fs.chmodSync(roadmap, 0o644); // restore so cleanup can remove it
+    }
+  });
+
   test('#1/#6 API phase WITH a valid matrix → passes (matrix persists on disk)', () => {
     fresh();
     writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API for payment processing.');

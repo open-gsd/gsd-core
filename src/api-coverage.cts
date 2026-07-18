@@ -394,18 +394,18 @@ function splitClauses(masked: string): ClauseSpan[] {
  * by a one-line COVERAGE.md declaration while a false negative silently slips a
  * real external-API phase past a blocking gate. It fires when EITHER:
  *   (a) an integration VERB and an API NOUN share one CLAUSE ("integrate the
- *       Stripe API", "Connect … to api.stripe.com") — the clause boundary is
- *       the whole relationship test, so verb/noun in DIFFERENT clauses do not
- *       pair (#2365 acceptance #2). A verb heading a short clause may also bind
- *       a noun in the next clause when that clause is a dependent elaboration,
- *       not a new coordinate action ("Integrate Stripe, exposing its endpoints").
+ *       Stripe API", "Connect … to api.stripe.com") — the clause boundary is the
+ *       whole relationship test, so verb/noun in DIFFERENT clauses do not pair
+ *       (#2365 acceptance #2). There is NO cross-clause binding: a service named
+ *       only in a clause separate from its API noun is a documented limitation.
  *   (b) an explicit `<Service> API|SDK|REST|GraphQL` surface names a service
  *       that is not a stopword, a locality/protocol descriptor, a compound
  *       modifier, or first-party-qualified ("Stripe API", "Spotify SDK").
  *
  * Fenced code, inline code spans, and path-shaped tokens are excluded before
  * matching. A package-shaped inline span (`@stripe/stripe-js`, `stripe-sdk`)
- * and an external hostname still count as noun/dependency evidence.
+ * and a URL that NAMES an API vocab word ("api.stripe.com/v1") still count as
+ * noun/dependency evidence; a bare host that names none does not.
  *
  * Non-string inputs degrade to `{ detected: false }` without throwing.
  */
