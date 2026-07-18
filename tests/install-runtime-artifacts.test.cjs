@@ -43,6 +43,7 @@ const {
 const {
   loadSkillsManifest,
   resolveProfile,
+  CAPABILITY_SKILL_MARKER,
 } = require('../gsd-core/bin/lib/install-profiles.cjs');
 
 const REAL_COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
@@ -465,6 +466,207 @@ describe('installOpencodeFamilySkills — emits skills/<name>/SKILL.md (#784)', 
     });
   }
 });
+
+// ─── #2362: OpenCode/Kilo combined-family INSTALL path drops the capability
+// registry — an installed+registered+surfaced+active third-party capability
+// skill never materializes ───────────────────────────────────────────────
+//
+// installOpencodeFamilyArtifacts (called from installRuntimeArtifacts's
+// combinedFamilyInstall early return) never threaded capabilityRegistry into
+// installOpencodeFamilySkills, so the actual #2322 seam
+// (install-profiles.cjs stageSkillsForRuntimeAsSkills) — already reachable
+// and correct for the surface-apply path (`capability set --runtime opencode`)
+// — was never reached from a fresh/reapplied install. RED before the fix
+// (installOpencodeFamilyArtifacts/installOpencodeFamilySkills silently drop
+// the registry), GREEN after.
+
+/** Install a fake already-installed third-party capability skill under a sandboxed GSD_HOME. */
+function install2362CapabilitySkill(gsdHome, capId, stem, content) {
+  const skillDir = path.join(gsdHome, '.gsd', 'capabilities', capId, 'skills', stem);
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf8');
+}
+
+/** A minimal capability-registry shape carrying one capId -> [stems] cluster. */
+function registry2362For(capId, stems) {
+  return { capabilityClusters: { [capId]: stems } };
+}
+
+/** Run `fn` with GSD_HOME pointed at `gsdHome`, always restoring the prior value. */
+function with2362GsdHome(gsdHome, fn) {
+  const saved = process.env.GSD_HOME;
+  process.env.GSD_HOME = gsdHome;
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env.GSD_HOME;
+    else process.env.GSD_HOME = saved;
+  }
+}
+
+/** Recursively snapshot every FILE under dir into a Map<relPath, content>. */
+function snapshot2362Dir(dir) {
+  const snap = new Map();
+  const walk = (rel) => {
+    const abs = path.join(dir, rel);
+    for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+      const relChild = path.join(rel, entry.name);
+      if (entry.isDirectory()) walk(relChild);
+      else if (entry.isFile()) snap.set(relChild, fs.readFileSync(path.join(dir, relChild), 'utf8'));
+    }
+  };
+  walk('.');
+  return snap;
+}
+
+/** Assert every entry captured in `before` (a snapshot2362Dir Map) still exists, byte-identical, under dir. */
+function assert2362SnapshotSubsetPreserved(before, dir, label) {
+  for (const [relChild, beforeContent] of before) {
+    const candidatePath = path.join(dir, relChild);
+    assert.ok(fs.existsSync(candidatePath), `${label}: ${relChild} must still exist`);
+    assert.strictEqual(fs.readFileSync(candidatePath, 'utf8'), beforeContent, `${label}: ${relChild} must be byte-identical`);
+  }
+}
+
+for (const __runtime2362 of ['opencode', 'kilo']) {
+  describe(`installRuntimeArtifacts — #2362 ${__runtime2362} materializes an installed third-party capability skill`, () => {
+    test(`${__runtime2362}: (1) registered capability skill materializes at skills/gsd-<stem>/SKILL.md`, (t) => {
+      const gsdHome = createTempDir('gsd-2362-home-');
+      const configDir = createTempDir(`gsd-2362-${__runtime2362}-cfg-`);
+      t.after(() => { cleanup(gsdHome); cleanup(configDir); });
+
+      const AUTHORED = '---\nname: my-thing\ndescription: third-party test skill\n---\n\n# My Thing\nThird-party capability content.\n';
+      install2362CapabilitySkill(gsdHome, 'my-thing', 'my-thing', AUTHORED);
+      const registry = registry2362For('my-thing', ['my-thing']);
+      const resolvedFull = resolveProfile({ modes: ['full'] });
+
+      with2362GsdHome(gsdHome, () => {
+        installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedFull, () => undefined, registry);
+      });
+
+      const stagedPath = path.join(configDir, 'skills', 'gsd-my-thing', 'SKILL.md');
+      assert.ok(
+        fs.existsSync(stagedPath),
+        `#2362: gsd-my-thing/SKILL.md must exist after installRuntimeArtifacts('${__runtime2362}', ...) — registry says surfaced:true but the combined-family install path never materialized it`,
+      );
+
+      // (2) prune parity: the staged directory carries the #2322 HIGH-3 marker
+      // naming its declaring capId, matching the seam's guarantee.
+      const markerPath = path.join(configDir, 'skills', 'gsd-my-thing', CAPABILITY_SKILL_MARKER);
+      assert.ok(fs.existsSync(markerPath), 'staged third-party skill must carry the CAPABILITY_SKILL_MARKER for prune parity');
+      assert.strictEqual(fs.readFileSync(markerPath, 'utf8').trim(), 'my-thing', 'marker must name the declaring capId');
+    });
+
+    test(`${__runtime2362}: (3) default full profile — resolvedProfile.skills === '*' still materializes the third-party skill (BLOCKER-2 parity)`, (t) => {
+      const gsdHome = createTempDir('gsd-2362-home-');
+      const configDir = createTempDir(`gsd-2362-${__runtime2362}-cfg-full-`);
+      t.after(() => { cleanup(gsdHome); cleanup(configDir); });
+
+      install2362CapabilitySkill(gsdHome, 'my-thing', 'my-thing', '# my-thing (full)\n');
+      const registry = registry2362For('my-thing', ['my-thing']);
+      const resolvedFull = resolveProfile({ modes: ['full'] });
+      assert.strictEqual(resolvedFull.skills, '*', "sanity: full mode resolves to the '*' sentinel");
+
+      with2362GsdHome(gsdHome, () => {
+        installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedFull, () => undefined, registry);
+      });
+
+      assert.ok(
+        fs.existsSync(path.join(configDir, 'skills', 'gsd-my-thing', 'SKILL.md')),
+        "BLOCKER-2 parity: the '*' full-profile sentinel must still stage a registered capability skill",
+      );
+    });
+
+    test(`${__runtime2362}: (4) first-party wins on a stem collision`, (t) => {
+      const gsdHome = createTempDir('gsd-2362-home-');
+      const configDir = createTempDir(`gsd-2362-${__runtime2362}-cfg-collide-`);
+      t.after(() => { cleanup(gsdHome); cleanup(configDir); });
+
+      const EVIL = '# EVIL HELP — must never win over the first-party gsd-help skill\n';
+      install2362CapabilitySkill(gsdHome, 'evil-cap', 'help', EVIL);
+      const registry = registry2362For('evil-cap', ['help']);
+      const resolvedFull = resolveProfile({ modes: ['full'] });
+
+      with2362GsdHome(gsdHome, () => {
+        installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedFull, () => undefined, registry);
+      });
+
+      const helpPath = path.join(configDir, 'skills', 'gsd-help', 'SKILL.md');
+      assert.ok(fs.existsSync(helpPath), 'sanity: first-party gsd-help must stage');
+      const helpContent = fs.readFileSync(helpPath, 'utf8');
+      assert.notStrictEqual(helpContent, EVIL, 'the third-party EVIL content must never win the collision');
+      assert.ok(!helpContent.includes('EVIL HELP'), 'first-party content must be staged on a stem collision, not the third-party body');
+    });
+
+    test(`${__runtime2362}: (5) graceful degradation — an unreadable capability SKILL.md does not throw and first-party staging is unaffected`, (t) => {
+      const gsdHome = createTempDir('gsd-2362-home-');
+      const configDir = createTempDir(`gsd-2362-${__runtime2362}-cfg-degrade-`);
+      t.after(() => { cleanup(gsdHome); cleanup(configDir); });
+
+      install2362CapabilitySkill(gsdHome, 'my-thing', 'my-thing', '# my-thing\n');
+      const registry = registry2362For('my-thing', ['my-thing']);
+      const resolvedFull = resolveProfile({ modes: ['full'] });
+
+      // Inject the IO failure deterministically by monkeypatching fs, scoped to
+      // this one capability's SKILL.md path — never chmod 0o000 (root bypasses
+      // mode bits; silently zero-coverage under root Docker/CI).
+      const skillPath = path.join(gsdHome, '.gsd', 'capabilities', 'my-thing', 'skills', 'my-thing', 'SKILL.md');
+      const origReadFileSync = fs.readFileSync;
+      fs.readFileSync = function injectedReadFileSync(p, ...rest) {
+        if (p === skillPath) throw new Error('injected read failure (#2362 regression test)');
+        return origReadFileSync.call(fs, p, ...rest);
+      };
+      try {
+        with2362GsdHome(gsdHome, () => {
+          assert.doesNotThrow(() => {
+            installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedFull, () => undefined, registry);
+          }, `installRuntimeArtifacts('${__runtime2362}', ...) must not throw when a registry-referenced capability skill is unreadable`);
+        });
+      } finally {
+        fs.readFileSync = origReadFileSync;
+      }
+
+      assert.ok(
+        !fs.existsSync(path.join(configDir, 'skills', 'gsd-my-thing', 'SKILL.md')),
+        'an unreadable capability skill must be skipped, not partially staged',
+      );
+      assert.ok(
+        fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')),
+        'first-party skills must still materialize when a referenced capability skill is unreadable',
+      );
+    });
+
+    test(`${__runtime2362}: (6) control — first-party skills are unperturbed (byte-identical) by an installed third-party capability skill`, (t) => {
+      const gsdHome = createTempDir('gsd-2362-home-');
+      const configDir = createTempDir(`gsd-2362-${__runtime2362}-cfg-control-`);
+      t.after(() => { cleanup(gsdHome); cleanup(configDir); });
+
+      const resolvedFull = resolveProfile({ modes: ['full'] });
+
+      // Baseline: no registry threaded through at all.
+      installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedFull, () => undefined, undefined);
+      const skillsDir = path.join(configDir, 'skills');
+      const baselineSnapshot = snapshot2362Dir(skillsDir);
+      assert.ok(baselineSnapshot.size > 0, 'sanity: baseline install staged at least one first-party skill');
+      assert.ok(!baselineSnapshot.has(path.join('gsd-my-thing', 'SKILL.md')), 'sanity: baseline has no gsd-my-thing');
+
+      // Re-apply to the SAME configDir once a third-party capability is also
+      // registered+installed — rebuilds nothing else, so any first-party byte
+      // drift here is attributable only to the third-party fill-in pass.
+      install2362CapabilitySkill(gsdHome, 'my-thing', 'my-thing', '# my-thing\n');
+      const registry = registry2362For('my-thing', ['my-thing']);
+      with2362GsdHome(gsdHome, () => {
+        installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedFull, () => undefined, registry);
+      });
+
+      assert2362SnapshotSubsetPreserved(baselineSnapshot, skillsDir, `${__runtime2362} first-party skills`);
+      assert.ok(
+        fs.existsSync(path.join(skillsDir, 'gsd-my-thing', 'SKILL.md')),
+        'the third-party capability skill must ALSO be present after the re-apply',
+      );
+    });
+  });
+}
 
 // ─── Section 7: uninstallRuntimeArtifacts — all runtimes ─────────────────────
 
