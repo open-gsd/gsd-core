@@ -253,6 +253,10 @@ reasoning_checkpoint:
   falsification_test: "[what specific observation would prove this hypothesis wrong]"
   fix_rationale: "[why the proposed fix addresses the root cause — not just the symptom]"
   blind_spots: "[what you haven't tested that could invalidate this hypothesis]"
+  candidate_causes:
+    - "[cause in category: code|config|environment|data]"
+    - "[cause in a DIFFERENT category — single-category is not a branch]"
+  and_gate: "[could this failure require >1 contributing condition simultaneously? yes/no + why — see RCA branching]"
 ```
 
 **Check before proceeding:**
@@ -260,8 +264,9 @@ reasoning_checkpoint:
 - Is the confirming evidence direct observation, not inference?
 - Does the fix address the root cause or a symptom?
 - Have you documented your blind spots honestly?
+- **Did you branch across ≥2 categories and answer the AND-gate?** (Single-cause is fine when the AND-gate is no — but you must have checked.)
 
-If you cannot fill all five fields with specific, concrete answers — you do not have a confirmed root cause yet. Return to investigation_loop.
+If you cannot fill all seven fields with specific, concrete answers — you do not have a confirmed root cause yet. Return to investigation_loop.
 
 ## Minimal Reproduction
 
@@ -788,7 +793,7 @@ Each resolved session appends one entry:
 ## {slug} — {one-line description}
 - **Date:** {ISO date}
 - **Error patterns:** {comma-separated keywords extracted from symptoms.errors and symptoms.actual}
-- **Root cause:** {from Resolution.root_cause}
+- **Root cause(s):** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate fired}
 - **Fix:** {from Resolution.fix}
 - **Files changed:** {from Resolution.files_changed}
 ---
@@ -998,6 +1003,10 @@ At investigation decision points, apply structured reasoning:
 
 **Phase 2: Form hypothesis**
 - Based on evidence AND common pattern matches, form SPECIFIC, FALSIFIABLE hypothesis
+- **Branch, don't chain** — at hypothesis formation (so it's done before the Phase 4 commit), enumerate candidate causes across ≥2 Ishikawa categories (code / config / environment / data) and answer the AND-gate check; `root_cause` may hold a set when the AND-gate fires:
+
+@~/.claude/gsd-core/references/debugger-rca-branching.md
+
 - Update Current Focus with hypothesis, test, expecting, next_action
 
 **Phase 3: Test hypothesis**
@@ -1050,7 +1059,7 @@ Return structured diagnosis:
 
 **Debug Session:** .planning/debug/{slug}.md
 
-**Root Cause:** {from Resolution.root_cause}
+**Root Cause:** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate identified multiple contributing causes}
 
 **Evidence Summary:**
 - {key finding 1}
@@ -1090,7 +1099,7 @@ Update status to "fixing".
 
 **0. Structured Reasoning Checkpoint (MANDATORY)**
 - Write the `reasoning_checkpoint` block to Current Focus (see Structured Reasoning Checkpoint in investigation_techniques)
-- Verify all five fields can be filled with specific, concrete answers
+- Verify every field can be filled with specific, concrete answers — including the RCA `candidate_causes` (≥2 categories) and `and_gate` fields
 - If any field is vague or empty: return to investigation_loop — root cause is not confirmed
 
 **1. Implement minimal fix**
@@ -1204,7 +1213,7 @@ Then append the entry:
 ## {slug} — {one-line description of the bug}
 - **Date:** {ISO date}
 - **Error patterns:** {comma-separated keywords from Symptoms.errors + Symptoms.actual}
-- **Root cause:** {Resolution.root_cause}
+- **Root cause(s):** {Resolution.root_cause — joined as '; ' when multiple contributing causes were confirmed}
 - **Fix:** {Resolution.fix}
 - **Files changed:** {Resolution.files_changed joined as comma list}
 ---
@@ -1309,7 +1318,7 @@ Orchestrator presents checkpoint to user, gets response, spawns fresh continuati
 
 **Debug Session:** .planning/debug/{slug}.md
 
-**Root Cause:** {specific cause with evidence}
+**Root Cause:** {specific cause with evidence — one cause, or a '; '-joined list when the AND-gate identified multiple contributing causes}
 
 **Evidence Summary:**
 - {key finding 1}

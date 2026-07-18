@@ -316,7 +316,7 @@ Return compact summary (terminal — investigation resolved):
 ## DEBUG SESSION COMPLETE
 
 **Session:** {final path — resolved/ if archived, otherwise debug_file_path}
-**Root Cause:** {one sentence from Resolution.root_cause, or "not determined"}
+**Root Cause:** {one sentence, or a '; '-joined list when the AND-gate identified multiple contributing causes, from Resolution.root_cause; or "not determined"}
 **Fix:** {one sentence from Resolution.fix, or "not applied"}
 **Cycles:** {N} (investigation) + {M} (fix)
 **TDD:** {yes/no}
@@ -329,7 +329,7 @@ If the session was abandoned by user choice, return (terminal — user stopped):
 ## DEBUG SESSION COMPLETE
 
 **Session:** {debug_file_path}
-**Root Cause:** {one sentence if found, or "not determined"}
+**Root Cause:** {one sentence if found (or a '; '-joined list if the AND-gate identified multiple contributing causes), or "not determined"}
 **Fix:** not applied
 **Cycles:** {N}
 **TDD:** {yes/no}
