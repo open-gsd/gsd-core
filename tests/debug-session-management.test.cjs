@@ -209,7 +209,9 @@ describe('debug skill dispatch and sub-orchestrator (#2148, #2151)', () => {
     assert.ok(yamlBlock, 'gsd-debugger.md must define a fenced reasoning_checkpoint YAML block');
     const keys = new Set();
     for (const line of yamlBlock[1].split(/\r?\n/)) {
-      const m = line.match(/^ {2}([a-z_]+):\s/);
+      // Match 2-space-indented YAML keys (with OR without an inline value —
+      // array-valued keys like confirming_evidence: have no trailing space).
+      const m = line.match(/^ {2}([a-z_]+):/);
       if (m) keys.add(m[1]);
     }
     assert.strictEqual(
