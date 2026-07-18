@@ -213,7 +213,7 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     ['compound-modifier mid-sentence', 'The Resolver-only API rejects arbitrary caller URLs.'],
     ['clause-initial capitalized prose', 'Internal API surface stays unchanged in this phase.'],
     ['localhost URL', 'Run integration tests against https://localhost:3000/api/profile'],
-    ['non-API URL', 'Wire the docs link to https://github.com/org/repo into the footer'],
+    ['bare external domain, no path', 'Integrate the design tokens from https://example.com into the theme'],
     ['internal-qualified service (no verb)', 'The internal Payments API remains unchanged.'],
     ['descriptor service + unrelated URL', 'Internal API surface stays unchanged; see https://example.com/style-guide.'],
     ['Windows path', 'Wire tests for src\\app\\api\\profile\\route.ts.'],
@@ -273,6 +273,13 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     ['integration verb + internal noun', 'Wire the settings form to the internal endpoint.'],
     ['coordinated integration verb + internal noun', 'Wire the form and document the internal API.'],
     ['distant same-clause verb+noun', 'Wiring the settings drawer means the profile page the sidebar and the account menu all reach the same internal endpoint'],
+    // Round-3 review fail-open fixes:
+    ['external host with a path, no vocab word in host', 'Connect the client to graph.microsoft.com:443/v1.0/me.'],
+    ['external host with a path (scheme form)', 'Connect the client to https://graph.microsoft.com/v1.0/me.'],
+    ['qualifier does not leak across a sentence', 'The cache is private. Stripe API client for payments.'],
+    ['qualifier does not leak across a semicolon', 'Keep the cache private; Stripe API client for payments.'],
+    ['participial continuation past a 4-word head', 'Connect checkout to Stripe payments, exposing its endpoints.'],
+    ['external URL with a path + integration verb', 'Wire the docs link to https://github.com/org/repo into the footer'],
   ]) {
     test(`POSITIVE fail-open guard (${label}): "${scope}"`, () => {
       const r = detectApiIntegration(scope);
@@ -280,18 +287,50 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     });
   }
 
-  // ── #2365 review — false-positive fixes. The same review found new false
-  //    positives from the round-2 heuristics; these MUST stay clean.
+  // ── #2365 review — false-positive fixes. The reviews found new false
+  //    positives from the heuristics; these MUST stay clean.
   for (const [label, scope] of [
     ['URL token swallowing a clause comma (F6)', 'Integrate the design tokens from https://example.com, document the endpoint terminology.'],
     ['capitalized internal component cross-clause (F7)', 'Wire the SettingsForm, then document the endpoint props.'],
     ['protocol name as service (F8)', 'Document the REST API behavior for maintainers.'],
+    // Round-3 review: cross-clause must NOT bind a finite (non-participial)
+    // continuation, whatever the separator.
+    ['finite continuation after a period', 'Wire the settings form. Document endpoint props.'],
+    ['finite continuation after a semicolon', 'Wire the settings form; document endpoint props.'],
+    ['finite continuation after a comma', 'Wire the form, document endpoint props.'],
   ]) {
     test(`NEGATIVE fail-closed FP guard (${label}): "${scope}"`, () => {
       const r = detectApiIntegration(scope);
       assert.strictEqual(r.detected, false, `new false positive [${label}]: ${scope}`);
     });
   }
+
+  // ── #2365 review — DOCUMENTED fail-closed tradeoffs. A clause-initial
+  //    capitalized common word before "API" ("Payment API", "Search API") is
+  //    treated as a service name, and a long clause pairs a verb with a distant
+  //    noun. Codex judged these acceptable because the COVERAGE.md declaration
+  //    is a cheap override; these tests exist so the behavior is INTENTIONAL and
+  //    a future maintainer does not "fix" it back into a fail-open cap.
+  for (const [label, scope] of [
+    ['capitalized common word as service', 'Payment API remains unchanged in this refactor.'],
+    ['capitalized common word as service (Search)', 'Search API types are generated locally.'],
+    ['long clause pairs verb with distant noun', 'Wire the settings form to validation state so the designer can review field behavior and document every public API and endpoint symbol without changing runtime dependencies.'],
+  ]) {
+    test(`POSITIVE documented fail-closed tradeoff (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, true, `expected documented fail-closed detection [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review finding 7: inline code spans are matched WITHIN a line by
+  //    design (phase scope prose is line-oriented). A CommonMark code span that
+  //    wraps a newline is NOT recognized, so its contents are treated as prose —
+  //    a documented, narrow limitation (fail-closed: a stray detection is
+  //    dismissed by the declaration). This test pins the current behavior.
+  test('multi-line inline code span is not treated as code (documented limitation)', () => {
+    const r = detectApiIntegration('Documentation example: `integrate\nStripe API` only.');
+    assert.strictEqual(r.detected, true);
+  });
 
   // ── acceptance #5: a legitimate, non-fabricated "no external API" declaration
   test('declaration-only COVERAGE.md is VALID with zero rows (none_declared)', () => {

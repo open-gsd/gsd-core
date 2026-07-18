@@ -18,10 +18,11 @@
  *  - COMPOUND SIGNAL for low false positives. A bare word like "api" appears in
  *    countless non-integration phases ("the public API of UserController"). The
  *    detector requires an INTEGRATION VERB and an EXTERNAL-API NOUN in the SAME
- *    CLAUSE within a bounded word gap (#2365 — same-line co-occurrence alone
- *    over-fired), or an explicit "<Service> API/SDK" phrase in proper-noun
- *    position. Single weak tokens do not fire. This is the issue's "low
- *    false-positive trigger" made mechanical.
+ *    CLAUSE (#2365 — same-line co-occurrence across unrelated clauses over-fired;
+ *    the clause boundary, not a word-gap cap, is the relationship test), or an
+ *    explicit "<Service> API/SDK" phrase naming a real service. Single weak
+ *    tokens do not fire. This is the issue's "low false-positive trigger" made
+ *    mechanical.
  *  - CODE AND PATHS ARE NOT PROSE. Fenced code blocks and inline code spans are
  *    stripped first (markdown-sectionizer seam), and path-shaped tokens
  *    (`src/app/api/...`, URLs) are masked, so a trigger term inside code or a
@@ -179,7 +180,10 @@ function makeSnippet(line, anchor) {
  *  `[A-Z]\w+ API` shape. Those are common English, not a service name, so they
  *  are rejected before counting as a surface signal (acceptance #4 — low false
  *  positives). */
-const SERVICE_SURFACE_API_RE = /\b([A-Z][A-Za-z0-9_-]{1,})\s+(API|SDK|REST|GraphQL)\b/;
+// Service-name length is bounded ({1,40}) so a hostile "A-A-A-…-A-x" run cannot
+// drive the greedy group into O(n^2) backtracking (#2365 review). A real vendor
+// name fits comfortably.
+const SERVICE_SURFACE_API_RE = /\b([A-Z][A-Za-z0-9_-]{1,40})\s+(API|SDK|REST|GraphQL)\b/;
 const SERVICE_STOPWORDS = new Set([
     'the', 'an', 'a', 'our', 'this', 'these', 'that', 'those', 'new', 'add',
     'use', 'your', 'my', 'no', 'some', 'any', 'all', 'each', 'every', 'both',
@@ -202,15 +206,21 @@ const SERVICE_STOPWORDS = new Set([
  *  clause (18 words) — the clause boundary is the only sound signal, and the
  *  declaration handles the residual false positives. */
 const CLAUSE_BOUNDARY_RE = /[,;:.!?|()—–]/;
+/** Same character class as CLAUSE_BOUNDARY_RE, as a set — for scanning a token's
+ *  trailing punctuation without an unanchored `[…]+$` regex, whose backtracking
+ *  is O(n^2) on a long punctuation run (#2365 review). */
+const CLAUSE_BOUNDARY_CHARS = new Set([',', ';', ':', '.', '!', '?', '|', '(', ')', '—', '–']);
 /** Cross-clause binding ("Integrate Stripe, exposing its endpoints …"): a verb
- *  in one clause may bind a noun in the IMMEDIATELY FOLLOWING clause, but only
- *  when the verb heads a short "verb + object" clause (CROSS_CLAUSE_HEAD_WORDS)
- *  AND the continuation is a dependent elaboration — NOT a new coordinate
- *  action introduced by a conjunction. This keeps "Integrate Stripe, exposing
- *  its endpoints" (dependent participial) while rejecting "Wire the form, then
- *  document the endpoint" (F7 — a second, unrelated coordinate clause). */
-const CROSS_CLAUSE_HEAD_WORDS = 3;
-const CONTINUATION_CONJUNCTION_RE = /^\s*(?:then|and|but|or|nor|so|yet|also|plus|next|finally|afterwards?|meanwhile|additionally|otherwise)\b/i;
+ *  in one clause binds a noun in the IMMEDIATELY FOLLOWING clause only when that
+ *  clause is a dependent PARTICIPIAL elaboration — it begins with an `-ing`
+ *  word ("exposing …", "returning …"). A new finite clause ("…, then document
+ *  the endpoint", "…. Document the endpoint", "…; document the endpoint") is a
+ *  separate action and does not bind. A leading participle is the sound
+ *  discriminator that a head-word count is not: "Integrate the tokens from URL,
+ *  document …" (unrelated) and "Connect checkout to Stripe payments, exposing …"
+ *  (genuine) both have 4 words after the verb, but only the second continues
+ *  with a participle (#2365 review). */
+const PARTICIPIAL_CONTINUATION_RE = /^\s*[A-Za-z]+ing\b/;
 /** In the `<Service> API|SDK` surface position, these capture words are NOT a
  *  named third-party service: locality/scope descriptors ("Internal API",
  *  "Public API") and bare protocol names ("REST API", "GraphQL API"). A real
@@ -262,9 +272,13 @@ function scanLineTokens(line, nounRe, nounSet) {
         // Peel trailing clause-boundary punctuation off the token and keep it
         // LITERAL in `masked` — masking it away would erase a clause split and pair
         // unrelated verb/noun across it (#2365 review F6: "…example.com, document…").
-        const trailMatch = /[,;:.!?|()—–]+$/.exec(rawTok);
-        const trail = trailMatch ? trailMatch[0] : '';
-        const tok = trail ? rawTok.slice(0, rawTok.length - trail.length) : rawTok;
+        // A backward char scan (not a `[…]+$` regex) keeps this linear.
+        let trailLen = 0;
+        while (trailLen < rawTok.length && CLAUSE_BOUNDARY_CHARS.has(rawTok[rawTok.length - 1 - trailLen])) {
+            trailLen++;
+        }
+        const trail = trailLen ? rawTok.slice(rawTok.length - trailLen) : '';
+        const tok = trailLen ? rawTok.slice(0, rawTok.length - trailLen) : rawTok;
         if (!/\S[\\/]\S/.test(tok)) {
             masked += rawTok;
             continue;
@@ -276,15 +290,27 @@ function scanLineTokens(line, nounRe, nounSet) {
             continue;
         }
         // A scheme URL or a bare external hostname is an external dependency
-        // reference: mask it from prose but keep its API nouns as compound-rule
-        // evidence. A first-party route path has neither a scheme nor a dotted
-        // host, so it is masked WITHOUT contributing nouns (#2365 root cause 2).
+        // reference: mask it from prose but keep it as compound-rule evidence. A
+        // first-party route path has neither a scheme nor a dotted host, so it is
+        // masked WITHOUT contributing nouns (#2365 root cause 2).
         const isSchemeUrl = URL_TOKEN_RE.test(tok) && !LOCAL_URL_RE.test(tok);
         const isDomainUrl = !URL_TOKEN_RE.test(tok) && DOMAIN_HEAD_RE.test(tok);
         if (nounRe && (isSchemeUrl || isDomainUrl)) {
             const found = collectTermMatches(nounRe, tok);
             for (const f of found) {
                 urlNouns.push({ term: f.term, start: m.index, end: m.index + tok.length });
+            }
+            // An external URL that addresses a PATH ("graph.microsoft.com/v1.0/me")
+            // is itself an integration surface, so it contributes an endpoint noun
+            // even when the host names no vocabulary word (#2365 review). A bare
+            // domain link with no path ("https://example.com") is just a reference,
+            // not an endpoint, so it does NOT (keeps "Integrate … from example.com,
+            // document …" a non-signal). Non-local only (localhost excluded above).
+            const afterAuthority = tok.replace(/^[([<"'`]*[a-z][a-z0-9+.-]*:\/\//i, '');
+            const addressesPath = /\/[^/\s]/.test(afterAuthority);
+            const hostNoun = nounSet.has('endpoint') ? 'endpoint' : nounSet.has('api') ? 'api' : null;
+            if (addressesPath && hostNoun && !found.some((f) => f.term === hostNoun)) {
+                urlNouns.push({ term: hostNoun, start: m.index, end: m.index + tok.length });
             }
         }
         masked += ' '.repeat(tok.length) + trail;
@@ -438,7 +464,7 @@ function detectApiIntegration(text, terms) {
                         emitPair(vTerm, nTerm, rawLine);
                 }
                 const next = clauseNouns[ci + 1];
-                if (next && next.length > 0 && allowsCrossClause(clauses[ci], clauses[ci + 1], verbs)) {
+                if (next && next.length > 0 && allowsCrossClause(clauses[ci + 1])) {
                     for (const vTerm of verbTerms) {
                         for (const nTerm of distinctTerms(next))
                             emitPair(vTerm, nTerm, rawLine);
@@ -478,29 +504,25 @@ function detectApiIntegration(text, terms) {
     }
     return { detected: signals.length > 0, signals, terms: effective };
 }
-/** Cross-clause binding gate: a verb heading clause `verbClause` may bind a
- *  noun in the immediately following `nextClause` only when (1) the
- *  continuation is a dependent elaboration, NOT a new coordinate action opened
- *  by a conjunction ("…, then document…" is a separate action — #2365 review
- *  F7), and (2) the verb heads a short "verb + object" clause, so it is not a
- *  verb buried in a long clause whose real object lies elsewhere (F6). */
-function allowsCrossClause(verbClause, nextClause, verbs) {
-    if (CONTINUATION_CONJUNCTION_RE.test(nextClause.text))
-        return false;
-    const lastVerbEnd = Math.max(...verbs.map((v) => v.end)) - verbClause.start;
-    const wordsAfterVerb = verbClause.text.slice(lastVerbEnd).split(/\s+/).filter(Boolean).length;
-    return wordsAfterVerb <= CROSS_CLAUSE_HEAD_WORDS;
+/** Cross-clause binding gate — bind a verb to a noun in `nextClause` only when
+ *  that clause is a dependent participial elaboration ("…, exposing its
+ *  endpoints"). A new finite clause (imperative, or opened by a conjunction) is
+ *  a separate action and does not bind (#2365 review). */
+function allowsCrossClause(nextClause) {
+    return PARTICIPIAL_CONTINUATION_RE.test(nextClause.text);
 }
-/** True when the word immediately before `offset` is a locality descriptor
- *  ("the internal endpoint", "internal Payments API") — first-party
- *  qualification is negative evidence for an EXTERNAL-API signal. Looks back
- *  through a BOUNDED window, not the whole prefix — this runs per match and a
- *  full-prefix slice would be quadratic on hostile input (#2365 review S-2). */
+/** True when the word IMMEDIATELY ADJACENT before `offset` is a locality
+ *  descriptor ("internal Payments API") — first-party qualification is negative
+ *  evidence for an EXTERNAL-API signal. Only plain spaces/tabs may separate the
+ *  descriptor from the service: any intervening punctuation means the descriptor
+ *  belongs to a prior clause/sentence and must NOT qualify ("The cache is
+ *  private. Stripe API …" — `private` is a different sentence; #2365 review).
+ *  Looks back through a BOUNDED window, not the whole prefix, to stay linear. */
 const QUALIFIER_LOOKBACK = 24; // longest descriptor ("first-party") + separators
 function isInternallyQualified(masked, offset) {
     const from = offset > QUALIFIER_LOOKBACK ? offset - QUALIFIER_LOOKBACK : 0;
     const window = masked.slice(from, offset);
-    const m = /([A-Za-z0-9'-]+)[^A-Za-z0-9]*$/.exec(window);
+    const m = /([A-Za-z0-9'-]+)[ \t]+$/.exec(window);
     if (!m)
         return false;
     // A word truncated by the window start is not a descriptor match (its real

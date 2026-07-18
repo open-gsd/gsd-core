@@ -1151,7 +1151,7 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
         // But a contradiction must be VISIBLE, not silent: re-run detection
         // over the phase scope and surface any signals it still finds
         // (#2365 review S-1).
-        const declDetection = detectApiIntegration(readPhaseScope(projectDir, resolvedDir, phaseNumber));
+        const declDetection = detectApiIntegration(readPhaseScope(projectDir, resolvedDir, phaseNumber).text);
         const declSignals = declDetection.signals.map((s) => ({ verb: s.verb, noun: s.noun }));
         output(
           {
@@ -1219,8 +1219,27 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
   }
 
   // (2) no matrix — detect whether this phase integrates an external API.
-  const scopeText = readPhaseScope(projectDir, resolvedDir, phaseNumber);
-  const detection = detectApiIntegration(scopeText);
+  const scope = readPhaseScope(projectDir, resolvedDir, phaseNumber);
+  if (scope.readError) {
+    // Fail-closed: an unreadable plan could be the one describing the
+    // integration, so we cannot certify "no integration" — block and surface it.
+    output(
+      {
+        block: true,
+        passed: false,
+        coverage_present: false,
+        detected: false,
+        message:
+          `api-coverage: could not read the phase scope (${scope.readError}); ` +
+          'refusing to certify no external-API integration from incomplete scope. ' +
+          'Fix the unreadable plan file, or add a COVERAGE.md declaration.',
+      },
+      raw,
+      undefined,
+    );
+    return;
+  }
+  const detection = detectApiIntegration(scope.text);
   if (detection.detected) {
     // Surface only verb/noun (typed, bounded) — NOT raw prose snippets — so the
     // gate output cannot relay injected PLAN.md instructions to the orchestrator.
@@ -1263,8 +1282,19 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
  * whole roadmap, which would cross-contaminate sibling phases). Strips nothing
  * here — detectApiIntegration strips fenced code itself.
  */
-function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: string): string {
+interface PhaseScopeRead {
+  text: string;
+  /** Non-null when a plan file EXISTED but could not be read. The gate must not
+   *  conclude "no external API integration" from provably incomplete scope — an
+   *  unreadable plan could be the one describing the integration (#2365 review:
+   *  the blocking consumer silently passed partially-read scope). A missing plan
+   *  directory is NOT a read error (a phase may legitimately have no plans yet). */
+  readError: string | null;
+}
+
+function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: string): PhaseScopeRead {
   const chunks: string[] = [];
+  let readError: string | null = null;
   try {
     const entries = fs.readdirSync(phaseDir, { withFileTypes: true });
     const plans = entries
@@ -1272,12 +1302,22 @@ function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: strin
       .map((e) => e.name)
       .sort();
     for (const p of plans) {
-      chunks.push(fs.readFileSync(path.join(phaseDir, p), 'utf8'));
+      try {
+        chunks.push(fs.readFileSync(path.join(phaseDir, p), 'utf8'));
+      } catch (err) {
+        // A plan file that exists but cannot be read — record it and keep
+        // reading the rest so the message names the first failure.
+        if (!readError) {
+          readError = `could not read ${p}: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
     }
   } catch {
-    // ignore — fall through to roadmap
+    // phaseDir missing/unreadable — a phase may have no plan directory yet;
+    // fall through to the roadmap section rather than treating it as an error.
   }
-  if (chunks.join('').trim().length > 0) return chunks.join('\n\n');
+  if (readError) return { text: chunks.join('\n\n'), readError };
+  if (chunks.join('').trim().length > 0) return { text: chunks.join('\n\n'), readError: null };
 
   // Fallback: ONLY this phase's ROADMAP section (not the whole file, which
   // would pollute detection with sibling-phase prose). Best-effort; absence or
@@ -1285,12 +1325,12 @@ function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: strin
   if (phaseNumber) {
     try {
       const section = getRoadmapPhaseWithFallback(projectDir, phaseNumber);
-      if (section) return section;
+      if (section) return { text: section, readError: null };
     } catch {
       // ignore
     }
   }
-  return '';
+  return { text: '', readError: null };
 }
 
 function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {

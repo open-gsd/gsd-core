@@ -171,6 +171,28 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     assert.strictEqual(j.detected, false);
   });
 
+  test('unreadable plan file → BLOCKS fail-closed instead of silently passing (#2365 review)', (t) => {
+    if (process.getuid && process.getuid() === 0) {
+      t.skip('chmod 000 does not deny the root user');
+      return;
+    }
+    fresh();
+    // A readable non-API plan plus an UNREADABLE plan that DOES integrate: the
+    // gate must not conclude "no integration" from the readable half alone.
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nRefactor the UI.');
+    const unreadable = path.join(phaseDir, '02-PLAN.md');
+    fs.writeFileSync(unreadable, '# Plan\nIntegrate the Stripe API.', 'utf8');
+    fs.chmodSync(unreadable, 0o000);
+    try {
+      const r = runGate(tmpDir, phaseDir);
+      const j = JSON.parse(r.output);
+      assert.strictEqual(j.block, true, 'unreadable scope must fail-closed (block), not pass');
+      assert.match(j.message, /could not read/i);
+    } finally {
+      fs.chmodSync(unreadable, 0o644); // restore so cleanup can remove it
+    }
+  });
+
   test('#1/#6 API phase WITH a valid matrix → passes (matrix persists on disk)', () => {
     fresh();
     writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API for payment processing.');
