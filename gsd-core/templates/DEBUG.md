@@ -51,7 +51,7 @@ started: [when it broke / always broken]
 ## Resolution
 <!-- OVERWRITE as understanding evolves -->
 
-root_cause: [empty until found]
+root_cause: [empty until found — may hold one OR a small set of contributing causes when the AND-gate fires; see gsd-core/references/debugger-rca-branching.md]
 fix: [empty until applied]
 verification: [empty until verified — holds the nested per-signal fix-acceptance guardrail record (map shape) when active; see gsd-core/references/debugger-fix-acceptance.md]
 files_changed: []
