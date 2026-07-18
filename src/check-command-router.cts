@@ -1450,4 +1450,7 @@ export = {
   cmdCheckPredicate,
   buildPredicateDeps,
   parsePredicateFlags,
+  // Fail-closed phase-scope reader for the api-coverage gate — exported for
+  // in-process failure-injection tests (#2365 review).
+  readPhaseScope,
 };

@@ -408,14 +408,92 @@ describe('#2365 detector false positives + no-integration declaration', () => {
     assert.notStrictEqual(v.none_declared, true);
   });
 
-  // ── S-2: a hostile line repeating a verb+noun pair must not go quadratic.
-  test('hostile repeated-term line stays fast', () => {
-    const s = 'integrate api '.repeat(10000); // 140 KB single line
-    const t0 = Date.now();
+  // ── A hostile line repeating one verb+noun pair thousands of times must
+  //    collapse to a SINGLE signal — pairing is by distinct term, not a
+  //    match×match cross product. Asserting the signal count is a deterministic
+  //    proxy for that linearity (no wall-clock timing — Clock Seams rule).
+  test('hostile repeated-term line dedups to one signal', () => {
+    const s = 'integrate api '.repeat(10000); // 140 KB single line, 10k pairs
     const r = detectApiIntegration(s);
-    const ms = Date.now() - t0;
     assert.strictEqual(r.detected, true);
-    assert.ok(ms < 3000, `detector took ${ms}ms on a 140 KB hostile line`);
+    assert.strictEqual(
+      r.signals.length,
+      1,
+      `repeated verb+noun pair must dedup to one signal, got ${r.signals.length}`
+    );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// #2365 review — hardening-constant boundaries + parser fuzz property
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('#2365 hardening-constant boundaries + parser property', () => {
+  const { detectApiIntegration, validateCoverageMatrix } = require(MODULE_PATH);
+
+  // SERVICE_SURFACE_API_RE bounds the service token to `[A-Z][A-Za-z0-9_-]{1,40}`
+  // (2..41 chars) so a hostile hyphen run cannot drive O(n^2) backtracking.
+  test('surface service name at the 41-char limit still fires', () => {
+    const svc = 'S' + 'a'.repeat(40); // exactly 41 chars
+    assert.strictEqual(detectApiIntegration(`${svc} API`).detected, true);
+  });
+  test('surface service name at 42 chars is past the length bound (surface path)', () => {
+    const svc = 'S' + 'a'.repeat(41); // 42 chars, no integration verb → surface-only
+    assert.strictEqual(detectApiIntegration(`${svc} API`).detected, false);
+  });
+
+  // QUALIFIER_LOOKBACK (24): a first-party descriptor only suppresses the surface
+  // within the bounded lookback window. Pin the EXACT constant: 8-char "internal"
+  // + 16 spaces places its start at offset-24 (the window edge) → still qualifies;
+  // + 17 spaces pushes its start one char outside → truncated → no longer
+  // qualifies. Both would pass for any lookback in ~9..37, so use the exact pair.
+  test('internal qualifier exactly at the 24-char window edge still suppresses the surface', () => {
+    const atEdge = 'internal' + ' '.repeat(16) + 'Payments API'; // start at offset-24
+    assert.strictEqual(detectApiIntegration(atEdge).detected, false);
+  });
+  test('internal qualifier one char past the 24-char window no longer qualifies (fires)', () => {
+    const pastEdge = 'internal' + ' '.repeat(17) + 'Payments API'; // start at offset-25
+    assert.strictEqual(detectApiIntegration(pastEdge).detected, true);
+  });
+
+  // REASON_MAX_LEN (200): the no-integration declaration reason is length-bounded.
+  test('declaration reason at 200 chars is valid; 201 is rejected', () => {
+    const at = 'No external API integration: ' + 'x'.repeat(200) + '\n';
+    const over = 'No external API integration: ' + 'x'.repeat(201) + '\n';
+    assert.strictEqual(validateCoverageMatrix(at).valid, true);
+    const v = validateCoverageMatrix(over);
+    assert.strictEqual(v.valid, false);
+    assert.ok(v.errors.some((e) => /exceeds 200 chars/.test(e)), `errors: ${v.errors.join('; ')}`);
+  });
+
+  // Fuzz the tokenizer / clause splitter / masking (scanLineTokens, splitClauses,
+  // collectTermMatches) with adversarial tokens — slashes, backticks, URLs,
+  // clause punctuation. The detector must never throw, keep its typed shape, hold
+  // `detected ⇔ signals.length > 0`, and be deterministic on any input.
+  test('property: parser is total, shape-stable, and deterministic on arbitrary prose', () => {
+    const token = fc.oneof(
+      fc.constantFrom(
+        'integrate', 'connect', 'wire', 'the', 'Stripe', 'API', 'SDK', 'endpoint',
+        'api', 'internal', 'Resolver-only', '/', '//', '`', 'https://api.x.com/v1',
+        'src/app/api/x.ts', 'graph.microsoft.com/v1'
+      ),
+      fc.stringMatching(/^[A-Za-z0-9/.:`_-]{0,12}$/)
+    );
+    fc.assert(
+      fc.property(
+        fc.array(token, { maxLength: 40 }),
+        fc.constantFrom(' ', ', ', '. ', '; ', ' | ', '\n'),
+        (words, sep) => {
+          const line = words.join(sep);
+          const r = detectApiIntegration(line);
+          assert.ok(typeof r.detected === 'boolean' && Array.isArray(r.signals), 'typed shape');
+          assert.strictEqual(r.detected, r.signals.length > 0, 'detected ⇔ signals present');
+          assert.deepStrictEqual(detectApiIntegration(line), r, 'deterministic');
+          return true;
+        }
+      ),
+      { numRuns: 300 }
+    );
   });
 });
 

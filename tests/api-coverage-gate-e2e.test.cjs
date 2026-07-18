@@ -22,6 +22,10 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const { cleanup } = require('./helpers.cjs');
+// In-process seam for the fail-closed read-injection tests at the bottom of this
+// file (#2365 review): readPhaseScope is the pure phase-scope reader behind the
+// gate. Those tests monkeypatch fs rather than drive a subprocess.
+const { readPhaseScope } = require('../gsd-core/bin/lib/check-command-router.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -171,67 +175,6 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     assert.strictEqual(j.detected, false);
   });
 
-  test('unreadable plan file → BLOCKS fail-closed instead of silently passing (#2365 review)', (t) => {
-    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
-      t.skip('chmod 000 does not deny read on Windows or for the root user');
-      return;
-    }
-    fresh();
-    // A readable non-API plan plus an UNREADABLE plan that DOES integrate: the
-    // gate must not conclude "no integration" from the readable half alone.
-    writePlan(phaseDir, '01-PLAN.md', '# Plan\nRefactor the UI.');
-    const unreadable = path.join(phaseDir, '02-PLAN.md');
-    fs.writeFileSync(unreadable, '# Plan\nIntegrate the Stripe API.', 'utf8');
-    fs.chmodSync(unreadable, 0o000);
-    try {
-      const r = runGate(tmpDir, phaseDir);
-      const j = JSON.parse(r.output);
-      assert.strictEqual(j.block, true, 'unreadable scope must fail-closed (block), not pass');
-      assert.match(j.message, /could not read/i);
-    } finally {
-      fs.chmodSync(unreadable, 0o644); // restore so cleanup can remove it
-    }
-  });
-
-  test('unreadable phase directory → BLOCKS fail-closed (#2365 round-4 review)', (t) => {
-    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
-      t.skip('chmod 000 does not deny read on Windows or for the root user');
-      return;
-    }
-    fresh();
-    writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API.');
-    fs.chmodSync(phaseDir, 0o000); // directory exists but cannot be enumerated
-    try {
-      const r = runGate(tmpDir, phaseDir);
-      const j = JSON.parse(r.output);
-      // Fail-closed: caught either by phase resolution or by readPhaseScope —
-      // the invariant is that an unreadable directory never silently passes.
-      assert.strictEqual(j.block, true, 'an unreadable phase directory must fail-closed, not pass');
-      assert.match(j.message, /could not (read|resolve)/i);
-    } finally {
-      fs.chmodSync(phaseDir, 0o755); // restore so cleanup can recurse
-    }
-  });
-
-  test('unreadable ROADMAP.md fallback → BLOCKS fail-closed (#2365 round-5 review)', (t) => {
-    if (process.platform === 'win32' || (process.getuid && process.getuid() === 0)) {
-      t.skip('chmod 000 does not deny read on Windows or for the root user');
-      return;
-    }
-    fresh(); // phaseDir 01-pay with NO plans → gate falls back to the roadmap
-    const roadmap = path.join(tmpDir, '.planning', 'ROADMAP.md');
-    fs.writeFileSync(roadmap, '# Roadmap\n\n### Phase 01: Pay\n\nIntegrate the Stripe API.\n', 'utf8');
-    fs.chmodSync(roadmap, 0o000); // exists but unreadable — must not read as "absent"
-    try {
-      const r = runGate(tmpDir, phaseDir);
-      const j = JSON.parse(r.output);
-      assert.strictEqual(j.block, true, 'an unreadable roadmap fallback must fail-closed, not pass');
-      assert.match(j.message, /could not read/i);
-    } finally {
-      fs.chmodSync(roadmap, 0o644); // restore so cleanup can remove it
-    }
-  });
-
   test('#1/#6 API phase WITH a valid matrix → passes (matrix persists on disk)', () => {
     fresh();
     writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API for payment processing.');
@@ -373,5 +316,71 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     } finally {
       cleanup(noPhases);
     }
+  });
+});
+
+// ─── Fail-closed phase-scope read failures (in-process, #2365 review) ──────────
+// These exercise readPhaseScope directly and inject the read failure by
+// monkeypatching fs (restored in finally) rather than chmod 0o000 — chmod does
+// not fault under root and is the pattern this repo's IO-failure convention
+// avoids. Deterministic and platform-independent, so no root/win32 skip needed.
+describe('readPhaseScope — fail-closed on a real read failure (#2365 review)', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
+
+  // Run `fn` with `fs[method]` throwing `code` for any path matching `pat`,
+  // delegating to the real implementation otherwise; always restored.
+  function withFsThrow(method, pat, code, fn) {
+    const orig = fs[method];
+    fs[method] = (p, ...rest) => {
+      if (typeof p === 'string' && pat.test(p)) {
+        const err = new Error(`${code}: injected read failure`);
+        err.code = code;
+        throw err;
+      }
+      return orig(p, ...rest);
+    };
+    try { return fn(); } finally { fs[method] = orig; }
+  }
+
+  test('an EXISTING plan file that cannot be read → readError set (not silent-empty)', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const phaseDir = makePhaseDir(tmpDir, '01-pay');
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nRefactor the UI.');
+    writePlan(phaseDir, '02-PLAN.md', '# Plan\nIntegrate the Stripe API.');
+    const res = withFsThrow('readFileSync', /02-PLAN\.md$/, 'EACCES', () =>
+      readPhaseScope(tmpDir, phaseDir, '01'));
+    assert.ok(res.readError, 'a real plan read failure must set readError, not read as empty scope');
+    assert.match(res.readError, /could not read/i);
+  });
+
+  test('a phase directory that cannot be enumerated → readError set', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const phaseDir = makePhaseDir(tmpDir, '01-pay');
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API.');
+    const res = withFsThrow('readdirSync', new RegExp(phaseDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), 'EACCES', () =>
+      readPhaseScope(tmpDir, phaseDir, '01'));
+    assert.ok(res.readError, 'an unreadable phase directory must set readError, not read as empty');
+  });
+
+  test('roadmap fallback that cannot be read → readError set', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const phaseDir = makePhaseDir(tmpDir, '01-pay'); // no plans → roadmap fallback
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 01: Pay\n\nIntegrate the Stripe API.\n',
+      'utf8'
+    );
+    const res = withFsThrow('readFileSync', /ROADMAP\.md$/, 'EACCES', () =>
+      readPhaseScope(tmpDir, phaseDir, '01'));
+    assert.ok(res.readError, 'an unreadable roadmap fallback must set readError, not read as absent');
+  });
+
+  test('a MISSING phase dir / roadmap is legitimate absence (ENOENT) → readError null', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const missing = path.join(tmpDir, '.planning', 'phases', '99-does-not-exist');
+    const res = readPhaseScope(tmpDir, missing, '99');
+    assert.strictEqual(res.readError, null, 'ENOENT is absence, not a read failure — must not block');
+    assert.strictEqual(res.text, '');
   });
 });
