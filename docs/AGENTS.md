@@ -400,6 +400,7 @@ runs its default whole-repo scan.
 - Tracks hypotheses, evidence, and eliminated theories
 - State persists across context resets
 - Requires human verification before marking resolved
+- Runs a multi-signal fix-acceptance guardrail (mutation check, no-op/deletion detector, adjacent tests, revert-and-reconfirm) before accepting a fix; degrades gracefully when Stryker or a test suite is absent
 - Appends to persistent knowledge base on resolution
 - Consults knowledge base on new sessions
 

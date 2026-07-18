@@ -270,6 +270,29 @@ If user selects 1 or 2: spawn continuation agent (with any additional context pr
 
 If user selects 3: proceed to Step 4 with fix = "not applied".
 
+### 3f. FIX REJECTED BY GUARDRAIL
+
+When agent returns `## FIX REJECTED BY GUARDRAIL`:
+
+Present the failing signal and evidence to the user via AskUserQuestion:
+```
+Fix rejected by the acceptance guardrail.
+
+Failing signal: {failing signal}
+Evidence: {why it failed}
+
+Options:
+1. Revise fix — spawn continuation agent to revise the fix so the signal passes
+2. Accept as technical debt — record the unmet signal + justification (the fix lands without the gate passing; this is never silent)
+3. Abandon — stop; session stays unresolved
+```
+
+If user selects 1: spawn continuation agent with `goal: find_and_fix` naming the failing signal to revise. Loop back to Step 3.
+
+If user selects 2: spawn continuation agent instructed to record `guardrail_verdict: accepted_debt` + the justification in the debug file, then proceed to request_human_verification. Loop back to Step 3.
+
+If user selects 3: proceed to Step 4 with fix = "not applied (guardrail rejected)".
+
 ## Step 4: Return Compact Summary
 
 **Non-terminal early stop — check this FIRST.** Before returning any summary below, ask: is your own turn/context budget exhausted while the debugger (`gsd-debugger`) is still investigating — i.e. you have NOT reached `DEBUG COMPLETE`, a user-chosen `ABANDONED`, or exhausted the `INVESTIGATION INCONCLUSIVE` options? If so, do NOT fabricate a `DEBUG SESSION COMPLETE` or `ABANDONED` summary to fit this shape. Return the non-terminal marker instead:
