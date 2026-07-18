@@ -676,6 +676,53 @@ describe('plan-review-convergence workflow: CYCLE_SUMMARY contract definition (#
   });
 });
 
+// ─── Workflow: consensus gate for multi-reviewer HIGH counting ────────────
+
+describe('plan-review-convergence workflow: consensus gate (#2398)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+  test('consensus gate is positioned before the counting rules it modifies', () => {
+    const gateIdx = workflow.indexOf('Consensus gate (#2398');
+    const countingIdx = workflow.indexOf('Counting rules (apply AFTER the consensus gate above)');
+    assert.ok(gateIdx !== -1, 'workflow must define the #2398 consensus gate');
+    assert.ok(countingIdx !== -1, 'counting rules must reference the consensus gate applying before them');
+    assert.ok(gateIdx < countingIdx, 'consensus gate must appear before the counting rules it constrains');
+  });
+
+  test('consensus gate is a no-op with a single reviewer (backward compatible)', () => {
+    assert.ok(
+      workflow.includes('skip this gate entirely'),
+      'single-reviewer configurations (the common case) must be unaffected — that reviewer\'s HIGHs always count'
+    );
+  });
+
+  test('consensus gate requires source-grounding OR multi-reviewer corroboration for a lone HIGH to count', () => {
+    assert.ok(
+      workflow.includes('The source-grounding pass independently confirms it against real project source'),
+      'lone HIGH must be countable via independent source-grounding confirmation'
+    );
+    assert.ok(
+      workflow.includes('It is raised independently by 2+ reviewers') &&
+        workflow.includes('Agreed Concerns'),
+      'lone HIGH must alternatively be countable via corroboration from REVIEWS.md\'s Consensus Summary Agreed Concerns'
+    );
+  });
+
+  test('an uncorroborated single-reviewer HIGH stays visible but tagged, not silently dropped', () => {
+    assert.ok(
+      workflow.includes('(single-reviewer, unconfirmed)'),
+      'uncorroborated lone HIGHs must still be listed under Current HIGH Concerns, just tagged and non-blocking — never silently discarded'
+    );
+  });
+
+  test('consensus gate cross-references reviewer_instances for the multi-reviewer trigger condition', () => {
+    assert.ok(
+      workflow.includes('review.reviewer_instances') && workflow.includes('reviewer-instances.md'),
+      'gate must clarify that reviewer_instances entries count toward the 2+ reviewer trigger, cross-referencing the reviewer-instances reference doc'
+    );
+  });
+});
+
 // ─── Workflow: HIGH_LINES validation ──────────────────────────────────────
 
 describe('plan-review-convergence workflow: HIGH_LINES validation (#2306-v2)', () => {
