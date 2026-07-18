@@ -106,7 +106,7 @@ Agent(
 
 **b. Run tests:**
 ```bash
-AUDIT_TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" 2>/dev/null || true)
+AUDIT_TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" --raw 2>/dev/null || true)
 if [ -z "$AUDIT_TEST_CMD" ]; then
   if [ -f "Makefile" ] && grep -q "^test:" Makefile; then
     AUDIT_TEST_CMD="make test"

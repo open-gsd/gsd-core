@@ -1091,11 +1091,15 @@ Update status to "fixing".
 - Make SMALLEST change that addresses root cause
 - Update Resolution.fix and Resolution.files_changed
 
-**2. Verify**
+**2. Verify (Fix-Acceptance Guardrail)**
 - Update status to "verifying"
-- Test against original Symptoms
-- If verification FAILS: status -> "investigating", return to investigation_loop
-- If verification PASSES: Update Resolution.verification, proceed to request_human_verification
+- Run the multi-signal guardrail before accepting the fix:
+
+@~/.claude/gsd-core/references/debugger-fix-acceptance.md
+
+- Record every signal's result under `Resolution.verification` (per-signal schema in the reference)
+- If ANY applicable signal fails (and no documented technical-debt escape applies): return `## FIX REJECTED BY GUARDRAIL` (see structured_returns) — do NOT request human verification
+- If all applicable signals pass: set `guardrail_verdict: accepted`, proceed to request_human_verification
 </step>
 
 <step name="request_human_verification">
@@ -1333,6 +1337,16 @@ Orchestrator presents checkpoint to user, gets response, spawns fresh continuati
 ```
 
 Only return this after human verification confirms the fix.
+
+## FIX REJECTED BY GUARDRAIL
+
+Returned when a fix-acceptance guardrail signal fails (see `@~/.claude/gsd-core/references/debugger-fix-acceptance.md`). Do **not** mark the session resolved.
+
+**Debug Session:** .planning/debug/{slug}.md
+**Failing signal:** {signal 1–5 name}
+**Evidence:** {why the signal failed — e.g. "mutant at fix site survived", "deletion-only diff with no RCA justification", "bug did not return on revert"}
+
+The session-manager continuation surfaces this and offers revise / accept-as-debt / abandon.
 
 ## INVESTIGATION INCONCLUSIVE
 

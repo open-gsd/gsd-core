@@ -214,6 +214,7 @@
       "common-bug-patterns.md",
       "context-budget.md",
       "continuation-format.md",
+      "debugger-fix-acceptance.md",
       "debugger-philosophy.md",
       "decimal-phase-calculation.md",
       "doc-conflict-engine.md",

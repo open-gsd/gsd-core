@@ -269,7 +269,7 @@ inspecting static artifacts.
 
 ```bash
 # Resolve test command: project config > Makefile > language sniff
-TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" 2>/dev/null || true)
+TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" --raw 2>/dev/null || true)
 if [ -z "$TEST_CMD" ]; then
   if [ -f "Makefile" ] && grep -q "^test:" Makefile; then
     TEST_CMD="make test"
