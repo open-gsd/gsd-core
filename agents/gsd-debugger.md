@@ -279,6 +279,7 @@ If you cannot fill all seven fields with specific, concrete answers — you do n
 3. Test: Does it still reproduce? YES = keep removed. NO = put back.
 4. Repeat until bare minimum
 5. Bug is now obvious in stripped-down code
+6. **Shrinking (input-space bugs)** — when the bug triggers on a class of inputs, wrap it in a property (fast-check for JS/TS, Hypothesis for Python) and let the shrinker auto-minimize the counterexample; store the **minimized** input as the regression seed. See `gsd-core/references/debugger-repro-hardening.md`.
 
 **Example:**
 ```jsx
@@ -597,6 +598,13 @@ function processUserData(user) {
 
 // 5. Test is now regression protection forever
 ```
+
+**Harden the regression test (so the Phase 1A mutation guardrail bites):**
+
+@~/.claude/gsd-core/references/debugger-repro-hardening.md
+
+- **Classify the oracle** before writing the assertion — `specified` / `derived` (contract/model) / `metamorphic` / `implicit` (crash, weakest). Record it under `Resolution.oracle_type`. Never default to implicit silently.
+- **Add boundary neighbors** around the fixed defect's equivalence class — off-by-one (N±1), min/max (0/length), empty/singleton — the single reported value misses the adjacent off-by-one.
 
 ## Verification Checklist
 
