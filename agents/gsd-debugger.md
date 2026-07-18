@@ -1251,7 +1251,7 @@ Commit the knowledge base update alongside the resolved session:
 gsd_run query commit "docs: update debug knowledge base with {slug}" --files .planning/debug/knowledge-base.md
 ```
 
-**Index into MemPalace (when available)** for semantic recall: index the resolved session (symptoms + root_cause(s) + fix + recurrence guard) so a future Phase-0 query surfaces it by meaning, not just keyword. Skip with a logged note when MemPalace is absent — the plain-text `knowledge-base.md` entry is the durable fallback.
+**Index into MemPalace (when available)** per the semantic-recall reference — the Resolution summary (not raw symptoms), redacted — so a future Phase-0 query surfaces it by meaning. Skip with a logged note when MemPalace is absent or the KB write failed; `knowledge-base.md` is the durable fallback.
 
 Report completion and offer next steps.
 </step>

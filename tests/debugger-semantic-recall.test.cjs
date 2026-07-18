@@ -58,6 +58,17 @@ describe('semantic knowledge-base recall via MemPalace (#1964, epic #1957 Phase 
       assert.ok(/keyword/i.test(content), 'must name keyword matching as the fallback');
     });
 
+    test('the keyword-fallback mechanics survived the Phase 0 consolidation', () => {
+      // Guards against the consolidation dropping the extraction detail the
+      // fallback path needs. The reference must still document the Error
+      // patterns field scan + the 2+ token threshold + identifiers + case-insensitive.
+      const content = fs.readFileSync(REFERENCE, 'utf8');
+      assert.ok(/error patterns/i.test(content), 'fallback must scan the Error patterns field');
+      assert.ok(/2\+ token overlap/i.test(content), 'fallback must keep the 2+ token overlap threshold');
+      assert.ok(/identifier/i.test(content), 'fallback must keep identifier extraction (highest-signal token)');
+      assert.ok(/case-insensitive/i.test(content), 'fallback must keep the case-insensitive qualifier');
+    });
+
     test('knowledge-base.md remains the durable plain-text source of truth', () => {
       const content = fs.readFileSync(REFERENCE, 'utf8');
       assert.ok(/knowledge-base\.md|durable|plain[\s-]?text|source of truth/i.test(content),

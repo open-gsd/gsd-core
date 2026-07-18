@@ -25,10 +25,29 @@ truth**; semantic recall is an additive layer over it, not a replacement.
 
 ## Write — index resolved sessions at archive
 
-At `archive_session`, after appending the entry to `knowledge-base.md`, **index
-the resolved session into MemPalace**: the symptoms + root cause(s) + fix (and
-the Prevention block's recurrence guard). This is what makes the session
-recallable by meaning rather than by keyword.
+At `archive_session`, after appending the entry to `knowledge-base.md` (the KB
+append + commit MUST succeed first — `knowledge-base.md` is the durable source
+of truth; skip indexing on KB-write failure), **index the resolved session into
+MemPalace**.
+
+**Index the agent-authored `Resolution` summary — `root_cause(s)` + `fix` + the
+Prevention `recurrence_guard` — NOT the raw user-supplied `Symptoms`.** The
+Resolution is the post-investigation, agent-synthesized signal; indexing it
+(rather than raw symptoms) excludes attacker-controlled prose from the
+cross-session index and reduces secret/PII leakage. Even so, **redact
+secret-shaped values** (API keys, bearer tokens, JWTs, passwords, credentials)
+from the summary before indexing — a bug report's error string can echo a
+secret, and MemPalace is a cross-session, cross-project store.
+
+## Invocation (the agent has no MCP tools — use the CLI)
+
+The `gsd-debugger` `tools:` frontmatter grants no MCP tools, so query and index
+via the **Bash CLI** (the headless/autonomous path): `mempalace search
+"<symptoms>" --wing <wing>` to recall, and the matching index command on
+archive. If an `mempalace_search(query, wing)` MCP tool is registered in the
+runtime, prefer it. **Resolve the wing** from `config.mempalace.wing` → else the
+project's `project_code` → else the project directory name (the same precedence
+every other MemPalace integration uses).
 
 ## Read — query MemPalace at Phase 0
 
@@ -46,11 +65,12 @@ users connect" even though no keywords overlap.
 
 When MemPalace is unavailable (not installed, not configured, or the query
 errors), **fall back to keyword-overlap matching** against
-`knowledge-base.md`: extract nouns / error substrings from `Symptoms.errors`
-and `Symptoms.actual` and scan each entry's `Error patterns` field for 2+
-token overlap. The fallback is logged (Kernighan — never a silent skip), and
-`knowledge-base.md` continues to be written regardless, so no session is lost
-to a missing palace.
+`knowledge-base.md`: extract nouns, error substrings, and **identifiers**
+(function/variable names — often the highest-signal token) from
+`Symptoms.errors` and `Symptoms.actual`, and scan each entry's `Error patterns`
+field for **2+ token overlap (case-insensitive)**. The fallback is logged
+(Kernighan — never a silent skip), and `knowledge-base.md` continues to be
+written regardless, so no session is lost to a missing palace.
 
 ## Scope boundary (Zawinski's Law)
 
