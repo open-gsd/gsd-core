@@ -107,14 +107,13 @@ describe('prevention / blameless-postmortem output (#1963, epic #1957 Phase 3B)'
 
     test('Phase 0 consumes the prevention fields (why_not_caught + recurrence_guard) when present', () => {
       const content = fs.readFileSync(AGENT, 'utf8');
-      // The Phase 0 "Add to Evidence" line must surface the new fields, else they are dead data.
-      assert.ok(/why.?not.?caught/i.test(content) && /recurrence.?guard/i.test(content),
-        'Phase 0 must read why_not_caught + recurrence_guard from matched KB entries');
-      // Specifically in the Phase 0 / knowledge-base-match Evidence line, not just anywhere
-      const phase0Block = content.match(/Phase 0[\s\S]{0,1200}/);
-      assert.ok(phase0Block, 'a Phase 0 block must exist');
+      // Anchor on the specific Phase 0 heading in investigation_loop (the
+      // string "Phase 0" also appears in knowledge_base_protocol prose, which
+      // would match the wrong region).
+      const phase0Block = content.match(/\*\*Phase 0: Check knowledge base\*\*[\s\S]{0,1500}/);
+      assert.ok(phase0Block, 'a Phase 0: Check knowledge base block must exist in investigation_loop');
       assert.ok(/why.?not.?caught/i.test(phase0Block[0]) && /recurrence.?guard/i.test(phase0Block[0]),
-        'the Phase 0 Evidence line must include why_not_caught + recurrence_guard (consume when present)');
+        'the Phase 0 Evidence line must include why_not_caught + recurrence_guard (consume when present, absent on old entries)');
     });
   });
 });
