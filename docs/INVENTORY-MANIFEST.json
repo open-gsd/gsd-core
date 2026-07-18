@@ -218,6 +218,7 @@
       "debugger-fix-acceptance.md",
       "debugger-philosophy.md",
       "debugger-rca-branching.md",
+      "debugger-repro-hardening.md",
       "debugger-sbfl.md",
       "decimal-phase-calculation.md",
       "doc-conflict-engine.md",
