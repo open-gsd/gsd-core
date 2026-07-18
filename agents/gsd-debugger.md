@@ -807,6 +807,8 @@ Each resolved session appends one entry:
 - **Root cause(s):** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate fired}
 - **Fix:** {from Resolution.fix}
 - **Files changed:** {from Resolution.files_changed}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {the concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / KB pattern}
 ---
 ```
 
@@ -1212,9 +1214,13 @@ Then commit planning docs via CLI (respects `commit_docs` config automatically):
 gsd_run query commit "docs: resolve debug {slug}" --files .planning/debug/resolved/{slug}.md
 ```
 
-**Append to knowledge base:**
+**Append to knowledge base (with the Prevention block):**
 
-Read `.planning/debug/resolved/{slug}.md` to extract final `Resolution` values. Then append to `.planning/debug/knowledge-base.md` (create file with header if it doesn't exist):
+Read `.planning/debug/resolved/{slug}.md` to extract final `Resolution` values. Then produce the **Prevention block** — a blameless postmortem (branching 5-Whys per RCA, "why wasn't this caught?", and a concrete recurrence guard):
+
+@~/.claude/gsd-core/references/debugger-prevention.md
+
+Then append to `.planning/debug/knowledge-base.md` (create file with header if it doesn't exist):
 
 If creating for the first time, write this header first:
 ```markdown

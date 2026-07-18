@@ -1,0 +1,5 @@
+---
+type: Added
+pr: 0
+---
+**`gsd-debugger` now emits a blameless-postmortem Prevention block at resolution, closing the loop on bug-class prevention** — at `archive_session` the debugger produces three blame-free components: a **branching 5-Whys** causal chain (branching per the Phase 2A RCA discipline, not a single linear chain; "agent error" prompts "why was that error possible?", never blame), a **"why wasn't this caught?"** answer naming the existing gate (test/typecheck/lint/review/verify) that missed it, and a **concrete recurrence guard** (a regression test / assertion / lint rule / knowledge-base pattern). The knowledge-base entry gains two structured fields — `why_not_caught` and `recurrence_guard` — so a future Phase-0 recall surfaces not just the prior fix but the prior *prevention* (additive; old entries without the fields still load). The session-manager's compact summary surfaces a one-line prevention summary. Full rules live in `gsd-core/references/debugger-prevention.md`; kept minimal — a block, not an incident-management subsystem. (#1963)
