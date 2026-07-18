@@ -328,7 +328,7 @@ If `REVIEW_CMD` is non-empty and not `"null"`, run the external review:
    # ship runs — same or different phase, same or different project — never
    # clobber or read each other's stderr. Portable via ${TMPDIR:-/tmp}.
    REVIEW_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-review-stderr-XXXXXX")
-   REVIEW_OUTPUT=$(echo "${REVIEW_PROMPT}" | timeout 120 ${REVIEW_CMD} 2>"${REVIEW_STDERR_FILE}")
+   REVIEW_OUTPUT=$(echo "${REVIEW_PROMPT}" | gsd_run run-with-timeout 120 -- ${REVIEW_CMD} 2>"${REVIEW_STDERR_FILE}")
    REVIEW_EXIT=$?
    ```
 
