@@ -308,6 +308,7 @@
       "assumption-delta.cjs",
       "audit-command-router.cjs",
       "audit.cjs",
+      "broken-windows.cjs",
       "capability-activation.cjs",
       "capability-command-router.cjs",
       "capability-consent.cjs",

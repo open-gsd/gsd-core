@@ -586,6 +586,23 @@ Merge those harvested items into the same human verification list as your own an
 **Why human:** {Why can't verify programmatically}
 ```
 
+## Step 8b: Record Unmet Truths in the Broken-Windows Ledger (issue #1950)
+
+Each truth left ⚠️ PRESENT_BEHAVIOR_UNVERIFIED, each FAILED truth whose blocker was *not* fixed during verification, and each human-verification item from Step 8 represents a defect this fresh context will lose track of by the next phase. Append each to the cross-phase broken-windows ledger at `.planning/WINDOWS.md` so it survives `/clear` and reaches the ship gate:
+
+```bash
+gsd_run windows append \
+  --kind unmet-truth \
+  --phase "${PHASE_NUMBER}" \
+  --description "<the truth statement, rephrased as the defect>"
+```
+
+For a Step 8 human-verification item that is broader than a single truth (e.g. a visual check or an external-service flow), use `--kind unrun-verify` with a one-line description of the check. The full kind vocabulary: `stub | todo | fixme | skipped-test | lint-warning | unmet-truth | unrun-verify | deviation`.
+
+The ledger is **optional**: if `gsd_run windows append` returns `windows_ledger_missing` or otherwise fails to write, continue without blocking — recording here is best-effort and never downgrades the verification verdict. The gate at `/gsd-ship` is the enforcement point; this step only feeds it.
+
+Do **not** record truths that the verifier fully VERIFIED, and do **not** record gaps that Step 9b (milestone-scope filtering) marks as `deferred` — those are owned by a later phase, not defects to wave in front of ship.
+
 ## Step 9: Determine Overall Status
 
 Classify status using this decision tree IN ORDER (most restrictive first):
