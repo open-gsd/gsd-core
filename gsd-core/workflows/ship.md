@@ -324,7 +324,11 @@ If `REVIEW_CMD` is non-empty and not `"null"`, run the external review:
    Construct a review prompt containing the diff, diff stats, and phase context, then pipe it to the configured command:
    ```bash
    REVIEW_PROMPT="You are reviewing a pull request.\n\nDiff stats:\n${DIFF_STATS}\n\nPhase context:\n${STATE_STATUS}\n\nFull diff:\n${DIFF}\n\nRespond with JSON: { \"verdict\": \"APPROVED\" or \"REVISE\", \"confidence\": 0-100, \"summary\": \"...\", \"issues\": [{\"severity\": \"...\", \"file\": \"...\", \"line_range\": \"...\", \"description\": \"...\", \"suggestion\": \"...\"}] }"
-   REVIEW_OUTPUT=$(echo "${REVIEW_PROMPT}" | timeout 120 ${REVIEW_CMD} 2>/tmp/gsd-review-stderr.log)
+   # #2358: a per-run temp file (not a shared, unqualified path) so concurrent
+   # ship runs — same or different phase, same or different project — never
+   # clobber or read each other's stderr. Portable via ${TMPDIR:-/tmp}.
+   REVIEW_STDERR_FILE=$(mktemp "${TMPDIR:-/tmp}/gsd-review-stderr-XXXXXX")
+   REVIEW_OUTPUT=$(echo "${REVIEW_PROMPT}" | timeout 120 ${REVIEW_CMD} 2>"${REVIEW_STDERR_FILE}")
    REVIEW_EXIT=$?
    ```
 
@@ -332,10 +336,11 @@ If `REVIEW_CMD` is non-empty and not `"null"`, run the external review:
    If `REVIEW_EXIT` is non-zero or the command times out:
    ```bash
    if [ $REVIEW_EXIT -ne 0 ]; then
-     REVIEW_STDERR=$(cat /tmp/gsd-review-stderr.log 2>/dev/null)
+     REVIEW_STDERR=$(cat "${REVIEW_STDERR_FILE}" 2>/dev/null)
      echo "WARNING: External review command failed (exit ${REVIEW_EXIT}). stderr: ${REVIEW_STDERR}"
      echo "Continuing with manual review flow..."
    fi
+   rm -f "${REVIEW_STDERR_FILE}"
    ```
    On failure, warn with stderr output and fall through to the manual review flow below.
 

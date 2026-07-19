@@ -60,27 +60,29 @@ cannot diverge (`DEFECT.GENERATIVE-FIX`; parity-locked in
 
 For each selected INSTANCE, invoke its base `cli` using the instance's own `model`/`agent` —
 NOT the global `review.models.<cli>`. Each instance writes to its OWN per-instance output file
-and runs as a distinct reviewer identity.
+under the run-scoped `{run_dir}` (`RUN_DIR` from `gather_context`, #2358 — never a bare
+`{phase}`-keyed `/tmp` path) and runs as a distinct reviewer identity.
 
 For an OpenCode-backed instance (the motivating adapter):
 
 ```bash
 # $INSTANCE_MODEL / $INSTANCE_AGENT come from the instance spec; $INSTANCE_NAME is the
 # reviewer identity (e.g. opencode-deepseek). --agent is OpenCode's native subagent flag;
-# omit it when the instance has no agent.
+# omit it when the instance has no agent. {run_dir} is the run-scoped mktemp directory
+# created once in gather_context (#2358) — same directory every other reviewer block uses.
 if [ -n "$INSTANCE_AGENT" ] && [ "$INSTANCE_AGENT" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | opencode run --model "$INSTANCE_MODEL" --agent "$INSTANCE_AGENT" - 2>/dev/null > /tmp/gsd-review-${INSTANCE_NAME}-{phase}.md
+  cat {run_dir}/gsd-review-prompt.md | opencode run --model "$INSTANCE_MODEL" --agent "$INSTANCE_AGENT" - 2>/dev/null > {run_dir}/gsd-review-${INSTANCE_NAME}.md
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | opencode run --model "$INSTANCE_MODEL" - 2>/dev/null > /tmp/gsd-review-${INSTANCE_NAME}-{phase}.md
+  cat {run_dir}/gsd-review-prompt.md | opencode run --model "$INSTANCE_MODEL" - 2>/dev/null > {run_dir}/gsd-review-${INSTANCE_NAME}.md
 fi
-if [ ! -s /tmp/gsd-review-${INSTANCE_NAME}-{phase}.md ]; then
-  echo "OpenCode review ($INSTANCE_NAME) failed or returned empty output." > /tmp/gsd-review-${INSTANCE_NAME}-{phase}.md
+if [ ! -s {run_dir}/gsd-review-${INSTANCE_NAME}.md ]; then
+  echo "OpenCode review ($INSTANCE_NAME) failed or returned empty output." > {run_dir}/gsd-review-${INSTANCE_NAME}.md
 fi
 ```
 
 For an instance backed by a DIFFERENT cli, reuse that cli's invocation block with two
 substitutions: use the instance's `model` in place of the global `review.models.<cli>` value,
-and write to `/tmp/gsd-review-${INSTANCE_NAME}-{phase}.md`. Only `opencode` honours an
+and write to `{run_dir}/gsd-review-${INSTANCE_NAME}.md`. Only `opencode` honours an
 `agent` field in v1; ignore `agent` for other adapters.
 
 ---

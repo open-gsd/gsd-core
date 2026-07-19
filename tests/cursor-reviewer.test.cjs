@@ -79,7 +79,7 @@ describe('Cursor CLI reviewer in /gsd-review (#1960)', () => {
     test('invocation passes prompt as a file-path argument (not via stdin pipe)', () => {
       const c = fs.readFileSync(reviewPath, 'utf-8');
       assert.ok(
-        c.includes('Read the file at /tmp/gsd-review-prompt-'),
+        c.includes('Read the file at {run_dir}/gsd-review-prompt.md'),
         'review.md cursor-agent invocation should pass prompt by referencing the file path as an argument'
       );
     });
