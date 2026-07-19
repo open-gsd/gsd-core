@@ -136,7 +136,7 @@ substituir as instruções do agente ou exfiltrar informações.
 O GSD Core trata a injeção de prompt em três níveis.
 
 **Validação de entrada (`security.cjs`).** O módulo
-`get-shit-done/bin/lib/security.cjs` é o utilitário central de segurança.
+`gsd-core/bin/lib/security.cjs` é o utilitário central de segurança.
 Ele fornece:
 
 - Prevenção de path traversal: caminhos de arquivo fornecidos pelo usuário

@@ -122,8 +122,8 @@ Output: PostFeed and PostCard components wired to /api/feed.
 
 ```xml
 <execution_context>
-@~/.claude/get-shit-done/workflows/execute-plan.md
-@~/.claude/get-shit-done/templates/summary.md
+@~/.claude/gsd-core/workflows/execute-plan.md
+@~/.claude/gsd-core/templates/summary.md
 </execution_context>
 ```
 

@@ -42,7 +42,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
                       │
 ┌─────────────────────▼────────────────────────────────┐
 │              WORKFLOW LAYER                           │
-│   get-shit-done/workflows/*.md — Orchestration logic  │
+│   gsd-core/workflows/*.md — Orchestration logic  │
 │   (Reads references, spawns agents, manages state)    │
 └──────┬──────────────┬─────────────────┬──────────────┘
        │              │                 │
@@ -75,7 +75,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 
 ### 2. 얇은 오케스트레이터
 
-워크플로우 파일(`get-shit-done/workflows/*.md`)은 무거운 작업을 직접 수행하지 않는다. 오케스트레이터가 하는 것:
+워크플로우 파일(`gsd-core/workflows/*.md`)은 무거운 작업을 직접 수행하지 않는다. 오케스트레이터가 하는 것:
 
 - `gsd-tools.cjs init <workflow>`로 컨텍스트 로드
 - 집중된 프롬프트로 전문화된 에이전트 생성
@@ -130,7 +130,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 
 열망적 스킬 목록은 턴당 반복되는 두 가지 토큰 비용 중 하나이다. 다른 하나는 `.claude/settings.json`의 모든 활성화된 MCP 서버가 주입하는 MCP 도구 스키마이다. 무거운 MCP 서버(브라우저/playwright, Mac-tools, Windows-tools)는 각각 턴당 20k+ 토큰 비용이 들 수 있다 — 종종 `model_profile` 튜닝이 절약하는 것을 압도한다. 토글은 Claude Code 하니스(`.claude/settings.json`의 `enabledMcpjsonServers` / `disabledMcpjsonServers`)에 있으며 GSD 관심사가 아니다. 2단계 라우팅 계층(#2792)과 규율 있는 MCP 활성화를 함께 사용하는 것이 턴당 가장 큰 비용 레버이다. [`docs/USER-GUIDE.md`](USER-GUIDE.md)와 `references/context-budget.md`에서 감사 체크리스트를 참조하라.
 
-### Workflows (`get-shit-done/workflows/*.md`)
+### Workflows (`gsd-core/workflows/*.md`)
 
 명령어가 참조하는 오케스트레이션 로직. 다음을 포함하는 단계별 프로세스를 담는다:
 
@@ -152,7 +152,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 | `LARGE`   | 1500 — 다단계 플래너 및 대형 기능 워크플로우 |
 | `DEFAULT` | 1000 — 집중된 단일 목적 워크플로우 (목표 등급) |
 
-`workflows/discuss-phase.md`는 discuss-phase 바이트 예산(#717; discuss-phase/modes 분할로 ≈32000 바이트 유지)에 따라 더 엄격한 상한을 유지한다. 워크플로우가 등급을 초과하면 모드별 본문은 `workflows/<workflow>/modes/<mode>.md`로, 템플릿은 `workflows/<workflow>/templates/`로, 공유 지식은 `get-shit-done/references/`로 추출한다. 부모 파일은 현재 호출에 필요한 모드 및 템플릿 파일만 읽는 얇은 디스패처가 된다.
+`workflows/discuss-phase.md`는 discuss-phase 바이트 예산(#717; discuss-phase/modes 분할로 ≈32000 바이트 유지)에 따라 더 엄격한 상한을 유지한다. 워크플로우가 등급을 초과하면 모드별 본문은 `workflows/<workflow>/modes/<mode>.md`로, 템플릿은 `workflows/<workflow>/templates/`로, 공유 지식은 `gsd-core/references/`로 추출한다. 부모 파일은 현재 호출에 필요한 모드 및 템플릿 파일만 읽는 얇은 디스패처가 된다.
 
 `workflows/discuss-phase/`가 이 패턴의 정규 예시이다 — 부모는 디스패치하고, modes/는 플래그별 동작(`power.md`, `all.md`, `auto.md`, `chain.md`, `text.md`, `batch.md`, `analyze.md`, `default.md`, `advisor.md`)을 담으며, templates/는 해당 출력 파일이 작성될 때만 읽히는 CONTEXT.md, DISCUSSION-LOG.md, checkpoint.json 스키마를 담는다.
 
@@ -167,7 +167,7 @@ GSD Core는 사용자와 AI 코딩 에이전트(Claude Code, Gemini CLI, OpenCod
 
 **전체 에이전트 수:** 33개
 
-### References (`get-shit-done/references/*.md`)
+### References (`gsd-core/references/*.md`)
 
 워크플로우와 에이전트가 `@-reference`하는 공유 지식 문서([`docs/INVENTORY.md`](INVENTORY.md#references-41-shipped)에서 권위 있는 개수와 전체 목록 참조):
 
@@ -221,7 +221,7 @@ GSD 워크플로우에 thinking 클래스 모델(o3, o4-mini, Gemini 2.5 Pro)을
 - `planner-reviews.md` — 교차 AI 리뷰 통합 (`/gsd-review`의 REVIEWS.md 읽기)
 - `planner-revision.md` — 반복적 개선을 위한 계획 수정 패턴
 
-### Templates (`get-shit-done/templates/`)
+### Templates (`gsd-core/templates/`)
 
 모든 계획 결과물을 위한 마크다운 템플릿. `gsd-tools.cjs template fill` / `phase.scaffold`(와 최상위 `scaffold`)가 사전 구조화된 파일을 생성하는 데 사용:
 - `project.md`, `requirements.md`, `roadmap.md`, `state.md` — 핵심 프로젝트 파일
@@ -253,13 +253,13 @@ GSD 워크플로우에 thinking 클래스 모델(o3, o4-mini, Gemini 2.5 Pro)을
 
 권위 있는 11개 훅 목록은 [`docs/INVENTORY.md`](INVENTORY.md#hooks-11-shipped)를 참조하라.
 
-### Command Routing Hub (`get-shit-done/bin/lib/command-routing-hub.cjs`)
+### Command Routing Hub (`gsd-core/bin/lib/command-routing-hub.cjs`)
 
 CJS 명령어 패밀리 라우터는 `CommandRoutingHub`를 통해 디스패치한다. 허브는 no-throw 순수 결과 계약(`hub.dispatch()`는 내부 예외를 잡아 `{ ok: false, kind, ...typedPayload }`를 반환)과 닫힌 런타임 오류 분류(`UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`)를 소유한다. 라우터 어댑터는 얇은 CLI 번역기로 유지된다 — 허브를 구축하고, `dispatch`를 호출하고, 결과를 `output()`/`error()` 호출에 매핑한다. 런타임은 단일 경로이다(이중 런타임 모드 선택 없음). `docs/adr/0174-retire-gsd-sdk-package-boundary.md` 참조.
 
-### CLI Tools (`get-shit-done/bin/`)
+### CLI Tools (`gsd-core/bin/`)
 
-`get-shit-done/bin/lib/`에 걸쳐 분할된 도메인 모듈을 가진 Node.js CLI 유틸리티(`gsd-tools.cjs`)(권위 있는 목록은 [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) 참조):
+`gsd-core/bin/lib/`에 걸쳐 분할된 도메인 모듈을 가진 Node.js CLI 유틸리티(`gsd-tools.cjs`)(권위 있는 목록은 [`docs/INVENTORY.md`](INVENTORY.md#cli-modules-33-shipped) 참조):
 
 
 | 모듈                 | 책임                                                                                      |
@@ -466,7 +466,7 @@ UI-SPEC.md (단계별) ───────────────────
 ~/.claude/                          # Claude Code (전역 설치)
 ├── skills/gsd-*/SKILL.md           # 전역 스킬 (권위 있는 목록: docs/INVENTORY.md)
 ├── commands/gsd/*.md               # 로컬 Claude 설치는 전역 스킬 대신 슬래시 명령어 사용
-├── get-shit-done/
+├── gsd-core/
 │   ├── bin/gsd-tools.cjs           # CLI 유틸리티
 │   ├── bin/lib/*.cjs               # 도메인 모듈 (권위 있는 목록: docs/INVENTORY.md)
 │   ├── workflows/*.md              # 워크플로우 정의 (권위 있는 목록: docs/INVENTORY.md)

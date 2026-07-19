@@ -77,7 +77,7 @@ paused_at: null
 
 ### ステータス値
 
-`get-shit-done/bin/lib/state-document.cjs` の `normalizeStateStatus()` が本文の生テキストを以下の正規値にマッピングします：
+`gsd-core/bin/lib/state-document.cjs` の `normalizeStateStatus()` が本文の生テキストを以下の正規値にマッピングします：
 
 | 正規値 | マッチするテキスト（大文字小文字不問） |
 |---|---|
@@ -133,7 +133,7 @@ paused_at: null
 
 ## Markdown 本文セクション
 
-本文（末尾の `---` 以降のすべて）は `get-shit-done/templates/state.md` のテンプレートに従います。標準セクションは以下の通りです：
+本文（末尾の `---` 以降のすべて）は `gsd-core/templates/state.md` のテンプレートに従います。標準セクションは以下の通りです：
 
 ### Project Reference
 
@@ -153,7 +153,7 @@ paused_at: null
 | `Last activity:` | ハンドラー書き込み時は ISO 日付（`YYYY-MM-DD`）; エグゼキューター作成時はナラティブ文章 |
 | `Progress:` | ビジュアルバー。例: `[████░░░░░░] 40%` |
 
-このセクションの `Status:` および `Last activity:` フィールドは、既存の値が既知のテンプレートデフォルト値の場合に GSD ハンドラーによって更新されます（クヌース不変式: エグゼキューター作成値は保存されます）。既知のハンドラーデフォルト値の完全なリストは `get-shit-done/bin/lib/state-document.cjs` の `KNOWN_TEMPLATE_DEFAULTS` に記載されています。
+このセクションの `Status:` および `Last activity:` フィールドは、既存の値が既知のテンプレートデフォルト値の場合に GSD ハンドラーによって更新されます（クヌース不変式: エグゼキューター作成値は保存されます）。既知のハンドラーデフォルト値の完全なリストは `gsd-core/bin/lib/state-document.cjs` の `KNOWN_TEMPLATE_DEFAULTS` に記載されています。
 
 ### Performance Metrics
 
