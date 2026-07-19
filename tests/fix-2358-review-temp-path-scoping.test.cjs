@@ -32,6 +32,7 @@ const { cleanup } = require('./helpers.cjs');
 
 const REVIEW_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'review.md');
 const SHIP_MD = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ship.md');
+const REVIEWER_INSTANCES_MD = path.join(__dirname, '..', 'gsd-core', 'references', 'reviewer-instances.md');
 
 describe('#2358 review.md temp paths are run-scoped, not phase-only', () => {
   const content = fs.readFileSync(REVIEW_MD, 'utf-8');
@@ -127,6 +128,44 @@ describe('#2358 ship.md external-review stderr capture is run-scoped', () => {
     assert.ok(
       /cat "\$\{REVIEW_STDERR_FILE\}"/.test(content),
       'the failure-handling block must read back the same per-run $REVIEW_STDERR_FILE'
+    );
+  });
+});
+
+describe('#2358 reviewer-instances.md (#1517, lazily loaded from invoke_reviewers) is run-scoped too', () => {
+  // review.md's own invoke_reviewers step lazily loads this companion doc for the
+  // review.reviewer_instances codepath — it was missed in the initial pass and still
+  // pointed at the old, unscoped /tmp/gsd-review-*-{phase} paths, which both broke
+  // reviewer-instances functionality (the prompt file build_prompt now writes lives
+  // at {run_dir}/gsd-review-prompt.md, never the old path) and left the exact
+  // cross-project collision bug open for that code path.
+  const content = fs.readFileSync(REVIEWER_INSTANCES_MD, 'utf-8');
+
+  test('no bare, unscoped /tmp/gsd-review-* path remains', () => {
+    assert.ok(
+      !content.includes('/tmp/gsd-review'),
+      'reviewer-instances.md must not contain any hardcoded /tmp/gsd-review* literal — ' +
+      'every review temp path must be rooted under the run-scoped {run_dir} directory'
+    );
+  });
+
+  test('no temp path is still keyed on a bare {phase} placeholder', () => {
+    assert.ok(
+      !/gsd-review[^\r\n]*\{phase\}/.test(content),
+      'no temp path may still be keyed on a bare {phase} placeholder'
+    );
+  });
+
+  test('the instance prompt read and output write are threaded through {run_dir}', () => {
+    assert.ok(
+      /\{run_dir\}\/gsd-review-prompt\.md/.test(content),
+      'reviewer-instances.md must read the prompt from {run_dir}/gsd-review-prompt.md, ' +
+      'the same run-scoped path build_prompt writes in review.md'
+    );
+    assert.ok(
+      /\{run_dir\}\/gsd-review-\$\{INSTANCE_NAME\}\.md/.test(content),
+      'reviewer-instances.md must write each instance\'s output to ' +
+      '{run_dir}/gsd-review-${INSTANCE_NAME}.md, not a {phase}-keyed /tmp path'
     );
   });
 });
