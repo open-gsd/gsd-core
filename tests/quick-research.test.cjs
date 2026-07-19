@@ -12,7 +12,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, absPlanningPath } = require('./helpers.cjs');
 
 const COMMANDS_DIR = path.join(__dirname, '..', 'commands', 'gsd');
 const WORKFLOWS_DIR = path.join(__dirname, '..', 'gsd-core', 'workflows');
@@ -163,7 +163,12 @@ describe('quick task: research file in task directory', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createTempProject();
+    // #2376 macOS fix: realpath the fixture root so absolute path-field
+    // assertions (absPlanningPath comparisons below) match the code's
+    // process.cwd()-anchored output — macOS's tmpdir is a symlink
+    // (/var/... -> /private/var/...) that a spawned child resolves via
+    // realpath but createTempProject() does not. No-op on Linux (no symlink).
+    tmpDir = fs.realpathSync(createTempProject());
   });
 
   afterEach(() => {
@@ -176,8 +181,11 @@ describe('quick task: research file in task directory', () => {
 
     const output = JSON.parse(result.output);
     assert.ok(output.task_dir, 'task_dir should be non-null');
+    // #2376: task_dir is now absolute (anchored on tmpDir), not the historical
+    // relative literal.
+    const quickDirAbs = absPlanningPath(tmpDir, 'quick');
     assert.ok(
-      output.task_dir.startsWith('.planning/quick/'),
+      output.task_dir.startsWith(`${quickDirAbs}/`),
       'task_dir should be under .planning/quick/'
     );
 

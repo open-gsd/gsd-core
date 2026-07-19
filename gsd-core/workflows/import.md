@@ -202,7 +202,7 @@ Print: "Delegating to gsd-plan-checker (runs in a subagent — no output until i
 ```
 Agent({
   subagent_type: "gsd-plan-checker",
-  prompt: "Validate: .planning/phases/{phase}/{plan}-PLAN.md — check frontmatter completeness, task structure, and GSD conventions. Report any issues."
+  prompt: "Validate: ${phase_dir}/{plan}-PLAN.md — check frontmatter completeness, task structure, and GSD conventions. Report any issues."
 })
 ```
 

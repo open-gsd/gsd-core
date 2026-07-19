@@ -59,6 +59,8 @@ if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
 Parse `project_exists`, `planning_exists`, `has_git`, `git_worktree_root`, `in_nested_subdir`, `project_path` from INIT.
 
+**Absolute path fields (#2376):** INIT also carries `requirements_path`, `roadmap_path`, `state_path`, `intel_dir`, and `conflicts_path` — all anchored on `project_root`, not the orchestrator's own cwd. Use these (not bare `.planning/...` literals) whenever building `<files_to_read>`/output paths for a spawned subagent, since that subagent's own cwd may differ from the orchestrator's.
+
 **Auto-detect MODE** if not set:
 - `planning_exists: true` → `MODE=merge`
 - `planning_exists: false` → `MODE=new`
@@ -170,7 +172,7 @@ For each discovered doc, spawn `gsd-doc-classifier` in parallel. In Claude Code,
 
 Per-spawn prompt fields:
 - `FILEPATH` — absolute path to the doc
-- `OUTPUT_DIR` — `.planning/intel/classifications/`
+- `OUTPUT_DIR` — `{intel_dir}/classifications` (absolute — from `init ingest-docs`; #2376: a spawned classifier's own cwd may differ from the orchestrator's)
 - `MANIFEST_TYPE` — the type from the manifest if present, else omit
 - `MANIFEST_PRECEDENCE` — the precedence integer from the manifest if present, else omit
 - `<required_reading>` — `agents/gsd-doc-classifier.md` (the agent definition itself)
@@ -187,9 +189,9 @@ Spawn `gsd-doc-synthesizer` once (runs in a subagent — no output until it retu
 Agent({
   subagent_type: "gsd-doc-synthesizer",
   prompt: "
-    CLASSIFICATIONS_DIR: .planning/intel/classifications/
-    INTEL_DIR: .planning/intel/
-    CONFLICTS_PATH: .planning/INGEST-CONFLICTS.md
+    CLASSIFICATIONS_DIR: {intel_dir}/classifications
+    INTEL_DIR: {intel_dir}
+    CONFLICTS_PATH: {conflicts_path}
     MODE: {MODE}
     EXISTING_CONTEXT: {paths to existing .planning files if MODE=merge, else empty}
     PRECEDENCE: {array from manifest defaults or default ['ADR','SPEC','PRD','DOC']}
@@ -255,15 +257,15 @@ Agent({
   subagent_type: "gsd-roadmapper",
   prompt: "
     Mode: new-project-from-ingest
-    Intel: .planning/intel/SYNTHESIS.md (entry point)
-    Per-type intel: .planning/intel/{decisions,requirements,constraints,context}.md
+    Intel: {intel_dir}/SYNTHESIS.md (entry point)
+    Per-type intel: {intel_dir}/decisions.md, {intel_dir}/requirements.md, {intel_dir}/constraints.md, {intel_dir}/context.md
     User-supplied fields: {collected in previous step}
 
     Produce:
-    - .planning/PROJECT.md
-    - .planning/REQUIREMENTS.md
-    - .planning/ROADMAP.md
-    - .planning/STATE.md
+    - {project_path}
+    - {requirements_path}
+    - {roadmap_path}
+    - {state_path}
 
     Treat ADR-locked decisions as locked in PROJECT.md <decisions> blocks.
   "

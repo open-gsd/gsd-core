@@ -1024,7 +1024,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup, absPlanningPath } = require('./helpers.cjs');
 
 // ---------------------------------------------------------------------------
 // Shared fixture content
@@ -1061,7 +1061,12 @@ const ROADMAP_CONTENT = `# Roadmap: Example
 // ---------------------------------------------------------------------------
 
 function createBareProject() {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-'));
+  // #2376 macOS fix: realpath the fixture root so absolute path-field
+  // assertions (absPlanningPath comparisons below) match the code's
+  // process.cwd()-anchored output — macOS's tmpdir is a symlink
+  // (/var/... -> /private/var/...) that a spawned child resolves via
+  // realpath but a bare mkdtempSync() does not. No-op on Linux (no symlink).
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-')));
   fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
   return tmpDir;
 }
@@ -1095,7 +1100,7 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
     assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}, expected_phase_dir=${out.expected_phase_dir}`);
     assert.strictEqual(out.phase_name, 'Feature', `phase_name should be 'Feature'; got '${out.phase_name}'`);
     assert.strictEqual(out.padded_phase, '02', `padded_phase should be '02'; got '${out.padded_phase}'`);
-    assert.strictEqual(out.expected_phase_dir, '.planning/phases/02-feature', `expected_phase_dir should be '.planning/phases/02-feature'; got '${out.expected_phase_dir}'`);
+    assert.strictEqual(out.expected_phase_dir, absPlanningPath(dir, 'phases', '02-feature'), `expected_phase_dir should be '${absPlanningPath(dir, 'phases', '02-feature')}'; got '${out.expected_phase_dir}'`);
   });
 
   // -------------------------------------------------------------------------
@@ -1188,7 +1193,8 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
   // Test 5: three-milestone roadmap, current = latest (v1.2)
   // -------------------------------------------------------------------------
   test('init phase-op resolves the latest milestone phase in a 3-milestone roadmap', () => {
-    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t5-'));
+    // #2376 macOS fix: see createBareProject() above.
+    const localDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t5-')));
     try {
       const planning = path.join(localDir, '.planning');
       fs.mkdirSync(planning, { recursive: true });
@@ -1212,7 +1218,7 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
       assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}`);
       assert.strictEqual(out.phase_name, 'Polish', `phase_name should be 'Polish'; got '${out.phase_name}'`);
       assert.strictEqual(out.padded_phase, '03', `padded_phase should be '03'; got '${out.padded_phase}'`);
-      assert.strictEqual(out.expected_phase_dir, '.planning/phases/03-polish', `expected_phase_dir should be '.planning/phases/03-polish'; got '${out.expected_phase_dir}'`);
+      assert.strictEqual(out.expected_phase_dir, absPlanningPath(localDir, 'phases', '03-polish'), `expected_phase_dir should be '${absPlanningPath(localDir, 'phases', '03-polish')}'; got '${out.expected_phase_dir}'`);
     } finally {
       cleanup(localDir);
     }
@@ -1223,7 +1229,8 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
   // cross-pollinate into the active milestone's Phase Details lookup (#730)
   // -------------------------------------------------------------------------
   test('init phase-op anchors Phase Details to the selected sub-milestone, not a closed same-prefix sibling', () => {
-    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t6-'));
+    // #2376 macOS fix: see createBareProject() above.
+    const localDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t6-')));
     try {
       const planning = path.join(localDir, '.planning');
       fs.mkdirSync(planning, { recursive: true });
@@ -1276,7 +1283,7 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
       const out = JSON.parse(r.output);
       assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}, output=${JSON.stringify(out)}`);
       assert.strictEqual(out.phase_name, 'Beta', `phase_name should be 'Beta' (v3.0-B section), not '${out.phase_name}' (would indicate v3.0-A cross-pollination)`);
-      assert.strictEqual(out.expected_phase_dir, '.planning/phases/02-beta', `expected_phase_dir should be '.planning/phases/02-beta'; got '${out.expected_phase_dir}'`);
+      assert.strictEqual(out.expected_phase_dir, absPlanningPath(localDir, 'phases', '02-beta'), `expected_phase_dir should be '${absPlanningPath(localDir, 'phases', '02-beta')}'; got '${out.expected_phase_dir}'`);
     } finally {
       cleanup(localDir);
     }

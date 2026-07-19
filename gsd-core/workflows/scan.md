@@ -76,7 +76,7 @@ Print: `◆ Spawning scanner... (runs in a subagent — no output until it retur
 
 ```
 Agent(
-  prompt="Scan this codebase with focus: {focus}. Write results to .planning/codebase/. Produce only: {document_list}",
+  prompt="Scan this codebase with focus: {focus}. Write results to {codebase_dir}/. Produce only: {document_list}",
   subagent_type="gsd-codebase-mapper",
   model="{resolved_model}"
 )
