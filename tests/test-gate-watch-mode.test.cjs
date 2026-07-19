@@ -7,12 +7,12 @@
  * Three gates were UNBOUNDED or silently-continued and are the core fix. They must:
  *   - route the resolved command through the shared `normalize-test-command`
  *     helper (defeats vitest/jest watch mode), so the paths cannot drift,
- *   - bound execution with `timeout` using the `workflow.test_gate_timeout`
- *     budget, and
+ *   - bound execution with `gsd_run run-with-timeout` using the
+ *     `workflow.test_gate_timeout` budget, and
  *   - surface a timeout (exit 124) with a watch-mode hint — the regression gate
  *     ABORTS, the others surface clearly (never silently ignored).
  *
- * verify-phase's gate was ALREADY bounded (a fixed `timeout 300`, not a hang), so
+ * verify-phase's gate was ALREADY bounded (a fixed `run-with-timeout 300`, not a hang), so
  * it only needs the normalizer (so a watch runner exits fast) and keeps its own
  * fixed 5-minute bound — asserted separately below.
  */
@@ -50,7 +50,7 @@ describe('#1857: test gates normalize to one-shot and bound with a timeout', () 
       test('bounds execution with a timeout using the workflow.test_gate_timeout budget', () => {
         const c = read(file);
         assert.match(c, /workflow\.test_gate_timeout/, `${label} must read workflow.test_gate_timeout`);
-        assert.match(c, /timeout "\$TEST_GATE_TIMEOUT"/, `${label} must wrap the test command in a timeout with the configured budget`);
+        assert.match(c, /run-with-timeout "\$TEST_GATE_TIMEOUT"/, `${label} must wrap the test command in run-with-timeout with the configured budget`);
       });
       test('surfaces a timeout (exit 124) with a watch-mode hint — never a silent hang', () => {
         const c = read(file);
@@ -60,7 +60,7 @@ describe('#1857: test gates normalize to one-shot and bound with a timeout', () 
     });
   }
 
-  // verify-phase is already bounded (fixed `timeout 300`, not a hang); it only
+  // verify-phase is already bounded (fixed `run-with-timeout 300`, not a hang); it only
   // needs the normalizer so a watch runner exits fast, and names watch mode on 124.
   describe('verify-phase gate (already bounded — normalize-only)', () => {
     test('routes the resolved command through the shared normalize-test-command helper', () => {

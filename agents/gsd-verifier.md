@@ -537,11 +537,11 @@ grep -R -n -E 'probe-[^[:space:]]+\.sh|scripts/.*/tests/probe-.*\.sh' "$PHASE_DI
 
 1. Build the `PROBES` list from explicit PLAN declarations first; include conventional `scripts/*/tests/probe-*.sh` when the phase is a migration/tooling phase or the success criteria mention probes.
 2. For every documented probe path, if the file is missing or unreadable, mark `MISSING_PROBE` and set `status: gaps_found`. Do not require the executable bit because probes run through `bash "$probe"`.
-3. Run each probe from the built `PROBES` list (declared + conventional) from the repository root:
+3. Run each probe from the built `PROBES` list from the repository root:
 
 ```bash
 for probe in "${PROBES[@]}"; do
-  timeout 30s bash "$probe"
+  gsd_run run-with-timeout 30 -- bash "$probe"
 done
 ```
 

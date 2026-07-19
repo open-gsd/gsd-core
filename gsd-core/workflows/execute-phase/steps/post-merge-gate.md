@@ -41,7 +41,7 @@ fi
 # Run build with 5-minute timeout
 BUILD_EXIT=0
 if [ -n "$BUILD_CMD" ]; then
-  timeout 300 bash -c "$BUILD_CMD" 2>&1
+  gsd_run run-with-timeout 300 -- bash -c "$BUILD_CMD" 2>&1
   BUILD_EXIT=$?
   if [ "${BUILD_EXIT}" -eq 0 ]; then
     echo "✓ Post-merge build gate passed"
@@ -100,7 +100,7 @@ fi
 TEST_CMD=$(gsd_run query normalize-test-command "$TEST_CMD" --cwd . 2>/dev/null || echo "$TEST_CMD")
 TEST_GATE_TIMEOUT=$(gsd_run query config-get workflow.test_gate_timeout 2>/dev/null || echo "600")
 TEST_EXIT=0
-timeout "$TEST_GATE_TIMEOUT" bash -c "$TEST_CMD" 2>&1
+gsd_run run-with-timeout "$TEST_GATE_TIMEOUT" -- bash -c "$TEST_CMD" 2>&1
 TEST_EXIT=$?
 if [ "${TEST_EXIT}" -eq 0 ]; then
   echo "✓ Post-merge test gate passed — no cross-plan conflicts"

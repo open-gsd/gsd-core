@@ -128,7 +128,7 @@ fi
 # timeout so a watch-mode runner cannot hang the audit gate indefinitely.
 AUDIT_TEST_CMD=$(gsd_run query normalize-test-command "$AUDIT_TEST_CMD" --cwd . 2>/dev/null || echo "$AUDIT_TEST_CMD")
 TEST_GATE_TIMEOUT=$(gsd_run query config-get workflow.test_gate_timeout 2>/dev/null || echo "600")
-timeout "$TEST_GATE_TIMEOUT" bash -c "$AUDIT_TEST_CMD" 2>&1 | tail -20
+gsd_run run-with-timeout "$TEST_GATE_TIMEOUT" -- bash -c "$AUDIT_TEST_CMD" 2>&1 | tail -20
 AUDIT_TEST_EXIT=${PIPESTATUS[0]}
 if [ "$AUDIT_TEST_EXIT" -eq 124 ]; then
   echo "✗ Audit test gate timed out after ${TEST_GATE_TIMEOUT}s — likely stuck in watch/dev mode (e.g. vitest without 'run'). Run tests one-shot (e.g. 'vitest run') or raise workflow.test_gate_timeout."
