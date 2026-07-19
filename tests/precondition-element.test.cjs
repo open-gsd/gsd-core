@@ -146,85 +146,74 @@ describe('issue #1949: gsd-executor.md asserts <precondition> before task execut
 // `cmdVerifyPlanStructure` checks for PRESENCE of required tags. It must not
 // reject unknown optional tags. This is the "does not break plans that omit it"
 // plus "does not break plans that include it" guarantee from acceptance #1.
+// Pattern mirrors tests/tracer-bullet.test.cjs (companion feature #1945).
+
+function planWith({ precondition = null } = {}) {
+  const lines = [
+    '<task type="auto">',
+    '  <name>Task 1: Test</name>',
+  ];
+  if (precondition !== null) {
+    lines.push(`  <precondition>${precondition}</precondition>`);
+  }
+  lines.push(
+    '  <files>src/x.ts</files>',
+    '  <action>Do the thing.</action>',
+    '  <verify><automated>echo ok</automated></verify>',
+    '  <done>Done</done>',
+    '</task>',
+    '',
+  );
+  return [
+    '---',
+    'phase: 01-test',
+    'plan: 01',
+    'type: execute',
+    'wave: 1',
+    'depends_on: []',
+    'files_modified: [src/x.ts]',
+    'autonomous: true',
+    'must_haves:',
+    '  truths:',
+    '    - "something is true"',
+    '---',
+    '',
+    '<tasks>',
+    '',
+    ...lines,
+    '</tasks>',
+  ].join('\n');
+}
+
+function verifyPlan(tmpDir, content) {
+  const rel = path.join('.planning', 'phases', '01-test', '01-01-PLAN.md');
+  fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-test'), { recursive: true });
+  fs.writeFileSync(path.join(tmpDir, rel), content);
+  const result = runGsdTools(`verify plan-structure ${rel}`, tmpDir);
+  assert.ok(result.success, `verify plan-structure failed to run: ${result.error}`);
+  return JSON.parse(result.output);
+}
 
 describe('issue #1949: cmdVerifyPlanStructure accepts <precondition> (additive)', () => {
-  test('plan with <precondition> passes structural validation', () => {
-    const tmp = createTempProject('precondition-present');
-    try {
-      const planPath = path.join(tmp, '01-PLAN.md');
-      const planContent = [
-        '---',
-        'phase: 01-test',
-        'plan: 01',
-        'type: execute',
-        'wave: 1',
-        'depends_on: []',
-        'files_modified: []',
-        'autonomous: true',
-        'must_haves:',
-        '  truths: []',
-        '---',
-        '',
-        '<tasks>',
-        '<task type="auto">',
-        '  <name>Test task</name>',
-        '  <precondition>OPENAI_API_KEY is set in the environment</precondition>',
-        '  <files>src/x.ts</files>',
-        '  <action>Do the thing.</action>',
-        '  <verify>true</verify>',
-        '  <done>Done</done>',
-        '</task>',
-        '</tasks>',
-        '',
-      ].join('\n');
-      fs.writeFileSync(planPath, planContent);
+  test('plan with <precondition> passes structural validation', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
 
-      const result = runGsdTools(['verify', 'plan-structure', planPath], tmp);
-      assert.ok(result.success, `verify plan-structure should accept plan: ${result.stderr || ''}`);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.valid, true, `plan with <precondition> must be valid: ${JSON.stringify(parsed.errors || [])}`);
-    } finally {
-      cleanup(tmp);
-    }
+    const out = verifyPlan(tmp, planWith({ precondition: 'OPENAI_API_KEY is set in the environment' }));
+    assert.strictEqual(out.valid, true, `plan with <precondition> must be valid, errors: ${JSON.stringify(out.errors)}`);
+    assert.deepStrictEqual(out.errors, [], 'no validation path may reject a <precondition> task');
+    assert.ok(
+      !(out.warnings || []).some((w) => /precondition/i.test(w)),
+      'nothing may flag the <precondition> element specifically',
+    );
   });
 
-  test('plan without <precondition> still passes structural validation (back-compat)', () => {
-    const tmp = createTempProject('precondition-absent');
-    try {
-      const planPath = path.join(tmp, '02-PLAN.md');
-      const planContent = [
-        '---',
-        'phase: 01-test',
-        'plan: 02',
-        'type: execute',
-        'wave: 1',
-        'depends_on: []',
-        'files_modified: []',
-        'autonomous: true',
-        'must_haves:',
-        '  truths: []',
-        '---',
-        '',
-        '<tasks>',
-        '<task type="auto">',
-        '  <name>Test task</name>',
-        '  <files>src/y.ts</files>',
-        '  <action>Do another thing.</action>',
-        '  <verify>true</verify>',
-        '  <done>Done</done>',
-        '</task>',
-        '</tasks>',
-        '',
-      ].join('\n');
-      fs.writeFileSync(planPath, planContent);
+  test('plan without <precondition> still passes structural validation (back-compat)', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
 
-      const result = runGsdTools(['verify', 'plan-structure', planPath], tmp);
-      assert.ok(result.success, `verify plan-structure should accept plan: ${result.stderr || ''}`);
-      const parsed = JSON.parse(result.stdout);
-      assert.equal(parsed.valid, true, `plan without <precondition> must be valid (back-compat): ${JSON.stringify(parsed.errors || [])}`);
-    } finally {
-      cleanup(tmp);
-    }
+    const out = verifyPlan(tmp, planWith({ precondition: null }));
+    assert.strictEqual(out.valid, true, `plan without <precondition> must be valid (back-compat), errors: ${JSON.stringify(out.errors)}`);
   });
 });
 
