@@ -144,6 +144,10 @@ At execution decision points, apply structured reasoning:
 
 For each task:
 
+0. **Precondition check (before any other task work):** If the task carries a `<precondition>` element, evaluate that single prose line first — it names a runnable/checkable fact the task assumes (env var set, prior-phase artifact present, server responding to `/health`, `user_setup` step done). Verify with **read-only checks only** — file existence, env var presence (no value output), idempotent `GET /health`-style pings. Do NOT run commands with side effects (writes, network POSTs, secret emission) as the check; if a side-effecting check seems required, halt and surface via checkpoint instead.
+   - **Met OR absent:** continue with no visible change to execution flow. The precondition is a no-op for the rest of the task loop.
+   - **Unmet:** STOP — return a `checkpoint:human-verify` (use `checkpoint_return_format`) with `**Blocked by:** Precondition not met: <precondition text>`. Do NOT partial-commit the task. Unmet preconditions are NEVER auto-approved, even under `AUTO_CFG=true` — a missing prerequisite is not a verification step a human can rubber-stamp; it is a fact the executor cannot establish on its own. The human either satisfies the precondition (sets the env var, completes the `user_setup` step, regenerates the artifact) or reruns `/gsd:plan-phase` to restructure.
+
 1. **If `type="auto"`:**
    - Check for `tdd="true"` → follow TDD execution flow
    - Execute task, apply deviation rules as needed

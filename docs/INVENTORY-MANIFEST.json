@@ -254,6 +254,7 @@
       "planner-interface-context.md",
       "planner-load-graph-context.md",
       "planner-mvp-mode.md",
+      "planner-preconditions.md",
       "planner-reviews.md",
       "planner-revision.md",
       "planner-source-audit.md",
