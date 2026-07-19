@@ -169,7 +169,7 @@
 
 ## 워크플로우 (88개 출시)
 
-전체 목록은 `get-shit-done/workflows/*.md`에 있습니다. 워크플로우는 명령어가 내부적으로 참조하는 얇은 오케스트레이터입니다; 대부분은 최종 사용자가 직접 읽지 않습니다. 아래 행은 각 워크플로우 파일을 역할(`<purpose>` 블록에서 도출)과, 해당하는 경우 호출 명령어에 매핑합니다.
+전체 목록은 `gsd-core/workflows/*.md`에 있습니다. 워크플로우는 명령어가 내부적으로 참조하는 얇은 오케스트레이터입니다; 대부분은 최종 사용자가 직접 읽지 않습니다. 아래 행은 각 워크플로우 파일을 역할(`<purpose>` 블록에서 도출)과, 해당하는 경우 호출 명령어에 매핑합니다.
 
 | 워크플로우 | 역할 | 호출자 |
 |----------|------|------------|
@@ -268,7 +268,7 @@
 
 ## 레퍼런스 (62개 출시)
 
-전체 목록은 `get-shit-done/references/*.md`에 있습니다. 레퍼런스는 워크플로우와 에이전트가 `@-참조`하는 공유 지식 문서입니다. 아래 그룹화는 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) — 코어, 워크플로우, 씽킹 모델 클러스터, 모듈식 플래너 분해에 일치합니다.
+전체 목록은 `gsd-core/references/*.md`에 있습니다. 레퍼런스는 워크플로우와 에이전트가 `@-참조`하는 공유 지식 문서입니다. 아래 그룹화는 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — 코어, 워크플로우, 씽킹 모델 클러스터, 모듈식 플래너 분해에 일치합니다.
 
 ### 코어 레퍼런스
 
@@ -363,13 +363,13 @@
 | `user-story-template.md` | MVP 계획을 위한 사용자 스토리 형식 — "As a / I want to / So that" 구조화된 필드. |
 | `spidr-splitting.md` | MVP 모드에서 큰 사용자 스토리 처리를 위한 SPIDR 분할 분해 규칙. |
 
-> **하위 디렉터리:** `get-shit-done/references/few-shot-examples/`에는 특정 에이전트에서 참조되는 추가 퓨샷 예시(`plan-checker.md`, `verifier.md`)가 포함되어 있습니다. 이들은 62개 최상위 레퍼런스 수에 포함되지 않습니다.
+> **하위 디렉터리:** `gsd-core/references/few-shot-examples/`에는 특정 에이전트에서 참조되는 추가 퓨샷 예시(`plan-checker.md`, `verifier.md`)가 포함되어 있습니다. 이들은 62개 최상위 레퍼런스 수에 포함되지 않습니다.
 
 ---
 
 ## CLI 모듈 (81개 출시)
 
-전체 목록: `get-shit-done/bin/lib/*.cjs`.
+전체 목록: `gsd-core/bin/lib/*.cjs`.
 
 | 모듈 | 책임 |
 |--------|----------------|
@@ -443,7 +443,7 @@
 | `task-command-router.cjs` | `gsd-tools task`를 위한 얇은 CJS 하위 명령어 라우터 어댑터 |
 | `template.cjs` | 변수 치환을 통한 템플릿 선택 및 채우기 |
 | `uat.cjs` | UAT 파일 파싱, 검증 부채 추적, audit-uat 지원 |
-| `ui-safety-gate.cjs` | 셸 없는 단어 경계 UI 토큰 감지기(#3706, #3718); stdin에서 단계 섹션 텍스트를 읽어 0(UI 발견) 또는 1(UI 없음) 종료; GSD 설치 프로그램이 `$RUNTIME_DIR`에 배포하도록 `get-shit-done/bin/lib/`에도 배포 |
+| `ui-safety-gate.cjs` | 셸 없는 단어 경계 UI 토큰 감지기(#3706, #3718); stdin에서 단계 섹션 텍스트를 읽어 0(UI 발견) 또는 1(UI 없음) 종료; GSD 설치 프로그램이 `$RUNTIME_DIR`에 배포하도록 `gsd-core/bin/lib/`에도 배포 |
 | `update-context.cjs` | `/gsd:update`를 위한 순수 설치 컨텍스트 해석기 — update.md bash에서 포팅된 런타임/범위/설정 디렉터리/버전 감지(LOCAL/GLOBAL/UNKNOWN); `gsd-tools update-context` 지원(#498) |
 | `validate-command-router.cjs` | `gsd-tools validate`를 위한 얇은 CJS 하위 명령어 라우터 어댑터 |
 | `validate.cjs` | 순수 단계 변형 정규화 헬퍼(`phaseVariants`, `buildRoadmapPhaseVariants`, `buildNotStartedPhaseVariants`), W006/W007 확인을 위해 `verify.cjs`에서 사용; I/O 없음, 비동기 없음 |

@@ -89,19 +89,19 @@ GSD 的设计围绕全新上下文展开。每个子代理已获得干净的 200
 这会产生警告 `W002`。使用状态 CLI 进行诊断和修复：
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate
 ```
 
 在不写入的情况下预览同步将更改的内容：
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync --verify
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync --verify
 ```
 
 应用同步：
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync
 ```
 
 这些命令从磁盘上的实际项目状态重建 `STATE.md`，取代手动编辑 `STATE.md` 的操作。

@@ -169,7 +169,7 @@ Esses seis roteadores são entradas apenas descritivas que o modelo seleciona pr
 
 ## Workflows (88 entregues)
 
-Registro completo em `get-shit-done/workflows/*.md`. Workflows são orquestradores enxutos que os comandos referenciam internamente; a maioria não é lida diretamente pelos usuários finais. As linhas abaixo mapeiam cada arquivo de workflow para sua função (derivada do bloco `<purpose>`) e, quando aplicável, para o comando que o invoca.
+Registro completo em `gsd-core/workflows/*.md`. Workflows são orquestradores enxutos que os comandos referenciam internamente; a maioria não é lida diretamente pelos usuários finais. As linhas abaixo mapeiam cada arquivo de workflow para sua função (derivada do bloco `<purpose>`) e, quando aplicável, para o comando que o invoca.
 
 | Workflow | Função | Invocado por |
 |----------|--------|--------------|
@@ -268,7 +268,7 @@ Registro completo em `get-shit-done/workflows/*.md`. Workflows são orquestrador
 
 ## Referências (62 entregues)
 
-Registro completo em `get-shit-done/references/*.md`. Referências são documentos de conhecimento compartilhado que workflows e agentes `@-reference`. Os agrupamentos abaixo correspondem a [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) — clusters principais, de workflow, de modelo de raciocínio e a decomposição modular do planejador.
+Registro completo em `gsd-core/references/*.md`. Referências são documentos de conhecimento compartilhado que workflows e agentes `@-reference`. Os agrupamentos abaixo correspondem a [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) — clusters principais, de workflow, de modelo de raciocínio e a decomposição modular do planejador.
 
 ### Referências Principais
 
@@ -363,13 +363,13 @@ O agente `gsd-planner` é decomposto em um agente principal mais módulos de ref
 | `user-story-template.md` | Formato de história de usuário para planejamento MVP — campos estruturados "Como / Quero / Para que". |
 | `spidr-splitting.md` | Regras de decomposição de divisão SPIDR para lidar com histórias de usuário grandes no modo MVP. |
 
-> **Subdiretório:** `get-shit-done/references/few-shot-examples/` contém exemplos adicionais de few-shot (`plan-checker.md`, `verifier.md`) que são referenciados por agentes específicos. Estes não são contados nas 62 referências de nível superior.
+> **Subdiretório:** `gsd-core/references/few-shot-examples/` contém exemplos adicionais de few-shot (`plan-checker.md`, `verifier.md`) que são referenciados por agentes específicos. Estes não são contados nas 62 referências de nível superior.
 
 ---
 
 ## Módulos de CLI (81 entregues)
 
-Listagem completa: `get-shit-done/bin/lib/*.cjs`.
+Listagem completa: `gsd-core/bin/lib/*.cjs`.
 
 | Módulo | Responsabilidade |
 |--------|-----------------|
@@ -443,7 +443,7 @@ Listagem completa: `get-shit-done/bin/lib/*.cjs`.
 | `task-command-router.cjs` | Adaptador de roteador de subcomando CJS fino para `gsd-tools task` |
 | `template.cjs` | Seleção e preenchimento de template com substituição de variáveis |
 | `uat.cjs` | Análise de arquivo UAT, rastreamento de dívida de verificação, suporte audit-uat |
-| `ui-safety-gate.cjs` | Detector de token de UI de limite de palavra sem shell (#3706, #3718); lê texto de seção de fase do stdin, sai com 0 (UI encontrada) ou 1 (sem UI); também implantado em `get-shit-done/bin/lib/` para que o instalador GSD o entregue em `$RUNTIME_DIR` (#448) |
+| `ui-safety-gate.cjs` | Detector de token de UI de limite de palavra sem shell (#3706, #3718); lê texto de seção de fase do stdin, sai com 0 (UI encontrada) ou 1 (sem UI); também implantado em `gsd-core/bin/lib/` para que o instalador GSD o entregue em `$RUNTIME_DIR` (#448) |
 | `update-context.cjs` | Resolvedor de contexto de instalação puro para `/gsd:update` — detecção de runtime/escopo/config-dir/versão (LOCAL/GLOBAL/UNKNOWN) portada do bash de update.md; sustenta `gsd-tools update-context` (#498) |
 | `validate-command-router.cjs` | Adaptador de roteador de subcomando CJS fino para `gsd-tools validate` |
 | `validate.cjs` | Auxiliares de normalização de variante de fase puros (`phaseVariants`, `buildRoadmapPhaseVariants`, `buildNotStartedPhaseVariants`) usados por `verify.cjs` para verificações W006/W007; sem I/O, sem async |

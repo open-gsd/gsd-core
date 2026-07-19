@@ -48,7 +48,7 @@ A engenharia de contexto por si só não é suficiente. Se um agente começa do 
 
 **Desenvolvimento orientado a especificações** significa que toda fase produz artefatos estruturados antes de a execução começar. Um `CONTEXT.md` captura as decisões de implementação da etapa Discuss. Um `RESEARCH.md` registra o que o pesquisador encontrou. Um `PLAN.md` divide o trabalho em tarefas discretas, ordenadas por dependência, com critérios de aceite explícitos. Quando um agente executor toca um arquivo, ele tem uma especificação precisa para seguir — não uma reinterpretação de uma conversa longa.
 
-**Meta-prompting** significa que as próprias definições de agentes são prompts cuidadosamente engenheirados, não instruções ad-hoc. Os arquivos em `get-shit-done/workflows/` e `agents/` codificam conhecimento conquistado a duras penas sobre como delimitar tarefas, o que verificar e quando escalar para um checkpoint humano. O usuário não precisa reexplicar esse conhecimento a cada sessão; ele está integrado aos próprios prompts do sistema.
+**Meta-prompting** significa que as próprias definições de agentes são prompts cuidadosamente engenheirados, não instruções ad-hoc. Os arquivos em `gsd-core/workflows/` e `agents/` codificam conhecimento conquistado a duras penas sobre como delimitar tarefas, o que verificar e quando escalar para um checkpoint humano. O usuário não precisa reexplicar esse conhecimento a cada sessão; ele está integrado aos próprios prompts do sistema.
 
 A combinação é deliberada. O contexto limpo garante que cada agente raciocine com clareza. Os artefatos orientados a especificações garantem que cada agente raciocine sobre a *coisa certa*. O meta-prompting garante que cada agente saiba *como* raciocinar bem sobre ela.
 

@@ -77,7 +77,7 @@ paused_at: null
 
 ### 상태 값
 
-`get-shit-done/bin/lib/state-document.cjs`의 `normalizeStateStatus()`는 본문의 원시 텍스트를 다음 표준 값으로 매핑합니다:
+`gsd-core/bin/lib/state-document.cjs`의 `normalizeStateStatus()`는 본문의 원시 텍스트를 다음 표준 값으로 매핑합니다:
 
 | 표준 값 | 매칭되는 텍스트 (대소문자 무관) |
 |---|---|
@@ -133,7 +133,7 @@ paused_at: null
 
 ## Markdown 본문 섹션
 
-본문(닫는 `---` 이후의 모든 것)은 `get-shit-done/templates/state.md`의 템플릿을 따릅니다. 표준 섹션은 다음과 같습니다:
+본문(닫는 `---` 이후의 모든 것)은 `gsd-core/templates/state.md`의 템플릿을 따릅니다. 표준 섹션은 다음과 같습니다:
 
 ### Project Reference
 
@@ -153,7 +153,7 @@ paused_at: null
 | `Last activity:` | 핸들러가 기록할 때 ISO 날짜(`YYYY-MM-DD`); 실행기가 작성할 때 서술형 산문 |
 | `Progress:` | 시각적 막대, 예: `[████░░░░░░] 40%` |
 
-이 섹션의 `Status:` 및 `Last activity:` 필드는 기존 값이 알려진 템플릿 기본값인 경우 GSD 핸들러에 의해 업데이트됩니다(크누스 불변량: 실행기가 작성한 값은 보존됩니다). 알려진 핸들러 기본값의 전체 목록은 `get-shit-done/bin/lib/state-document.cjs`의 `KNOWN_TEMPLATE_DEFAULTS`에 있습니다.
+이 섹션의 `Status:` 및 `Last activity:` 필드는 기존 값이 알려진 템플릿 기본값인 경우 GSD 핸들러에 의해 업데이트됩니다(크누스 불변량: 실행기가 작성한 값은 보존됩니다). 알려진 핸들러 기본값의 전체 목록은 `gsd-core/bin/lib/state-document.cjs`의 `KNOWN_TEMPLATE_DEFAULTS`에 있습니다.
 
 ### Performance Metrics
 

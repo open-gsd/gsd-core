@@ -169,7 +169,7 @@
 
 ## 工作流 (88 shipped)
 
-完整清单位于 `get-shit-done/workflows/*.md`。工作流是命令在内部引用的轻量编排器；大多数不由最终用户直接阅读。以下行将每个工作流文件映射到其角色（来源于 `<purpose>` 块），以及在适用情况下映射到调用它的命令。
+完整清单位于 `gsd-core/workflows/*.md`。工作流是命令在内部引用的轻量编排器；大多数不由最终用户直接阅读。以下行将每个工作流文件映射到其角色（来源于 `<purpose>` 块），以及在适用情况下映射到调用它的命令。
 
 | 工作流 | 角色 | 调用者 |
 |--------|------|--------|
@@ -268,7 +268,7 @@
 
 ## 参考资料 (62 shipped)
 
-完整清单位于 `get-shit-done/references/*.md`。参考资料是工作流和代理 `@-reference` 的共享知识文档。以下分组与 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) 一致 — 核心、工作流、思维模型集群和模块化规划器分解。
+完整清单位于 `gsd-core/references/*.md`。参考资料是工作流和代理 `@-reference` 的共享知识文档。以下分组与 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-gsd-corereferencesmd) 一致 — 核心、工作流、思维模型集群和模块化规划器分解。
 
 ### 核心参考资料
 
@@ -363,13 +363,13 @@
 | `user-story-template.md` | MVP 规划的用户故事格式 — "作为 / 我想要 / 以便" 结构化字段。 |
 | `spidr-splitting.md` | 用于在 MVP 模式下处理大型用户故事的 SPIDR 拆分分解规则。 |
 
-> **子目录：** `get-shit-done/references/few-shot-examples/` 包含额外的少样本示例（`plan-checker.md`、`verifier.md`），这些示例从特定代理中引用。它们不计入 62 个顶级参考资料。
+> **子目录：** `gsd-core/references/few-shot-examples/` 包含额外的少样本示例（`plan-checker.md`、`verifier.md`），这些示例从特定代理中引用。它们不计入 62 个顶级参考资料。
 
 ---
 
 ## CLI 模块 (81 shipped)
 
-完整清单：`get-shit-done/bin/lib/*.cjs`。
+完整清单：`gsd-core/bin/lib/*.cjs`。
 
 | 模块 | 职责 |
 |------|------|
@@ -443,7 +443,7 @@
 | `task-command-router.cjs` | `gsd-tools task` 的轻量 CJS 子命令路由适配器 |
 | `template.cjs` | 带变量替换的模板选择和填充 |
 | `uat.cjs` | UAT 文件解析、验证债务跟踪、audit-uat 支持 |
-| `ui-safety-gate.cjs` | 无 shell 的词边界 UI 令牌检测器（#3706，#3718）；从 stdin 读取阶段章节文本，退出 0（找到 UI）或 1（未找到 UI）；也部署到 `get-shit-done/bin/lib/`，以便 GSD 安装程序将其传送到 `$RUNTIME_DIR`（#448） |
+| `ui-safety-gate.cjs` | 无 shell 的词边界 UI 令牌检测器（#3706，#3718）；从 stdin 读取阶段章节文本，退出 0（找到 UI）或 1（未找到 UI）；也部署到 `gsd-core/bin/lib/`，以便 GSD 安装程序将其传送到 `$RUNTIME_DIR`（#448） |
 | `update-context.cjs` | `/gsd:update` 的纯安装上下文解析器 — 从 update.md bash 移植的运行时/范围/配置目录/版本检测（LOCAL/GLOBAL/UNKNOWN）；支持 `gsd-tools update-context`（#498） |
 | `validate-command-router.cjs` | `gsd-tools validate` 的轻量 CJS 子命令路由适配器 |
 | `validate.cjs` | 纯阶段变体规范化帮助器（`phaseVariants`、`buildRoadmapPhaseVariants`、`buildNotStartedPhaseVariants`），被 `verify.cjs` 用于 W006/W007 检查；无 I/O，无异步 |

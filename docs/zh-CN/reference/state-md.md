@@ -77,7 +77,7 @@ paused_at: null
 
 ### 状态值
 
-`get-shit-done/bin/lib/state-document.cjs` 中的 `normalizeStateStatus()` 将原始正文文本映射到以下规范值：
+`gsd-core/bin/lib/state-document.cjs` 中的 `normalizeStateStatus()` 将原始正文文本映射到以下规范值：
 
 | 规范值 | 匹配文本（不区分大小写） |
 |---|---|
@@ -133,7 +133,7 @@ paused_at: null
 
 ## Markdown 正文章节
 
-正文（结束 `---` 之后的所有内容）遵循 `get-shit-done/templates/state.md` 中的模板。标准章节为：
+正文（结束 `---` 之后的所有内容）遵循 `gsd-core/templates/state.md` 中的模板。标准章节为：
 
 ### 项目参考
 
@@ -153,7 +153,7 @@ paused_at: null
 | `Last activity:` | 处理器写入时为 ISO 日期（`YYYY-MM-DD`）；执行器编写时为叙述性文本 |
 | `Progress:` | 可视化进度条，如 `[████░░░░░░] 40%` |
 
-当现有值为已知模板默认值时，该章节中的 `Status:` 和 `Last activity:` 字段由 GSD 处理器更新（Knuth 不变式：执行器编写的值被保留）。已知处理器默认值的完整列表位于 `get-shit-done/bin/lib/state-document.cjs` 中的 `KNOWN_TEMPLATE_DEFAULTS`。
+当现有值为已知模板默认值时，该章节中的 `Status:` 和 `Last activity:` 字段由 GSD 处理器更新（Knuth 不变式：执行器编写的值被保留）。已知处理器默认值的完整列表位于 `gsd-core/bin/lib/state-document.cjs` 中的 `KNOWN_TEMPLATE_DEFAULTS`。
 
 ### 性能指标
 

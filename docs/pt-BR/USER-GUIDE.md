@@ -562,14 +562,14 @@ Para um guia abrangente de solução de problemas, consulte [Recuperar e solucio
 
 ### CLI programática (`gsd-tools query` vs `gsd-tools.cjs`)
 
-Para automação, prefira **`gsd-tools query`** com um subcomando registrado (consulte [CLI-TOOLS.md — SDK e acesso programático](CLI-TOOLS.md#sdk-and-programmatic-access) e QUERY-HANDLERS.md). O CLI legado `node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs` continua sendo suportado.
+Para automação, prefira **`gsd-tools query`** com um subcomando registrado (consulte [CLI-TOOLS.md — SDK e acesso programático](CLI-TOOLS.md#sdk-and-programmatic-access) e QUERY-HANDLERS.md). O CLI legado `node $HOME/.claude/gsd-core/bin/gsd-tools.cjs` continua sendo suportado.
 
 ### STATE.md fora de sincronia
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate          # Detect drift
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync --verify     # Preview changes
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate          # Detect drift
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync --verify     # Preview changes
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
 ```
 
 ### Um comando parece congelado após "Spawning..."
@@ -667,7 +667,7 @@ Auditoria rápida antes de uma fase longa:
 
 Cada servidor desabilitado remove seu esquema de cada turno subsequente. Reduzir MCPs **compõe** com o ajuste de `model_profile` — ambas as alavancas são aditivas, e as economias de MCP aparecem imediatamente em cada subagente que o orquestrador gera.
 
-Para a auditoria completa, referência do harness e a nota de composição com `model_profile`, consulte [Custo de esquema de ferramentas MCP](../../get-shit-done/references/context-budget.md#mcp-tool-schema-cost-harness-concern) na referência `context-budget.md` incluída.
+Para a auditoria completa, referência do harness e a nota de composição com `model_profile`, consulte [Custo de esquema de ferramentas MCP](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) na referência `context-budget.md` incluída.
 
 ### Usando runtimes não-Claude (Codex, OpenCode, Gemini CLI, Kilo)
 
