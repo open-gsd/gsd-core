@@ -57,6 +57,8 @@ The CLI handles:
 - Inserting the phase entry into ROADMAP.md with Goal, Depends on, and Plans sections
 
 Extract from result: `phase_number`, `padded`, `name`, `slug`, `directory`.
+
+**If result includes a `warning` field:** the description read as goal-shaped (long and/or multi-sentence) rather than title-shaped, and was written verbatim as the `### Phase N:` header. The phase was still created — surface the warning to the user and suggest a short title with the detail moved to `**Goal:**` in ROADMAP.md.
 </step>
 
 <step name="update_project_state">

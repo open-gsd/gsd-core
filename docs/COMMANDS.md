@@ -193,7 +193,7 @@ Research, plan, and verify a phase.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `N` | No | Phase number (defaults to next unplanned phase) |
+| `N` | No | Phase number (if omitted, the orchestrating workflow reads ROADMAP.md and targets the next unplanned phase — not a `gsd-tools.cjs` CLI feature) |
 
 | Flag | Description |
 |------|-------------|

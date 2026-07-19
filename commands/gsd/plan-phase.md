@@ -40,7 +40,7 @@ Create executable phase prompts (PLAN.md files) for a roadmap phase with integra
 </runtime_note>
 
 <context>
-Phase number: $ARGUMENTS (optional — auto-detects next unplanned phase if omitted)
+Phase number: $ARGUMENTS (optional — when omitted, the orchestrating workflow reads ROADMAP.md and selects the next unplanned phase; `gsd-tools.cjs` itself has no auto-detect feature and requires an explicit phase number)
 
 **Flags:**
 - `--research` — Force re-research even if RESEARCH.md exists
