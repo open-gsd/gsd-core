@@ -127,7 +127,7 @@ else
 fi
 ```
 
-`SUBMODULE_PATHS` is exported to the `execute_waves` step, where the per-plan decision actually happens (see "Per-plan worktree decision" sub-step inside `execute_waves`). The decision is per-plan because different plans in the same wave can touch different files — only plans whose paths intersect a submodule must drop worktree isolation; plans nowhere near a submodule keep parallel isolation.
+`SUBMODULE_PATHS` is exported to the `execute_waves` step, where the per-plan decision happens (see "Per-plan worktree decision" sub-step inside `execute_waves`). The decision is per-plan because different plans in the same wave can touch different files — only plans whose paths intersect a submodule must drop worktree isolation; plans nowhere near a submodule keep parallel isolation.
 
 When `USE_WORKTREES` (project-level) is `false`, all executor agents run without `isolation="worktree"` — they execute sequentially on the main working tree instead of in parallel worktrees. The per-plan decision below has no effect when worktrees are project-disabled.
 
@@ -976,7 +976,7 @@ increases monotonically across waves. `{status}` is `complete` (success),
    Note: If `WAVE_FAILURE_COUNT > 1`, strongly recommend "Fix now" — compounding
    failures across multiple waves become exponentially harder to diagnose.
 
-   If "Fix now": diagnose failures (typically import conflicts, missing types,
+   If "Fix now": diagnose failures (import conflicts, missing types,
    or changed function signatures from parallel plans modifying the same module).
    Fix, commit as `fix: resolve post-merge conflicts from wave {N}`, re-run tests.
 
@@ -993,8 +993,6 @@ increases monotonically across waves. `{status}` is `complete` (success),
    ```
    [checkpoint] phase {PHASE_NUMBER} wave {N}/{M} complete, {P}/{Q} plans done ({wave_success}/{wave_plan_count} ok)
    ```
-
-
 
    For each SUMMARY.md:
    - Verify first 2 files from `key-files.created` exist on disk
@@ -1666,7 +1664,7 @@ Orchestrator: ~10-15% context for 200k windows, can use more for 1M+ windows.
 Subagents: fresh context each (200k-1M depending on model). No polling (Agent blocks). No context bleed.
 
 For 1M+ context models, consider:
-- Passing richer context (code snippets, dependency outputs) directly to executors instead of just file paths
+- Passing richer context (code snippets, dependency outputs) directly to executors instead of file paths
 - Running small phases (≤3 plans, no dependencies) inline without subagent spawning overhead
 - Relaxing /clear recommendations — context rot onset is much further out with 5x window
 </context_efficiency>
