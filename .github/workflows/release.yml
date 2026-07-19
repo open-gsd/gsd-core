@@ -669,6 +669,21 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$VERSION" --dist-tag latest
 
+      # Regression #2423: keep `next` at the last published release for final
+      # releases, not just rc/hotfix. Without this, `next` drifts to whatever
+      # rc.N the release branch forked from, and every npm script banner on
+      # `next` (and feature branches cut from it) reports the stale rc version
+      # — e.g. `lint:ci` reported `@opengsd/gsd-core@1.7.0-rc.6` after 1.7.0
+      # shipped. Mirrors the rc job's sync step at line ~479. Idempotent: a
+      # no-op when `next` is already at the target version.
+      - name: Sync next branch to the published release
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: node scripts/sync-next-version.cjs "$VERSION"
+
       - name: Summary
         env:
           VERSION: ${{ inputs.version }}
