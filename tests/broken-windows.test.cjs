@@ -150,6 +150,37 @@ describe('broken-windows: appendWindow', () => {
     // And reparses cleanly:
     assert.doesNotThrow(() => parseLedger(renderLedger(ledger)));
   });
+
+  test('renderTable escapes backslash before pipe (CodeQL: incomplete-sanitization — PR #2441)', () => {
+    // A description containing `\|` must NOT split the markdown table cell.
+    // Escape order: `\` → `\\` first, then `|` → `\|`. If pipe is escaped first,
+    // `\|` in input becomes `\\|` in output which markdown renders as `\` + cell-sep.
+    const led0 = emptyLedger('2026-07-19T00:00:00Z');
+    const { ledger } = appendWindow(
+      led0,
+      makeEntry({ description: 'path with \\| separator and | pipe and \\ backslash' }),
+      { now: '2026-07-19T12:00:00Z' },
+    );
+    const rendered = renderLedger(ledger);
+
+    // The JSON block (source of truth) preserves the description verbatim and reparses.
+    const reparsed = parseLedger(rendered);
+    assert.equal(reparsed.entries[0].description, 'path with \\| separator and | pipe and \\ backslash');
+
+    // The table row for this entry has exactly 10 cells (one per column). Counting
+    // unescaped pipes inside the row would surface a split. The cell's rendered
+    // form is `path with \\| separator and \| pipe and \\ backslash` — every pipe
+    // is preceded by a backslash, so splitting on /(?<!\\)\|/ yields 10 cells.
+    const tableLine = rendered.split('\n').find((l) => l.includes('path with'));
+    assert.ok(tableLine, 'table row for the test entry must exist');
+    // Walk the line and count pipes that are NOT preceded by a backslash.
+    let unescapedPipes = 0;
+    for (let i = 0; i < tableLine.length; i++) {
+      if (tableLine[i] === '|' && tableLine[i - 1] !== '\\') unescapedPipes++;
+    }
+    // 10 cells = 11 cell-separator pipes per row (leading + 9 internal + trailing).
+    assert.equal(unescapedPipes, 11, 'table row must have exactly 11 unescaped pipes (10 cells) — backslash-pipe in description must NOT add a split');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -621,7 +621,15 @@ function renderTable(entries: WindowEntry[]): string {
     '|----|-------|------|------|------|-------------|--------|--------|-------------|-------------|',
   ];
   for (const e of entries) {
-    const cell = (s: string | number | null) => String(s ?? '').replace(/\|/g, '\\|');
+    // Escape backslash FIRST, then pipe — markdown table cells treat `\` as
+    // the escape introducer, so a description containing `\|` would render
+    // as an escaped pipe (i.e. a literal `|` inside the cell) and split the
+    // column. Escaping `\` → `\\` first makes the subsequent `\|` replacement
+    // unambiguous. (CodeQL: js/incomplete-sanitization — issue #1950 PR #2441.)
+    const cell = (s: string | number | null) =>
+      String(s ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/\|/g, '\\|');
     rows.push(
       [
         '|', cell(e.id), '|', cell(e.phase), '|', cell(e.kind), '|',
