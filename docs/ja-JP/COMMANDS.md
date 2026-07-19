@@ -608,7 +608,7 @@ Nyquist 検証ギャップを事後的に監査して埋めます。
 /gsd-help --brief <topic>           # コンパクトなスコープ付きルックアップ — シグネチャ + 1行サマリー
 ```
 
-完全なエイリアステーブルについては `get-shit-done/workflows/help/modes/topic.md` を参照してください。不明なトピックは認識されたリストを表示します。
+完全なエイリアステーブルについては `gsd-core/workflows/help/modes/topic.md` を参照してください。不明なトピックは認識されたリストを表示します。
 
 ---
 

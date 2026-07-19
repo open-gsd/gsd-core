@@ -612,7 +612,7 @@ Nyquist 검증 갭을 소급하여 감사하고 보완합니다.
 /gsd-help --brief <topic>           # 압축된 범위 지정 조회 — 시그니처 + 한 줄 요약
 ```
 
-전체 별칭 테이블은 `get-shit-done/workflows/help/modes/topic.md`를 참조하세요. 알 수 없는 주제는 인식된 목록을 출력합니다.
+전체 별칭 테이블은 `gsd-core/workflows/help/modes/topic.md`를 참조하세요. 알 수 없는 주제는 인식된 목록을 출력합니다.
 
 ---
 

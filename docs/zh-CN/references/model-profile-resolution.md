@@ -12,7 +12,7 @@ MODEL_PROFILE=$(cat .planning/config.json 2>/dev/null | grep -o '"model_profile"
 
 ## 查找表
 
-@~/.claude/get-shit-done/references/model-profiles.md
+@~/.claude/gsd-core/references/model-profiles.md
 
 在表中查找已解析配置对应的代理。将 model 参数传递给 Task 调用：
 

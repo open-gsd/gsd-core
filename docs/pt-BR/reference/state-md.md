@@ -77,7 +77,7 @@ paused_at: null
 
 ### Valores de status
 
-`normalizeStateStatus()` em `get-shit-done/bin/lib/state-document.cjs` mapeia o texto bruto do corpo para estes valores canônicos:
+`normalizeStateStatus()` em `gsd-core/bin/lib/state-document.cjs` mapeia o texto bruto do corpo para estes valores canônicos:
 
 | Valor canônico | Texto correspondente (sem diferenciação de maiúsculas/minúsculas) |
 |---|---|
@@ -133,7 +133,7 @@ Se uma mudança futura substituir o analisador de regex por uma biblioteca YAML 
 
 ## Seções do corpo Markdown
 
-O corpo (tudo após o `---` de fechamento) segue o template em `get-shit-done/templates/state.md`. As seções padrão são:
+O corpo (tudo após o `---` de fechamento) segue o template em `gsd-core/templates/state.md`. As seções padrão são:
 
 ### Referência do Projeto
 
@@ -153,7 +153,7 @@ Onde o projeto está agora:
 | `Last activity:` | Data ISO (`YYYY-MM-DD`) quando escrito por handler; prosa narrativa quando elaborado pelo executor |
 | `Progress:` | Barra visual, ex.: `[████░░░░░░] 40%` |
 
-Os campos `Status:` e `Last activity:` nesta seção são atualizados pelos handlers do GSD quando o valor existente é um padrão de template conhecido (invariante de Knuth: valores elaborados pelo executor são preservados). A lista completa de padrões de handler conhecidos está em `KNOWN_TEMPLATE_DEFAULTS` dentro de `get-shit-done/bin/lib/state-document.cjs`.
+Os campos `Status:` e `Last activity:` nesta seção são atualizados pelos handlers do GSD quando o valor existente é um padrão de template conhecido (invariante de Knuth: valores elaborados pelo executor são preservados). A lista completa de padrões de handler conhecidos está em `KNOWN_TEMPLATE_DEFAULTS` dentro de `gsd-core/bin/lib/state-document.cjs`.
 
 ### Métricas de Desempenho
 

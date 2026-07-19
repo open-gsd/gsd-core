@@ -1,6 +1,6 @@
 # GSD CLI 도구 참조
 
-> `gsd-tools` CLI(`get-shit-done/bin/gsd-tools.cjs`)에 대한 참조입니다. 슬래시 명령 및 사용자 흐름은 [명령 참조](COMMANDS.md)를 확인하세요. [문서 인덱스](README.md)로 돌아가기.
+> `gsd-tools` CLI(`gsd-core/bin/gsd-tools.cjs`)에 대한 참조입니다. 슬래시 명령 및 사용자 흐름은 [명령 참조](COMMANDS.md)를 확인하세요. [문서 인덱스](README.md)로 돌아가기.
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **배포 경로**   | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **구현**        | `get-shit-done/bin/lib/` 아래 20개의 도메인 모듈 (해당 디렉토리가 기준)                                                                                                                                 |
+| **배포 경로**   | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **구현**        | `gsd-core/bin/lib/` 아래 20개의 도메인 모듈 (해당 디렉토리가 기준)                                                                                                                                 |
 | **상태**         | 오케스트레이션, 워크플로우, 자동화를 위한 주요 런타임 명령 인터페이스. |
 
 
@@ -488,7 +488,7 @@ node gsd-tools.cjs config-set review.models.claude   ""   # clear — fall back 
 
 ## 시크릿 처리
 
-`/gsd-settings`(`brave_search`, `firecrawl`, `exa_search`)를 통해 설정된 API 키는 `.planning/config.json`에 일반 텍스트로 기록되지만 모든 `config-set` / `config-get` 출력, 확인 테이블, 대화형 프롬프트에서 마스킹(`****<last-4>`)됩니다. 마스킹 구현은 `get-shit-done/bin/lib/secrets.cjs`를 참조하세요. `config.json` 파일 자체가 보안 경계입니다 — 파일시스템 권한으로 보호하고 git에서 제외하세요(`.planning/`는 기본적으로 gitignore됩니다).
+`/gsd-settings`(`brave_search`, `firecrawl`, `exa_search`)를 통해 설정된 API 키는 `.planning/config.json`에 일반 텍스트로 기록되지만 모든 `config-set` / `config-get` 출력, 확인 테이블, 대화형 프롬프트에서 마스킹(`****<last-4>`)됩니다. 마스킹 구현은 `gsd-core/bin/lib/secrets.cjs`를 참조하세요. `config.json` 파일 자체가 보안 경계입니다 — 파일시스템 권한으로 보호하고 git에서 제외하세요(`.planning/`는 기본적으로 gitignore됩니다).
 
 ---
 

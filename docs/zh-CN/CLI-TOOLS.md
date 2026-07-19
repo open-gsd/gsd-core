@@ -1,6 +1,6 @@
 # GSD CLI 工具参考
 
-> `gsd-tools` CLI（`get-shit-done/bin/gsd-tools.cjs`）参考文档。斜杠命令与用户流程请参见[命令参考](COMMANDS.md)。返回[文档索引](README.md)。
+> `gsd-tools` CLI（`gsd-core/bin/gsd-tools.cjs`）参考文档。斜杠命令与用户流程请参见[命令参考](COMMANDS.md)。返回[文档索引](README.md)。
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **发布路径**   | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **实现**       | `get-shit-done/bin/lib/` 下的 20 个领域模块（以该目录为准）                                                                                                                                              |
+| **发布路径**   | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **实现**       | `gsd-core/bin/lib/` 下的 20 个领域模块（以该目录为准）                                                                                                                                              |
 | **状态**       | 编排、工作流和自动化的主要运行时命令接口。 |
 
 
@@ -488,7 +488,7 @@ Slug 将针对 `[a-zA-Z0-9_-]+` 进行验证；空或包含路径的 slug 将被
 
 ## 密钥处理
 
-通过 `/gsd-settings` 配置的 API 密钥（`brave_search`、`firecrawl`、`exa_search`）以明文形式写入 `.planning/config.json`，但在所有 `config-set` / `config-get` 输出、确认表格和交互式提示中均会被遮蔽（`****<last-4>`）。遮蔽实现请参见 `get-shit-done/bin/lib/secrets.cjs`。`config.json` 文件本身是安全边界——请通过文件系统权限保护它，并将其排除在 git 之外（`.planning/` 默认已被 gitignore）。
+通过 `/gsd-settings` 配置的 API 密钥（`brave_search`、`firecrawl`、`exa_search`）以明文形式写入 `.planning/config.json`，但在所有 `config-set` / `config-get` 输出、确认表格和交互式提示中均会被遮蔽（`****<last-4>`）。遮蔽实现请参见 `gsd-core/bin/lib/secrets.cjs`。`config.json` 文件本身是安全边界——请通过文件系统权限保护它，并将其排除在 git 之外（`.planning/` 默认已被 gitignore）。
 
 ---
 
