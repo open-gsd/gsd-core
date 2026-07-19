@@ -38,6 +38,38 @@ function extractJobBlock(text, jobName) {
   return lines.slice(startIdx, endIdx);
 }
 
+/**
+ * Extract the YAML step block (within a job) that contains `marker` text.
+ *
+ * Steps begin at `^      - name:` (6-space indent for a job at column 2).
+ * Returns the lines from the step's `- name:` line through the line before
+ * the next `- name:` at the same indent (or end of the job block).
+ *
+ * Used to assert invariants about a SPECIFIC step rather than the whole job,
+ * so a test like "the sync step is gated on !inputs.dry_run" can't pass by
+ * accident because some OTHER step in the same job happens to have that gate.
+ * @param {string[]} jobBlock - lines of the containing job (from extractJobBlock)
+ * @param {string} marker - substring identifying the target step
+ * @returns {string[]} lines of the matching step (including its `- name:` header)
+ */
+function extractStepBlockContaining(jobBlock, marker) {
+  const stepStarts = [];
+  for (let i = 0; i < jobBlock.length; i++) {
+    if (/^\s{6}- name:/.test(jobBlock[i])) {
+      stepStarts.push(i);
+    }
+  }
+  for (let s = 0; s < stepStarts.length; s++) {
+    const start = stepStarts[s];
+    const end = s + 1 < stepStarts.length ? stepStarts[s + 1] : jobBlock.length;
+    const stepLines = jobBlock.slice(start, end);
+    if (stepLines.some((l) => l.includes(marker))) {
+      return stepLines;
+    }
+  }
+  return [];
+}
+
 describe('release-finalize-syncs-next-version (regression #2423)', () => {
   const text = fs.readFileSync(RELEASE_WORKFLOW, 'utf8');
 
@@ -61,22 +93,22 @@ describe('release-finalize-syncs-next-version (regression #2423)', () => {
   });
 
   test('the finalize job gates sync-next-version on !inputs.dry_run', () => {
-    // A dry-run finalize must not open a sync PR. Walk the finalize block and
-    // confirm that the sync-next-version step sits under an `if: ${{ !inputs.dry_run }}`
-    // step boundary that follows the publish step. We assert the weaker but
-    // contract-correct invariant: the finalize block contains both the dry_run
-    // gate and the sync call, and every sync call is accompanied somewhere in
-    // the block by a dry_run guard.
+    // A dry-run finalize must not open a sync PR. We assert this against the
+    // SPECIFIC step that runs sync-next-version.cjs (not the whole finalize
+    // block) so the test cannot pass by accident if some OTHER step in the
+    // finalize job happens to have a !inputs.dry_run gate. Regression of the
+    // loose-invariant version of this test, caught during #2423 code review.
     const finalizeBlock = extractJobBlock(text, 'finalize');
-    const hasSync = finalizeBlock.some((l) => l.includes('scripts/sync-next-version.cjs'));
-    if (!hasSync) {
-      // The previous test already covers the missing-sync case; skip the
-      // dry-run gate assertion when sync is absent to keep failure messages
-      // single-cause.
-      return;
-    }
-    const hasDryRunGate = finalizeBlock.some((l) => l.includes('!inputs.dry_run'));
-    assert.ok(hasDryRunGate,
-      'finalize job must gate sync-next-version on !inputs.dry_run so dry runs do not open PRs');
+    const syncStep = extractStepBlockContaining(finalizeBlock, 'scripts/sync-next-version.cjs');
+    assert.notStrictEqual(syncStep.length, 0,
+      'cannot locate the sync-next-version step within the finalize job — has the step shape changed?');
+    const stepHasGate = syncStep.some((l) => l.includes('!inputs.dry_run'));
+    assert.ok(stepHasGate,
+      [
+        'the sync-next-version step itself must be gated on !inputs.dry_run',
+        '(regression of the loose-invariant test that passed when ANY step in',
+        'finalize had the gate). Without this guard, a dry-run finalize would',
+        'open a real chore: sync next package version PR against next.',
+      ].join(' '));
   });
 });
