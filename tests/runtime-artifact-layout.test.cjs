@@ -20,9 +20,11 @@
 const { test, describe, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const { resolveRuntimeArtifactLayout, findInstallSourceRoot } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+const capabilityRegistry = require('../gsd-core/bin/lib/capability-registry.cjs');
 const installProfiles = require('../gsd-core/bin/lib/install-profiles.cjs');
 const { install } = require('../bin/install.js');
 const { createTempDir, cleanup } = require('./helpers.cjs');
@@ -101,6 +103,27 @@ describe('resolveRuntimeArtifactLayout — codex', () => {
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
   });
+
+  test('keeps the global skills home override out of the local scope (#2429)', () => {
+    const globalLayout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'global');
+    const localLayout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'local');
+
+    assert.strictEqual(globalLayout.kinds[0].home, path.join(os.homedir(), '.agents'));
+    assert.strictEqual(localLayout.kinds[0].home, undefined);
+  });
+});
+
+test('keeps every local artifact layout project-scoped (#2429)', () => {
+  for (const [runtime, descriptor] of Object.entries(capabilityRegistry.runtimes)) {
+    const localEntries = descriptor.runtime?.artifactLayout?.local ?? [];
+    for (const entry of localEntries) {
+      assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(entry, 'home'),
+        false,
+        `${runtime} local artifact layout entry '${entry.kind}' must not declare home`,
+      );
+    }
+  }
 });
 
 describe('resolveRuntimeArtifactLayout — copilot', () => {
