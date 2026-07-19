@@ -13,17 +13,20 @@
  * tests/api-coverage-gate-e2e.test.cjs and tests/decisions.test.cjs — never
  * the parser function called in isolation.
  *
- * Three fixtures (across api-coverage-detector, api-coverage-matrix,
- * decision-coverage-guard) encode gates that are still open bugs (#2365,
- * #2366, #2347). For those, MANIFEST.json carries BOTH the correct target
+ * Some fixtures (across api-coverage-detector, api-coverage-matrix,
+ * decision-coverage-guard) encode gates that were open bugs (#2365, #2366,
+ * #2347). For a still-open one, MANIFEST.json carries BOTH the correct target
  * verdict (`expected*` — what the fix must produce) and the exact CURRENT
  * observed verdict (`currentBuggyOutput` — what today's code actually
- * returns). The test asserts against `currentBuggyOutput`: an honest,
+ * returns), and the test asserts against `currentBuggyOutput`: an honest,
  * non-vacuous characterization of today's known-broken reality, not a fake
- * pass. This assertion WILL fail, loudly, the moment the underlying bug is
- * fixed and the gate starts returning something other than the pinned
- * buggy value — at which point whoever's fix landed must update the
- * assertion to check `expected*` instead (and can delete `currentBuggyOutput`).
+ * pass. That assertion WILL fail, loudly, the moment the underlying bug is
+ * fixed and the gate returns something other than the pinned buggy value — at
+ * which point whoever's fix landed removes `currentBuggyOutput` so the test
+ * asserts `expected*` instead. The api-coverage-matrix (#2366) fixture has
+ * been through exactly that flip and now asserts `expected*` directly; the
+ * api-coverage-detector (#2365) and decision-coverage (#2347) fixtures still
+ * carry `currentBuggyOutput` on this branch.
  *
  * Why not node:test's `todo` option: this repo's own test-runner
  * (gsd-test / gsd-test-runner v1.6.2) has no concept of it. Its JSONL

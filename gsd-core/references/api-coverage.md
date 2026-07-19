@@ -78,10 +78,34 @@ Canonical form — a markdown table (human-editable, diff-friendly):
 - A fenced ` ```coverage ` JSON block (`[{"capability":…,"decision":…,"reason":…}]`)
   is also accepted for machine-generated matrices.
 
+- **The table must be ONE contiguous block.** Rows are read only from inside a
+  well-formed table — the canonical header, its delimiter row, then data rows
+  with nothing between them. A blank line, a prose line, or an HTML comment ends
+  the table, so a matrix split across two blocks would lose every row after the
+  split. That is now a blocking error naming the orphaned row (`coverage row
+  "payouts" appears outside a coverage table`), not a silent drop (#2366). To
+  group capabilities, repeat the full header — each canonical header opens a new
+  section of the same matrix:
+
+```markdown
+| capability | decision | reason |
+|---|---|---|
+| search | INTEGRATE | |
+
+## Transferred to a later phase
+
+| capability | decision | reason |
+|---|---|---|
+| playlists | OPT-OUT | moved to phase 8.1 |
+```
+
+- Other tables in the file are ignored, so a summary-of-counts or threat table is
+  free to sit alongside the matrix.
+
 Rules enforced at seal time: the matrix must be non-empty; every capability name
 must be non-empty and unique; every decision must be `INTEGRATE` or `OPT-OUT`;
-every `OPT-OUT` must have a reason. Violations block the seal with a precise
-error.
+every `OPT-OUT` must have a reason; and every coverage-shaped row must sit inside
+the table. Violations block the seal with a precise error.
 
 ### Declaring "no external API integration" (#2365)
 

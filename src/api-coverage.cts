@@ -56,7 +56,8 @@
  *     exit 0 = integration detected, 1 = none, 2 = startup error
  */
 
-import { stripFencedCode, scanInlineCodeSpans, extractFencedBlock } from './markdown-sectionizer.cjs';
+import { stripFencedCode, scanInlineCodeSpans, extractFencedBlock, scanFencedBlocks } from './markdown-sectionizer.cjs';
+import { matchTableSchema, splitTableRow, isDelimiterRow, escapeCell } from './markdown-table.cjs';
 
 // ─── Integration-signal vocabulary ────────────────────────────────────────────
 
@@ -599,6 +600,143 @@ const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
 const VALID_DECISIONS = new Set<CoverageDecision>(['INTEGRATE', 'OPT-OUT']);
 
 /**
+ * True when `cells` are a coverage-matrix header, per the canonical column set
+ * registered as `TABLE_SCHEMAS.Coverage`.
+ *
+ * Compared case-insensitively, and ONLY against the Coverage variants: the
+ * pre-#2366 check was `cells[0].toLowerCase() === 'capability'`, so a
+ * hand-written `| Capability | Decision | Reason |` has always been accepted.
+ * Scoping the parse to a registered schema must not silently narrow that — a
+ * header that stopped being recognised would drop every row and surface as a
+ * confusing "matrix is empty" block. `matchTableSchema` is exact by contract
+ * (other schemas' columns are capitalised and must stay that way), hence the
+ * local comparison against the registry rather than a call into it.
+ */
+/**
+ * Test seam (#2374 review m6): exported under an underscore so
+ * `tests/markdown-table.test.cjs` can assert this reader and `matchTableSchema`
+ * agree on every probe, in both directions — the guard against the two
+ * identification paths drifting apart again.
+ */
+export function _isCoverageHeader(cells: string[]): boolean {
+  return isCoverageHeader(cells);
+}
+
+function isCoverageHeader(cells: string[]): boolean {
+  // Resolved THROUGH the registry seam (`matchTableSchema`), not by a local walk
+  // over `TABLE_SCHEMAS`: the local copy was a second identification path for one
+  // registered schema, and the two had already diverged — `matchTableSchema`
+  // rejected `| Capability | Decision | Reason |` while this reader accepted it
+  // (#2374 review m6). The case-folding this reader needs is now an option ON the
+  // seam, so there is one matcher and `tests/markdown-table.test.cjs` pins the
+  // two callers to the same answer.
+  const m = matchTableSchema(cells, { caseInsensitive: true });
+  return m !== null && m.id === 'Coverage';
+}
+
+/**
+ * A STRONG GFM delimiter row: every cell is `---`+ (optionally alignment-colon'd),
+ * i.e. at least three dashes. Deliberately stricter than the shared `-{1,}`
+ * `isDelimiterRow` — the coverage parser uses this only to detect a SECOND,
+ * butted-on table's delimiter mid-rows, where an all-single-dash data row
+ * (`| - | - | - |`) must NOT be mistaken for a delimiter and truncate the rows
+ * after it (#2366 re-review). Restores the parser's pre-#2366 `-{3,}` heuristic.
+ */
+function isStrongDelimiterRow(cells: string[]): boolean {
+  // TRIM only (not internal-whitespace strip): a real delimiter cell is contiguous
+  // dashes (`---`, optionally space-padded), whereas a spaced-dash DATA cell
+  // (`- - -`) must NOT collapse to `---` and be misread as a delimiter — that
+  // would truncate the rows after it, the very bug this guard fixes (Codex #2366
+  // re-review).
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+/**
+ * Unwrap balanced inline emphasis/code markers that surround a WHOLE decision
+ * cell, before validation.
+ *
+ * `**OPT-OUT**` renders identically to `OPT-OUT` in every markdown viewer, so
+ * rejecting it made the failure invisible to anyone reading the file as
+ * rendered output (#2366); the fragment's own example writes decisions
+ * backticked (`` `INTEGRATE` ``). Only a matching pair at BOTH ends is removed
+ * (repeatedly, so `` **`OPT-OUT`** `` unwraps fully) — an unbalanced or interior
+ * marker is left intact, so a genuinely malformed decision like `INTEG_RATE`
+ * is NOT silently massaged into the valid `INTEGRATE` and still fails loudly.
+ * Applied to the decision cell only — capability names and reasons keep their
+ * formatting verbatim.
+ */
+/**
+ * Longest decision cell that is worth normalising. The decisions and their
+ * formatted forms are short (`` **`OPT-OUT`** `` is 13 chars); a much longer cell
+ * is malformed regardless, so it is left untouched for the enum compare to
+ * reject. Bailing early also bounds the normalisation work as defense in depth.
+ */
+const DECISION_NORMALIZE_MAX = 64;
+
+/**
+ * Peel a single code span (`` `x` ``) off a whole cell, or return `null` if the
+ * cell is not one. A code span is a leading backtick run and an equal-length
+ * trailing run; per CommonMark §6.1 exactly one space is removed from each edge
+ * when both edges are a space and the content is not all spaces. The content is
+ * returned VERBATIM otherwise — a code span's interior is literal text, never
+ * further markdown, which is why the caller must not recurse into it.
+ *
+ * Implemented as a deterministic edge scan, NOT a regex: `/^(`+)(.*?)(`+)$/` on a
+ * long run of opening backticks with no closing run backtracks super-linearly
+ * (ReDoS on the unbounded decision cell).
+ */
+function peelCodeSpan(s: string): string | null {
+  let open = 0;
+  while (open < s.length && s[open] === '`') open += 1;
+  if (open === 0) return null;
+  let close = 0;
+  while (close < s.length && s[s.length - 1 - close] === '`') close += 1;
+  // Equal-length runs, with at least one non-backtick character between them.
+  if (open !== close || open + close >= s.length) return null;
+  let content = s.slice(open, s.length - close);
+  if (content.startsWith(' ') && content.endsWith(' ') && content.trim() !== '') {
+    content = content.slice(1, -1);
+  }
+  return content;
+}
+
+/**
+ * Normalise a decision cell by removing the markdown formatting that renders to
+ * the same text, before it is validated against {INTEGRATE, OPT-OUT} (#2366).
+ *
+ * `**OPT-OUT**` renders identically to `OPT-OUT`, and the fragment's own example
+ * backticks decisions — both must be accepted. But the normalisation must match
+ * what a reader SEES, or it silently accepts decisions the author never wrote:
+ *  - Emphasis (`*`, `_`, `**`, `__`) is peeled one layer at a time, and only when
+ *    the marker hugs its content — a flanking space disqualifies emphasis in
+ *    CommonMark, so `* OPT-OUT *` stays malformed.
+ *  - A code span binds tighter than emphasis and its content is LITERAL, so it is
+ *    peeled exactly once and returned as-is (no recursion). This is what keeps
+ *    `` `*OPT-OUT*` `` malformed — it renders as the literal text `*OPT-OUT*`, not
+ *    the enum value — and `` `  OPT-OUT  ` `` malformed (CommonMark strips only one
+ *    space per edge, leaving the surrounding spaces the enum compare rejects).
+ */
+function stripInlineEmphasis(cell: string): string {
+  let s = cell.trim();
+  if (s.length > DECISION_NORMALIZE_MAX) return s;
+  for (;;) {
+    const code = peelCodeSpan(s);
+    if (code !== null) return code;
+    let peeled: string | null = null;
+    for (const mark of ['**', '__', '*', '_']) {
+      if (s.length <= 2 * mark.length || !s.startsWith(mark) || !s.endsWith(mark)) continue;
+      const inner = s.slice(mark.length, s.length - mark.length);
+      if (/^\S/.test(inner) && /\S$/.test(inner)) {
+        peeled = inner;
+        break;
+      }
+    }
+    if (peeled === null) return s;
+    s = peeled;
+  }
+}
+
+/**
  * Parse a coverage matrix from COVERAGE.md. Accepts two bijective formats:
  *
  *  1. Markdown table (canonical, human-editable):
@@ -657,47 +795,277 @@ export function parseCoverageMatrix(text: unknown): CoverageParseResult {
     return out;
   }
 
-  // (2) markdown table — collect table rows whose decision column parses.
+  // (2) markdown table — rows are read ONLY from inside a Coverage-schema table.
+  // A COVERAGE.md legitimately carries other tables (a summary of counts, a
+  // threat table). Scanning every `|` line file-wide let a foreign table whose
+  // 2nd cell happened to read INTEGRATE/OPT-OUT be pushed as a capability row
+  // with no error, so the gate reported success over an invented capability
+  // (#2366). Table identity comes from the shared TABLE_SCHEMAS registry, the
+  // same seam the roadmap/requirements/quick-task/security tables resolve
+  // through (ADR-2143 §3 — a table is identified by its registered header,
+  // never by position).
+  // A coverage table is a well-formed GFM table: a canonical header, then a
+  // delimiter row, then contiguous data rows until a blank/non-piped line. This
+  // is a 3-state walk rather than a single `inMatrix` latch so the structure is
+  // actually enforced — a header with no delimiter, or a stray second delimiter
+  // inside the data rows, is a LOUD error (ADR-2143 §3 fail-loud), never a shape
+  // that silently absorbs a neighbouring table's rows.
+  // `seeking`         — outside any table.
+  // `expectDelimiter` — a canonical Coverage header awaits its delimiter row.
+  // `inRows`          — inside the Coverage table's data rows.
+  // `foreignHeader?`  — a piped line that is NOT a Coverage header: either some
+  //                     other table's header (a delimiter follows) or a LOOSE
+  //                     row. Undecided until the next line.
+  // `foreignRows`     — inside a confirmed non-Coverage table (a summary of
+  //                     counts, a threat table): its rows are correctly ignored.
+  // `looseRows`       — a run of piped lines belonging to NO table.
+  //
+  // The last two exist to answer a question `seeking` alone could not (#2374
+  // review B1): a piped line outside the Coverage table was skipped by a bare
+  // `continue`, so a matrix split by a blank line, a prose line, or an HTML
+  // comment silently lost every row after the split — with zero errors, while
+  // `validateCoverageMatrix` still sealed it `valid: true`. It cannot simply be
+  // an error either: a COVERAGE.md legitimately carries other tables, and a
+  // summary header like `| tier | INTEGRATE | OPT-OUT |` is coverage-SHAPED.
+  // Distinguishing "row inside another table" from "row inside no table" is what
+  // makes the loud error safe.
+  type MatrixState =
+    | 'seeking'
+    | 'expectDelimiter'
+    | 'inRows'
+    | 'foreignHeader?'
+    | 'foreignRows'
+    | 'looseRows';
   const lines = src.split('\n');
-  let sawHeader = false;
-  for (const line of lines) {
+  // Fenced code (```/~~~) delimits a worked EXAMPLE, not data — the project's own
+  // api-coverage-plan-pre.md fragment writes a canonical-shaped table inside a
+  // fence. Mark every fenced line (delimiters + content) so the scan treats it as
+  // a table-terminating non-pipe line: a fenced example is never parsed as rows.
+  // The mask is built from `scanFencedBlocks` — the SAME CommonMark engine
+  // stripFencedCode/extractFencedBlock use (correct delimiter char/run-length and
+  // valid-closer tracking, so a ``` inside a ~~~ fence, a 4-backtick opener, or an
+  // indented fence do not desync) — and applied IN PLACE so line adjacency is
+  // preserved. Pre-STRIPPING the lines instead would splice a header to a
+  // delimiter that a fence separated and fabricate a phantom table (Codex #2366
+  // re-review). An unterminated fence (closeLineIdx -1) masks to EOF.
+  const fenced: boolean[] = lines.map(() => false);
+  for (const b of scanFencedBlocks(lines)) {
+    const end = b.closeLineIdx === -1 ? lines.length - 1 : b.closeLineIdx;
+    for (let i = b.openLineIdx; i <= end; i++) fenced[i] = true;
+    // An unterminated fence masks every line after it, so a matrix below one
+    // vanishes and the author is told the matrix is "empty" — a true statement
+    // about a wrong cause (#2374 review m4). `scanFencedBlocks` already knows,
+    // so name the real problem and its line.
+    if (b.closeLineIdx === -1) {
+      out.errors.push(
+        `fence: unterminated code fence opened at line ${b.openLineIdx + 1} `
+        + '— everything after it is treated as example text, not coverage rows',
+      );
+    }
+  }
+  let state: MatrixState = 'seeking';
+  let headerCols = 0;
+  // A canonical header that never received its delimiter row (the section ends at
+  // a blank line, EOF, a short row, or the next header) is not a real table —
+  // surface it rather than dropping it silently, which would let an orphan header
+  // pass the gate once an earlier section already supplied rows.
+  // A piped line held while we wait to learn whether it was a foreign table's
+  // header or a loose row.
+  let heldRow: string[] | null = null;
+  // A loose row that is coverage-SHAPED (`| capability | decision | reason |`
+  // with a decision in {INTEGRATE, OPT-OUT}) is a matrix row that fell outside
+  // its table — the B1 silent-drop. Report it loudly and name it, so the author
+  // is pointed at the split rather than at a mysteriously short matrix. A loose
+  // row of any other shape is unrelated markdown and stays ignored.
+  const reportLooseRow = (cells: string[]): void => {
+    // 3 cells is the canonical width, but a WIDER loose row is reported too
+    // (#2374 review n1): a row is most often wide because an unescaped `|` in
+    // the reason split it, and a mangled row outside the table is exactly the
+    // case the author needs told about. Silently ignoring it while reporting its
+    // 3-cell sibling was inconsistent with the fail-loud posture of this rewrite.
+    // Narrower rows stay ignored — with fewer than 3 cells there is no decision
+    // column to key on, so anything matched would be a guess.
+    if (cells.length < 3) return;
+    const decision = stripInlineEmphasis(cells[1] || '').toUpperCase();
+    if (!VALID_DECISIONS.has(decision as CoverageDecision)) return;
+    const width = cells.length === 3
+      ? ''
+      : ` and has ${cells.length} columns (expected 3 — an unescaped "|" splits a cell)`;
+    out.errors.push(
+      `row: coverage row ${JSON.stringify(cells[0] || '')} appears outside a coverage table `
+      + `(a blank line, comment, or prose line split the matrix)${width}`,
+    );
+  };
+  // A confirmed non-Coverage table whose header is clearly TRYING to be the
+  // matrix — an extra column (`| capability | decision | reason | notes |`) or a
+  // reordered one — is reported by name. Scoping the parse to the registered
+  // schema made these tables invisible, so the author saw "matrix is empty" (or
+  // nothing at all) instead of a message about the header they actually wrote
+  // (#2374 review M2). Requiring BOTH canonical anchors keeps it off genuinely
+  // unrelated tables (`| tier | INTEGRATE | OPT-OUT |`, `| threat | posture | note |`).
+  const reportNearMissHeader = (cells: string[]): void => {
+    const lower = cells.map((c) => c.toLowerCase().trim());
+    if (!lower.includes('capability') || !lower.includes('decision')) return;
+    out.errors.push(
+      `table: found a table headed ${JSON.stringify(cells.join(' | '))} — not the canonical `
+      + 'Coverage schema (capability | decision | reason); its rows are not read',
+    );
+  };
+  const flushPending = (): void => {
+    if (state === 'expectDelimiter') {
+      out.errors.push('row: coverage header is not followed by a delimiter row');
+    }
+    // A held line that never got a delimiter was never a header — it was a
+    // loose row (the single-row split case, and the end-of-file case).
+    if (heldRow !== null) {
+      reportLooseRow(heldRow);
+      heldRow = null;
+    }
+  };
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx];
     const trimmed = line.trim();
-    if (!trimmed.startsWith('|')) continue;
-    const cells = trimmed.slice(1, trimmed.endsWith('|') ? -1 : trimmed.length).split('|');
-    if (cells.length < 2) continue;
-    const cleaned = cells.map((c) => c.trim());
-    // skip separator rows (|---|---|); require ≥3 dashes so a literal "-" cell
-    // is not mistaken for a separator.
-    if (cleaned.every((c) => /^:?-{3,}:?$/.test(c))) continue;
-    const decisionCell = (cleaned[1] || '').toUpperCase();
-    // header detection
-    if (!sawHeader && cleaned[0].toLowerCase() === 'capability') {
-      sawHeader = true;
+    // A fenced line (a code-block delimiter or its content) ends the current
+    // table and is never read as a row.
+    if (fenced[lineIdx]) {
+      flushPending();
+      state = 'seeking';
+      continue;
+    }
+    // A GFM table cannot contain a non-piped line: the first one ends the table.
+    if (!trimmed.startsWith('|')) {
+      flushPending();
+      state = 'seeking';
+      continue;
+    }
+    // CommonMark §4.4: four spaces (or a tab) of indent OUTSIDE a paragraph is
+    // an indented CODE BLOCK, so a pipe-shaped line there is sample text, not a
+    // row. Scoped to the states outside the matrix on purpose: an indented
+    // pipe line while `inRows` is a lazy continuation of the open table and is
+    // still parsed as a row, exactly as before.
+    //
+    // Without this, an unfenced worked example — the shape an author writes when
+    // showing the format inline — is held as a loose row and BLOCKS a
+    // well-formed COVERAGE.md (Codex round-4 blocker on the B1 fix; reproduced:
+    // `    | example | INTEGRATE | shown only as code |` under a valid matrix
+    // sealed `valid: false`). The B1 error exists to stop rows going missing; it
+    // must never invent a failure on a file whose matrix is complete.
+    if ((state === 'seeking' || state === 'foreignHeader?' || state === 'foreignRows' || state === 'looseRows')
+      && /^(?: {4}|\t)/.test(line)) {
+      flushPending();
+      state = 'seeking';
+      continue;
+    }
+    const cells = splitTableRow(line);
+    if (isCoverageHeader(cells)) {
+      // Every canonical header opens a new matrix section — the previous latch
+      // permitted exactly one per file, so a phase that sectioned its matrix
+      // ("this phase" / "transferred to 8.1") had its 2nd header parsed as a
+      // data row and rejected as decision "DECISION". A prior header still
+      // awaiting its delimiter is abandoned here, so flush it first.
+      flushPending();
+      state = 'expectDelimiter';
+      headerCols = cells.length;
       out.format = 'table';
       continue;
     }
-    if (!VALID_DECISIONS.has(decisionCell as CoverageDecision)) {
-      // A row that otherwise looks like data (≥3 cells, non-empty capability)
-      // but carries a malformed decision is a real error, not a row to skip
-      // silently — otherwise a single typo'd row collapses the matrix to
-      // "empty" and the user sees a confusing message.
-      if (cleaned.length >= 3 && cleaned[0]) {
-        out.errors.push(`row: decision "${decisionCell}" not in {INTEGRATE, OPT-OUT}`);
+    // A piped line outside the Coverage table. Hold it for one line: if a
+    // delimiter follows it was some other table's header (`foreignRows` — its
+    // rows are legitimately ignored); otherwise it belongs to no table and the
+    // run is loose rows, each of which is checked for the B1 split shape.
+    if (state === 'seeking') {
+      heldRow = cells;
+      state = 'foreignHeader?';
+      continue;
+    }
+    if (state === 'foreignHeader?') {
+      if (isDelimiterRow(cells)) {
+        if (heldRow !== null) reportNearMissHeader(heldRow);
+        heldRow = null;
+        state = 'foreignRows';
+      } else {
+        if (heldRow !== null) reportLooseRow(heldRow);
+        heldRow = null;
+        reportLooseRow(cells);
+        state = 'looseRows';
       }
       continue;
     }
-    if (out.format === 'none') out.format = 'table';
-    // A coverage row has exactly 3 cells. Extra cells mean an unescaped pipe in
-    // a value silently corrupted the row — surface it rather than parse garbage.
-    if (cleaned.length > 3) {
-      out.errors.push(`row: ${cleaned.length} columns (expected 3 — unescaped pipe in a cell?)`);
+    // Rows of a confirmed non-Coverage table are ignored (that scoping IS the
+    // #2366 fix); every row of a table-less run is a B1 candidate.
+    if (state === 'foreignRows') continue;
+    if (state === 'looseRows') {
+      reportLooseRow(cells);
+      continue;
+    }
+    if (state === 'expectDelimiter') {
+      // GFM requires the delimiter row immediately after the header, with the
+      // same column count. Its absence (or a mismatched width) means the header
+      // did not open a real table; surface it rather than reading the following
+      // lines as data (a header with no delimiter used to parse its data rows
+      // anyway, then pass the gate).
+      if (!isDelimiterRow(cells)) {
+        out.errors.push('row: coverage header is not followed by a delimiter row');
+        state = 'seeking';
+      } else if (cells.length !== headerCols) {
+        out.errors.push(
+          `row: delimiter row has ${cells.length} columns, expected ${headerCols}`,
+        );
+        state = 'seeking';
+      } else {
+        state = 'inRows';
+      }
+      continue;
+    }
+    // state === 'inRows'
+    // A SECOND delimiter here means a distinct/adjacent table butted on with no
+    // blank line; absorbing its rows would re-open the silent-corruption path
+    // #2366 closes. Detect that with a STRONG delimiter (`-{3,}`, the parser's
+    // pre-#2366 heuristic) rather than the shared GFM `isDelimiterRow` (`-{1,}`):
+    // a real table delimiter is `|---|`, whereas an all-single-dash data row
+    // (`| - | - | - |`) is NOT a delimiter — treating it as one would misreport
+    // the row and TRUNCATE every row after it in the section (trek-e review). A
+    // single-dash row instead falls through to the width/decision checks below
+    // and is rejected precisely, without dropping its successors.
+    if (isStrongDelimiterRow(cells)) {
+      out.errors.push('row: unexpected delimiter row inside the coverage table');
+      state = 'seeking';
+      continue;
+    }
+    // A wholly-empty row (`| | | |`) is a blank separator, not data — skip it
+    // silently, matching the parser's long-standing tolerance for a trailing
+    // blank pipe row.
+    if (cells.every((c) => c === '')) continue;
+    // A coverage row must be as wide as the header that opened its table. Any
+    // other width is malformed — a missing cell, or an unescaped pipe that split
+    // a value. Surface it LOUDLY: a short or wide row must never be silently
+    // skipped or truncate the rows that follow it.
+    //
+    // Width comes from `headerCols` (captured when the header matched) rather
+    // than a literal 3: every registered `Coverage` variant is 3 columns today,
+    // so this is identical now — but a hardcoded 3 would silently reject every
+    // row of a second variant the moment one is registered, which is the whole
+    // point of resolving table identity through the schema registry (#2374
+    // review m5).
+    if (cells.length !== headerCols) {
+      out.errors.push(
+        `row: ${cells.length} columns (expected ${headerCols}: capability | decision | reason)`,
+      );
+      continue;
+    }
+    const decisionCell = stripInlineEmphasis(cells[1] || '').toUpperCase();
+    if (!VALID_DECISIONS.has(decisionCell as CoverageDecision)) {
+      out.errors.push(`row: decision "${decisionCell}" not in {INTEGRATE, OPT-OUT}`);
+      continue;
     }
     out.rows.push({
-      capability: cleaned[0] || '',
+      capability: cells[0] || '',
       decision: decisionCell as CoverageDecision,
-      reason: (cleaned[2] ?? '').trim(),
+      reason: (cells[2] ?? '').trim(),
     });
   }
+  // A header on the final line, with the file ending before its delimiter.
+  flushPending();
   return out;
 }
 
@@ -730,6 +1098,10 @@ export function validateCoverageMatrix(text: unknown): CoverageValidationResult 
   const parsed = parseCoverageMatrix(text);
   const errors = [...parsed.errors];
   const rows = parsed.rows;
+  // The JSON-fence path carries RAW author content (no GFM escaping), so a `|`
+  // there is still rejected; a `|` from the table path arrived as a correct
+  // `\|` escape and is legitimate (#2374 review m7).
+  const rawPipesRejected = parsed.format === 'json';
 
   // #2365 acceptance #5: a reasoned no-integration declaration with no rows
   // satisfies the gate. A declaration ALONGSIDE rows is contradictory — the
@@ -764,19 +1136,38 @@ export function validateCoverageMatrix(text: unknown): CoverageValidationResult 
     if (!row.capability) {
       errors.push(`row[${i}]: empty capability name`);
     } else {
-      // Format contract + prompt-injection bound: cell values must be short,
-      // single-line, pipe-free prose (the matrix is a markdown table whose
-      // content flows into the gate message). Pipes/newlines would corrupt the
-      // table and let a COVERAGE.md inject unbounded text into the seal message.
-      if (/[|\n\r]/.test(row.capability)) {
-        errors.push(`row[${i}]: capability contains a pipe or newline (unsupported in a table cell)`);
+      // Format contract + prompt-injection bound: cell values must be short and
+      // single-line (the matrix is a markdown table whose content flows into the
+      // gate message, so a newline could inject unbounded text into the seal
+      // message; length is bounded below).
+      //
+      // A literal `|` from the TABLE path is NOT rejected (#2374 review m7): it
+      // normally reaches here only from a correctly GFM-escaped `\|`, so
+      // rejecting it blamed the author for writing the table right.
+      // `renderCoverageMatrix` escapes on the way back out through the shared
+      // `escapeCell`, so the round-trip stays bijective either way.
+      //
+      // Precisely: `splitTableRow`'s split guard is a single-character lookbehind
+      // (`(?<!\\)\|`, markdown-table.cts), so it also keeps a pipe preceded by an
+      // ESCAPED backslash (`a\\\\|b`) in one cell, where GFM would treat that pipe
+      // as a real column break. That pre-existing seam imprecision is reported
+      // separately rather than fixed here (it is shared by every table reader);
+      // its only effect on this path is that such a cell is accepted instead of
+      // rejected, and it still renders and re-parses losslessly.
+      //
+      // A raw `|` from the JSON-fence path is still rejected: that is a
+      // deliberate hardening decision from an earlier review round (unescaped
+      // author content, not correct GFM), and this fix has no mandate to
+      // reverse it.
+      if (/[\n\r]/.test(row.capability) || (rawPipesRejected && row.capability.includes('|'))) {
+        errors.push(`row[${i}]: capability contains a newline or unescaped pipe (unsupported in a table cell)`);
       }
       if (row.capability.length > CAPABILITY_MAX_LEN) {
         errors.push(`row[${i}]: capability exceeds ${CAPABILITY_MAX_LEN} chars`);
       }
     }
-    if (row.reason && /[|\n\r]/.test(row.reason)) {
-      errors.push(`row[${i}]: reason contains a pipe or newline (unsupported in a table cell)`);
+    if (row.reason && (/[\n\r]/.test(row.reason) || (rawPipesRejected && row.reason.includes('|')))) {
+      errors.push(`row[${i}]: reason contains a newline or unescaped pipe (unsupported in a table cell)`);
     }
     if (row.reason.length > REASON_MAX_LEN) {
       errors.push(`row[${i}]: reason exceeds ${REASON_MAX_LEN} chars`);
@@ -803,8 +1194,11 @@ export function validateCoverageMatrix(text: unknown): CoverageValidationResult 
 
 /** Render rows back to the canonical markdown-table format (bijective with parse). */
 export function renderCoverageMatrix(rows: readonly CoverageRow[]): string {
+  // Cells are escaped through the shared `escapeCell` (the exact inverse of
+  // `splitTableRow`'s unescaping), so a reason legitimately containing a `|`
+  // round-trips instead of rendering a corrupt table (#2374 review m7).
   const body = rows
-    .map((r) => `| ${r.capability} | ${r.decision} | ${r.reason} |`)
+    .map((r) => `| ${escapeCell(r.capability)} | ${r.decision} | ${escapeCell(r.reason)} |`)
     .join('\n');
   return `| capability | decision | reason |\n|---|---|---|\n${body}`;
 }

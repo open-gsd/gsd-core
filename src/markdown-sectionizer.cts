@@ -269,7 +269,7 @@ function stripInlineCodeLine(line: string): string {
 // ─── extractFencedBlock ───────────────────────────────────────────────────────
 
 /** A fenced code block located by `scanFencedBlocks`: line-index span + info string. */
-interface FencedBlockRecord {
+export interface FencedBlockRecord {
   /** Fence delimiter character (`` ` `` or `~`). */
   char: '`' | '~';
   /** Fence delimiter run length (≥3). */
@@ -302,7 +302,7 @@ interface FencedBlockRecord {
  * comment above): this is a second independent copy of the fence state
  * machine, pending a T-tier consolidation.
  */
-function scanFencedBlocks(lines: string[]): FencedBlockRecord[] {
+export function scanFencedBlocks(lines: string[]): FencedBlockRecord[] {
   const delimRe = /^( {0,3})(`{3,}|~{3,})(.*)$/;
   const blocks: FencedBlockRecord[] = [];
   let open: { char: '`' | '~'; len: number; infoString: string; openLineIdx: number } | null = null;

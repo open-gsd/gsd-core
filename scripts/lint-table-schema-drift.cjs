@@ -26,6 +26,7 @@ const path = require('node:path');
 // Schema id -> the ONE canonical template/workflow file that must emit every
 // variant's header verbatim (ADR-2143 §3).
 const SCHEMA_SOURCE_FILES = {
+  Coverage: path.join('capabilities', 'ai-integration', 'fragments', 'api-coverage-plan-pre.md'),
   RoadmapProgress: path.join('gsd-core', 'templates', 'roadmap.md'),
   RequirementsTraceability: path.join('gsd-core', 'templates', 'requirements.md'),
   QuickTasks: path.join('gsd-core', 'workflows', 'quick.md'),

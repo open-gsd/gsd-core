@@ -59,6 +59,9 @@ export const TABLE_SCHEMAS: Record<string, CanonicalTableVariant[]> = {
       columns: ['#', 'Description', 'Date', 'Commit', 'Status', 'Directory'],
     },
   ],
+  Coverage: [
+    { label: 'default', columns: ['capability', 'decision', 'reason'] },
+  ],
   Security: [
     { label: 'trust-boundaries', columns: ['Boundary', 'Description', 'Data Crossing'] },
     {
@@ -87,13 +90,26 @@ export const TABLE_SCHEMAS: Record<string, CanonicalTableVariant[]> = {
 /**
  * Resolve a parsed table's header columns to the canonical schema it matches
  * (exact column names, same length, same order), else `null`.
+ *
+ * `opts.caseInsensitive` compares column names case-folded. Exact matching is
+ * the default and stays the contract for the schemas whose columns are
+ * capitalised; the coverage matrix is hand-authored prose, where
+ * `| Capability | Decision | Reason |` has always been accepted, so its reader
+ * asks for the folded comparison rather than reimplementing the walk over
+ * `TABLE_SCHEMAS` (#2374 review m6 — two identification paths for one
+ * registered schema is exactly the drift ADR-2143 §3 exists to prevent).
  */
-export function matchTableSchema(columns: string[]): { id: string; label: string } | null {
+export function matchTableSchema(
+  columns: string[],
+  opts: { caseInsensitive?: boolean } = {},
+): { id: string; label: string } | null {
+  const fold = (c: string): string => (opts.caseInsensitive ? c.toLowerCase() : c);
+  const target = columns.map(fold);
   for (const [id, variants] of Object.entries(TABLE_SCHEMAS)) {
     for (const variant of variants) {
       if (
-        variant.columns.length === columns.length
-        && variant.columns.every((col, idx) => col === columns[idx])
+        variant.columns.length === target.length
+        && variant.columns.every((col, idx) => fold(col) === target[idx])
       ) {
         return { id, label: variant.label };
       }

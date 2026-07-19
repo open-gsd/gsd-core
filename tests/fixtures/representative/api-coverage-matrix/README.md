@@ -12,12 +12,11 @@ phase" heading (the section-split use case #2366 names as legitimate), and
 a decoy 3-column "Coverage summary" table whose header row happens to read
 `| tier | INTEGRATE | OPT-OUT |`.
 
-Expected once fixed: 3 rows (`search`, `skip`, `widget`), 0 errors (see
-`MANIFEST.json`'s `expectedCounts`/`expectedErrorCount`/`expectedBlock`).
-Today's parser instead invents a `tier` capability from the summary table
-(silent corruption — zero errors reported for that path) while rejecting
-the bolded `skip` decision and two other cells, producing 3 errors and
-`block: true` — pinned in `MANIFEST.json`'s `currentBuggyOutput` and
-asserted directly in `tests/representative-corpus.test.cjs` (a
-characterization of today's known-broken behavior, not a `todo` — see
-`tests/fixtures/representative/README.md` for why) until #2366 lands.
+Result (fixed by #2366): 3 rows (`search`, `skip`, `widget`), 0 errors,
+`block: false` (see `MANIFEST.json`'s `expectedCounts`/`expectedErrorCount`/
+`expectedBlock`, asserted directly in `tests/representative-corpus.test.cjs`).
+Before #2366, the parser invented a `tier` capability from the summary table
+(silent corruption — zero errors for that path) while rejecting the bolded
+`skip` decision and two other cells (3 errors, `block: true`); that
+`currentBuggyOutput` was pinned here until the fix landed and has since been
+removed per the tripwire's flip-on-fix contract.

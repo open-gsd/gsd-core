@@ -24,7 +24,7 @@ const path = require('node:path');
 const fc = require('./helpers/fast-check-setup.cjs');
 
 const { parseMarkdownTable, matchTableSchema, TABLE_SCHEMAS, appendQuickTaskRow, findTableBySchema, findTableWithColumns, updateTableCell, deleteTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
-const { buildHeader, normalize } = require('../scripts/lint-table-schema-drift.cjs');
+const { buildHeader, normalize, SCHEMA_SOURCE_FILES } = require('../scripts/lint-table-schema-drift.cjs');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -190,6 +190,51 @@ describe('matchTableSchema', () => {
   test('returns null when column count differs from every variant', () => {
     const match = matchTableSchema(['Phase', 'Plans Complete', 'Status']);
     assert.equal(match, null);
+  });
+
+  // #2374 review m6 — the coverage reader used to walk TABLE_SCHEMAS itself
+  // rather than calling this seam, and the two had already diverged: a
+  // hand-written `| Capability | Decision | Reason |` was accepted by the reader
+  // and rejected here. `caseInsensitive` is how that reader now asks for the
+  // comparison it needs, so there is ONE matcher for one registered schema
+  // (ADR-2143 §3).
+  test('caseInsensitive resolves a differently-cased header; exact matching still rejects it', () => {
+    const mixed = ['Capability', 'Decision', 'Reason'];
+    assert.equal(matchTableSchema(mixed), null,
+      'exact matching stays the default contract for the capitalised schemas');
+    assert.deepEqual(matchTableSchema(mixed, { caseInsensitive: true }), { id: 'Coverage', label: 'default' });
+  });
+
+  test('caseInsensitive does not widen order or arity', () => {
+    assert.equal(matchTableSchema(['decision', 'capability', 'reason'], { caseInsensitive: true }), null,
+      'a reordered header is still a different table');
+    assert.equal(matchTableSchema(['capability', 'decision', 'reason', 'notes'], { caseInsensitive: true }), null,
+      'an extended header is still a different table');
+  });
+
+  // Parity guard: the coverage reader and the registry must agree on exactly
+  // which headers are Coverage tables, in both directions, so the two cannot
+  // drift apart again.
+  test('parity: isCoverageHeader agrees with matchTableSchema on every probe', () => {
+    const { _isCoverageHeader } = require('../gsd-core/bin/lib/api-coverage.cjs');
+    const probes = [
+      ['capability', 'decision', 'reason'],
+      ['Capability', 'Decision', 'Reason'],
+      ['CAPABILITY', 'DECISION', 'REASON'],
+      ['capability', 'decision', 'reason', 'notes'],
+      ['decision', 'capability', 'reason'],
+      ['tier', 'INTEGRATE', 'OPT-OUT'],
+      ['threat', 'posture', 'note'],
+      ['Phase', 'Plans Complete', 'Status', 'Completed'],
+    ];
+    for (const probe of probes) {
+      const viaSeam = matchTableSchema(probe, { caseInsensitive: true });
+      assert.equal(
+        _isCoverageHeader(probe),
+        viaSeam !== null && viaSeam.id === 'Coverage',
+        `divergence on ${JSON.stringify(probe)}`,
+      );
+    }
   });
 });
 
@@ -963,6 +1008,12 @@ describe('TABLE_SCHEMAS parity: registry headers must appear verbatim in their s
   test('Security variants appear in gsd-core/templates/SECURITY.md', () => {
     for (const variant of TABLE_SCHEMAS.Security) {
       assertHeaderInFile('gsd-core/templates/SECURITY.md', variant);
+    }
+  });
+
+  test('Coverage variant appears in its api-coverage fragment (#2366)', () => {
+    for (const variant of TABLE_SCHEMAS.Coverage) {
+      assertHeaderInFile(SCHEMA_SOURCE_FILES.Coverage, variant);
     }
   });
 });

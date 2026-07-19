@@ -85,6 +85,13 @@ Write the matrix to `${PHASE_DIR}/COVERAGE.md` (canonical markdown-table form):
 | skip | OPT-OUT | not needed yet — tracked for follow-up phase |
 ```
 
+Keep the table in ONE contiguous block — header, delimiter, then rows with no
+blank line, prose, or HTML comment between them. Anything else ends the table, so
+a coverage row after the break sits outside the matrix and **blocks the seal**
+naming that row. To group capabilities, repeat the full header: each canonical
+header opens a new section of the same matrix. Other tables (a summary of counts,
+a threat table) are ignored and can sit alongside it.
+
 A fenced ` ```coverage ` JSON block is also accepted for machine-generated
 matrices; the markdown table is preferred (human-editable, diff-friendly).
 
