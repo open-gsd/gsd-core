@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product [#1949]
 // Agent .md, reference .md, and docs/reference/*.md files — their text IS what the
 // runtime loads. Per CONTRIBUTING.md exception matrix, asserting these files
 // document the <precondition> contract tests the deployed surface, not derived
