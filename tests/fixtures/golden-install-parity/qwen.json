@@ -243,7 +243,7 @@
   "gsd-core/workflows/docs-update.md": "45d2f0d173c84e07",
   "gsd-core/workflows/edit-phase.md": "0fb5e0123cfc6f36",
   "gsd-core/workflows/eval-review.md": "6dee8a1e40ececd4",
-  "gsd-core/workflows/execute-phase.md": "15c75c13bb1cb5ea",
+  "gsd-core/workflows/execute-phase.md": "a771448bed59407a",
   "gsd-core/workflows/execute-phase/steps/codebase-drift-gate.md": "36af8d91e4ae8b9c",
   "gsd-core/workflows/execute-phase/steps/per-plan-worktree-gate.md": "7ebb7d1af6082028",
   "gsd-core/workflows/execute-phase/steps/post-merge-gate.md": "0b04cc2dcab61107",
