@@ -11,7 +11,7 @@
  * DIFFERENT project). Neither file used the portable ${TMPDIR:-/tmp} seam,
  * and review.md had no cleanup.
  *
- * The fix threads a single `mktemp -d "${TMPDIR:-/tmp}/gsd-review.XXXXXX"`
+ * The fix threads a single `mktemp -d "${TMPDIR:-/tmp}/gsd-review-XXXXXX"`
  * run directory (RUN_DIR / {run_dir}) through every review.md temp path, and
  * ship.md's stderr capture through a per-run `mktemp` file — eliminating the
  * shared-path collision by construction rather than by convention.
@@ -45,10 +45,10 @@ describe('#2358 review.md temp paths are run-scoped, not phase-only', () => {
   });
 
   test('creates exactly one run-scoped directory via the portable ${TMPDIR:-/tmp} seam', () => {
-    const mktempAssignments = content.match(/RUN_DIR=\$\(mktemp -d "\$\{TMPDIR:-\/tmp\}\/gsd-review\.XXXXXX"\)/g) || [];
+    const mktempAssignments = content.match(/RUN_DIR=\$\(mktemp -d "\$\{TMPDIR:-\/tmp\}\/gsd-review-XXXXXX"\)/g) || [];
     assert.equal(
       mktempAssignments.length, 1,
-      'review.md must create the run directory with exactly one `mktemp -d "${TMPDIR:-/tmp}/gsd-review.XXXXXX"` — ' +
+      'review.md must create the run directory with exactly one `mktemp -d "${TMPDIR:-/tmp}/gsd-review-XXXXXX"` — ' +
       'a hardcoded /tmp (no ${TMPDIR:-/tmp} seam) breaks on Windows, and re-mktemp-ing per block would break the ' +
       'write/read pairing between build_prompt and the local-reviewer budget-trimming reads'
     );
@@ -138,7 +138,7 @@ describe('#2358 design principle: run-scoped temp dirs never collide across proj
   // randomized-suffix isolation) using Node's built-in equivalent, which is
   // cross-platform (Windows included) unlike shelling out to `mktemp`/bash.
   test('two runs — even for the same phase number, same or different project — get distinct run dirs', () => {
-    const prefix = path.join(os.tmpdir(), 'gsd-review.');
+    const prefix = path.join(os.tmpdir(), 'gsd-review-');
     const runDirA = fs.mkdtempSync(prefix);
     const runDirB = fs.mkdtempSync(prefix);
     try {

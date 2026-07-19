@@ -52,7 +52,7 @@ describe('Antigravity (agy) reviewer invocation in /gsd-review (#2073)', () => {
   test('#2073 mode 1 — uses a file-reference prompt (mirrors the Cursor block)', () => {
     const block = agyBashBlock();
     assert.ok(
-      /Read the file at \/tmp\/gsd-review-prompt-/.test(block),
+      /Read the file at \{run_dir\}\/gsd-review-prompt\.md/.test(block),
       'agy should reference the prompt by file path, not inline it',
     );
   });

@@ -120,28 +120,18 @@ Collect phase artifacts for the review prompt:
 INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 
-# #2358: create ONE private, run-scoped temp directory for this review
-# invocation. Every temp file the rest of this workflow writes lives under
-# it, so two runs — different projects, or overlapping runs of the same
-# project — never collide or read each other's files, even when their phase
-# numbers coincide. Portable via ${TMPDIR:-/tmp}; mktemp's random suffix
-# makes stale-file reuse structurally impossible (unlike a path keyed only
-# on the phase number).
-RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review.XXXXXX")
+# #2358: ONE run-scoped temp dir (portable via ${TMPDIR:-/tmp}) so overlapping
+# runs never collide or read each other's stale files.
+RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review-XXXXXX")
 echo "RUN_DIR=$RUN_DIR"
 ```
 
 Read from init: `phase_dir`, `phase_number`, `padded_phase`.
 
-Capture `RUN_DIR` from the command output above. It is created exactly ONCE
-for this entire review run — thread its concrete path into every `{run_dir}`
-placeholder (and every `$RUN_DIR` / `${RUN_DIR}` shell reference inside a
-single contiguous bash block) used throughout the remaining steps, the same
-placeholder-substitution mechanism already used for `{phase}`. Do NOT re-run
-`mktemp -d` in a later block — a fresh directory per block would break the
-write/read pairing between `build_prompt`'s section-file writes and
-`invoke_reviewers`' local-reviewer budget-trimming reads, which must resolve
-to the identical directory.
+Capture `RUN_DIR` above (created ONCE) and thread it into every `{run_dir}`
+placeholder and `$RUN_DIR`/`${RUN_DIR}` reference within a bash block. Do NOT
+re-run `mktemp -d` later — every block must resolve to this same directory, or
+`build_prompt`'s writes and `invoke_reviewers`' reads split.
 
 Then read:
 1. `.planning/PROJECT.md` (first 80 lines — project context)
@@ -214,9 +204,7 @@ Write to a temp file: `{run_dir}/gsd-review-prompt.md`
 Also write individual section files so the budget tool can re-trim per reviewer:
 
 ```bash
-# RUN_DIR is the concrete path captured from gather_context's mktemp -d
-# (threaded in via the {run_dir} placeholder — see the note above).
-RUN_DIR="{run_dir}"
+RUN_DIR="{run_dir}"   # from gather_context
 
 # Write individual section files for per-reviewer budget trimming
 # These are always written so reviewers with a budget can invoke prompt-budget
@@ -246,7 +234,7 @@ if [ -f ".planning/REQUIREMENTS.md" ]; then
 fi
 ```
 
-Note: The variable names above (`INSTRUCTIONS_BLOCK_FILE`, `ROADMAP_SECTION_FILE`, `PHASE_DIR`) reference the variables already established during prompt assembly; `RUN_DIR` is the run-scoped directory created once in `gather_context` (#2358) and re-assigned from the `{run_dir}` placeholder at the top of this block. In practice the AI implementing this step writes the instruction and roadmap blocks to temp files while assembling the combined prompt, then copies those same temp files to the per-reviewer section paths. If the assembled prompt was built inline (string concatenation rather than file-by-file), write each section to the corresponding path after writing the combined file.
+Note: `INSTRUCTIONS_BLOCK_FILE`, `ROADMAP_SECTION_FILE`, and `PHASE_DIR` come from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Copy the temp files written during prompt assembly to these section paths (or write each section here if the prompt was built inline).
 </step>
 
 <step name="invoke_reviewers">
@@ -358,14 +346,14 @@ else
   set --
 fi
 cat {run_dir}/gsd-review-prompt.md | opencode run "$@" --format json - 2>{run_dir}/gsd-review-opencode.err > {run_dir}/gsd-review-opencode.json
-# Reconstruct the review from the assistant text parts. Capture into a variable and
-# test its CONTENT (not the output file's size): an empty extraction still prints a
-# trailing newline, which would fool a `[ -s file ]` check into skipping the stub.
+# Reconstruct the review from the assistant text parts into a variable and test
+# its CONTENT, not the file size: an empty extraction still prints a trailing
+# newline that would fool a `[ -s file ]` check into skipping the stub.
 OPENCODE_REVIEW=$(jq -rs '[.[] | select(.type=="text") | .part.text // empty] | join("\n")' {run_dir}/gsd-review-opencode.json 2>/dev/null)
 if [ -n "$OPENCODE_REVIEW" ]; then
   printf '%s\n' "$OPENCODE_REVIEW" > {run_dir}/gsd-review-opencode.md
 else
-  # No assistant text (agent emitted no final message, or stdout was not valid JSON events).
+  # No assistant text (no final message, or stdout was not valid JSON):
   {
     echo "OpenCode review returned no assistant text (#1936: agent ended its turn with no final message)."
     OPENCODE_DIAG=$(jq -rs '[.[] | select(.type=="step_finish")] | last | "stop reason=\(.part.reason // "?"), output tokens=\(.part.tokens.output // "?")"' {run_dir}/gsd-review-opencode.json 2>/dev/null)
@@ -935,8 +923,7 @@ To incorporate feedback into planning:
   /gsd:plan-phase {N} --reviews
 ```
 
-Clean up temp files — remove the run's private temp directory now that
-REVIEWS.md has been written and committed:
+Clean up — remove the run's temp directory now that REVIEWS.md is committed:
 
 ```bash
 rm -rf "{run_dir}"
