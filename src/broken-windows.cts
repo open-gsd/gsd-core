@@ -265,6 +265,17 @@ function nextId(entries: WindowEntry[]): number {
   return max + 1;
 }
 
+/**
+ * Append a window to the ledger. Assigns the next dense id (max+1), sets
+ * status=open, timestamps via opts.now.
+ *
+ * Concurrency (issue #1950 review L2): NOT safe for concurrent writers. Two
+ * parallel `gsd_run windows append` invocations both read the same snapshot,
+ * both compute the same nextId, both write — the second atomic rename wins
+ * and the first append (and the entry it added) is silently lost. This is
+ * acceptable in the current single-executor-per-phase model; document if the
+ * executor ever gains parallel wave-level append.
+ */
 export function appendWindow(
   ledger: Ledger,
   input: WindowInput,
@@ -664,6 +675,11 @@ function ensurePlanningDir(cwd: string): void {
 /**
  * Errnos that Windows throws transiently on rename when a reader or antivirus
  * scanner holds the target. We retry through these; anything else propagates.
+ *
+ * NOTE (issue #1950 review L3): the retry uses a short busy-wait rather than
+ * setTimeout — this is a synchronous CLI path with no event loop to yield on,
+ * and the cumulative wait is bounded at 25+50+100+200 = 375ms across 5 attempts.
+ * If a future caller moves this onto an async path, swap to awaitable sleeps.
  */
 const RENAME_RETRY_ERRNOS = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const RENAME_MAX_ATTEMPTS = 5;
