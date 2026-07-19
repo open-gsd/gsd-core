@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (see #2423)
 // .github/workflows/release.yml is the deployed CI contract; asserting that
 // the finalize job wires in scripts/sync-next-version.cjs is only expressible
 // against the workflow text. See regression #2423 — the finalize job shipped
