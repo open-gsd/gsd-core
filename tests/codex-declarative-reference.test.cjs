@@ -228,13 +228,18 @@ test('upgrade 2 — the managed config block writes [agents] max_depth = 1', () 
     path.join(os.homedir(), '.codex'),
   );
   assert.match(block, /\[agents\]\nmax_depth = 1\n/, 'the block pins max_depth = 1 on a bare [agents] table');
-  // The bare [agents] scalar table coexists with the [agents.gsd-*] role tables.
-  assert.match(block, /\[agents\.gsd-foo\]/);
+  // #2406: the bare [agents] scalar table is the ONLY [agents]-namespaced
+  // content the block emits — no [agents.gsd-*] role sub-tables. Codex
+  // auto-discovers roles from the standalone agents/<name>.toml files, so a
+  // config.toml role table pointing config_file back at that same file was a
+  // second, duplicate registration of the same role.
+  assert.doesNotMatch(block, /\[agents\.gsd-foo\]/, 'no [agents.gsd-foo] role table');
+  assert.doesNotMatch(block, /config_file/, 'no config_file line');
 });
 
 test('upgrade 2 — validateCodexConfigSchema accepts the managed [agents] block but still rejects break-forms', () => {
   const block = install.generateCodexConfigBlock([{ name: 'gsd-foo', description: 'Foo' }], path.join(os.homedir(), '.codex'));
-  assert.equal(install.validateCodexConfigSchema(block).ok, true, 'known-scalar [agents] + role tables must validate');
+  assert.equal(install.validateCodexConfigSchema(block).ok, true, 'known-scalar [agents] table must validate');
 
   // Still rejects the actual #2760 break-forms.
   assert.equal(install.validateCodexConfigSchema('[[agents]]\nname = "x"\n').ok, false, '[[agents]] sequence still rejected');
@@ -275,13 +280,17 @@ test('upgrade 2 — install preserves the user\'s own AgentsToml scalars (max_th
     assert.doesNotMatch(merged, /max_depth = 9/, 'user max_depth is overridden by the GSD-managed value');
     assert.equal((merged.match(/^\[agents\]$/mg) || []).length, 1, 'exactly one managed [agents] table (no duplicate)');
     assert.equal(install.validateCodexConfigSchema(merged).ok, true, 'the merged config still validates');
+    // #2406: the fresh block never emitted an [agents.gsd-foo] role table in
+    // the first place — canonical registration lives only in the standalone
+    // TOML, so there is nothing gsd-foo-shaped in config.toml to begin with.
+    assert.doesNotMatch(merged, /gsd-foo/, 'no [agents.gsd-foo] role table in the merged config');
 
     // Symmetric: uninstall restores the user's scalars and drops GSD's max_depth.
     const uninstalled = install.stripGsdFromCodexConfig(merged);
     assert.match(uninstalled, /max_threads = 4/, 'uninstall restores the user\'s max_threads');
     assert.match(uninstalled, /interrupt_message = false/, 'uninstall restores interrupt_message');
     assert.doesNotMatch(uninstalled, /max_depth/, 'uninstall drops the GSD-managed max_depth');
-    assert.doesNotMatch(uninstalled, /gsd-foo/, 'uninstall removes the gsd role table');
+    assert.doesNotMatch(uninstalled, /gsd-foo/, 'no [agents.gsd-foo] role table remains after uninstall either');
     assert.equal(install.validateCodexConfigSchema(uninstalled).ok, true, 'the restored config validates');
   } finally {
     cleanup(tmp);

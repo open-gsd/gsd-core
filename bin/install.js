@@ -4365,14 +4365,26 @@ function _resolveMovedSkillsOldDir(runtime, targetDir, scope) {
 
 /**
  * Generate the GSD config block for Codex config.toml.
- * @param {Array<{name: string, description: string}>} agents
+ *
+ * #2406 — standalone per-agent TOMLs (written by installCodexConfig to
+ * `$CODEX_HOME/agents/<name>.toml`) are auto-discovered by Codex and are the
+ * SOLE canonical registration source for each role. This block therefore no
+ * longer emits `[agents.<name>]` role tables that point `config_file` back at
+ * those same standalone TOMLs — that was a second, redundant declaration of
+ * the same role in one config layer, and Codex logged "Ignoring malformed
+ * agent role definition: duplicate agent role name" once per agent as a
+ * result. Only the bare `[agents]` dispatch-tuning scalar table is emitted
+ * here; role name/description/model/reasoning-effort/sandbox settings remain
+ * fully discoverable through the standalone TOML alone.
+ * @param {Array<{name: string, description: string}>} _agents unused — kept
+ *   in the signature for call-site compatibility (installCodexConfig and
+ *   existing tests still pass it positionally); per-agent role tables are no
+ *   longer generated from it.
+ * @param {string} [_targetDir] unused — the standalone-TOML `config_file`
+ *   path it used to resolve is no longer emitted here; kept for the same
+ *   call-site-compatibility reason as `_agents`.
  */
-function generateCodexConfigBlock(agents, targetDir) {
-  // Use absolute paths when targetDir is provided — Codex ≥0.116 requires
-  // AbsolutePathBuf for config_file and cannot resolve relative paths.
-  const agentsPrefix = targetDir
-    ? path.join(targetDir, 'agents').replace(/\\/g, '/')
-    : 'agents';
+function generateCodexConfigBlock(_agents, _targetDir) {
   const lines = [
     GSD_CODEX_MARKER,
     '',
@@ -4381,23 +4393,11 @@ function generateCodexConfigBlock(agents, targetDir) {
   // ADR-1239 upgrade 2 / #2088 — explicit dispatch tuning. Pin `max_depth` on the
   // `[agents]` (AgentsToml) table rather than relying on codex-cli's implicit
   // default, realizing the negotiated `dispatch.maxDepth: 1` axis. This bare
-  // `[agents]` scalar table coexists with the flattened `[agents.<name>]` role
-  // sub-tables below (validated by validateCodexConfigSchema, which permits a
-  // known-scalar-only `[agents]`). Emitted before the role tables so the parent
-  // table is opened first.
+  // `[agents]` scalar table is validated by validateCodexConfigSchema, which
+  // permits a known-scalar-only `[agents]`.
   lines.push('[agents]');
   lines.push(`max_depth = ${GSD_CODEX_AGENTS_MAX_DEPTH}`);
   lines.push('');
-
-  for (const { name, description } of agents) {
-    // #2727 — Codex 0.124.0 requires [agents.<name>] struct format, not [[agents]] sequence.
-    // [[agents]] (introduced in #2645) is rejected by codex-cli 0.124.0 with
-    // "invalid type: sequence, expected struct AgentsToml in `agents`".
-    lines.push(`[agents.${name}]`);
-    lines.push(`description = ${JSON.stringify(description)}`);
-    lines.push(`config_file = "${agentsPrefix}/${name}.toml"`);
-    lines.push('');
-  }
 
   return lines.join('\n');
 }

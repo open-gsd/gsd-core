@@ -155,7 +155,7 @@ KILO_CONFIG_DIR=~/.config/kilo-alt npx @opengsd/gsd-core@latest --kilo --global
 npx @opengsd/gsd-core@latest --codex --global
 ```
 
-Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written with per-agent TOML entries in `config.toml`. Restart Codex (or run `codex --reload`) after install.
+Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written as standalone `~/.codex/agents/gsd-*.toml` files, which Codex auto-discovers — that is the sole registration source for each role; `config.toml` only carries the shared `[agents]` dispatch-tuning scalar (`max_depth`), not a per-role table (#2406). Restart Codex (or run `codex --reload`) after install.
 
 **Minimum supported version:** Codex CLI 0.130.0. Earlier versions had additional skill-root scanning that can produce duplicate listings.
 
