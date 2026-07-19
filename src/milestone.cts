@@ -268,6 +268,193 @@ function cmdRequirementsMarkComplete(cwd: string, reqIdsRaw: string[], raw: bool
   );
 }
 
+/**
+ * #2388: a requirement ID shared by more than one plan in a phase must not be
+ * handed to `cmdRequirementsMarkComplete` until every plan declaring it has
+ * finished (i.e. has a `*-SUMMARY.md`) — otherwise the ID reads `Complete` in
+ * REQUIREMENTS.md ~20 minutes before its sibling plans even run, and long
+ * before `verify_phase_goal` has a chance to catch a gap.
+ *
+ * Pure read-only gate: scans sibling `*-PLAN.md` files in the SAME phase
+ * directory as `planPath` (excluding `planPath` itself) and, for each
+ * candidate ID, blocks it only when a sibling plan ALSO declares that ID in
+ * its own `requirements:` frontmatter AND that sibling has no matching
+ * `*-SUMMARY.md` yet. An ID no sibling declares is never blocked — a
+ * single-plan (non-shared) ID is always `ready`, preserving immediate
+ * marking with no added latency (acceptance criterion 4). Does not read or
+ * write REQUIREMENTS.md itself; callers pass the `ready` subset on to
+ * `cmdRequirementsMarkComplete` (whose own flip semantics are untouched).
+ */
+function cmdRequirementsReadyIds(cwd: string, args: string[], raw: boolean): void {
+  const planPathArg = args[0];
+  if (!planPathArg) {
+    error('plan path required. Usage: requirements ready-ids <plan-path> REQ-01,REQ-02');
+  }
+
+  const reqIds = args
+    .slice(1)
+    .join(' ')
+    .replace(/[\[\]]/g, '')
+    .split(/[,\s]+/)
+    .map((r) => r.trim())
+    .filter(Boolean);
+
+  if (reqIds.length === 0) {
+    output({ ready: [], blocked: [], total: 0 }, raw, 'no requirement IDs provided');
+    return;
+  }
+
+  const planAbsPath = path.resolve(cwd, planPathArg);
+  const phaseDir = path.dirname(planAbsPath);
+  const currentBasename = path.basename(planAbsPath);
+
+  let siblingPlanFiles: string[] = [];
+  try {
+    siblingPlanFiles = fs
+      .readdirSync(phaseDir)
+      .filter((f) => f.endsWith('-PLAN.md') && f !== currentBasename);
+  } catch {
+    siblingPlanFiles = [];
+  }
+
+  const parseFrontmatterReqIds = (content: string): string[] => {
+    const fm = extractFrontmatter(content);
+    const fmReq = fm.requirements;
+    if (Array.isArray(fmReq)) return fmReq.map((r) => String(r).trim()).filter(Boolean);
+    if (typeof fmReq === 'string') {
+      return fmReq
+        .replace(/[\[\]]/g, '')
+        .split(/[,\s]+/)
+        .map((r) => r.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const ready: string[] = [];
+  const blocked: string[] = [];
+
+  for (const reqId of reqIds) {
+    let blockedBySibling = false;
+
+    for (const siblingFile of siblingPlanFiles) {
+      const siblingPath = path.join(phaseDir, siblingFile);
+      let siblingContent: string;
+      try {
+        siblingContent = fs.readFileSync(siblingPath, 'utf-8');
+      } catch {
+        continue;
+      }
+
+      const siblingReqIds = parseFrontmatterReqIds(siblingContent);
+      const siblingDeclaresId = siblingReqIds.some((id) => id.toLowerCase() === reqId.toLowerCase());
+      if (!siblingDeclaresId) continue;
+
+      // Sibling declares the SAME ID — it must have finished (produced a
+      // SUMMARY) before this ID is ready to mark Complete.
+      const siblingSummaryPath = siblingPath.replace(/-PLAN\.md$/, '-SUMMARY.md');
+      if (!fs.existsSync(siblingSummaryPath)) {
+        blockedBySibling = true;
+        break;
+      }
+    }
+
+    if (blockedBySibling) blocked.push(reqId);
+    else ready.push(reqId);
+  }
+
+  output(
+    { ready, blocked, total: reqIds.length },
+    raw,
+    `${ready.length}/${reqIds.length} requirement(s) ready to mark complete`,
+  );
+}
+
+/**
+ * #2388: revert this phase's own requirement IDs out of `Complete` when
+ * `verify_phase_goal` returns `gaps_found` — a gap verdict must not leave a
+ * premature `Complete` (from a shared ID's first-declaring plan, or from any
+ * other early write) sitting in REQUIREMENTS.md indefinitely.
+ *
+ * Mirrors `cmdRequirementsMarkComplete`'s two write surfaces in reverse:
+ * checkbox `[x]` -> `[ ]`, and traceability Status `Complete` -> `Gaps
+ * Found`. Phase-scoping is the CALLER's responsibility — this function only
+ * ever touches the exact IDs it is given, so a caller passing just this
+ * phase's own `phase_req_ids` never touches another phase's `Complete` row.
+ * Never call this on the pass path; it is `gaps_found`-only.
+ */
+function cmdRequirementsRevertPhase(cwd: string, reqIdsRaw: string[], raw: boolean): void {
+  const reqIds = (reqIdsRaw || [])
+    .join(' ')
+    .replace(/[\[\]]/g, '')
+    .split(/[,\s]+/)
+    .map((r) => r.trim())
+    .filter(Boolean);
+
+  if (reqIds.length === 0) {
+    output({ reverted: [], unchanged: [], total: 0 }, raw, 'no requirement IDs provided');
+    return;
+  }
+
+  const reqPath = planningPaths(cwd).requirements;
+  if (!fs.existsSync(reqPath)) {
+    output(
+      { reverted: [], unchanged: reqIds, total: reqIds.length, reason: 'REQUIREMENTS.md not found' },
+      raw,
+      'no requirements file',
+    );
+    return;
+  }
+
+  let reqContent = fs.readFileSync(reqPath, 'utf-8');
+  const reverted: string[] = [];
+  const unchanged: string[] = [];
+
+  for (const reqId of reqIds) {
+    const reqEscaped = escapeRegex(reqId);
+    let idReverted = false;
+
+    // Surface 1 — checkbox: - [x] **REQ-ID** -> - [ ] **REQ-ID**
+    const checkboxPattern = new RegExp(`(-\\s*\\[)x(\\]\\s*\\*\\*${reqEscaped}\\*\\*)`, 'gi');
+    const afterCheckbox = reqContent.replace(checkboxPattern, '$1 $2');
+    if (afterCheckbox !== reqContent) {
+      reqContent = afterCheckbox;
+      idReverted = true;
+    }
+
+    // Surface 2 — traceability row: Status Complete -> Gaps Found. Only
+    // flips a row currently reading Complete (mirrors mark-complete's own
+    // "only flip Pending -> Complete" gate, in reverse).
+    const rowMatch = (row: Record<string, string>): boolean =>
+      (Object.values(row)[0] ?? '').trim().toLowerCase() === reqId.toLowerCase();
+    let tableHit = false;
+    const tableUpdate = updateTraceabilityCell(reqContent, rowMatch, 'Status', (current) => {
+      if (/^complete$/i.test(current.trim())) {
+        tableHit = true;
+        return ' Gaps Found ';
+      }
+      return current;
+    });
+    if (tableUpdate.ok) {
+      reqContent = tableUpdate.value;
+      if (tableHit) idReverted = true;
+    }
+
+    if (idReverted) reverted.push(reqId);
+    else unchanged.push(reqId);
+  }
+
+  if (reverted.length > 0) {
+    platformWriteSync(reqPath, reqContent);
+  }
+
+  output(
+    { reverted, unchanged, total: reqIds.length },
+    raw,
+    `${reverted.length}/${reqIds.length} requirement(s) reverted from Complete`,
+  );
+}
+
 function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCompleteOptions, raw: boolean): void {
   if (!version) {
     error('version required for milestone complete (e.g., v1.0)');
@@ -766,6 +953,8 @@ function archivePhaseDirectories(cwd: string, phasesDir: string, dirs: ReadonlyA
 
 export = {
   cmdRequirementsMarkComplete,
+  cmdRequirementsReadyIds,
+  cmdRequirementsRevertPhase,
   cmdMilestoneComplete,
   cmdPhasesClear,
 };

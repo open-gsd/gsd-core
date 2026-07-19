@@ -1163,6 +1163,201 @@ describe('requirements mark-complete: traceability write (regression, ADR-2143 �
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// requirements ready-ids command — shared-ID sibling-plan gate (#2388)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('requirements ready-ids command (#2388 shared-ID gate)', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function writeRequirements(tmpDir, content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), content, 'utf-8');
+  }
+
+  function readRequirements(tmpDir) {
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+  }
+
+  function makePhaseDir(tmpDir) {
+    const dir = path.join(tmpDir, '.planning', 'phases', '05-05-feature');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  const SHARED_REQUIREMENTS = `# Requirements
+
+## Feature
+
+- [ ] **SHARED-01**: shared across two plans
+- [ ] **SOLO-01**: only plan-02 declares this
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| SHARED-01 | Phase 5 | Pending |
+| SOLO-01 | Phase 5 | Pending |
+`;
+
+  // #2388 acceptance criteria 2+3: a requirement ID shared by two plans in
+  // the same phase must not read Complete until BOTH plans have a SUMMARY —
+  // then, once the last declaring plan finishes, it marks Complete via the
+  // normal (unmodified) mark-complete path.
+  test('shared ID stays Pending until every declaring plan has a SUMMARY, then marks Complete', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    const plan2 = path.join(dir, '05-05-02-b-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nPlan A\n');
+    fs.writeFileSync(plan2, '---\nphase: 05-05\nplan: 02\nrequirements: [SHARED-01, SOLO-01]\n---\nPlan B\n');
+
+    // Plan 01 finishes first (its own SUMMARY now exists) and gates its own
+    // requirement IDs before calling mark-complete — plan 02 has not
+    // finished yet, so SHARED-01 must be blocked.
+    fs.writeFileSync(path.join(dir, '05-05-01-a-SUMMARY.md'), 'done\n');
+    const readyForPlan1 = JSON.parse(
+      runGsdTools(['query', 'requirements.ready-ids', plan1, 'SHARED-01'], tmpDir).output,
+    );
+    assert.deepStrictEqual(readyForPlan1.ready, [], 'SHARED-01 must be blocked — plan 02 has not finished yet');
+    assert.deepStrictEqual(readyForPlan1.blocked, ['SHARED-01']);
+
+    // The workflow only hands the READY subset to mark-complete (empty here),
+    // so REQUIREMENTS.md must be untouched.
+    let content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **SHARED-01**'), 'SHARED-01 checkbox must stay unchecked');
+    assert.ok(content.includes('| SHARED-01 | Phase 5 | Pending |'), 'SHARED-01 traceability must stay Pending');
+
+    // Plan 02 finishes: its own SUMMARY now exists too, so when IT gates its
+    // own IDs, plan 01 (the sibling) already has a SUMMARY — SHARED-01 is
+    // ready. SOLO-01 has no sibling declaring it at all, so it was always ready.
+    fs.writeFileSync(path.join(dir, '05-05-02-b-SUMMARY.md'), 'done\n');
+    const readyForPlan2 = JSON.parse(
+      runGsdTools(['query', 'requirements.ready-ids', plan2, 'SHARED-01,SOLO-01'], tmpDir).output,
+    );
+    assert.deepStrictEqual(readyForPlan2.ready.sort(), ['SHARED-01', 'SOLO-01']);
+    assert.deepStrictEqual(readyForPlan2.blocked, []);
+
+    // Hand the ready subset to the UNMODIFIED mark-complete path.
+    runGsdTools(['query', 'requirements.mark-complete', ...readyForPlan2.ready], tmpDir);
+    content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [x] **SHARED-01**'), 'SHARED-01 checkbox should now be checked');
+    assert.ok(content.includes('| SHARED-01 | Phase 5 | Complete |'), 'SHARED-01 traceability should now be Complete');
+  });
+
+  // #2388 acceptance criteria 4: a single-plan (non-shared) ID must not incur
+  // any added latency — it is ready even before its OWN plan has a SUMMARY,
+  // as long as no sibling plan also declares it.
+  test('a single-plan (non-shared) requirement ID is always ready — no added latency', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SOLO-01]\n---\nSolo plan\n');
+
+    const result = JSON.parse(
+      runGsdTools(['query', 'requirements.ready-ids', plan1, 'SOLO-01'], tmpDir).output,
+    );
+    assert.deepStrictEqual(result.ready, ['SOLO-01']);
+    assert.deepStrictEqual(result.blocked, []);
+  });
+
+  test('no sibling *-PLAN.md files at all → every ID is ready', () => {
+    writeRequirements(tmpDir, SHARED_REQUIREMENTS);
+    const dir = makePhaseDir(tmpDir);
+    const plan1 = path.join(dir, '05-05-01-a-PLAN.md');
+    fs.writeFileSync(plan1, '---\nphase: 05-05\nplan: 01\nrequirements: [SHARED-01]\n---\nOnly plan\n');
+
+    const result = JSON.parse(
+      runGsdTools(['query', 'requirements.ready-ids', plan1, 'SHARED-01'], tmpDir).output,
+    );
+    assert.deepStrictEqual(result.ready, ['SHARED-01']);
+    assert.deepStrictEqual(result.blocked, []);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// requirements revert-phase command — gaps_found revert (#2388)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('requirements revert-phase command (#2388 gaps_found revert)', () => {
+  let tmpDir;
+
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  function writeRequirements(tmpDir, content) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), content, 'utf-8');
+  }
+
+  function readRequirements(tmpDir) {
+    return fs.readFileSync(path.join(tmpDir, '.planning', 'REQUIREMENTS.md'), 'utf-8');
+  }
+
+  // #2388 acceptance criterion 5 (phase-scoping): reverting one phase's IDs
+  // must never touch a DIFFERENT phase's Complete row.
+  test('reverts a phase\'s own Complete IDs (checkbox + traceability) without touching another phase\'s Complete', () => {
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Feature
+
+- [x] **PHASE5-01**: phase 5 thing
+- [x] **PHASE6-01**: phase 6 thing
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| PHASE5-01 | Phase 5 | Complete |
+| PHASE6-01 | Phase 6 | Complete |
+`,
+    );
+
+    const result = runGsdTools('requirements revert-phase PHASE5-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.reverted, ['PHASE5-01']);
+    assert.deepStrictEqual(out.unchanged, []);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **PHASE5-01**'), 'PHASE5-01 checkbox must revert to unchecked');
+    assert.ok(content.includes('| PHASE5-01 | Phase 5 | Gaps Found |'), 'PHASE5-01 traceability must revert to Gaps Found');
+    assert.ok(content.includes('- [x] **PHASE6-01**'), 'a DIFFERENT phase\'s Complete checkbox must be untouched');
+    assert.ok(content.includes('| PHASE6-01 | Phase 6 | Complete |'), 'a DIFFERENT phase\'s traceability row must be untouched');
+  });
+
+  test('an ID that is not currently Complete is reported unchanged, not reverted', () => {
+    writeRequirements(
+      tmpDir,
+      `# Requirements
+
+## Feature
+
+- [ ] **PHASE5-01**: not complete yet
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| PHASE5-01 | Phase 5 | Pending |
+`,
+    );
+
+    const result = runGsdTools('requirements revert-phase PHASE5-01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.deepStrictEqual(out.reverted, []);
+    assert.deepStrictEqual(out.unchanged, ['PHASE5-01']);
+
+    const content = readRequirements(tmpDir);
+    assert.ok(content.includes('- [ ] **PHASE5-01**'), 'checkbox must stay unchecked (nothing to revert)');
+    assert.ok(content.includes('| PHASE5-01 | Phase 5 | Pending |'), 'traceability status must stay Pending (nothing to revert)');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // new-milestone workflow verification gate (#1269)
 // ─────────────────────────────────────────────────────────────────────────────
 

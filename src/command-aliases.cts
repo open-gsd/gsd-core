@@ -747,6 +747,20 @@ export const NON_FAMILY_COMMAND_ALIASES: NonFamilyCommandAlias[] = [
     "mutation": true
   },
   {
+    "canonical": "requirements.ready-ids",
+    "aliases": [
+      "requirements ready-ids"
+    ],
+    "mutation": false
+  },
+  {
+    "canonical": "requirements.revert-phase",
+    "aliases": [
+      "requirements revert-phase"
+    ],
+    "mutation": true
+  },
+  {
     "canonical": "stats.json",
     "aliases": [
       "stats json"

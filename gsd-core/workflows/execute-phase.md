@@ -1439,9 +1439,10 @@ Verify-work will walk you through each item and mark the phase complete when all
 
 **If user acknowledges without reporting issues (including "ok", "noted", "ack", "got it", "approved", "done", "yes", "pass", or similar):** Stop. The phase remains pending. No further orchestrator action — wait for the user to run `/gsd:verify-work`.
 
-**If user reports issues now (before running verify-work):** Proceed to gap closure as currently implemented.
+**If user reports issues now:** Proceed to gap closure.
 
 **If gaps_found:**
+@~/.claude/gsd-core/references/execute-phase-requirement-revert.md
 ```
 ## ⚠ Phase {X}: {Name} — Gaps Found
 
