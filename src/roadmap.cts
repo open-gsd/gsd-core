@@ -210,9 +210,17 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
 function getRoadmapPhaseWithFallback(cwd: string, phaseNum: string): string | null {
   if (/^999(?:\.|$)/.test(stripProjectCodePrefix(phaseNum))) return null;
   const roadmapPath = planningPaths(cwd).roadmap;
-  if (!fs.existsSync(roadmapPath)) return null;
-
-  const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+  // Read directly rather than gating on fs.existsSync: existsSync returns false
+  // on EACCES/EIO too, which would mask an UNREADABLE roadmap as "missing" and
+  // let a blocking gate certify empty scope (#2365 review). Honor the documented
+  // contract — null only when genuinely absent (ENOENT), otherwise throw.
+  let rawContent: string;
+  try {
+    rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return null;
+    throw err;
+  }
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
 

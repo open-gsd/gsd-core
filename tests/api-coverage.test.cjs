@@ -168,6 +168,336 @@ describe('detectApiIntegration — pure detector (#1562)', () => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// #2365 — detector false positives (first-party paths, unrelated same-line
+// clauses, descriptive "API" prose) + the no-integration declaration.
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('#2365 detector false positives + no-integration declaration', () => {
+  let mod;
+  try {
+    mod = require(MODULE_PATH);
+  } catch (err) {
+    throw new Error(`Could not require ${MODULE_PATH}. Run "npm run build:lib". Underlying: ${err.message}`);
+  }
+  const { detectApiIntegration, parseCoverageMatrix, validateCoverageMatrix } = mod;
+
+  // ── acceptance #1: first-party framework route paths are not integration prose
+  for (const [label, scope] of [
+    ['Next.js route file in prose', 'Run integration tests for src/app/api/profile/route.test.ts'],
+    ['route handler path with verb', 'Wire the src/app/api/profile/route.ts handler into the settings page'],
+    ['inline-code span', 'Verify the `api` helper wiring end to end'],
+  ]) {
+    test(`NEGATIVE path/inline-code (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `unexpected detection for [${label}]: ${scope}`);
+    });
+  }
+
+  // ── acceptance #2: verb + noun in unrelated clauses of one line
+  test('NEGATIVE unrelated clauses: verb and noun in different clauses do not compound', () => {
+    const r = detectApiIntegration(
+      'Render the page and prove label endpoint, filename, and CSV/XLSX wiring.'
+    );
+    assert.strictEqual(r.detected, false);
+  });
+
+  // ── acceptance #3: descriptive/local "API" prose (threat-model shape).
+  //    NOTE: the detector is FAIL-CLOSED — the classes below stay clean because
+  //    they are unambiguously NOT external integration (no integration verb + a
+  //    named service, or a first-party-qualified surface). Prose that pairs an
+  //    integration VERB with an API noun ("wire … the internal endpoint") is a
+  //    fail-closed POSITIVE now (see the "#2365 review — fail-open fixes" group);
+  //    a one-line COVERAGE.md declaration dismisses it if it is a false alarm.
+  for (const [label, scope] of [
+    ['threat-model table cell', '| Tampering | Resolver-only API rejects arbitrary caller URLs. |'],
+    ['compound-modifier mid-sentence', 'The Resolver-only API rejects arbitrary caller URLs.'],
+    ['clause-initial capitalized prose', 'Internal API surface stays unchanged in this phase.'],
+    ['localhost URL', 'Run integration tests against https://localhost:3000/api/profile'],
+    ['bare external domain, no path', 'Integrate the design tokens from https://example.com into the theme'],
+    ['internal-qualified service (no verb)', 'The internal Payments API remains unchanged.'],
+    ['descriptor service + unrelated URL', 'Internal API surface stays unchanged; see https://example.com/style-guide.'],
+    ['Windows path', 'Wire tests for src\\app\\api\\profile\\route.ts.'],
+    ['loopback shorthand URL', 'Connect tests to http://127.1:3000/api/profile.'],
+    ['protocol-only surface', 'Document the REST API behavior for maintainers.'],
+    ['protocol-only surface (GraphQL)', 'Review the GraphQL API schema naming conventions.'],
+    ['cross-clause coordinate action', 'Wire the header, then update the endpoint docs'],
+  ]) {
+    test(`NEGATIVE descriptive API prose (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `unexpected detection for [${label}]: ${scope}`);
+    });
+  }
+
+  // ── acceptance #4: true positives preserved (the fail-open guard — a fix that
+  // silences these is strictly worse than the false positives it removes).
+  for (const [label, scope] of [
+    ['canonical compound', 'integrate the Stripe API'],
+    ['compound with trailing prose', 'Integrate the Stripe API for payment processing'],
+    ['surface rule, no verb', 'Add a Spotify API client'],
+    ['widest default-suite word gap', 'Consume the billing service over gRPC'],
+    ['clause-initial service + URL corroboration', 'Stripe API — docs at https://stripe.com/docs/api'],
+    ['webhook compound', 'Wire up the Slack webhook for deploy notifications'],
+    ['verb + API-naming URL', 'Connect the app to https://api.stripe.com/v1 for charges'],
+    ['slashed noun shorthand', 'Integrate the Stripe API/SDK for payments'],
+    ['long single-clause gap', "Connect our checkout to Stripe's hosted payment processing service through its v1 endpoints."],
+    ['non-http URI scheme', 'Connect the realtime client to wss://api.openai.com/v1/realtime.'],
+    ['versioned noun shorthand', 'Integrate Stripe API/v2 for legacy payments.'],
+    ['clause-initial service + object follower', 'Stripe API client for payments.'],
+    ['inline-code package corroboration', 'Stripe SDK client via `@stripe/stripe-js` for payment intents.'],
+    ['inline-code package as only noun', 'Integrate `stripe-sdk` for payment intents.'],
+    ['later surface after rejected first candidate', 'Internal API facade around Stripe SDK payment flows.'],
+    ['later surface after rejected modifier', 'Resolver-only API facade delegates to Stripe SDK for payments.'],
+  ]) {
+    test(`POSITIVE still fires (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, true, `true-positive regression [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review — fail-open fixes. Codex's second-round review found the
+  //    round-2 tightening had over-corrected into FAIL-OPEN false negatives:
+  //    realistic external-API prose that a BLOCKING gate silently let through.
+  //    Under the fail-closed decision these MUST detect. This is the guard the
+  //    handoff flagged in bold — a fix that lets these slip is strictly worse
+  //    than the false positives it removes.
+  for (const [label, scope] of [
+    ['clause-initial service, plain follower (F1)', 'Stripe API for payment processing.'],
+    ['external host that names an API vocab word (F2)', 'Connect the client to api.stripe.com/v1 for charges.'],
+    ["vendor's first-party SDK (F3)", "Integrate Shopify's first-party SDK for checkout."],
+    ['long single integration clause (F4)', "Integrate Stripe's hosted payment processing service into checkout using the vendor-recommended asynchronous flow for recurring subscriptions and one-time card payments through its API."],
+    // Fail-closed reversal of the round-2 "internal" negatives: an integration
+    // verb bound to an API noun detects even when the noun is "internal"-qualified
+    // (Codex: "internal" can name the vendor's own API). Dismissed by declaration.
+    ['integration verb + internal noun', 'Wire the settings form to the internal endpoint.'],
+    ['coordinated integration verb + internal noun', 'Wire the form and document the internal API.'],
+    ['distant same-clause verb+noun', 'Wiring the settings drawer means the profile page the sidebar and the account menu all reach the same internal endpoint'],
+    // Qualification must NOT leak across a sentence/clause boundary.
+    ['qualifier does not leak across a sentence', 'The cache is private. Stripe API client for payments.'],
+    ['qualifier does not leak across a semicolon', 'Keep the cache private; Stripe API client for payments.'],
+  ]) {
+    test(`POSITIVE fail-open guard (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, true, `fail-open regression [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review — false-positive fixes. The reviews found false positives
+  //    from over-broad heuristics; these MUST stay clean.
+  for (const [label, scope] of [
+    ['bare external domain, no path (F6)', 'Integrate the design tokens from https://example.com, document the endpoint terminology.'],
+    ['internal UI component, separate action (F7)', 'Wire the SettingsForm, then document the endpoint props.'],
+    ['protocol name as service (F8)', 'Document the REST API behavior for maintainers.'],
+    ['finite continuation after a period', 'Wire the settings form. Document endpoint props.'],
+    ['finite continuation after a semicolon', 'Wire the settings form; document endpoint props.'],
+    ['finite continuation after a comma', 'Wire the form, document endpoint props.'],
+    // Round-4 review: an external asset/link URL is NOT an API endpoint.
+    ['external stylesheet asset URL', 'Wire stylesheet from https://cdn.example.com/assets/theme.css into the page.'],
+    ['external URL with a query string', 'Wire the login link to https://example.com?next=/dashboard.'],
+    ['external docs/repo link, not an API', 'Wire the docs link to https://github.com/org/repo into the footer'],
+    // Round-4 review: an "-ing"-SPELLED noun ("billing") is not a participle.
+    ['-ing-spelled noun in an unrelated clause', 'Wire the new settings form component, billing endpoint terminology remains unchanged.'],
+    // Round-4 review: qualification survives markdown emphasis.
+    ['descriptor qualifies through markdown emphasis', 'The **internal** Payments API remains unchanged.'],
+  ]) {
+    test(`NEGATIVE fail-closed FP guard (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `new false positive [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 — DOCUMENTED fail-open LIMITATIONS. Detection is same-clause only
+  //    (no cross-clause binding) and an external host is evidence only when it
+  //    NAMES an API vocabulary word. Catching the cases below robustly needs a
+  //    vendor dictionary + coreference, which the issue rules out in principle;
+  //    every lexical rule tried across four review rounds traded a false
+  //    negative for a false positive. These are cheaply covered by the
+  //    COVERAGE.md declaration and rare in real phase prose. The tests pin the
+  //    behavior as INTENTIONAL — a future maintainer re-adding a cross-clause or
+  //    every-URL heuristic would reintroduce the false positives above.
+  for (const [label, scope] of [
+    ['service named only in a following participial clause', 'Integrate Stripe, exposing its endpoints for payment capture.'],
+    ['service named only in a following finite clause', 'Integrate Stripe; use its OAuth endpoints for checkout.'],
+    ['bare external host naming no vocab word', 'Connect the client to graph.microsoft.com:443/v1.0/me.'],
+  ]) {
+    test(`DOCUMENTED fail-open limitation stays clean (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, false, `limitation changed [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review — DOCUMENTED fail-closed tradeoffs. A clause-initial
+  //    capitalized common word before "API" ("Payment API", "Search API") is
+  //    treated as a service name, and a long clause pairs a verb with a distant
+  //    noun. Codex judged these acceptable because the COVERAGE.md declaration
+  //    is a cheap override; these tests exist so the behavior is INTENTIONAL and
+  //    a future maintainer does not "fix" it back into a fail-open cap.
+  for (const [label, scope] of [
+    ['capitalized common word as service', 'Payment API remains unchanged in this refactor.'],
+    ['capitalized common word as service (Search)', 'Search API types are generated locally.'],
+    ['long clause pairs verb with distant noun', 'Wire the settings form to validation state so the designer can review field behavior and document every public API and endpoint symbol without changing runtime dependencies.'],
+  ]) {
+    test(`POSITIVE documented fail-closed tradeoff (${label}): "${scope}"`, () => {
+      const r = detectApiIntegration(scope);
+      assert.strictEqual(r.detected, true, `expected documented fail-closed detection [${label}]: ${scope}`);
+    });
+  }
+
+  // ── #2365 review finding 7: inline code spans are matched WITHIN a line by
+  //    design (phase scope prose is line-oriented). A CommonMark code span that
+  //    wraps a newline is NOT recognized, so its contents are treated as prose —
+  //    a documented, narrow limitation (fail-closed: a stray detection is
+  //    dismissed by the declaration). This test pins the current behavior.
+  test('multi-line inline code span is not treated as code (documented limitation)', () => {
+    const r = detectApiIntegration('Documentation example: `integrate\nStripe API` only.');
+    assert.strictEqual(r.detected, true);
+  });
+
+  // ── acceptance #5: a legitimate, non-fabricated "no external API" declaration
+  test('declaration-only COVERAGE.md is VALID with zero rows (none_declared)', () => {
+    const md = '# API Coverage\n\nNo external API integration: UI-only phase, no third-party surface.\n';
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, true, `expected valid, errors: ${v.errors.join('; ')}`);
+    assert.strictEqual(v.none_declared, true);
+    assert.deepStrictEqual(v.counts, { surface: 0, integrate: 0, optout: 0 });
+  });
+
+  test('declaration accepts the bold/em-dash form', () => {
+    const md = '**No external API integration** — resolver work is local-only.\n';
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, true);
+    assert.strictEqual(v.none_declared, true);
+  });
+
+  test('declaration WITHOUT a reason is not recognized (reasoned opt-out, like OPT-OUT rows)', () => {
+    const v = validateCoverageMatrix('No external API integration\n');
+    assert.strictEqual(v.valid, false);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  test('declaration PLUS coverage rows is contradictory → invalid', () => {
+    const md = [
+      'No external API integration: nothing external here.',
+      '',
+      '| capability | decision | reason |',
+      '|---|---|---|',
+      '| search | INTEGRATE | |',
+    ].join('\n');
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, false);
+    assert.ok(v.errors.some((e) => /declar/i.test(e)), `errors: ${v.errors.join('; ')}`);
+  });
+
+  test('declaration inside a fenced code block is NOT recognized', () => {
+    const md = '```markdown\nNo external API integration: example only.\n```\n';
+    const p = parseCoverageMatrix(md);
+    assert.notStrictEqual(p.declaration && p.declaration.none, true);
+    const v = validateCoverageMatrix(md);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  test('declaration inside an HTML comment is NOT recognized', () => {
+    const md = '<!--\nNo external API integration: quoted example only.\n-->\n';
+    const v = validateCoverageMatrix(md);
+    assert.strictEqual(v.valid, false);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  test('blockquoted declaration is NOT recognized (quoted text is not a decision)', () => {
+    const v = validateCoverageMatrix('> No external API integration: copied from the old PLAN.md.\n');
+    assert.strictEqual(v.valid, false);
+    assert.notStrictEqual(v.none_declared, true);
+  });
+
+  // ── A hostile line repeating one verb+noun pair thousands of times must
+  //    collapse to a SINGLE signal — pairing is by distinct term, not a
+  //    match×match cross product. Asserting the signal count is a deterministic
+  //    proxy for that linearity (no wall-clock timing — Clock Seams rule).
+  test('hostile repeated-term line dedups to one signal', () => {
+    const s = 'integrate api '.repeat(10000); // 140 KB single line, 10k pairs
+    const r = detectApiIntegration(s);
+    assert.strictEqual(r.detected, true);
+    assert.strictEqual(
+      r.signals.length,
+      1,
+      `repeated verb+noun pair must dedup to one signal, got ${r.signals.length}`
+    );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// #2365 review — hardening-constant boundaries + parser fuzz property
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe('#2365 hardening-constant boundaries + parser property', () => {
+  const { detectApiIntegration, validateCoverageMatrix } = require(MODULE_PATH);
+
+  // SERVICE_SURFACE_API_RE bounds the service token to `[A-Z][A-Za-z0-9_-]{1,40}`
+  // (2..41 chars) so a hostile hyphen run cannot drive O(n^2) backtracking.
+  test('surface service name at the 41-char limit still fires', () => {
+    const svc = 'S' + 'a'.repeat(40); // exactly 41 chars
+    assert.strictEqual(detectApiIntegration(`${svc} API`).detected, true);
+  });
+  test('surface service name at 42 chars is past the length bound (surface path)', () => {
+    const svc = 'S' + 'a'.repeat(41); // 42 chars, no integration verb → surface-only
+    assert.strictEqual(detectApiIntegration(`${svc} API`).detected, false);
+  });
+
+  // QUALIFIER_LOOKBACK (24): a first-party descriptor only suppresses the surface
+  // within the bounded lookback window. Pin the EXACT constant: 8-char "internal"
+  // + 16 spaces places its start at offset-24 (the window edge) → still qualifies;
+  // + 17 spaces pushes its start one char outside → truncated → no longer
+  // qualifies. Both would pass for any lookback in ~9..37, so use the exact pair.
+  test('internal qualifier exactly at the 24-char window edge still suppresses the surface', () => {
+    const atEdge = 'internal' + ' '.repeat(16) + 'Payments API'; // start at offset-24
+    assert.strictEqual(detectApiIntegration(atEdge).detected, false);
+  });
+  test('internal qualifier one char past the 24-char window no longer qualifies (fires)', () => {
+    const pastEdge = 'internal' + ' '.repeat(17) + 'Payments API'; // start at offset-25
+    assert.strictEqual(detectApiIntegration(pastEdge).detected, true);
+  });
+
+  // REASON_MAX_LEN (200): the no-integration declaration reason is length-bounded.
+  test('declaration reason at 200 chars is valid; 201 is rejected', () => {
+    const at = 'No external API integration: ' + 'x'.repeat(200) + '\n';
+    const over = 'No external API integration: ' + 'x'.repeat(201) + '\n';
+    assert.strictEqual(validateCoverageMatrix(at).valid, true);
+    const v = validateCoverageMatrix(over);
+    assert.strictEqual(v.valid, false);
+    assert.ok(v.errors.some((e) => /exceeds 200 chars/.test(e)), `errors: ${v.errors.join('; ')}`);
+  });
+
+  // Fuzz the tokenizer / clause splitter / masking (scanLineTokens, splitClauses,
+  // collectTermMatches) with adversarial tokens — slashes, backticks, URLs,
+  // clause punctuation. The detector must never throw, keep its typed shape, hold
+  // `detected ⇔ signals.length > 0`, and be deterministic on any input.
+  test('property: parser is total, shape-stable, and deterministic on arbitrary prose', () => {
+    const token = fc.oneof(
+      fc.constantFrom(
+        'integrate', 'connect', 'wire', 'the', 'Stripe', 'API', 'SDK', 'endpoint',
+        'api', 'internal', 'Resolver-only', '/', '//', '`', 'https://api.x.com/v1',
+        'src/app/api/x.ts', 'graph.microsoft.com/v1'
+      ),
+      fc.stringMatching(/^[A-Za-z0-9/.:`_-]{0,12}$/)
+    );
+    fc.assert(
+      fc.property(
+        fc.array(token, { maxLength: 40 }),
+        fc.constantFrom(' ', ', ', '. ', '; ', ' | ', '\n'),
+        (words, sep) => {
+          const line = words.join(sep);
+          const r = detectApiIntegration(line);
+          assert.ok(typeof r.detected === 'boolean' && Array.isArray(r.signals), 'typed shape');
+          assert.strictEqual(r.detected, r.signals.length > 0, 'detected ⇔ signals present');
+          assert.deepStrictEqual(detectApiIntegration(line), r, 'deterministic');
+          return true;
+        }
+      ),
+      { numRuns: 300 }
+    );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Matrix parse / validate / render
 // ──────────────────────────────────────────────────────────────────────────────
 

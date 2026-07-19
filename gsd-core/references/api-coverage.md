@@ -24,13 +24,26 @@ treated as an external-API integration when **either**:
 1. a `COVERAGE.md` matrix is present in the phase directory (the planner produced
    one at `plan:pre`), **or**
 2. the phase scope shows a strong external-API-integration signal (an integration
-   verb co-occurring with an external-API noun, or an explicit `<Service>
-   API|SDK|REST|GraphQL` surface) and no matrix yet exists.
+   verb and an external-API noun **in the same clause**, or an explicit
+   `<Service> API|SDK|REST|GraphQL` surface naming a real service) and no matrix
+   yet exists.
 
-Non-API phases (refactors, bug fixes, internal-only work, features that merely
-*mention* an existing internal API) do **not** fire the gate — the trigger
-requires a compound signal, so a bare word like "api" in "the public API of
-UserController" is intentionally ignored.
+The detector is deliberately **fail-closed**: it leans toward firing, because a
+false positive is dismissed by a one-line `COVERAGE.md` "no external API
+integration" declaration, whereas a false *negative* silently lets a real
+external-API phase past this blocking gate — strictly worse. So it suppresses
+only prose that is unambiguously not external integration. A bare word like
+"api" in "the public API of UserController" is ignored (no integration verb +
+named service); the clause boundary is the whole relationship test, so an
+integration verb and an API noun in **different** clauses do not pair. Since
+#2365 the detector also excludes non-prose spans before matching: fenced code
+blocks, inline `` `code` `` spans, and path-shaped tokens (a first-party
+`src/app/api/profile/route.ts` route is a file path, not an external API, while
+an external host like `api.stripe.com/v1` still counts). In the
+`<Service> API` surface position it rejects capitalized sentence starters
+("The API"), locality/protocol descriptors ("Internal API", "REST API"),
+compound modifiers ("Resolver-only API"), and first-party-qualified services
+("internal Payments API") — a real vendor name is none of these.
 
 ## The two touch points
 
@@ -69,6 +82,23 @@ Rules enforced at seal time: the matrix must be non-empty; every capability name
 must be non-empty and unique; every decision must be `INTEGRATE` or `OPT-OUT`;
 every `OPT-OUT` must have a reason. Violations block the seal with a precise
 error.
+
+### Declaring "no external API integration" (#2365)
+
+A phase that integrates no external API/SDK/service — but was still asked for a
+matrix (e.g. the detector over-fired, or a team wants the decision on record) —
+declares it instead of fabricating a row:
+
+```markdown
+No external API integration: UI-only phase, no third-party surface.
+```
+
+The reason is **required**, exactly like an `OPT-OUT` reason — the declaration
+is a reasoned decision, not a bypass. A `COVERAGE.md` containing both the
+declaration and coverage rows is contradictory and blocks the seal. When the
+detector still finds integration signals in the phase scope, the declaration
+wins (it is the human overrule for a fallible detector) but the gate output
+surfaces the overridden signals so the contradiction is visible, not silent.
 
 ## A second integration against the same need
 
