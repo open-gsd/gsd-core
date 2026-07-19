@@ -20,6 +20,7 @@
 const { test, describe, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const { resolveRuntimeArtifactLayout, findInstallSourceRoot } = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
@@ -100,6 +101,14 @@ describe('resolveRuntimeArtifactLayout — codex', () => {
     assert.strictEqual(layout.kinds[0].destSubpath, 'skills');
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
+  });
+
+  test('keeps the global skills home override out of the local scope (#2429)', () => {
+    const globalLayout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'global');
+    const localLayout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'local');
+
+    assert.strictEqual(globalLayout.kinds[0].home, path.join(os.homedir(), '.agents'));
+    assert.strictEqual(localLayout.kinds[0].home, undefined);
   });
 });
 
