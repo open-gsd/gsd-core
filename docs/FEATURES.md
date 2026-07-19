@@ -3352,4 +3352,16 @@ The load-bearing wire is the `plan-phase` lift into `must_haves.prohibitions`, s
 
 **Behavior:** A new `gsd-tools state rebuild` subcommand re-derives `STATE.md` from source (#1830). The new `graphify.graph_path` setting makes the knowledge-graph location configurable, so a single umbrella graph can serve several projects (#1825).
 
+---
+
+### 158. Broken-Windows Ledger
+
+**Behavior:** A cross-phase defect register at `.planning/WINDOWS.md` accumulates stubs, TODOs, skipped tests, unrun verifies, and unmet truths (#1950). `/gsd-ship` blocks while any entry is `open`; an entry can be `waived` only with a recorded reason (auditable) or marked `fixed` (removed from the blocking set). `/gsd-progress` surfaces the open + waived counts.
+
+**Commands:** `gsd-tools windows status | append | waive | fixed`.
+
+**Config:** `windows.enabled` (capability activation, default `true`), `windows.enforce` (gate active, default `true`). Disable enforcement per-project with `gsd config-set windows.enforce false` — tracking continues, gate stays open.
+
+**Backward compatibility:** A project with no `.planning/WINDOWS.md` reports `open_count: 0` and ships cleanly; the gate only activates once windows are recorded.
+
 **Configuration:** `graphify.graph_path`
