@@ -874,6 +874,11 @@ describe('regressions: #1995 agent-<id> namespace acceptance', () => {
 describe('regressions: #1995 parity — hand-synced namespace regex copies must agree', () => {
   const fs = require('node:fs');
   const repoRoot = path.join(__dirname, '..');
+  // allow-test-rule: source-text-is-the-product (see #1997) — reads
+  // src/worktree-safety.cts (an unexported, private regex constant with no
+  // importable alternative) plus 3 markdown reference files to cross-check
+  // their hand-synced literals agree; there is no behavioral seam to require()
+  // instead.
   const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 
   const ANCHORED_SOURCE = '^(worktree-)?agent-[A-Za-z0-9._/-]+$';
