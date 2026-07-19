@@ -315,6 +315,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `agent-contracts.md` | Formal interface between orchestrators and agents. |
 | `context-budget.md` | Context window budget allocation rules. |
 | `execute-phase-context-guard.md` | Context exhaustion guard step for `execute-phase` wave loop — `workflow.context_guard_mode` dispatch table (warn/auto/off) and POOR-tier pause-work trigger (#1452). |
+| `execute-phase-requirement-revert.md` | Gap-report step for `execute-phase` — reverts this phase's own shared requirement IDs out of `Complete` in REQUIREMENTS.md before rendering a `gaps_found` report, scoped to `PHASE_REQ_IDS` so other phases' rows are untouched (#2388). |
 | `continuation-format.md` | Session continuation/resume format. |
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |
@@ -384,6 +385,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 | `planner-revision.md` | Plan revision patterns for iterative refinement. |
 | `planner-source-audit.md` | Planner source-audit and authority-limit rules. |
 | `planner-mvp-mode.md` | Vertical-slice planning rules for MVP mode. |
+| `planner-preconditions.md` | Emission rules for the optional `<precondition>` task element (issue #1949, Design by Contract): when to emit, the three cases (user_setup / prior-phase artifact / env-var), format, anti-patterns, and the contract triad mapping. |
 | `planner-human-verify-mode.md` | Rules for `workflow.human_verify_mode = end-of-phase`: suppress `checkpoint:human-verify` task emission and route deferred items via `<verify><human-check>`. |
 | `planner-graphify-auto-update.md` | How `load_graph_context` surfaces `.last-build-status.json` auto-update state (running / failed / stale head) alongside the existing staleness annotation. Opt-in via `graphify.auto_update` (#3347). |
 | `planner-interface-context.md` | Interface context rules for executors — how to extract key interfaces/types/exports from existing code and document new interfaces that downstream plans will consume. |

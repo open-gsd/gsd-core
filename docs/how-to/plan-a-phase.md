@@ -18,7 +18,7 @@ This runs three stages in sequence:
 2. **Plan** — A `gsd-planner` subagent reads context, research, and requirements, then writes one or more `{phase}-{N}-PLAN.md` files.
 3. **Verify** — A `gsd-plan-checker` subagent validates plan quality across eight dimensions and triggers a revision loop (up to three iterations) until quality gates pass.
 
-If no phase number is given, GSD Core targets the next unplanned phase from the roadmap.
+If no phase number is given, the `/gsd-plan-phase` orchestrating workflow reads `ROADMAP.md` and targets the next unplanned phase. This detection happens in the workflow/LLM layer, not in the `gsd-tools.cjs` CLI — its phase-lookup commands require an explicit phase number.
 
 ---
 

@@ -759,6 +759,32 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   output(result, raw);
 }
 
+// #2390 — phase.add title-shape heuristic. A description at or under this many
+// characters, and with no sentence-ending punctuation followed by more text,
+// reads as a short Title. Anything longer or multi-sentence reads as a Goal,
+// not a Title. phase.add still writes the phase verbatim (it never mangles
+// ROADMAP.md), but when the description looks goal-shaped the JSON result
+// gains a `warning` key naming the gap, so the caller — or the orchestrating
+// add-phase workflow — can split title vs. goal instead of the whole paragraph
+// landing silently in the `### Phase N:` header.
+const PHASE_ADD_TITLE_MAX_LEN = 80;
+const PHASE_ADD_MULTI_SENTENCE_RE = /[.!?]['")\]]?\s+\S/;
+
+function describeGoalShapedTitle(description: string): string | null {
+  const trimmed = description.trim();
+  const tooLong = trimmed.length > PHASE_ADD_TITLE_MAX_LEN;
+  const multiSentence = PHASE_ADD_MULTI_SENTENCE_RE.test(trimmed);
+  if (!tooLong && !multiSentence) return null;
+  const reasons = [
+    tooLong ? `${trimmed.length} chars (over the ${PHASE_ADD_TITLE_MAX_LEN}-char title threshold)` : null,
+    multiSentence ? 'multiple sentences' : null,
+  ].filter(Boolean).join(', ');
+  return (
+    `description looks goal-shaped, not title-shaped (${reasons}). It was written verbatim ` +
+    `as the phase title; consider a short title with the detail moved to **Goal:**.`
+  );
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -858,7 +884,9 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     return { newPhaseId: _newPhaseId, dirName: _dirName };
   });
 
-  const result = {
+  const titleWarning = describeGoalShapedTitle(description);
+
+  const result: Record<string, unknown> = {
     phase_number: typeof newPhaseId === 'number' ? newPhaseId : String(newPhaseId),
     padded:
       typeof newPhaseId === 'number' ? String(newPhaseId).padStart(2, '0') : String(newPhaseId),
@@ -869,8 +897,9 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     ),
     naming_mode: config.phase_naming,
   };
+  if (titleWarning) result['warning'] = titleWarning;
 
-  output(result, raw, result.padded);
+  output(result, raw, result['padded']);
 }
 
 function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): void {

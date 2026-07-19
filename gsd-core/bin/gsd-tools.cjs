@@ -59,6 +59,10 @@
  * Requirements Operations:
  *   requirements mark-complete <ids>   Mark requirement IDs as complete in REQUIREMENTS.md
  *                                      Accepts: REQ-01,REQ-02 or REQ-01 REQ-02 or [REQ-01, REQ-02]
+ *   requirements ready-ids <plan-path> <ids>  Read-only: which of <ids> are safe to mark-complete now
+ *                                      (no sibling *-PLAN.md in the same phase dir still missing its SUMMARY for that ID)
+ *   requirements revert-phase <ids>   Revert requirement IDs out of Complete (checkbox + traceability row);
+ *                                      gaps_found-only, never call on the pass path
  *
  * Milestone Operations:
  *   milestone complete <version>       Archive milestone, create MILESTONES.md
@@ -1216,8 +1220,19 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     const subcommand = args[1];
           if (subcommand === 'mark-complete') {
             milestone.cmdRequirementsMarkComplete(cwd, args.slice(2), raw);
+          } else if (subcommand === 'ready-ids') {
+            // #2388: read-only shared-ID gate — computes which of the given
+            // requirement IDs are safe to hand to mark-complete right now
+            // (no sibling *-PLAN.md in the same phase dir still missing its
+            // *-SUMMARY.md for that ID).
+            milestone.cmdRequirementsReadyIds(cwd, args.slice(2), raw);
+          } else if (subcommand === 'revert-phase') {
+            // #2388: gaps_found-only revert — flips this phase's own
+            // requirement IDs back out of Complete (checkbox + traceability
+            // row) before the gap report renders.
+            milestone.cmdRequirementsRevertPhase(cwd, args.slice(2), raw);
           } else {
-            error('Unknown requirements subcommand. Available: mark-complete', ERROR_REASON.SDK_UNKNOWN_COMMAND);
+            error('Unknown requirements subcommand. Available: mark-complete, ready-ids, revert-phase', ERROR_REASON.SDK_UNKNOWN_COMMAND);
           }
   }
 
