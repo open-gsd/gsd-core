@@ -600,7 +600,7 @@ check_substantive() {
 
 关于自动化优先的检查点模式、服务器生命周期管理、CLI 安装处理和错误恢复协议，请参阅：
 
-**@~/.claude/get-shit-done/references/checkpoints.md** → `<automation_reference>` 部分
+**@~/.claude/gsd-core/references/checkpoints.md** → `<automation_reference>` 部分
 
 关键原则：
 - Claude 在呈现检查点**之前**设置验证环境

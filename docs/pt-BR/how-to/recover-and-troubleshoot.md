@@ -89,19 +89,19 @@ Isso recria o `STATE.md` ausente, redefine um `config.json` corrompido para os p
 Isso gera o aviso `W002`. Use a CLI de estado para diagnosticar e reparar:
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate
 ```
 
 Visualize o que uma sincronização mudaria sem gravar:
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync --verify
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync --verify
 ```
 
 Aplique a sincronização:
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync
 ```
 
 Esses comandos reconstroem o `STATE.md` a partir do estado real do projeto em disco. Substituem a edição manual do `STATE.md`.

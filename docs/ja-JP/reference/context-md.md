@@ -14,7 +14,7 @@
 
 例: `.planning/phases/03-post-feed/03-CONTEXT.md`
 
-このファイルは `get-shit-done/workflows/discuss-phase.md` の `write_context`（または PRD / ADR インジェストのエクスプレスパス）によって生成されます。通常の運用中は手動で編集されません — discuss-phase ワークフローが書き込み、下流エージェントが封印された信頼できる情報源として読み取ります。
+このファイルは `gsd-core/workflows/discuss-phase.md` の `write_context`（または PRD / ADR インジェストのエクスプレスパス）によって生成されます。通常の運用中は手動で編集されません — discuss-phase ワークフローが書き込み、下流エージェントが封印された信頼できる情報源として読み取ります。
 
 ---
 

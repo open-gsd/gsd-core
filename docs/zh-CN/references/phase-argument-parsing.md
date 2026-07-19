@@ -14,7 +14,7 @@
 `find-phase` 命令一步完成规范化和验证：
 
 ```bash
-PHASE_INFO=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" find-phase "${PHASE}")
+PHASE_INFO=$(node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" find-phase "${PHASE}")
 ```
 
 返回 JSON 包含：
@@ -45,7 +45,7 @@ fi
 使用 `roadmap get-phase` 验证阶段存在：
 
 ```bash
-PHASE_CHECK=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" roadmap get-phase "${PHASE}")
+PHASE_CHECK=$(node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" roadmap get-phase "${PHASE}")
 if [ "$(printf '%s\n' "$PHASE_CHECK" | jq -r '.found')" = "false" ]; then
   echo "ERROR: Phase ${PHASE} not found in roadmap"
   exit 1
@@ -57,5 +57,5 @@ fi
 使用 `find-phase` 进行目录查找：
 
 ```bash
-PHASE_DIR=$(node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" find-phase "${PHASE}" --raw)
+PHASE_DIR=$(node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" find-phase "${PHASE}" --raw)
 ```

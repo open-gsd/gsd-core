@@ -14,7 +14,7 @@
 
 示例：`.planning/phases/03-post-feed/03-CONTEXT.md`。
 
-该文件由 `get-shit-done/workflows/discuss-phase.md` 中的 `write_context` 步骤生成（或通过 PRD/ADR 摄入快速路径生成）。在正常操作中，该文件不会被手动编辑——讨论阶段工作流负责写入，下游代理将其作为封闭的可信来源读取。
+该文件由 `gsd-core/workflows/discuss-phase.md` 中的 `write_context` 步骤生成（或通过 PRD/ADR 摄入快速路径生成）。在正常操作中，该文件不会被手动编辑——讨论阶段工作流负责写入，下游代理将其作为封闭的可信来源读取。
 
 ---
 

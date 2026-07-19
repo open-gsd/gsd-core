@@ -807,6 +807,8 @@ Each resolved session appends one entry:
 - **Root cause(s):** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate fired}
 - **Fix:** {from Resolution.fix}
 - **Files changed:** {from Resolution.files_changed}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify/build) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {the concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / type refinement / config-default change / KB pattern}
 ---
 ```
 
@@ -820,9 +822,11 @@ At the **end of `archive_session`**, after the session file is moved to `resolve
 
 ## Matching Logic
 
-Matching is keyword overlap, not semantic similarity. Extract nouns and error substrings from `Symptoms.errors` and `Symptoms.actual`. Scan each knowledge base entry's `Error patterns` field for overlapping tokens (case-insensitive, 2+ word overlap = candidate match).
+**Semantic-first, keyword-fallback.** Query MemPalace with the current symptoms and surface the top-k meaning-similar prior resolutions — this catches same-root-cause/different-wording cases keyword overlap misses. Fall back to keyword overlap on `knowledge-base.md` when MemPalace is absent. See:
 
-**Important:** A match is a **hypothesis candidate**, not a confirmed diagnosis. Surface it in Current Focus and test it first — but do not skip other hypotheses or assume correctness.
+@~/.claude/gsd-core/references/debugger-semantic-recall.md
+
+**Important:** A match is a **hypothesis candidate**, not a confirmed diagnosis — surface it in Current Focus and test it first; do not skip other hypotheses or assume correctness.
 
 </knowledge_base_protocol>
 
@@ -982,12 +986,10 @@ At investigation decision points, apply structured reasoning:
 **Autonomous investigation. Update file continuously.**
 
 **Phase 0: Check knowledge base**
-- If `.planning/debug/knowledge-base.md` exists, read it
-- Extract keywords from `Symptoms.errors` and `Symptoms.actual` (nouns, error substrings, identifiers)
-- Scan knowledge base entries for 2+ keyword overlap (case-insensitive)
+- Query MemPalace semantically with the current symptoms (top-k meaning-similar prior resolutions); fall back to reading `.planning/debug/knowledge-base.md` and keyword overlap when MemPalace is absent
 - If match found:
   - Note in Current Focus: `known_pattern_candidate: "{matched slug} — {description}"`
-  - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}.`
+  - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}. Why not caught: {why_not_caught}. Recurrence guard: {recurrence_guard}.` (the last two are absent on old entries — that's fine; consume them when present)
   - Test this hypothesis FIRST in Phase 2 — but treat it as one hypothesis, not a certainty
 - If no match: proceed normally
 
@@ -1212,9 +1214,13 @@ Then commit planning docs via CLI (respects `commit_docs` config automatically):
 gsd_run query commit "docs: resolve debug {slug}" --files .planning/debug/resolved/{slug}.md
 ```
 
-**Append to knowledge base:**
+**Append to knowledge base (with the Prevention block):**
 
-Read `.planning/debug/resolved/{slug}.md` to extract final `Resolution` values. Then append to `.planning/debug/knowledge-base.md` (create file with header if it doesn't exist):
+Read `.planning/debug/resolved/{slug}.md` to extract final `Resolution` values. Then produce the **Prevention block** — a blameless postmortem (branching 5-Whys per RCA, "why wasn't this caught?", and a concrete recurrence guard):
+
+@~/.claude/gsd-core/references/debugger-prevention.md
+
+Then append to `.planning/debug/knowledge-base.md` (create file with header if it doesn't exist):
 
 If creating for the first time, write this header first:
 ```markdown
@@ -1234,6 +1240,8 @@ Then append the entry:
 - **Root cause(s):** {Resolution.root_cause — joined as '; ' when multiple contributing causes were confirmed}
 - **Fix:** {Resolution.fix}
 - **Files changed:** {Resolution.files_changed joined as comma list}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify/build) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / KB pattern / type refinement / config-default change}
 ---
 
 ```
@@ -1242,6 +1250,8 @@ Commit the knowledge base update alongside the resolved session:
 ```bash
 gsd_run query commit "docs: update debug knowledge base with {slug}" --files .planning/debug/knowledge-base.md
 ```
+
+**Index into MemPalace (when available)** per the semantic-recall reference — the Resolution summary (not raw symptoms), redacted — so a future Phase-0 query surfaces it by meaning. Skip with a logged note when MemPalace is absent or the KB write failed; `knowledge-base.md` is the durable fallback.
 
 Report completion and offer next steps.
 </step>
