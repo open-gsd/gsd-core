@@ -25,6 +25,8 @@ const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { createTempDir, cleanup } = require('./helpers.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const WORKFLOW_PATH = path.join(ROOT, 'gsd-core', 'workflows', 'code-review.md');
@@ -345,5 +347,186 @@ describe('Reviewer contract — gsd-code-reviewer.md label-equivalence', () => {
       stepSection.includes('BL-'),
       'write_review step must acknowledge BL- as a Critical-tier-equivalent finding ID prefix'
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG 4 (#2352) — compute_file_scope must tilde-expand `~/...`-prefixed
+// SUMMARY.md key-files entries BEFORE the "Filter deleted files" existence
+// check. Bash only tilde-expands a literal `~` written in source text, never
+// one arriving as the value of an already-expanded variable — so a real file
+// recorded as `~/.claude/gsd-core/workflows/verify-phase.md` was silently
+// misclassified as deleted and dropped from REVIEW_FILES, and a phase whose
+// every recorded file used a `~/...` path hit the empty-scope skip
+// ("No source files changed ... Skipping review.") as a false negative.
+//
+// Tested both ways: a docs-parity assertion (cross-platform, pure fs read)
+// that the normalization block exists in the deployed workflow text, and a
+// behavioral test that extracts the actual "Expand tilde paths" +
+// "Filter deleted files" bash blocks from code-review.md and executes them
+// via a real bash subprocess against planted files under a fresh HOME.
+// ---------------------------------------------------------------------------
+describe('Bug 4 (#2352) — compute_file_scope tilde-path expansion', () => {
+  // Docs-parity: the workflow .md must contain the tilde-normalization block
+  // as step 1 of "Post-processing (all tiers)", ahead of the deleted-file
+  // filter, so what we behaviorally test below is what is actually deployed.
+  test('code-review.md contains a tilde-expansion block ahead of the deleted-file filter', () => {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const postProcessingIdx = src.indexOf('**Post-processing (all tiers):**');
+    assert.ok(postProcessingIdx !== -1, 'code-review.md must have a "Post-processing (all tiers)" section');
+
+    const expandIdx = src.indexOf('EXPANDED_FILES=()', postProcessingIdx);
+    assert.ok(expandIdx !== -1, 'Post-processing must contain an EXPANDED_FILES=() tilde-expansion loop');
+
+    const caseIdx = src.indexOf('case "$file" in', postProcessingIdx);
+    assert.ok(caseIdx !== -1 && caseIdx < expandIdx + 400, 'tilde-expansion loop must use a case "$file" in match');
+    assert.ok(
+      src.slice(caseIdx, caseIdx + 200).includes('"~/"*)') &&
+        src.slice(caseIdx, caseIdx + 200).includes('${HOME}${file#\\~}'),
+      'tilde-expansion loop must rewrite a leading ~/ to ${HOME}/... via ${file#\\~}'
+    );
+
+    const deletedFilterIdx = src.indexOf('DELETED_COUNT=0', postProcessingIdx);
+    assert.ok(deletedFilterIdx !== -1, 'Post-processing must still contain the deleted-file filter');
+    assert.ok(
+      expandIdx < deletedFilterIdx,
+      'tilde-expansion loop must run BEFORE the deleted-file filter, not after'
+    );
+  });
+
+  // Extract the tilde-expansion fence and the (non-adjacent — the exclusions
+  // filter sits between them) deleted-file-filter fence from the
+  // "Post-processing (all tiers)" section of code-review.md — the exact
+  // snippets the runtime executes, located by content anchor rather than
+  // position so an intervening step doesn't silently swap in the wrong
+  // block — and glue them behind a synthetic REVIEW_FILES=("$@") seed for
+  // direct execution. The exclusions filter itself is intentionally skipped
+  // here: it only matches relative planning-artifact paths and is orthogonal
+  // to tilde expansion (see code-review.md step 2, "Apply exclusions").
+  function extractPostProcessingScript() {
+    const src = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const postProcessingIdx = src.indexOf('**Post-processing (all tiers):**');
+    assert.ok(postProcessingIdx !== -1, 'code-review.md must have a "Post-processing (all tiers)" section');
+
+    function fenceContaining(marker) {
+      const markerIdx = src.indexOf(marker, postProcessingIdx);
+      assert.ok(markerIdx !== -1, `expected to find "${marker}" in the Post-processing section`);
+      const fenceStart = src.lastIndexOf('```bash', markerIdx);
+      assert.ok(fenceStart !== -1 && fenceStart > postProcessingIdx, `no \`\`\`bash fence before "${marker}"`);
+      const bodyStart = src.indexOf('\n', fenceStart) + 1;
+      const fenceEnd = src.indexOf('\n```', bodyStart);
+      assert.ok(fenceEnd !== -1, `unterminated \`\`\`bash fence containing "${marker}"`);
+      return src.slice(bodyStart, fenceEnd);
+    }
+
+    const tildeBlock = fenceContaining('EXPANDED_FILES=()');
+    const deletedBlock = fenceContaining('DELETED_COUNT=0');
+
+    return [
+      'REVIEW_FILES=("$@")',
+      tildeBlock,
+      deletedBlock,
+      'printf "%s\\n" "${REVIEW_FILES[@]}"',
+      'echo "REVIEW_FILES_COUNT=${#REVIEW_FILES[@]}"',
+      'echo "DELETED_COUNT=$DELETED_COUNT"',
+    ].join('\n');
+  }
+
+  function runPostProcessing(homeDir, files) {
+    const script = extractPostProcessingScript();
+    // "bash" as $0 so the real REVIEW_FILES entries land in "$@" from $1.
+    return spawnSync('bash', ['-c', script, 'bash', ...files], {
+      encoding: 'utf8',
+      env: { ...process.env, HOME: homeDir },
+    });
+  }
+
+  let tmpHome;
+
+  test('setup: plant a fresh HOME with a real file', { skip: process.platform === 'win32' }, () => {
+    tmpHome = createTempDir('gsd-2352-home-');
+    fs.mkdirSync(path.join(tmpHome, '.claude', 'gsd-core', 'workflows'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpHome, '.claude', 'gsd-core', 'workflows', 'verify-phase.md'),
+      '# real file\n',
+      'utf8'
+    );
+  });
+
+  test(
+    'AC1: a ~/-prefixed path to a real file survives and is not counted deleted',
+    { skip: process.platform === 'win32' },
+    () => {
+      const result = runPostProcessing(tmpHome, ['~/.claude/gsd-core/workflows/verify-phase.md']);
+      assert.equal(result.status, 0, `snippet exited ${result.status}; stderr=${result.stderr}`);
+      assert.match(
+        result.stdout,
+        new RegExp(path.join(tmpHome, '.claude', 'gsd-core', 'workflows', 'verify-phase.md').replace(/[/\\.]/g, '\\$&')),
+        `expected expanded absolute path in surviving REVIEW_FILES; got: ${JSON.stringify(result.stdout)}`
+      );
+      assert.match(result.stdout, /DELETED_COUNT=0/, `expected DELETED_COUNT=0; got: ${JSON.stringify(result.stdout)}`);
+      assert.match(
+        result.stdout,
+        /REVIEW_FILES_COUNT=1/,
+        `expected the tilde path to survive into REVIEW_FILES; got: ${JSON.stringify(result.stdout)}`
+      );
+    }
+  );
+
+  test(
+    'AC2: a ~/-prefixed path to a non-existent file is still correctly excluded as deleted',
+    { skip: process.platform === 'win32' },
+    () => {
+      const result = runPostProcessing(tmpHome, ['~/.claude/gsd-core/workflows/does-not-exist.md']);
+      assert.equal(result.status, 0, `snippet exited ${result.status}; stderr=${result.stderr}`);
+      assert.match(result.stdout, /DELETED_COUNT=1/, `expected DELETED_COUNT=1; got: ${JSON.stringify(result.stdout)}`);
+      assert.match(
+        result.stdout,
+        /REVIEW_FILES_COUNT=0/,
+        `expected the missing tilde path to be dropped; got: ${JSON.stringify(result.stdout)}`
+      );
+    }
+  );
+
+  test(
+    'AC3: a phase where every recorded file is a real ~/-prefixed path does not empty the scope',
+    { skip: process.platform === 'win32' },
+    () => {
+      const result = runPostProcessing(tmpHome, ['~/.claude/gsd-core/workflows/verify-phase.md']);
+      assert.equal(result.status, 0, `snippet exited ${result.status}; stderr=${result.stderr}`);
+      const countMatch = result.stdout.match(/REVIEW_FILES_COUNT=(\d+)/);
+      assert.ok(countMatch, `expected a REVIEW_FILES_COUNT line; got: ${JSON.stringify(result.stdout)}`);
+      assert.ok(
+        Number(countMatch[1]) > 0,
+        'an all-tilde real-file scope must not reduce to zero (would trigger the empty-scope skip)'
+      );
+    }
+  );
+
+  test(
+    'AC4: mixed tilde + missing ordinary relative path resolve independently',
+    { skip: process.platform === 'win32' },
+    () => {
+      const result = runPostProcessing(tmpHome, [
+        '~/.claude/gsd-core/workflows/verify-phase.md',
+        'this/relative/path/does-not-exist.md',
+      ]);
+      assert.equal(result.status, 0, `snippet exited ${result.status}; stderr=${result.stderr}`);
+      assert.match(result.stdout, /DELETED_COUNT=1/, `expected exactly 1 deleted; got: ${JSON.stringify(result.stdout)}`);
+      assert.match(
+        result.stdout,
+        /REVIEW_FILES_COUNT=1/,
+        `expected only the tilde path to survive; got: ${JSON.stringify(result.stdout)}`
+      );
+      assert.doesNotMatch(
+        result.stdout,
+        /this\/relative\/path\/does-not-exist\.md/,
+        'the missing ordinary relative path must not survive into REVIEW_FILES'
+      );
+    }
+  );
+
+  test('teardown: remove the temp HOME', { skip: process.platform === 'win32' }, () => {
+    cleanup(tmpHome);
   });
 });
