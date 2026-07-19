@@ -20,7 +20,7 @@ const { escapeRegex, normalizePhaseName, extractPhaseToken, parsePhaseFromProse,
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths } = planningWorkspace;
@@ -308,6 +308,12 @@ function cmdStateLoad(cwd: string, raw: boolean): void {
     state_exists: stateExists,
     roadmap_exists: roadmapExists,
     config_exists: configExists,
+    // #2376: absolute (anchored on cwd), not orchestrator-cwd-relative — a
+    // spawned subagent's own cwd may differ from the orchestrator's.
+    // debug.md has no init.* call of its own; it reads this field from
+    // `state load` to build debug_file_path for its gsd-debug-session-manager
+    // spawns instead of hardcoding '.planning/debug/{slug}.md'.
+    debug_dir: toPosixPath(path.join(planDir, 'debug')),
   };
 
   // For --raw, output a condensed key=value format

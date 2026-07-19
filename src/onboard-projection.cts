@@ -388,7 +388,9 @@ function buildOnboardProjection(cwd: string, options: BuildOnboardProjectionOpti
       projectExists,
       mapReadiness: mapReadinessValue,
       onboardingSummaryExists,
-      onboardingSummaryPath: toPosixPath(path.relative(cwd, onboardingSummaryPath)),
+      // #2376: absolute (anchored on cwd/project_root), not orchestrator-cwd-relative —
+      // a spawned subagent's own cwd may differ from the orchestrator's.
+      onboardingSummaryPath: toPosixPath(onboardingSummaryPath),
       hasPlanningArtifacts,
       missingPlanningFiles,
       handoffCommands,
@@ -410,19 +412,15 @@ function buildOnboardProjection(cwd: string, options: BuildOnboardProjectionOpti
     doc_candidates: docCandidates,
 
     onboarding_summary_exists: onboardingSummaryExists,
-    onboarding_summary_path: toPosixPath(path.relative(cwd, onboardingSummaryPath)),
+    // #2376: absolute — see comment on onboardingSummaryPath above.
+    onboarding_summary_path: toPosixPath(onboardingSummaryPath),
 
-    project_path: toPosixPath(path.relative(
-      cwd,
-      fs.existsSync(projectRootPath) ? projectRootPath : projectScopedPath,
-    )),
-    requirements_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'REQUIREMENTS.md')),
-    ),
-    roadmap_path: toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md'))),
-    state_path: toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'STATE.md'))),
-    codebase_dir: toPosixPath(path.relative(cwd, path.join(planningRoot(cwd), 'codebase'))),
-    onboarding_dir: toPosixPath(path.relative(cwd, path.join(planningRoot(cwd), 'onboarding'))),
+    project_path: toPosixPath(fs.existsSync(projectRootPath) ? projectRootPath : projectScopedPath),
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    codebase_dir: toPosixPath(path.join(planningRoot(cwd), 'codebase')),
+    onboarding_dir: toPosixPath(path.join(planningRoot(cwd), 'onboarding')),
   };
 }
 

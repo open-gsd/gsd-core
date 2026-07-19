@@ -159,7 +159,7 @@ Today's date: {date}
 
 Analyze this codebase for technology stack and external integrations.
 
-Write these documents to .planning/codebase/:
+Write these documents to {codebase_dir}/:
 - STACK.md - Languages, runtime, frameworks, dependencies, configuration
 - INTEGRATIONS.md - External APIs, databases, auth providers, webhooks
 
@@ -185,7 +185,7 @@ Today's date: {date}
 
 Analyze this codebase architecture and directory structure.
 
-Write these documents to .planning/codebase/:
+Write these documents to {codebase_dir}/:
 - ARCHITECTURE.md - Pattern, layers, data flow, abstractions, entry points
 - STRUCTURE.md - Directory layout, key locations, naming conventions
 
@@ -211,7 +211,7 @@ Today's date: {date}
 
 Analyze this codebase for coding conventions and testing patterns.
 
-Write these documents to .planning/codebase/:
+Write these documents to {codebase_dir}/:
 - CONVENTIONS.md - Code style, naming, patterns, error handling
 - TESTING.md - Framework, structure, mocking, coverage
 
@@ -237,7 +237,7 @@ Today's date: {date}
 
 Analyze this codebase for technical debt, known issues, and areas of concern.
 
-Write this document to .planning/codebase/:
+Write this document to {codebase_dir}/:
 - CONCERNS.md - Tech debt, bugs, security, performance, fragile areas
 
 IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.

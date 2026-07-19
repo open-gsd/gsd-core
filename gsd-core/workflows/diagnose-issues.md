@@ -107,7 +107,7 @@ Before spawning, materialize the guard into WORKTREE_GUARD: read `gsd-core/refer
 
 ```
 Agent(
-  prompt=filled_debug_subagent_prompt + "\n\n" + WORKTREE_GUARD + "\n\n<files_to_read>\n- {phase_dir}/{phase_num}-UAT.md\n- .planning/STATE.md\n</files_to_read>\n${AGENT_SKILLS_DEBUGGER}",
+  prompt=filled_debug_subagent_prompt + "\n\n" + WORKTREE_GUARD + "\n\n<files_to_read>\n- {phase_dir}/{phase_num}-UAT.md\n- {state_path}\n</files_to_read>\n${AGENT_SKILLS_DEBUGGER}",
   subagent_type="gsd-debugger",
   ${USE_WORKTREES !== "false" ? 'isolation="worktree",' : ''}
   description="Debug: {truth_short}"

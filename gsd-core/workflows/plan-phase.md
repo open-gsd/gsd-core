@@ -696,7 +696,7 @@ Read the active intel step hook from `PLAN_PRE_HOOKS_JSON` where `kind == "step"
 **If an active intel step hook exists:**
 ```bash
 gsd_run intel api-surface
-API_SURFACE_PATH=".planning/intel/API-SURFACE.md"
+API_SURFACE_PATH="$(dirname "$STATE_PATH")/intel/API-SURFACE.md"
 echo "✓ API surface regenerated: ${API_SURFACE_PATH}"  # injected into step 8 as HINT
 ```
 
@@ -760,7 +760,7 @@ ${CONTEXT_WINDOW >= 500000 ? `
 </files_to_read>
 ${API_SURFACE_PATH ? `
 <intel_surface_hint>
-**API Surface (HINT — may be incomplete):** When \`intel.enabled\` is true, \`.planning/intel/API-SURFACE.md\` lists symbols extracted from the codebase by regex/JS analysis. Prefer symbols listed there when referencing existing code. This surface is regex/JS-derived and MAY BE INCOMPLETE — a symbol's absence means *unknown*, not *nonexistent*. Never treat the surface as exhaustive. If you reference a symbol that is not in the surface and this phase creates it, list it under "Artifacts this phase produces".
+**API Surface (HINT — may be incomplete):** When \`intel.enabled\` is true, \`${API_SURFACE_PATH}\` lists symbols extracted from the codebase by regex/JS analysis. Prefer symbols listed there when referencing existing code. This surface is regex/JS-derived and MAY BE INCOMPLETE — a symbol's absence means *unknown*, not *nonexistent*. Never treat the surface as exhaustive. If you reference a symbol that is not in the surface and this phase creates it, list it under "Artifacts this phase produces".
 </intel_surface_hint>
 ` : ''}
 ${AGENT_SKILLS_PLANNER}

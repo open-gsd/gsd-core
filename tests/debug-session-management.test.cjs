@@ -220,4 +220,19 @@ describe('debug skill dispatch and sub-orchestrator (#2148, #2151)', () => {
       `parity drift: DEBUG.md claims ${claimedCount}-field but gsd-debugger.md enumerates ${keys.size} keys (${[...keys].join(', ')}). Update BOTH surfaces together.`
     );
   });
+
+  // #2376: debug_file_path handed to the spawned gsd-debug-session-manager
+  // must resolve regardless of that subagent's own cwd, which may differ
+  // from the orchestrator's — debug.md must reference the absolute
+  // {debug_dir} field from `state load`, not a bare .planning/debug/...
+  // literal, in both the `continue` and new-session Agent() spawns.
+  test('debug.md session_params reference {debug_dir}/{slug}.md, not bare .planning/debug/... literals (#2376)', () => {
+    const content = fs.readFileSync(path.join(process.cwd(), 'gsd-core/workflows/debug.md'), 'utf8');
+    assert.ok(content.includes('debug_file_path: {debug_dir}/{SLUG}.md'),
+      'debug.md continue-subcommand spawn must reference {debug_dir}/{SLUG}.md, not a bare .planning/debug/{SLUG}.md literal');
+    assert.ok(content.includes('debug_file_path: {debug_dir}/{slug}.md'),
+      'debug.md new-session spawn must reference {debug_dir}/{slug}.md, not a bare .planning/debug/{slug}.md literal');
+    assert.ok(!content.includes('debug_file_path: .planning/debug/'),
+      'debug.md session_params must not hardcode .planning/debug/... as debug_file_path (#2376)');
+  });
 });

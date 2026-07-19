@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, createTempProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 function writePassedVerification(tmpDir, phaseDirName, paddedPhase) {
@@ -867,6 +867,44 @@ describe('cmdStateLoad (state load)', () => {
 
     assert.ok(result.output.includes('state_exists=true'), 'raw output should include state_exists=true');
     assert.ok(result.output.includes('config_exists=true'), 'raw output should include config_exists=true');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2376: cmdStateLoad's *_dir/*_path fields must resolve regardless of the
+// calling process's own cwd, not just the orchestrator's — debug.md has no
+// init.* call of its own and reads debug_dir from `state load` to build
+// debug_file_path for its gsd-debug-session-manager spawns instead of
+// hardcoding '.planning/debug/{slug}.md'. See tests/init.test.cjs's matching
+// '#2376 — init.* path fields resolve...' describe block for the established
+// pattern (spawn gsd-tools with its OS-level process cwd pointed at an
+// unrelated decoy directory while passing the real project root via --cwd).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#2376 — state load emits absolute debug_dir regardless of process cwd', () => {
+  let projectDir;
+  let decoyDir;
+
+  beforeEach(() => {
+    projectDir = createFixture();
+    decoyDir = createTempDir('gsd-2376-decoy-');
+  });
+
+  afterEach(() => {
+    cleanup(projectDir);
+    cleanup(decoyDir);
+  });
+
+  test('state load emits absolute debug_dir field that resolves from a different process cwd (previously absent)', () => {
+    fs.mkdirSync(path.join(projectDir, '.planning', 'debug'), { recursive: true });
+
+    const result = runGsdTools(['state', 'load', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok('debug_dir' in output, 'cmdStateLoad must now emit debug_dir (#2376)');
+    assert.ok(path.isAbsolute(output.debug_dir), `debug_dir must be absolute, got: "${output.debug_dir}"`);
+    assert.ok(fs.existsSync(output.debug_dir), `debug_dir must resolve to the real directory: "${output.debug_dir}"`);
   });
 });
 

@@ -7,7 +7,7 @@ const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup, absPlanningPath } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 const ROOT = path.join(__dirname, '..');
@@ -18,7 +18,12 @@ describe('init onboard public CLI projection', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createFixture({ planning: false, projectDoc: false });
+    // #2376 macOS fix: realpath the fixture root so absolute path-field
+    // assertions (absPlanningPath comparisons below) match the code's
+    // process.cwd()-anchored output — macOS's tmpdir is a symlink
+    // (/var/... -> /private/var/...) that a spawned child resolves via
+    // realpath but createFixture() does not. No-op on Linux (no symlink).
+    tmpDir = fs.realpathSync(createFixture({ planning: false, projectDoc: false }));
   });
 
   afterEach(() => {
@@ -142,7 +147,7 @@ describe('init onboard public CLI projection', () => {
     assert.strictEqual(parsed.has_codebase_map, true);
     assert.deepStrictEqual(parsed.missing_codebase_map_files, []);
     assert.strictEqual(parsed.onboarding_summary_exists, true);
-    assert.strictEqual(parsed.onboarding_summary_path, '.planning/onboarding/SUMMARY.md');
+    assert.strictEqual(parsed.onboarding_summary_path, absPlanningPath(tmpDir, 'onboarding', 'SUMMARY.md'));
     assert.strictEqual(parsed.text_mode, true);
   });
 
@@ -224,7 +229,7 @@ describe('init onboard public CLI projection', () => {
     // Once project setup is complete, a fast map must not misroute back to the
     // pre-new-project complete-map handoff; onboarding advances to the summary.
     assert.strictEqual(parsed.next_action.kind, 'write-summary');
-    assert.strictEqual(parsed.next_action.summary_path, '.planning/onboarding/SUMMARY.md');
+    assert.strictEqual(parsed.next_action.summary_path, absPlanningPath(tmpDir, 'onboarding', 'SUMMARY.md'));
   });
 
   test('fast mode routes incomplete planning to partial-planning before the complete-map gate (regression #1990: fast map gate misroute)', () => {
@@ -259,7 +264,8 @@ describe('init onboard public CLI projection', () => {
     });
 
     cleanup(tmpDir);
-    tmpDir = createFixture({ planning: false, projectDoc: false });
+    // #2376 macOS fix: see beforeEach above.
+    tmpDir = fs.realpathSync(createFixture({ planning: false, projectDoc: false }));
     fs.mkdirSync(path.join(tmpDir, 'docs', 'adr'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, 'docs', 'adr', '0001-runtime.md'), '# ADR: Runtime\n');
     result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
@@ -271,7 +277,8 @@ describe('init onboard public CLI projection', () => {
     });
 
     cleanup(tmpDir);
-    tmpDir = createFixture({ planning: false, projectDoc: false });
+    // #2376 macOS fix: see beforeEach above.
+    tmpDir = fs.realpathSync(createFixture({ planning: false, projectDoc: false }));
     result = runGsdTools('init onboard --raw', tmpDir, { HOME: tmpDir });
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
@@ -281,7 +288,8 @@ describe('init onboard public CLI projection', () => {
     });
 
     cleanup(tmpDir);
-    tmpDir = createFixture({ planning: false, projectDoc: false });
+    // #2376 macOS fix: see beforeEach above.
+    tmpDir = fs.realpathSync(createFixture({ planning: false, projectDoc: false }));
     fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.planning', 'PROJECT.md'), '# Project\n');
     fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
@@ -301,7 +309,7 @@ describe('init onboard public CLI projection', () => {
     assert.ok(result.success, `init onboard should succeed: ${result.error}`);
     assert.deepStrictEqual(JSON.parse(result.output).next_action, {
       kind: 'write-summary',
-      summary_path: '.planning/onboarding/SUMMARY.md',
+      summary_path: absPlanningPath(tmpDir, 'onboarding', 'SUMMARY.md'),
       reason: 'Onboarding summary is missing.',
     });
 
