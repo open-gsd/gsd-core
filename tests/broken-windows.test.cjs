@@ -136,6 +136,20 @@ describe('broken-windows: appendWindow', () => {
       reasonIs(REASON.WINDOWS_INVALID_FILE),
     );
   });
+
+  test('append rejects 4-backtick run in description (H1 regression — would brick the JSON fence)', () => {
+    const led = emptyLedger('now');
+    assert.throws(
+      () => appendWindow(led, makeEntry({ description: 'see ```` four backticks' })),
+      reasonIs(REASON.WINDOWS_INVALID_TEXT),
+    );
+    // 3-backtick run is fine — the fence is 4-tick so 3-tick content is safe.
+    const led2 = emptyLedger('now');
+    const { ledger } = appendWindow(led2, makeEntry({ description: 'see ```js``` inline' }), { now: 't' });
+    assert.equal(ledger.entries[0].description, 'see ```js``` inline');
+    // And reparses cleanly:
+    assert.doesNotThrow(() => parseLedger(renderLedger(ledger)));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -379,9 +393,51 @@ describe('broken-windows CLI: windows status', () => {
     const res = runGsdTools(['windows', 'status', '--raw'], tmp);
     assert.equal(res.success, false);
     assert.ok(res.exitCode !== 0);
-    // The structured reason surfaces in either the message text or the JSON envelope
-    // depending on --json-errors. Match on the message text the operator would see.
     assert.match(res.error, /malformed|invalid frontmatter|missing frontmatter/i);
+  });
+
+  test('status on an UNREADABLE ledger fails closed (H2 regression — EACCES must not be silently empty)', (t) => {
+    // Skip on Windows where chmod 000 doesn't apply to root/admin or where the FS
+    // ignores mode bits; CI lanes run as non-root so the EACCES path is real.
+    const tmp = createTempDir('bw-status-eacces-');
+    t.after(() => {
+      try { fs.chmodSync(path.join(tmp, '.planning', LEDGER_FILE_NAME), 0o644); } catch { /* best-effort */ }
+      cleanup(tmp);
+    });
+    fs.mkdirSync(path.join(tmp, '.planning'), { recursive: true });
+    // A ledger with open_count=1 — if EACCES silently returned empty, ship gate would pass.
+    const validLedger = [
+      '---',
+      'schema_version: 1',
+      'open_count: 1',
+      'waived_count: 0',
+      'fixed_count: 0',
+      'total_count: 1',
+      'last_updated: 2026-07-19T00:00:00Z',
+      '---',
+      '',
+      '````json',
+      JSON.stringify([{
+        id: 1, kind: 'stub', phase: '2', file: '', line: null,
+        description: 'unreadable-test', status: 'open', reason: '',
+        recorded_at: 't', resolved_at: null,
+      }]),
+      '````',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(tmp, '.planning', LEDGER_FILE_NAME), validLedger);
+    try { fs.chmodSync(path.join(tmp, '.planning', LEDGER_FILE_NAME), 0o000); } catch { return; }
+
+    const res = runGsdTools(['windows', 'status', '--raw'], tmp);
+    // If the chmod actually took (non-root), the read must fail. If running as
+    // root (CI rarely does), the read may succeed — either way, the test must
+    // never see a false-green "open_count: 0" from a file we KNOW has open_count=1.
+    if (res.success) {
+      const obj = JSON.parse(res.output);
+      assert.notEqual(obj.ledger.open_count, 0, 'EACCES must NOT silently coerce an open_count=1 ledger to 0');
+    } else {
+      assert.match(res.error, /could not read|EACCES|malformed/i);
+    }
   });
 });
 
@@ -470,6 +526,46 @@ describe('broken-windows CLI: windows append', () => {
     );
     assert.equal(res.success, false);
     assert.match(res.error, /description|required|missing/i);
+  });
+
+  test('append --line boundary: 0 / 1 / large int (limit-1 / limit / limit+1)', (t) => {
+    const tmp = createTempDir('bw-append-line-bva-');
+    t.after(() => cleanup(tmp));
+
+    // line=0: treated as "no line" (null) — limit-1 boundary.
+    const r0 = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '0', '--description', 'a'], tmp);
+    assert.equal(r0.success, true, `--line 0 should succeed (null): ${r0.error || ''}`);
+    const e0 = JSON.parse(r0.output).entry;
+    assert.equal(e0.line, null, '--line 0 must serialize to null (omit)');
+
+    // line=1: smallest valid line — limit boundary.
+    const r1 = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '1', '--description', 'b'], tmp);
+    assert.equal(r1.success, true, `--line 1 should succeed: ${r1.error || ''}`);
+    assert.equal(JSON.parse(r1.output).entry.line, 1);
+
+    // line=large: limit+1 boundary (just confirm it accepts arbitrary positive int).
+    const r2 = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '999999', '--description', 'c'], tmp);
+    assert.equal(r2.success, true, `--line 999999 should succeed: ${r2.error || ''}`);
+    assert.equal(JSON.parse(r2.output).entry.line, 999999);
+
+    // line=-1 and line=abc: invalid — fail closed.
+    const rNeg = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '-1', '--description', 'd'], tmp);
+    assert.equal(rNeg.success, false);
+    assert.match(rNeg.error, /line|positive integer/i);
+    const rGarbage = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', 'abc', '--description', 'e'], tmp);
+    assert.equal(rGarbage.success, false);
+    assert.match(rGarbage.error, /line|positive integer/i);
+  });
+
+  test('append rejects 4-backtick description via CLI (H1 regression)', (t) => {
+    const tmp = createTempDir('bw-append-4tick-');
+    t.after(() => cleanup(tmp));
+    const res = runGsdTools(
+      ['windows', 'append', '--kind', 'stub', '--phase', '2', '--description', 'has ```` four backticks'],
+      tmp,
+    );
+    assert.equal(res.success, false);
+    assert.match(res.error, /4-backtick|fence|invalid_text/i);
   });
 });
 

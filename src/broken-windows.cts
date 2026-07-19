@@ -66,6 +66,7 @@ export const REASON = Object.freeze({
   WINDOWS_WAIVE_REASON_EMPTY: 'windows_waive_reason_empty',
   WINDOWS_INVALID_KIND: 'windows_invalid_kind',
   WINDOWS_INVALID_FILE: 'windows_invalid_file',
+  WINDOWS_INVALID_TEXT: 'windows_invalid_text',
   WINDOWS_INVALID_ID: 'windows_invalid_id',
   WINDOWS_APPEND_MISSING_FIELD: 'windows_append_missing_field',
   WINDOWS_USAGE: 'windows_usage',
@@ -197,7 +198,24 @@ function validateDescription(description: unknown): string {
       'Window description must be a non-empty string.',
     );
   }
+  rejectBacktickRun(description, 'description');
   return description;
+}
+
+/**
+ * Reject any string field that contains a 4-backtick run. The ledger's JSON
+ * code block uses a 4-backtick fence; a 4-backtick run inside stringified
+ * entry text would terminate the fence early and brick the next parse
+ * (issue #1950 review H1). JSON.stringify does not escape backticks, so we
+ * must catch them at validate time.
+ */
+function rejectBacktickRun(value: string, field: string): void {
+  if (value.includes(FORBIDDEN_BACKTICK_RUN)) {
+    throw new WindowsError(
+      REASON.WINDOWS_INVALID_TEXT,
+      `Window ${field} contains a 4-backtick run, which would corrupt the ledger's JSON code fence.`,
+    );
+  }
 }
 
 function validateFile(file: unknown): string {
@@ -227,7 +245,10 @@ function validateFile(file: unknown): string {
 }
 
 function validateLine(line: unknown): number | null {
-  if (line == null || line === '' || line === 0) return null;
+  if (line == null || line === '') return null;
+  // Strict: number or numeric string only; reject garbage like "abc" (which
+  // Number() would silently coerce to NaN → null, hiding type drift). Issue
+  // #1950 review M2.
   const n = typeof line === 'number' ? line : Number(line);
   if (!Number.isInteger(n) || n < 1) {
     throw new WindowsError(
@@ -336,8 +357,16 @@ export function markFixed(
 
 // ─── Pure: parse / render ──────────────────────────────────────────────────
 
-const JSON_FENCE_OPEN = '```json';
-const JSON_FENCE_CLOSE = '```';
+// JSON-FENCE strategy (issue #1950 review H1): a description containing the
+// 3-backtick markdown fence sequence would terminate the code block early
+// inside JSON.stringify output (which does not escape backticks), corrupting
+// the file and bricking the next parse. We use a 4-backtick fence which
+// cannot collide with anything JSON.stringify can emit on its own (JSON has
+// no 4-backtick operator), AND validate that no entry's text fields contain
+// a 4-backtick run, so the rendered file is provably reparseable.
+const JSON_FENCE_OPEN = '````json';
+const JSON_FENCE_CLOSE = '````';
+const FORBIDDEN_BACKTICK_RUN = '````';
 
 /**
  * Minimal strict frontmatter parser for flat scalar keys. Only supports the
@@ -605,10 +634,23 @@ function readLedgerOrNull(cwd: string): Ledger | null {
   let raw: string;
   try {
     raw = fs.readFileSync(p, 'utf8');
-  } catch {
-    return null;
+  } catch (e: unknown) {
+    // ENOENT is the only "no ledger yet" case. Every other fs error (EACCES,
+    // EPERM, EIO, ENOTDIR, EBADF, ...) must NOT be silently coerced to "empty
+    // ledger" — that would fail the ship gate OPEN on an unreadable ledger,
+    // contradicting the workflow's documented "fail closed on unreadable"
+    // invariant (issue #1950 review H2). Propagate as malformed so the gate
+    // blocks and the operator sees a real diagnostic.
+    const code = (e && typeof e === 'object' && 'code' in e)
+      ? String((e as { code?: unknown }).code)
+      : '';
+    if (code === 'ENOENT') return null;
+    throw new WindowsError(
+      REASON.WINDOWS_LEDGER_MALFORMED,
+      `Could not read ledger at ${p} (${code || 'unknown fs error'}): ${(e as Error).message}.`,
+    );
   }
-  // Throws WindowsError on malformed — caller decides whether to surface.
+  // parseLedger throws WindowsError on malformed content — caller surfaces it.
   return parseLedger(raw);
 }
 
@@ -656,7 +698,15 @@ function writeLedgerAtomic(cwd: string, ledger: Ledger): void {
   const p = ledgerPath(cwd);
   const tmp = `${p}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, renderLedger(ledger), 'utf8');
-  renameWithRetry(tmp, p);
+  try {
+    renameWithRetry(tmp, p);
+  } catch (err) {
+    // Clean up the orphaned tmp file so repeated failures don't accumulate
+    // `.planning/WINDOWS.md.<pid>.tmp` files (issue #1950 review M1). Best-effort:
+    // unlink failures (e.g., already gone) are swallowed.
+    try { fs.unlinkSync(tmp); } catch { /* best-effort cleanup */ }
+    throw err;
+  }
 }
 
 function nowIso(): string {

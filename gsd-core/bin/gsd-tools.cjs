@@ -1501,12 +1501,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       }
     } catch (e) {
       // WindowsError carries a REASON code; surface it through the structured
-      // error path so tests can assert on the typed reason. Other errors get
-      // a generic fall-through (printed by the top-level handler).
+      // error path so tests can assert on the typed reason. `error()` calls
+      // process.exit(1) internally so we never reach the fall-through.
       if (e && e.name === 'WindowsError' && typeof e.reason === 'string') {
         error(e.message || 'broken-windows error', e.reason);
       }
-      throw e;
+      // Non-WindowsError: surface the message verbatim and exit non-zero.
+      error(`broken-windows: ${(e && e.message) ? e.message : String(e)}`, ERROR_REASON.UNKNOWN);
     }
   }
 
