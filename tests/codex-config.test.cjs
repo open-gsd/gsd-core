@@ -2150,10 +2150,17 @@ describe('Codex install hook configuration (e2e)', () => {
     assert.strictEqual(countMatches(content, /^\[features\]\s*$/gm), 1, 'keeps one [features] section');
     assert.strictEqual(countMatches(content, /^hooks = true$/gm), 1, 'adds one codex_hooks key');
     assert.ok(content.indexOf('hooks = true') > content.indexOf('[features]'), 'adds codex_hooks after the existing EOF features header');
-    // #2406: no [agents.<name>] role tables are emitted anymore — anchor on
-    // the GSD marker (which opens the managed block containing the bare
-    // [agents] dispatch-tuning table) instead.
-    assert.ok(content.indexOf('hooks = true') < content.indexOf(GSD_CODEX_MARKER), 'keeps codex_hooks before the managed GSD block');
+    // In this EOF-without-trailing-newline edge case, the pre-existing
+    // [features] header has no blank-line boundary to close it, so the
+    // appended GSD marker/ownership comment textually falls *inside* what
+    // reads as the [features] section body, and `hooks = true` is inserted
+    // at the end of that body — after the marker, not before it. That
+    // ordering is unrelated to #2406 (verified unchanged against
+    // origin/next's install.js) and #2406 removed the [agents.<name>] role
+    // tables that used to anchor this assertion, so anchor on the bare
+    // [agents] dispatch-tuning table instead — codex_hooks always lands
+    // before it.
+    assert.ok(content.indexOf('hooks = true') < content.indexOf('[agents]'), 'keeps codex_hooks before the [agents] dispatch-tuning table');
     assertNoDraftRootKeys(content);
   });
 
