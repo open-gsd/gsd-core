@@ -487,9 +487,21 @@ function install2362CapabilitySkill(gsdHome, capId, stem, content) {
   fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf8');
 }
 
-/** A minimal capability-registry shape carrying one capId -> [stems] cluster. */
-function registry2362For(capId, stems) {
-  return { capabilityClusters: { [capId]: stems } };
+/**
+ * A minimal capability-registry shape carrying one capId -> [stems] cluster.
+ * `tier` (optional) additionally sets profileMembership so resolveProfile()
+ * with a tiered (non-'*') mode unions this capability's stems into
+ * resolvedProfile.skills — mirrors the seam's own __registryFor helper in
+ * tests/runtime-artifact-layout-install-profiles.test.cjs.
+ */
+function registry2362For(capId, stems, tier) {
+  const registry = { capabilityClusters: { [capId]: stems } };
+  if (tier) {
+    registry.profileMembership = {
+      [capId]: { tier, profiles: tier === 'core' ? ['core', 'standard', 'full'] : ['standard', 'full'] },
+    };
+  }
+  return registry;
 }
 
 /** Run `fn` with GSD_HOME pointed at `gsdHome`, always restoring the prior value. */
@@ -555,6 +567,51 @@ for (const __runtime2362 of ['opencode', 'kilo']) {
       const markerPath = path.join(configDir, 'skills', 'gsd-my-thing', CAPABILITY_SKILL_MARKER);
       assert.ok(fs.existsSync(markerPath), 'staged third-party skill must carry the CAPABILITY_SKILL_MARKER for prune parity');
       assert.strictEqual(fs.readFileSync(markerPath, 'utf8').trim(), 'my-thing', 'marker must name the declaring capId');
+    });
+
+    test(`${__runtime2362}: (2) tiered (non-'*') profile — resolvedProfile.skills is a concrete Set and still materializes the third-party skill`, (t) => {
+      const gsdHome = createTempDir('gsd-2362-home-');
+      const configDir = createTempDir(`gsd-2362-${__runtime2362}-cfg-tiered-`);
+      t.after(() => { cleanup(gsdHome); cleanup(configDir); });
+
+      install2362CapabilitySkill(gsdHome, 'my-thing', 'my-thing', '# my-thing (tiered)\n');
+      // tier='standard' -> profileMembership includes 'standard', so
+      // resolveProfile({modes:['standard'], registry}) unions 'my-thing' into
+      // the resolved Set BEFORE it ever reaches installOpencodeFamilySkills —
+      // exercising the `(resolvedProfile && resolvedProfile.skills) || []`
+      // (non-'*') branch of the new candidateStems ternary, never covered by
+      // the mode=['full'] cases above.
+      const registry = registry2362For('my-thing', ['my-thing'], 'standard');
+      const resolvedTiered = resolveProfile({ modes: ['standard'], registry });
+      assert.ok(
+        resolvedTiered.skills instanceof Set,
+        "sanity: a tiered (non-'*') profile mode must resolve to a concrete Set, not the full sentinel",
+      );
+      assert.ok(
+        resolvedTiered.skills.has('my-thing'),
+        'sanity: resolveProfile must union the registered capability skill into the tiered profile\'s Set (mirrors production callers)',
+      );
+
+      with2362GsdHome(gsdHome, () => {
+        installRuntimeArtifacts(__runtime2362, configDir, 'global', resolvedTiered, () => undefined, registry);
+      });
+
+      const stagedPath = path.join(configDir, 'skills', 'gsd-my-thing', 'SKILL.md');
+      assert.ok(
+        fs.existsSync(stagedPath),
+        `#2362: a tiered profile (mode=standard) must also materialize a registered third-party capability skill via the non-'*' candidateStems branch`,
+      );
+      const markerPath = path.join(configDir, 'skills', 'gsd-my-thing', CAPABILITY_SKILL_MARKER);
+      assert.ok(fs.existsSync(markerPath), 'staged third-party skill must carry the CAPABILITY_SKILL_MARKER for prune parity even on a tiered profile');
+      assert.strictEqual(fs.readFileSync(markerPath, 'utf8').trim(), 'my-thing', 'marker must name the declaring capId');
+
+      // Sanity: first-party skills that ARE part of the 'standard' base list
+      // (e.g. 'help') must still stage too — the third-party fill-in must not
+      // replace or crowd out the tiered profile's own first-party selection.
+      assert.ok(
+        fs.existsSync(path.join(configDir, 'skills', 'gsd-help', 'SKILL.md')),
+        "sanity: first-party 'standard' base skills must still stage alongside the third-party fill-in",
+      );
     });
 
     test(`${__runtime2362}: (3) default full profile — resolvedProfile.skills === '*' still materializes the third-party skill (BLOCKER-2 parity)`, (t) => {
