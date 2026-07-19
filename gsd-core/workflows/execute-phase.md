@@ -1439,19 +1439,10 @@ Verify-work will walk you through each item and mark the phase complete when all
 
 **If user acknowledges without reporting issues (including "ok", "noted", "ack", "got it", "approved", "done", "yes", "pass", or similar):** Stop. The phase remains pending. No further orchestrator action — wait for the user to run `/gsd:verify-work`.
 
-**If user reports issues now (before running verify-work):** Proceed to gap closure as currently implemented.
+**If user reports issues now:** Proceed to gap closure.
 
 **If gaps_found:**
-
-**Revert this phase's own requirement IDs out of `Complete` before rendering the gap report (#2388).** A shared requirement ID can already read `Complete` at this point (its first-declaring plan finished before this verification ran) — a `gaps_found` verdict must not leave that premature `Complete` sitting in REQUIREMENTS.md. Scoped strictly to `PHASE_REQ_IDS` (this phase's own citations from `init.execute-phase`), so another phase's `Complete` row is never touched:
-
-```bash
-if [ -n "${PHASE_REQ_IDS}" ]; then
-  gsd_run query requirements.revert-phase ${PHASE_REQ_IDS} >/dev/null 2>&1 || true
-  gsd_run query commit "docs(phase-{X}): revert premature Complete requirements after gaps found" --files .planning/REQUIREMENTS.md >/dev/null 2>&1 || true
-fi
-```
-
+@~/.claude/gsd-core/references/execute-phase-requirement-revert.md
 ```
 ## ⚠ Phase {X}: {Name} — Gaps Found
 
