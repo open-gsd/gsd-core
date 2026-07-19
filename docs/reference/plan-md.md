@@ -179,7 +179,7 @@ Contains one or more `<task>` elements. Every task element must carry `<name>`, 
 </task>
 ```
 
-**Optional and back-compat:** a plan that omits `<precondition>` on every task behaves exactly as today — the executor skips the check with no visible change. Adding `<precondition>` to a task tells the executor to assert it before any other task work and halt (returning a `checkpoint:human-verify`, no partial commit) on an unmet precondition. Plans that include `<precondition>` pass `verify plan-structure` unchanged — the structural validator checks for the presence of required tags and does not reject unknown optional tags.
+**Optional and back-compat:** a plan that omits `<precondition>` on every task behaves exactly as today — the executor skips the check with no visible change. Adding `<precondition>` to a task tells the executor to assert it before any other task work (read-only checks only: file existence, env var presence, idempotent health pings; no side-effecting checks — halt and surface a checkpoint if one seems required) and halt (returning a `checkpoint:human-verify`, no partial commit) on an unmet precondition. Plans that include `<precondition>` pass `verify plan-structure` unchanged — the structural validator checks for the presence of required tags and does not reject unknown optional tags.
 
 **Emission cases** (planner-side): emit `<precondition>` only when a task relies on state the plan's own `depends_on` ordering does not already guarantee. Three cases cover every legitimate use:
 

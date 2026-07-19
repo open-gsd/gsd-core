@@ -88,11 +88,7 @@ environment variable or runtime config that exists *now* (not at plan time).
 
 ## Format
 
-`<precondition>` is a single line of prose inside the `<task>` element, placed
-right after `<name>` and before `<files>`. It is **prose, not a structured
-block** — concrete enough that the executor agent can run a cheap check (file
-existence, env var presence, `curl /health`), prose enough not to require a
-parser extension.
+`<precondition>` is a single line of prose inside the `<task>` element, placed right after `<name>` and before `<files>`. It is **prose, not a structured block** — concrete enough that the executor agent can run a read-only check (file existence, env var presence, idempotent `GET /health`-style ping), prose enough not to require a parser extension. The executor MUST verify with read-only checks only: no writes, no network POSTs, no secret emission. If a side-effecting check seems required, the executor halts and surfaces a checkpoint rather than running it.
 
 ```xml
 <task type="auto">
