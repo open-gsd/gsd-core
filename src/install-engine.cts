@@ -29,6 +29,7 @@ import runtimeNamePolicy = require('./runtime-name-policy.cjs');
 import installProfiles = require('./install-profiles.cjs');
 import installerMigrations = require('./installer-migrations.cjs');
 import { posixNormalize } from './shell-command-projection.cjs';
+import { isPathConfined } from './external-descriptor-trust.cjs';
 
 const { processAttribution } = runtimeArtifactConversion;
 // resolveRuntimeArtifactLayout: accessed via module ref (not destructured) so
@@ -625,7 +626,7 @@ function installRuntimeArtifacts(
     // _runLegacyInstallMigrations below entirely (early return), so their
     // legacy-directory cleanup needs its own pre-materialization hook here.
     _migrateLegacyOpencodeCommandDir(runtime, configDir, behaviors);
-    installOpencodeFamilyArtifacts(runtime, configDir, scope, resolvedProfile, resolveAttribution, behaviors);
+    installOpencodeFamilyArtifacts(runtime, configDir, scope, resolvedProfile, resolveAttribution, behaviors, capabilityRegistry);
     return;
   }
 
@@ -760,6 +761,17 @@ function installRuntimeArtifacts(
  * @param rawCommandsDir - staged RAW Claude command dir (caller's _stageSkills output)
  * @param pathPrefix - computed config-path prefix for body rewrites
  * @param resolveAttribution - injection: (runtime) => attribution string | undefined
+ * @param resolvedProfile - #2362: from resolveProfile()/resolveEffectiveProfile(); only
+ *   `.skills` is consulted (either the `'*'` full-profile sentinel or a concrete Set
+ *   of stems), and only to gate which THIRD-PARTY capability stems are candidates for
+ *   staging below. Absent -> no third-party skills staged (fail closed).
+ * @param capabilityRegistry - #2362: optional composed capability registry
+ *   (capabilityClusters view). When present, installed third-party capability
+ *   skills bound to their declaring capId are unioned into the staged output —
+ *   the actual #2322 seam (install-profiles.cts stageSkillsForRuntimeAsSkills)
+ *   this bespoke OpenCode/Kilo writer never called. Absent -> no third-party
+ *   skills staged (fail closed), matching the seam's own optional-registry
+ *   contract.
  * @returns number of gsd-* skill directories written
  */
 function installOpencodeFamilySkills(
@@ -768,6 +780,8 @@ function installOpencodeFamilySkills(
   rawCommandsDir: string,
   pathPrefix: string,
   resolveAttribution: ResolveAttribution = () => undefined,
+  resolvedProfile?: any,
+  capabilityRegistry?: any,
 ): number {
   const layout: any = runtimeArtifactLayout.resolveRuntimeArtifactLayout(runtime, targetDir);
   const skillsKindEntry = layout.kinds.find((k: any) => k.kind === 'skills');
@@ -815,9 +829,11 @@ function installOpencodeFamilySkills(
   _removeGsdEntries(dest, skillsKindEntry);
 
   let count = 0;
+  const firstPartyStems = new Set<string>();
   for (const entry of fs.readdirSync(rawDir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
     const stem = entry.name.slice(0, -3);
+    firstPartyStems.add(stem);
     const skillName = `${skillsKindEntry.prefix}${stem}`;
     let content = fs.readFileSync(path.join(rawDir, entry.name), 'utf8');
     content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
@@ -827,6 +843,50 @@ function installOpencodeFamilySkills(
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content);
     count++;
+  }
+
+  // #2362: materialize installed THIRD-PARTY capability skills, bound to their
+  // DECLARING capability via the registry's capabilityClusters view — mirrors
+  // install-profiles.cts stageSkillsForRuntimeAsSkills's third-party fill-in
+  // (the actual #2322 seam), reusing its exported security-reviewed helpers
+  // rather than hand-rolling a second scan (DEFECT.GENERATIVE-FIX guard).
+  // First-party always wins on stem collision. The full/'*' sentinel resolves
+  // through capabilityClusterStems (BLOCKER-2 parity: `resolveProfile`
+  // short-circuits `full` to `'*'` before consulting a registry, so a bare
+  // `resolvedProfile.skills !== '*'` gate would silently skip this pass for
+  // the default full install). No registry in scope -> stage NOTHING
+  // third-party (fail closed — never fall back to scanning).
+  //
+  // Unlike the seam (which stages third-party bodies as-is and relies on a
+  // later applySurface rewrite pass), this install path has no such later
+  // pass — so third-party bodies get the SAME inline path-prefix/attribution
+  // rewrite as first-party ones for on-disk parity. They do NOT go through
+  // `converter`: an installed capability skill is already a complete
+  // SKILL.md, not a Claude-command body awaiting frontmatter conversion.
+  if (capabilityRegistry) {
+    const candidateStems: Iterable<string> =
+      resolvedProfile && resolvedProfile.skills === '*'
+        ? installProfiles.capabilityClusterStems(capabilityRegistry)
+        : (resolvedProfile && resolvedProfile.skills) || [];
+    for (const stem of candidateStems) {
+      if (firstPartyStems.has(stem)) continue; // first-party always wins
+      const found = installProfiles.readInstalledCapabilitySkill(stem, capabilityRegistry);
+      if (found === null) continue; // absent/malformed/unowned -> skip gracefully
+      const skillName = `${skillsKindEntry.prefix}${stem}`;
+      if (!isPathConfined(skillName, dest)) continue; // defense-in-depth
+      let content = found.content;
+      content = applyOpencodeFamilyPathPrefix(content, runtime, pathPrefix);
+      content = processAttribution(content, resolveAttribution(runtime));
+      const skillDir = path.join(dest, skillName);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content);
+      // #2322 HIGH-3 parity: persist the capability-owned marker so a later
+      // prune pass can identify this directory even once the owning
+      // capability is uninstalled/unsurfaced and no longer appears in any
+      // registry view.
+      fs.writeFileSync(path.join(skillDir, installProfiles.CAPABILITY_SKILL_MARKER), found.capId + '\n', 'utf8');
+      count++;
+    }
   }
 
   // Restore user-owned dirs after the prune+copy.
@@ -1029,6 +1089,11 @@ function _migrateLegacyOpencodeCommandDir(runtime: string, configDir: string, be
  * @param resolvedProfile - from resolveProfile() / resolveEffectiveProfile()
  * @param resolveAttribution - injection: (runtime) => attribution string | undefined
  * @param behaviors - the runtime's hostBehaviors descriptor (already resolved by the caller)
+ * @param capabilityRegistry - #2362: optional composed capability registry
+ *   (capabilityClusters view), threaded straight through to
+ *   installOpencodeFamilySkills so an installed third-party capability skill
+ *   materializes for this combined-family (OpenCode/Kilo) install path too.
+ *   Absent -> no third-party skills staged (fail closed).
  */
 function installOpencodeFamilyArtifacts(
   runtime: string,
@@ -1037,6 +1102,7 @@ function installOpencodeFamilyArtifacts(
   resolvedProfile: any,
   resolveAttribution: ResolveAttribution = () => undefined,
   behaviors: any = {},
+  capabilityRegistry?: any,
 ): void {
   const isGlobal = scope === 'global';
   // findInstallSourceRoot resolves DIRECTLY to the commands/gsd source dir
@@ -1068,7 +1134,7 @@ function installOpencodeFamilyArtifacts(
     behaviors.flatCommandDir || 'command',
   );
   installOpencodeFamilyCommands(runtime, commandDir, rawCommandsDir, pathPrefix, resolveAttribution);
-  installOpencodeFamilySkills(runtime, configDir, rawCommandsDir, pathPrefix, resolveAttribution);
+  installOpencodeFamilySkills(runtime, configDir, rawCommandsDir, pathPrefix, resolveAttribution, resolvedProfile, capabilityRegistry);
 
   _installNativePluginIfDeclared(runtime, configDir, behaviors, src);
 }
