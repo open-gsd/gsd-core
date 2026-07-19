@@ -15,20 +15,14 @@
     ],
     "unsupported": []
   },
-  "activationKey": "windows.enabled",
   "skills": [],
   "agents": [],
   "hooks": [],
   "config": {
-    "windows.enabled": {
+    "workflow.windows_enforce": {
       "type": "boolean",
-      "default": true,
-      "description": "Master toggle for the broken-windows capability. When false, the ship:pre gate is not registered and /gsd-ship proceeds even when WINDOWS.md has open entries."
-    },
-    "windows.enforce": {
-      "type": "boolean",
-      "default": true,
-      "description": "Enable the blocking ship:pre gate. When false, windows are still tracked (the executor and verifier still populate WINDOWS.md) but ship does not block on open_count > 0. Separate from windows.enabled so a project can adopt tracking before enforcement."
+      "default": false,
+      "description": "Enable the blocking ship:pre gate for the broken-windows ledger. When true (opt-in), /gsd-ship blocks while .planning/WINDOWS.md has any open entry. When false (default), windows are still tracked (the executor and verifier still populate WINDOWS.md via gsd-tools windows append) but ship does not block — teams can adopt tracking before enforcement. Issue #1950."
     }
   },
   "steps": [],
@@ -44,7 +38,7 @@
           "equals": 0
         }
       },
-      "when": "windows.enforce",
+      "when": "workflow.windows_enforce",
       "blocking": true,
       "onError": "halt"
     }

@@ -129,7 +129,7 @@ CONTEXT: [✓ if has_context | - if not]
 - [e.g. jq -r '.blockers[].text' from state-snapshot]
 
 ## Pending Todos
-- [count] pending — /gsd-capture --list to review
+- [count] pending — /gsd:capture --list to review
 
 ## Open Windows
 - [count] open in `.planning/WINDOWS.md` — /gsd:ship blocks while any remain

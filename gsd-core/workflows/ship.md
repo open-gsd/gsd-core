@@ -142,7 +142,7 @@ Verify the work is ready to ship:
 
    The ledger is **optional and backward-compatible**: on a project where `gsd_run windows status` returns `open_count: 0` (no `.planning/WINDOWS.md` yet, or an empty ledger), the gate passes silently. The gate only blocks when at least one entry is `open`.
 
-   If no active `broken-windows` `ship:pre` gate hook is present (capability disabled via `windows.enabled=false` or gate disabled via `windows.enforce=false`), skip this check silently.
+   If no active `broken-windows` `ship:pre` gate hook is present (gate disabled via `workflow.windows_enforce=false`, the default — tracking continues but the gate is opt-in), skip this check silently.
 </step>
 
 <step name="push_branch">
