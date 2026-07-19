@@ -335,9 +335,9 @@ function manifestAgentCount(manifest) {
  * @param {string} configDir
  * @param {string} [runtime] - when provided, the skills-kind destination is
  *   resolved via resolveRuntimeArtifactLayout so a skills-kind `home` override
- *   (Codex only, ADR-1239 upgrade 3 / #2088: skills -> $HOME/.agents/skills
- *   instead of configDir/skills) is honored. Omitted callers keep the prior
- *   configDir/skills default.
+ *   (Codex global only, ADR-1239 upgrade 3 / #2088: global skills ->
+ *   $HOME/.agents/skills; local skills stay under configDir/skills) is honored.
+ *   Omitted callers keep the prior configDir/skills default.
  * @param {string} [scope='global']
  */
 function collectSkillBasenamesOnDisk(configDir, runtime, scope = 'global') {

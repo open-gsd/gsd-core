@@ -903,8 +903,7 @@ const capabilities = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToCodexSkill",
-            "home": ".agents"
+            "converter": "convertClaudeCommandToCodexSkill"
           }
         ]
       },
@@ -4505,8 +4504,7 @@ const runtimes = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToCodexSkill",
-            "home": ".agents"
+            "converter": "convertClaudeCommandToCodexSkill"
           }
         ]
       },
