@@ -532,12 +532,6 @@ describe('broken-windows CLI: windows append', () => {
     const tmp = createTempDir('bw-append-line-bva-');
     t.after(() => cleanup(tmp));
 
-    // line=0: treated as "no line" (null) — limit-1 boundary.
-    const r0 = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '0', '--description', 'a'], tmp);
-    assert.equal(r0.success, true, `--line 0 should succeed (null): ${r0.error || ''}`);
-    const e0 = JSON.parse(r0.output).entry;
-    assert.equal(e0.line, null, '--line 0 must serialize to null (omit)');
-
     // line=1: smallest valid line — limit boundary.
     const r1 = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '1', '--description', 'b'], tmp);
     assert.equal(r1.success, true, `--line 1 should succeed: ${r1.error || ''}`);
@@ -548,13 +542,24 @@ describe('broken-windows CLI: windows append', () => {
     assert.equal(r2.success, true, `--line 999999 should succeed: ${r2.error || ''}`);
     assert.equal(JSON.parse(r2.output).entry.line, 999999);
 
-    // line=-1 and line=abc: invalid — fail closed.
+    // line=0: limit-1 boundary — invalid (lines are 1-indexed; 0 is not a line).
+    // M2 fix: validateLine no longer treats 0 as omit; it rejects as non-positive.
+    const rZero = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '0', '--description', 'a'], tmp);
+    assert.equal(rZero.success, false, '--line 0 must fail (positive integers only)');
+    assert.match(rZero.error, /line|positive integer/i);
+
+    // line=-1 and line=abc: also invalid — fail closed.
     const rNeg = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', '-1', '--description', 'd'], tmp);
     assert.equal(rNeg.success, false);
     assert.match(rNeg.error, /line|positive integer/i);
     const rGarbage = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--line', 'abc', '--description', 'e'], tmp);
     assert.equal(rGarbage.success, false);
     assert.match(rGarbage.error, /line|positive integer/i);
+
+    // line OMITTED entirely: valid, line is null.
+    const rOmit = runGsdTools(['windows', 'append', '--kind', 'stub', '--phase', '2', '--description', 'f'], tmp);
+    assert.equal(rOmit.success, true, `--line omitted should succeed: ${rOmit.error || ''}`);
+    assert.equal(JSON.parse(rOmit.output).entry.line, null);
   });
 
   test('append rejects 4-backtick description via CLI (H1 regression)', (t) => {
