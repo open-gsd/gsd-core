@@ -222,6 +222,9 @@ jobs:
             !coverage/tmp
             .nyc_output/
           if-no-files-found: ignore
+          # ~440 MB per full run; same-run diagnostic never consumed by other
+          # jobs — keep short so it cannot accumulate against the org quota.
+          retention-days: 3
 
       - name: Run integration tests
         if: matrix.scope == 'full'
