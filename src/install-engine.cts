@@ -237,6 +237,22 @@ function hasExistingSymlinkBetween(
     return true;
   }
 
+  // #2393 (security-review finding): realpathSync fully resolves all symlink
+  // components, path.resolve only normalizes lexically. On macOS, /var is a
+  // symlink to /private/var — so resolvedRoot='/var/foo/.claude' but its real
+  // path is '/private/var/foo/.claude'. A symlink whose real target equals the
+  // install root (the threat-(b) wipe case) would compare unequal without this
+  // normalization, defeating the guard exactly in the reporter's case (Azd325,
+  // nix-darwin: ~/.claude is itself a symlink). Compute realRoot once; fall
+  // back to the lexical form on any realpath failure (broken/missing/exotic FS)
+  // — threat (a) above still confines regardless.
+  let realRoot: string;
+  try {
+    realRoot = fs.existsSync(resolvedRoot) ? fs.realpathSync(resolvedRoot) : resolvedRoot;
+  } catch {
+    realRoot = resolvedRoot;
+  }
+
   const allowFollow = options.allowOptInFollow === true;
 
   let cursor = resolvedRoot;
@@ -248,10 +264,11 @@ function hasExistingSymlinkBetween(
     if (!allowFollow) return true;
     try {
       const realCursor = fs.realpathSync(cursor);
-      if (realCursor === resolvedRoot) return true; // (b) config-root-wipe threat
+      if (realCursor === realRoot || realCursor === resolvedRoot) return true; // (b) config-root-wipe threat
       cursor = realCursor;
     } catch {
-      // realpathSync failed (broken symlink) — refuse, matching fail-closed posture.
+      // realpathSync failed (broken symlink, permission denied, exotic FS) — refuse,
+      // matching fail-closed posture.
       return true;
     }
   }
@@ -267,9 +284,17 @@ function hasExistingSymlinkBetween(
       // is the install root itself (threat (b) — would let _removeGsdEntries
       // wipe the root). Other targets are acceptable per the user's explicit
       // opt-in. A broken symlink (realpathSync throws) is still refused.
+      //
+      // Transitivity note: once followed, the walk continues from the resolved
+      // real path WITHOUT re-checking that further segments stay inside any
+      // confining boundary. The user's opt-in asserts trust in the target dir
+      // AND any further symlinks reachable through it — transitive and unbounded
+      // by design (one opt-in trusts the whole reachable tree). This is the
+      // documented opt-in semantics; do not add a "follow one symlink only"
+      // expectation here without revisiting the threat model.
       try {
         const realTarget = fs.realpathSync(cursor);
-        if (realTarget === resolvedRoot) return true; // (b)
+        if (realTarget === realRoot || realTarget === resolvedRoot) return true; // (b)
         cursor = realTarget;
       } catch {
         return true;

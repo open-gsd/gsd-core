@@ -2802,6 +2802,54 @@ describe('#2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest 
     }
   });
 
+  // #2393 security-review finding: realpathSync fully resolves symlinks while
+  // path.resolve is lexical. On macOS, /var is a symlink to /private/var, so
+  // `resolvedRoot` carries `/var/...` while the symlink's realtarget carries
+  // `/private/var/...` — a naive `realtarget === resolvedRoot` check would miss
+  // the equality and let threat (b) through. Fix compares against BOTH the
+  // lexical and real forms of root. Test constructs the macOS-style divergence
+  // explicitly: spell configHome one way, point the symlink at its real path.
+  test('resolved-target-equals-install-root via /var ↔ /private/var normalization (macOS-style)', (t) => {
+    if (process.platform !== 'darwin') {
+      t.skip('test exercises the macOS /var → /private/var symlink — darwin only');
+      return;
+    }
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-realpath-'));
+    try {
+      // `os.tmpdir()` is spelled with `/var/...` on macOS; realpathSync resolves it
+      // to `/private/var/...`. The lexical resolvedRoot and the real realRoot differ.
+      const realConfigHome = fs.realpathSync(configHome);
+      if (realConfigHome === configHome) {
+        // Defensive — if for some reason there's no /var symlink in the chain, the
+        // test isn't exercising what it claims. Skip rather than pass vacuously.
+        t.skip('os.tmpdir() path contains no symlink component — test does not exercise the /var normalization');
+        return;
+      }
+
+      // Symlink spelled via the REAL path — its realtarget will equal realConfigHome,
+      // NOT lexical configHome. The bug shape: realtarget !== resolvedRoot (lexical).
+      const loopLink = path.join(configHome, 'loop');
+      try {
+        fs.symlinkSync(realConfigHome, loopLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(loopLink, 'gsd-foo');
+
+      // The fix compares against BOTH lexical and real forms — guard fires.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        true,
+        'opt-in must refuse a symlink resolving to install root by real path even when ' +
+          'lexical and real forms differ (macOS /var ↔ /private/var normalization)',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'loop')); } catch { /* already gone */ }
+      cleanup(configHome);
+    }
+  });
+
   // Documented edge case: a broken symlink (target missing) is silently passed by
   // both the default and opt-in paths. fs.existsSync follows the link and returns
   // false, so the component loop terminates before the symlink check fires. This is
