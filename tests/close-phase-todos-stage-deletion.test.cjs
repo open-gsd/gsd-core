@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product see #2415
 // Workflow .md files — their text IS what the runtime loads. Testing text content
 // tests the deployed contract. Per CONTRIBUTING.md exception matrix.
 'use strict';
