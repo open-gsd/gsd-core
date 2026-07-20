@@ -1031,4 +1031,96 @@ describe('check.decision-coverage-plan — planner-canonical tag scanning (#2372
       );
     }
   });
+
+  // Reviewer-driven edge cases (code review on the initial widening flagged these):
+  //
+  // 1. Nested scanned tag inside another scanned tag: a citation in the OUTER tag's
+  //    prefix prose must still count. Initial widening used a single alternation whose
+  //    negative lookahead halted the outer tag's body at any inner scanned tag — losing
+  //    the prefix citation. Switched to per-tag matching so each tag's body terminates
+  //    only at its own closing tag (other scanned tags pass through as text into this body).
+  // 2. Non-scanned tag bearing a D-NN citation must NOT count toward coverage — guards
+  //    against future over-widening.
+  // 3. Self-closing form `<read_first />` has no body and must not error or match.
+  // 4. Attribute form `<verify type="automated">D-01</verify>` is the canonical planner
+  //    shape for <verify> and must match.
+  // 5. CRLF newlines inside tag bodies must not break capture.
+
+  test('D-NN in outer scanned tag prefix is not lost when inner scanned tag follows (per-tag capture)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    // The bug shape: <action>per D-01 <verify>...</verify></action> — D-01 lives in <action>'s prefix.
+    writePlanFile(phaseDir, '01', [
+      '# Plan',
+      '',
+      '<tasks>',
+      '<task>',
+      '  <action>',
+      '    Implement per D-01 — OAuth 2.0 flow.',
+      '    <verify>token exchange returns 200</verify>',
+      '  </action>',
+      '</task>',
+      '</tasks>',
+    ].join('\n'));
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.covered, 1, `D-01 in <action> prefix must be caught (per-tag capture). Got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.passed, true);
+  });
+
+  test('D-NN inside a non-scanned tag body does NOT count toward coverage', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    // <name> is not in the scanned set — citation here must not be picked up.
+    writePlanFile(phaseDir, '01', '# Plan\n\n<name>per D-01</name>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.total, 1);
+    assert.strictEqual(parsed.covered, 0, 'non-scanned tag body must not count. Got: ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.passed, false);
+    assert.strictEqual(parsed.uncovered.length, 1);
+  });
+
+  test('self-closing scanned tag form is safely ignored (no body to scan)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    // Self-closing form has no body. The gate must not crash and must not match the (absent) body.
+    writePlanFile(phaseDir, '01', '# Plan\n\n<tasks>\n<task>\n<read_first />\n<action>Implement feature.</action>\n</task>\n</tasks>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.total, 1);
+    assert.strictEqual(parsed.covered, 0);
+    assert.strictEqual(parsed.passed, false);
+  });
+
+  test('attribute form `<verify type="...">D-NN</verify>` is scanned (canonical planner shape)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    writePlanFile(phaseDir, '01', '# Plan\n\n<tasks>\n<task>\n<verify type="automated">Run npm test per D-01</verify>\n</task>\n</tasks>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.covered, 1, 'attribute form on scanned tag must match. Got: ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.passed, true);
+  });
+
+  test('CRLF newlines inside scanned tag body do not break capture', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    const planBody = ['# Plan', '', '<tasks>', '<task>', '  <action>', '    Implement per D-01.', '  </action>', '</task>', '</tasks>', ''].join('\r\n');
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), planBody);
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.covered, 1, 'CRLF body must not break capture. Got: ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.passed, true);
+  });
 });
