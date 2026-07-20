@@ -673,9 +673,35 @@ function main() {
         );
       }
       const code = err.status || 1;
-      // Run every chunk so the operator sees all failures in one pass; report
-      // the first non-zero exit at the end.
       if (firstFailureExit === 0) firstFailureExit = code;
+      if (timedOut) {
+        // A timeout has already burned a large share of the job's budget
+        // (chunkTimeoutMs defaults to 600000ms, i.e. half the 20m CI job
+        // cap), so — unlike an ordinary test failure — letting the loop
+        // fall through to the remaining chunks risks the CI runner
+        // cancelling the whole job before they finish. That cancellation
+        // replaces the loud, specific diagnostic printed above with an
+        // opaque "The operation was canceled." buried at the very end of
+        // the log, thousands of lines past the real cause (observed live on
+        // CI run 29749380190: chunk 1/5 timed out, the loop pressed on
+        // through chunks 2-4, and the job was cancelled mid-chunk-5 — the
+        // timeout message was ~38,000 log lines from the end and
+        // `gh run view --log-failed` returned nothing). Abort the remaining
+        // chunks instead so the operator actually sees this message.
+        const skipped = chunks.length - (i + 1);
+        if (skipped > 0) {
+          console.error(
+            `run-tests: aborting — skipping the remaining ${skipped} chunk${skipped === 1 ? '' : 's'} ` +
+              `after the chunk ${i + 1}/${chunks.length} timeout rather than risk the CI runner ` +
+              `cancelling the job (and burying this diagnostic) before they finish.`,
+          );
+        }
+        break;
+      }
+      // A non-timeout failure is cheap in wall-clock terms (the child exits
+      // promptly on its own), so — unlike the timeout case above — run every
+      // remaining chunk anyway: the operator sees all failures in one pass,
+      // and the first non-zero exit is reported at the end.
     }
   }
   if (firstFailureExit !== 0) return firstFailureExit;
