@@ -64,12 +64,16 @@ On any error or timeout, stop and let the phase continue -- capture is best-effo
    # One-time: declare the GSD room taxonomy so detect_room() recognizes these folders
    mkdir -p "$STAGE"
    [ -f "$STAGE/mempalace.yaml" ] || cat > "$STAGE/mempalace.yaml" <<'YAML'
+   # Each entry MUST be a dict with a `name` key (the miner's detect_room()
+   # indexes room["name"] — a bare-string list crashes _mine_impl with
+   # TypeError: string indices must be integers, not 'str'). Optional fields:
+   # `description`, `keywords` (matched against folder-path segments).
    rooms:
-     - decisions
-     - planning
-     - milestones
-     - problems
-     - general
+     - name: decisions
+     - name: planning
+     - name: milestones
+     - name: problems
+     - name: general
    YAML
    # Suppress MemPalace cache artifacts written into the scanned tree
    [ -f "$STAGE/.gitignore" ] || echo "mempalace_embedder.json" > "$STAGE/.gitignore"
