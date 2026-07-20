@@ -139,7 +139,15 @@ function loadPlanContents(phaseDir: string): string[] {
 }
 
 const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objective)\b/i;
-const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action)(?:\s[^>]{0,1000})?>((?:(?!<(?:objective|tasks?|action)[\s>])[\s\S])*?)<\/(?:objective|tasks?|action)>/gi;
+// #2372: scanned-tag set must match the planner-canonical surfaces where a D-NN citation
+// is meaningful. `<objective>`/`<tasks>`/`<task>`/`<action>` are the historical core. The
+// planner is also explicitly told (plan-phase.md) to cite decisions in `<read_first>`,
+// `<behavior>`, `<verify>`, `<acceptance_criteria>`, and `<done>` — those are now scanned too,
+// so the gate no longer reports a false coverage gap when a decision is cited in any of them.
+// The body negative-lookahead must mirror the opening-tag set so each tag's body is captured
+// independently (a nested `<verify>` inside an `<action>` stops the `<action>` capture, then
+// the `<verify>` capture starts on its own match — same semantics as the prior 3-tag set).
+const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action|read_first|behavior|verify|acceptance_criteria|done)(?:\s[^>]{0,1000})?>((?:(?!<(?:objective|tasks?|action|read_first|behavior|verify|acceptance_criteria|done)[\s>])[\s\S])*?)<\/(?:objective|tasks?|action|read_first|behavior|verify|acceptance_criteria|done)>/gi;
 
 function stripCommentsAndFences(text: string): string {
   // HTML-comment stripping stays caller-side (the seam does not strip HTML comments).
@@ -219,7 +227,10 @@ function buildPlanMessage(uncovered: UncoveredItem[]): string {
     '',
     ...uncovered.map((item) => `- **${item.id}** (${item.category || 'uncategorized'}): ${item.text}`),
     '',
-    'Resolve by citing `D-NN:` in a relevant plan\'s `must_haves`/`truths` (or body),',
+    'Resolve by citing `D-NN:` in any of the scanned plan surfaces: front-matter',
+    '`must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective`',
+    'heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>`',
+    'tag body. Other locations (prose outside those headings, comments, other XML tags) are not scanned.',
     'OR move the decision to `### Claude\'s Discretion` / tag it `[informational]` if it should not be tracked.',
   ].join('\n');
 }
