@@ -18,13 +18,13 @@
 import frontmatter = require('./frontmatter.cjs');
 import { stateReplaceField, stateExtractField, stateReplaceFieldIfTemplate, stateReplaceFieldWithFallback } from './state-document.cjs';
 import { KNOWN_TEMPLATE_DEFAULTS } from './state-document.cjs';
-import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, stripFencedCode } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { deriveProgressFromRoadmap, clampPercent } from './phase-lifecycle.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 
-const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
+const { extractFrontmatter, reassembleFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
 const { escapeRegex } = phaseIdMod;
 
 // Stop predicate for section-body slicing: a level-2+ heading ends the section.
@@ -329,7 +329,7 @@ export type StateTransitionIntent =
       planCount: number;
       summaryCount: number;
     }
-  | { kind: 'plannedPhase'; phaseNumber: string | number; planCount: number | null }
+  | { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null }
   | { kind: 'milestoneSwitch'; version: string; name: string }
   | {
       kind: 'milestoneComplete';
@@ -443,9 +443,7 @@ function beginPhaseCore(
   let body = stripFrontmatter(content);
 
   const reassemble = (b: string): string =>
-    hasFrontmatter
-      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
-      : b;
+    hasFrontmatter ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, b) : b;
 
   const today = deps.clock.localToday();
 
@@ -689,7 +687,7 @@ function mutateCurrentPositionResume(
  */
 function mutateCurrentPositionForAdvance(
   content: string,
-  fields: { status?: string; lastActivity?: string; plan?: string },
+  fields: { status?: string; lastActivity?: string; plan?: string; phaseName?: string },
   statusDefaults: string[] | null | undefined,
   lastActivityDefaults: string[] | null | undefined,
 ): string {
@@ -697,6 +695,19 @@ function mutateCurrentPositionForAdvance(
   if (span === null) return content;
   let sectionBody = content.slice(span.start, span.end);
   let mutated = false;
+
+  // Phase name — #2400: thread the transition's --name into the "Phase: N of M
+  // (Name)" line so a stale/placeholder name is repaired. A callback replacer
+  // keeps the (unsanitised, advertised) --name literal — `$&`, `$1`, `` $` `` in
+  // the name are NOT expanded — and matching the parenthetical to the LAST `)`
+  // on the line replaces a nested-paren name whole ("(Critical Fix (v2))").
+  if (fields.phaseName) {
+    const phaseLineRe = /^(Phase:[^\n(]*\()[^\n]*(\)[^\n]*)$/m;
+    if (phaseLineRe.test(sectionBody)) {
+      const replaced = sectionBody.replace(phaseLineRe, (_m, pre: string, post: string) => pre + fields.phaseName + post);
+      if (replaced !== sectionBody) { sectionBody = replaced; mutated = true; }
+    }
+  }
 
   if (fields.status) {
     const replaced = stateReplaceFieldIfTemplate(sectionBody, 'Status', statusDefaults, fields.status);
@@ -755,9 +766,7 @@ function advancePlanCore(content: string, deps: StateTransitionDeps): StateTrans
   const hasFrontmatter = Object.keys(existingFm).length > 0;
   let body = stripFrontmatter(content);
   const reassemble = (b: string): string =>
-    hasFrontmatter
-      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
-      : b;
+    hasFrontmatter ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, b) : b;
 
   // Parse plan number — legacy first, then compound.
   const legacyPlan = stateExtractField(content, 'Current Plan');
@@ -902,9 +911,7 @@ function completePhaseCore(
   const hasFrontmatter = Object.keys(existingFm).length > 0;
   let body = stripFrontmatter(content);
   const reassemble = (b: string): string =>
-    hasFrontmatter
-      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
-      : b;
+    hasFrontmatter ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, b) : b;
 
   // Current Phase — preserve the existing `of <total>` shape and the phase name
   // in parens (mirrors phase.cts:1675-1697 byte-for-behaviour).
@@ -1042,11 +1049,53 @@ function completePhaseCore(
  */
 function plannedPhaseCore(
   content: string,
-  intent: { kind: 'plannedPhase'; phaseNumber: string | number; planCount: number | null },
+  intent: { kind: 'plannedPhase'; phaseNumber: string | number; phaseName: string | null; planCount: number | null },
   deps: StateTransitionDeps,
 ): StateTransitionResult {
   const updated: string[] = [];
   const today = deps.clock.localToday();
+
+  // #2400: the authoritative lifecycle field this transition advances is a
+  // labeled `Status:` (wherever it lives — Current Position, a Configuration
+  // section, or top-level bold). A narrative / non-canonical STATE.md with NO
+  // labeled Status anywhere carries nothing authoritative to advance: the Status
+  // replacement silently misses and planning would be "recorded" only as a stale
+  // plan count while the lifecycle status stays `ready_to_plan`. Detect that up
+  // front and report an explicit unsupported-shape outcome (the adapter fails
+  // loud) rather than an empty — or plan-count-only — `updated` that reads as a
+  // successful advance. The probe is whole-body, not scoped to "## Current
+  // Position": valid STATE.md files carry Status outside that section, and as
+  // long as the authoritative Status advances planning IS recorded even if a
+  // narrative Current Position prose line is left as-is. A labeled Status is
+  // REQUIRED (a "Total Plans in Phase" field alone cannot establish an
+  // advanceable lifecycle shape — Codex #2400 round-2).
+  //
+  // #2418 review m2: the probe reads a FENCE-STRIPPED copy. `stateExtractField`
+  // is a whole-body regex, so an illustrative `Status: …` inside a fenced
+  // example or a quoted STATE.md template would otherwise certify a narrative
+  // document as canonical — a narrower replay of the #2400 bug this closes. The
+  // strip is for the PROBE only; the mutation below still runs against the real
+  // body, so a fenced example is never rewritten.
+  //
+  // An UNTERMINATED fence disables the mask (Codex round-4 blocker). The
+  // stripper tolerates ≤3 spaces of opener indent but tracks no container
+  // context, so a fence opened inside a nested list whose closer sits at 4+
+  // spaces is never seen as closed and everything to EOF is discarded — taking
+  // a real, top-level `Status:` with it and hard-failing a VALID STATE.md.
+  // Reproduced: an `## Notes` list example above `## Current Position` yielded
+  // `unsupported-shape` on a document carrying `Status: Ready to plan`.
+  // Blocking a well-formed file is strictly worse than the fenced-example
+  // false-certify m2 closes, so when the mask is known-unreliable the probe
+  // falls back to the raw body (the pre-#2418 behavior). The narrow residue —
+  // an unterminated fence AND a Status that exists ONLY inside it — degrades to
+  // that same prior behavior rather than to a false hard failure.
+  let body = stripFrontmatter(content);
+  const fenceScan = stripFencedCode(body);
+  const probeText = fenceScan.unterminatedFence ? body : fenceScan.text;
+  const shapeSupported = stateExtractField(probeText, 'Status') !== null;
+  if (!shapeSupported) {
+    return { content, updated: [], data: { outcome: 'unsupported-shape' } };
+  }
 
   for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
     const cls = getFieldClassification(fmKey);
@@ -1058,14 +1107,12 @@ function plannedPhaseCore(
     }
   }
 
-  // #1255: body-field replacements operate on body only.
+  // #1255: body-field replacements operate on body only (`body` is stripped
+  // above for the shape probe and reused here — no second stripFrontmatter pass).
   const existingFm = extractFrontmatter(content) as Record<string, unknown>;
   const hasFrontmatter = Object.keys(existingFm).length > 0;
-  let body = stripFrontmatter(content);
   const reassemble = (b: string): string =>
-    hasFrontmatter
-      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
-      : b;
+    hasFrontmatter ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, b) : b;
 
   const statusDefaults = KNOWN_TEMPLATE_DEFAULTS['Status'];
   const lastActivityDefaults = KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
@@ -1077,10 +1124,12 @@ function plannedPhaseCore(
     updated.push('Status');
   }
 
-  // Total Plans in Phase — system-derived; always replaced when a count is given.
+  // Total Plans in Phase — system-derived; replaced when a count is given.
+  // Push only on an ACTUAL change so a re-run at the same count classifies as
+  // idempotent, not a phantom "applied" (#2400).
   if (intent.planCount !== null && intent.planCount !== undefined) {
     const result = stateReplaceField(body, 'Total Plans in Phase', String(intent.planCount));
-    if (result) {
+    if (result && result !== body) {
       body = result;
       updated.push('Total Plans in Phase');
     }
@@ -1099,25 +1148,32 @@ function plannedPhaseCore(
     'Last Activity Description',
     `Phase ${intent.phaseNumber} planning complete — ${intent.planCount || '?'} plans ready`,
   );
-  if (ladResult) {
+  if (ladResult && ladResult !== body) {
     body = ladResult;
     updated.push('Last Activity Description');
   }
 
-  // ## Current Position section — Status + Last activity (template-aware).
+  // ## Current Position section — Status + Last activity + phase name (#2400).
   const beforePos = body;
   body = mutateCurrentPositionForAdvance(
     body,
     {
       status: 'Ready to execute',
       lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
+      phaseName: intent.phaseName ?? undefined,
     },
     statusDefaults,
     lastActivityDefaults,
   );
   if (body !== beforePos) updated.push('Current Position');
 
-  return { content: reassemble(body), updated };
+  // #2400: the shape is canonical (checked above), so an empty `updated` is a
+  // safe NO-OP, not a failure — every field was already at its value OR an
+  // executor-authored Status was intentionally preserved (#397). Either way the
+  // caller must NOT fail loud; it just cannot assume the Status is now "Ready to
+  // execute". Classify it distinctly from `applied` and from `unsupported-shape`.
+  const outcome = updated.length > 0 ? 'applied' : 'idempotent';
+  return { content: reassemble(body), updated, data: { outcome } };
 }
 
 // ----------------------------------------------------------------------------
@@ -1166,11 +1222,18 @@ function milestoneSwitchCore(
   const resolvedName = (intent.name && intent.name.trim()) || 'milestone';
 
   // ## Current Position reset body (mirrors state.cts:2371-2375).
+  //
+  // #2418 review (CRLF class #1658/#1668/#2206/#2449/#2450): compose the reset
+  // in the document's OWN line ending. A literal `\n` here splices bare LFs
+  // into a CRLF STATE.md — the same mixed-EOL corruption the frontmatter
+  // reassemble seam was fixed for, one layer down. Identical bytes on an LF
+  // document (`eol === '\n'`), so LF byte-parity is unchanged.
+  const eol = /\r\n/.test(body) ? '\r\n' : '\n';
   const resetPositionBody =
-    `\nPhase: Not started (defining requirements)\n` +
-    `Plan: —\n` +
-    `Status: Defining requirements\n` +
-    `Last activity: ${today} — Milestone ${intent.version} started\n\n`;
+    `${eol}Phase: Not started (defining requirements)${eol}` +
+    `Plan: —${eol}` +
+    `Status: Defining requirements${eol}` +
+    `Last activity: ${today} — Milestone ${intent.version} started${eol}${eol}`;
 
   let newBody: string;
   const hs = tokenizeHeadings(body);
@@ -1183,14 +1246,14 @@ function milestoneSwitchCore(
     let bodyEnd = body.length;
     for (let j = posIdx + 1; j < hs.length; j++) {
       if (STOP_H2_PLUS(hs[j].level)) {
-        bodyEnd = hs[j].offset - 1;
+        bodyEnd = newlineStartBefore(body, hs[j].offset);
         break;
       }
     }
     newBody = body.slice(0, bodyStart) + resetPositionBody + body.slice(bodyEnd);
   } else {
-    const preface = body.trim().length > 0 ? body : '# Project State\n';
-    newBody = `${preface.trimEnd()}\n\n## Current Position\n${resetPositionBody}`;
+    const preface = body.trim().length > 0 ? body : `# Project State${eol}`;
+    newBody = `${preface.trimEnd()}${eol}${eol}## Current Position${eol}${resetPositionBody}`;
   }
 
   // Rebuilt frontmatter — curated fields are intentionally reset (milestone
@@ -1211,8 +1274,7 @@ function milestoneSwitchCore(
     },
   };
 
-  const yamlStr = reconstructFrontmatter(fm as unknown as Frontmatter);
-  const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
+  const assembled = reassembleFrontmatter(content, fm as unknown as Frontmatter, newBody.replace(/^(?:\r?\n)+/, ''));
   return { content: assembled, updated };
 }
 
@@ -1243,6 +1305,22 @@ function milestoneSwitchCore(
  * retired regex's `pattern.test(body)` miss) — callers fall back to their own
  * append-a-new-section path.
  */
+/**
+ * Offset of the START of the single newline that precedes the heading at
+ * `headingOffset` — 2 bytes back for a CRLF pair, 1 for a bare LF.
+ *
+ * The section-reset paths keep "exactly one newline unconsumed before the next
+ * heading" by slicing at `offset - 1`. On a CRLF document that lands BETWEEN
+ * the `\r` and the `\n`, so the `\r` falls into the discarded body span and the
+ * document keeps a bare `\n` before the heading (#2418 review, CRLF class
+ * #1658/#1668/#2206/#2449/#2450). Identical to `offset - 1` on LF input.
+ */
+function newlineStartBefore(content: string, headingOffset: number): number {
+  return headingOffset >= 2 && content[headingOffset - 2] === '\r' && content[headingOffset - 1] === '\n'
+    ? headingOffset - 2
+    : headingOffset - 1;
+}
+
 function resetSectionVerbatim(
   content: string,
   headingPredicate: (heading: HeadingToken) => boolean,
@@ -1277,7 +1355,7 @@ function resetSectionVerbatim(
   // deep); leave exactly one newline unconsumed before it, or run to EOF.
   let bodyEnd = content.length;
   for (let j = idx + 1; j < headings.length; j++) {
-    if (STOP_H2_PLUS(headings[j].level)) { bodyEnd = headings[j].offset - 1; break; }
+    if (STOP_H2_PLUS(headings[j].level)) { bodyEnd = newlineStartBefore(content, headings[j].offset); break; }
   }
 
   return content.slice(0, bodyStart) + newBody + content.slice(bodyEnd);
@@ -1323,9 +1401,7 @@ function milestoneCompleteCore(
   const hasFrontmatter = Object.keys(existingFm).length > 0;
   let body = stripFrontmatter(content);
   const reassemble = (b: string): string =>
-    hasFrontmatter
-      ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}`
-      : b;
+    hasFrontmatter ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, b) : b;
 
   // Status — `<version> milestone complete`.
   const statusAfter = stateReplaceFieldWithFallback(body, 'Status', null, `${version} milestone complete`);
@@ -1355,11 +1431,14 @@ function milestoneCompleteCore(
 
   // ## Current Position reset — stop resume/progress flows pointing at closed
   // execution instructions.
+  // #2418 review (CRLF class): compose in the document's own line ending —
+  // see the identical note in `milestoneSwitchCore`. Byte-identical on LF.
+  const eol = /\r\n/.test(body) ? '\r\n' : '\n';
   const closedPositionBody =
-    `\nPhase: Milestone ${version} complete\n` +
-    `Plan: —\n` +
-    `Status: Awaiting next milestone\n` +
-    `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
+    `${eol}Phase: Milestone ${version} complete${eol}` +
+    `Plan: —${eol}` +
+    `Status: Awaiting next milestone${eol}` +
+    `Last activity: ${today} — Milestone ${version} completed and archived${eol}${eol}`;
   const positionReset = resetSectionVerbatim(
     body,
     (h) => h.level === 2 && /^current\s+position$/i.test(h.text),
@@ -1368,7 +1447,7 @@ function milestoneCompleteCore(
   if (positionReset !== null) {
     body = positionReset;
   } else {
-    body = `${body.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
+    body = `${body.trimEnd()}${eol}${eol}## Current Position${eol}${closedPositionBody}`;
   }
   updated.push('Current Position');
 
@@ -1376,12 +1455,12 @@ function milestoneCompleteCore(
   const operatorReset = resetSectionVerbatim(
     body,
     (h) => h.level === 2 && /^operator\s+next\s+steps$/i.test(h.text),
-    `\n- Start the next milestone with ${intent.nextMilestoneCommand}\n\n`,
+    `${eol}- Start the next milestone with ${intent.nextMilestoneCommand}${eol}${eol}`,
   );
   if (operatorReset !== null) {
     body = operatorReset;
   } else {
-    body = `${body.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${intent.nextMilestoneCommand}\n`;
+    body = `${body.trimEnd()}${eol}${eol}## Operator Next Steps${eol}${eol}- Start the next milestone with ${intent.nextMilestoneCommand}${eol}`;
   }
   updated.push('Operator Next Steps');
 
@@ -1455,7 +1534,7 @@ function updateCore(
     return { content, updated: [], data: { updated: false } };
   }
   const reassembled = hasFrontmatter
-    ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${result}`
+    ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, result)
     : result;
   return { content: reassembled, updated: [intent.field], data: { updated: true } };
 }

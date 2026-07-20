@@ -1711,12 +1711,15 @@ Record state transition after plan-phase completes (Planned/Ready to execute).
 |------|-------------|
 | `--phase N` | Phase number that was planned |
 | `--plans N` | Number of plans generated |
+| `--name NAME` | Phase name; written to the `## Current Position` `Phase:` line (#2400) |
 
 **Prerequisites:** Phase has been planned
 **Produces:** Updated `STATE.md` with post-planning state
 
+Fails loud (non-zero exit) if `STATE.md` is narrative / non-canonical — no labeled `Status:` field to advance — rather than silently no-oping (#2400).
+
 ```bash
-node gsd-tools.cjs state planned-phase --phase 3 --plans 2
+node gsd-tools.cjs state planned-phase --phase 3 --name "Auth" --plans 2
 ```
 
 ---

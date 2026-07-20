@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error } = ioMod;
+const { output, error, ERROR_REASON } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig } = configLoaderMod;
@@ -27,7 +27,7 @@ const { planningDir, planningPaths } = planningWorkspace;
 import { realClock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatter = require('./frontmatter.cjs');
-const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
+const { extractFrontmatter, reassembleFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -1822,8 +1822,7 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
     }
   }
 
-  const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
-  return `---\n${yamlStr}\n---\n\n${body}`;
+  return reassembleFrontmatter(content, derivedFm as unknown as Frontmatter, body);
 }
 
 // Transient errno codes that indicate a temporary filesystem condition under
@@ -2172,9 +2171,8 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
       preBodyPhaseSource, postBodyPhaseSource,
     });
     if (preservation.mutated) {
-      const yamlStr = reconstructFrontmatter(preservation.postFm as unknown as Frontmatter);
       const body = stripFrontmatter(synced);
-      synced = `---\n${yamlStr}\n---\n\n${body}`;
+      synced = reassembleFrontmatter(synced, preservation.postFm as unknown as Frontmatter, body);
     }
 
     platformWriteSync(statePath, synced);
@@ -2497,7 +2495,7 @@ function updatePerformanceMetricsSection(content: string, cwd: string, phaseNum:
  * Gate 3a: Record state after plan-phase completes.
  * Updates Status to "Ready to execute", Total Plans, Last Activity.
  */
-function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCount: number | null | undefined, raw: boolean): void {
+function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, phaseName: string | null | undefined, planCount: number | null | undefined, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) {
     output({ error: 'STATE.md not found' }, raw, undefined);
@@ -2515,6 +2513,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCou
   const intent: StateTransitionIntent = {
     kind: 'plannedPhase',
     phaseNumber,
+    phaseName: phaseName ?? null,
     planCount: planCount ?? null,
   };
   const deps: StateTransitionDeps = {
@@ -2523,13 +2522,43 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCou
   };
 
   let updated: string[] = [];
+  let outcome = 'applied';
+  // resync:false preserves the curated MILESTONE-wide progress counters (#500) —
+  // planned-phase records a PER-PHASE plan count in the body ("Total Plans in
+  // Phase" and the "Plan: N of M" line), which is a different metric from the
+  // frontmatter milestone totals and must not trample them.
   readModifyWriteStateMd(statePath, (content) => {
     const result = transitionCore(content, intent, deps);
     updated = result.updated;
+    outcome = (result.data?.['outcome'] as string | undefined) ?? 'applied';
     return result.content;
   }, cwd, { resync: false, deriveProgressKeys: true });
 
-  output({ updated, phase: phaseNumber, plan_count: planCount }, raw, updated.length > 0 ? 'true' : 'false');
+  // #2400: a narrative / non-canonical STATE.md carries no labeled "Status:" for
+  // the transition to advance. Fail LOUD FIRST — a structured stderr diagnostic
+  // (json-errors mode emits `{ok:false, reason:"sdk_fail_fast", …}`) + non-zero
+  // exit — so plan-phase step 13b (and plan-review-convergence) stop instead of
+  // continuing on a STATE.md that still says ready-to-plan. `error()` returns
+  // `never` (it exits), so the `output()` below is the SUCCESS path only — the
+  // `outcome` discriminator (`applied` / `idempotent`) is a stdout success
+  // contract; the unsupported-shape failure is signalled by exit code + stderr,
+  // which is what the workflow guards key on. (An earlier attempt to also emit
+  // `outcome` on stdout here is defeated by gsd-tools' captureStdoutSyncWrites,
+  // which buffers sync stdout writes and only flushes on non-error completion.)
+  if (outcome === 'unsupported-shape') {
+    error(
+      'state planned-phase: STATE.md is narrative / non-canonical — ' +
+        'no labeled "Status:" field to advance. Reconcile it to the template ' +
+        'shape (or edit it by hand) before sealing planning.',
+      ERROR_REASON.SDK_FAIL_FAST,
+    );
+  }
+
+  output(
+    { updated, outcome, phase: phaseNumber, plan_count: planCount },
+    raw,
+    updated.length > 0 || outcome === 'idempotent' ? 'true' : 'false',
+  );
 }
 
 /**
@@ -3092,7 +3121,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     let body = stripFrontmatter(content);
 
     const reassemble = (b: string) =>
-      hasFrontmatter ? `---\n${reconstructFrontmatter(existingFm as unknown as Frontmatter)}\n---\n\n${b}` : b;
+      hasFrontmatter ? reassembleFrontmatter(content, existingFm as unknown as Frontmatter, b) : b;
 
     // Update Status field (body only — #1255)
     const statusValue = `Phase ${currentPhase} complete`;

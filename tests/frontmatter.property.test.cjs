@@ -4,7 +4,7 @@
  * Property-based tests for frontmatter.cjs
  *
  * Module: gsd-core/bin/lib/frontmatter.cjs
- * Exported (pure): extractFrontmatter, reconstructFrontmatter, spliceFrontmatter
+ * Exported (pure): extractFrontmatter, reconstructFrontmatter, reassembleFrontmatter, spliceFrontmatter
  *
  * Properties tested:
  *   (a) extractFrontmatter never throws on ANY string input (including binary/unicode)
@@ -13,6 +13,8 @@
  *       preserves key-value pairs for simple flat string values
  *   (d) spliceFrontmatter never throws on any string/object combination
  *   (e) extractFrontmatter returns {} for content without a leading ---...--- block
+ *   (g) reassembleFrontmatter is EOL-total: the block it authors is entirely in the
+ *       header's line ending, and the body passes through byte-for-byte (#2418)
  *   (f) prohibitions bijection (#644): over a generated must_haves.prohibitions block,
  *       parseMustHavesBlock(spliceFrontmatter(doc, parseFrontmatter(doc)), 'prohibitions')
  *       deepEquals the original parse — the new parse ↔ splice path is identity-preserving.
@@ -26,6 +28,7 @@ const yaml = require('js-yaml');
 const {
   extractFrontmatter,
   reconstructFrontmatter,
+  reassembleFrontmatter,
   spliceFrontmatter,
   parseFrontmatter,
   parseMustHavesBlock,
@@ -289,6 +292,53 @@ describe('frontmatter: reconstructFrontmatter strict-YAML property (#1779)', () 
           assert.equal(loaded.k, s,
             `value did not round-trip through strict YAML: ${JSON.stringify(s)}`);
         }
+      })
+    );
+  });
+});
+
+// #2418 review blocker — the reassemble seam must be EOL-total: for ANY
+// frontmatter object and ANY body, the document it emits carries exactly one
+// line-ending style in the block it wrote, matching the style of the header it
+// replaced. A single hardcoded `\n` anywhere in the assembly (delimiters,
+// separator blank line, or the YAML interior — the original bug spanned all
+// three) breaks this for CRLF documents, so the property covers the whole
+// assembly rather than spot-checking one joiner.
+//
+// The body is deliberately generated with mixed/ragged endings: the seam must
+// pass body bytes through untouched, so the invariant is scoped to the prefix
+// it authored, not to the document as a whole.
+describe('frontmatter: reassembleFrontmatter EOL-preservation property (#2418)', () => {
+  const fmObj = fc.dictionary(
+    fc.stringMatching(/^[a-z][a-z0-9_]{0,12}$/),
+    fc.stringMatching(/^[a-zA-Z0-9 ._/-]{1,30}$/),
+    { minKeys: 1, maxKeys: 6 },
+  );
+  const bodyArb = fc.array(fc.stringMatching(/^[a-zA-Z0-9 #:._-]{0,40}$/), { maxLength: 8 })
+    .chain((lines) => fc.array(fc.constantFrom('\n', '\r\n'), { minLength: lines.length, maxLength: lines.length })
+      .map((eols) => lines.map((l, i) => l + eols[i]).join('')));
+
+  test('property: the emitted frontmatter block is entirely in the header EOL, body untouched', () => {
+    fc.assert(
+      fc.property(fmObj, bodyArb, fc.constantFrom('\n', '\r\n'), (fm, body, eol) => {
+        const original = `---${eol}k: v${eol}---${eol}${eol}${body}`;
+        const out = reassembleFrontmatter(original, fm, body);
+
+        // The body is passed through byte-for-byte...
+        assert.ok(out.endsWith(body), 'body bytes must not be rewritten');
+
+        // ...and everything the seam authored uses exactly the header's EOL.
+        const authored = out.slice(0, out.length - body.length);
+        const bare = (authored.match(/\n/g) || []).length - (authored.match(/\r\n/g) || []).length;
+        if (eol === '\r\n') {
+          assert.equal(bare, 0, `CRLF header must not emit a bare LF, got: ${JSON.stringify(authored)}`);
+        } else {
+          assert.ok(!authored.includes('\r'), `LF header must not emit a \\r, got: ${JSON.stringify(authored)}`);
+        }
+
+        // The result is still a parseable frontmatter document in either style.
+        assert.deepEqual(Object.keys(extractFrontmatter(out)).sort(), Object.keys(fm).sort(),
+          'every key must survive the reassembly');
       })
     );
   });

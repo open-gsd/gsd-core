@@ -2680,6 +2680,396 @@ describe('state planned-phase command', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// #2400: state planned-phase must not silently no-op, must leave STATE.md
+// coherent, and must classify its outcome.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('#2400 state planned-phase — fail-loud + frontmatter coherence', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createFixture(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const CANONICAL = [
+    '---',
+    'status: ready_to_plan',
+    'current_phase: 07.15',
+    'current_phase_name: example',
+    'progress:',
+    '  total_phases: 1',
+    '  completed_phases: 0',
+    '  total_plans: 0',
+    '  completed_plans: 0',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 07.15 of 1 (Example)',
+    'Plan: 0 of 0 in current phase',
+    'Status: Ready to plan',
+    'Last activity: 2026-07-17',
+    '',
+    'Total Plans in Phase: 0',
+    'Last Activity Description: Ready to plan Phase 07.15',
+    '',
+  ].join('\n');
+
+  const NARRATIVE = [
+    '---',
+    'status: ready_to_plan',
+    'current_phase: 07.15',
+    'progress:',
+    '  total_plans: 0',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    '**Resume here: Phase 07.15 is ready for planning.** Next: run plan-phase.',
+    '',
+  ].join('\n');
+
+  const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+  const writeState = (body) => fs.writeFileSync(statePath(), body);
+  const readState = () => fs.readFileSync(statePath(), 'utf-8');
+  const frontmatterOf = (s) => s.split(/^---$/m)[1] || '';
+
+  // Bug A — a narrative Current Position must not return silent success + zero bytes.
+  test('narrative Current Position → fails loud (does not silently no-op)', () => {
+    writeState(NARRATIVE);
+    const before = readState();
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    // Fail-loud contract: a NON-ZERO exit (so the workflow guard stops) plus a
+    // TYPED reason — asserted below via --json-errors rather than by matching
+    // stderr prose, which this repo prohibits (#2418 review m2).
+    assert.ok(!r.success, `expected a non-zero exit on a narrative shape, got success=${r.success} output=${r.output}`);
+    assert.strictEqual(readState(), before, 'must not partially write a shape it cannot transition');
+    // The failure is machine-readable (folded into the error JSON) under --json-errors:
+    // a typed reason, not raw-text matching.
+    const rj = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir, { GSD_JSON_ERRORS: '1' });
+    assert.ok(!rj.success, 'json-errors mode must also exit non-zero');
+    assert.strictEqual(JSON.parse(rj.error).reason, 'sdk_fail_fast', `json-errors stderr must carry the typed reason, got: ${rj.error}`);
+  });
+
+  // Canonical shape: the PER-PHASE body count is set, and the MILESTONE-wide
+  // frontmatter `progress.total_plans` does NOT take it. The two are different
+  // metrics, and conflating them is the misread this fix exists to avoid — a
+  // per-phase count written into a milestone-wide field silently corrupts every
+  // downstream progress reader.
+  //
+  // NOTE (#2440, upstream): `total_plans` is no longer PRESERVED either — it
+  // joined `total_phases` as always-derived so it can correct in both
+  // directions. So the assertion is not "the curated 99 survives" (that contract
+  // was deliberately retired) but the part this fix owns: whatever lands there,
+  // it is the DERIVED milestone value, never the per-phase 23.
+  test('canonical shape → per-phase body count set; milestone frontmatter total_plans is not the per-phase count', () => {
+    writeState(CANONICAL.replace('  total_plans: 0', '  total_plans: 99'));
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    const s = readState();
+    assert.match(s, /Total Plans in Phase[:*\s]+23/, 'per-phase body "Total Plans in Phase" = 23');
+    assert.doesNotMatch(frontmatterOf(s), /total_plans:\s*23/,
+      `the per-phase count must never land in the milestone-wide field, got:\n${frontmatterOf(s)}`);
+  });
+
+  // #500 — a curated MONOTONIC counter must not be re-derived away from a
+  // half-planned disk snapshot. Per #1446/#2440 the ratchet is per-counter:
+  // `completed_phases`/`completed_plans` are monotonic and stay ratcheted, while
+  // `total_phases`/`total_plans` always take the freshly derived value so they
+  // can correct in both directions. planned-phase must respect that split
+  // rather than reinstating a whole-block preserve.
+  test('#500/#2440: the monotonic counter is preserved; the total is re-derived', () => {
+    writeState(CANONICAL.replace('completed_phases: 0', 'completed_phases: 2').replace('total_phases: 1', 'total_phases: 5'));
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    const fm = frontmatterOf(readState());
+    assert.match(fm, /completed_phases:\s*2/, 'completed_phases is monotonic — it must be preserved');
+    assert.doesNotMatch(fm, /total_phases:\s*5/,
+      `total_phases is always-derived since #1446 — a stale curated value must not survive, got:\n${fm}`);
+  });
+
+  // --name contract — the parsed name must reach the transition.
+  test('--name reaches the transition (Current Position carries the phase name)', () => {
+    writeState(CANONICAL);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'Complete Help Corpus', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    assert.ok(readState().includes('Complete Help Corpus'), `Current Position should carry the phase name, got:\n${readState()}`);
+  });
+
+  // Idempotency — a second call on a coherent ready-to-execute state is a
+  // successful, explicitly-classified no-op, not an indistinguishable failure.
+  test('idempotent: a second call on a coherent state succeeds, reports outcome=idempotent + updated=[]', () => {
+    writeState(CANONICAL);
+    runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    const r2 = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r2.success, `second call must succeed, got: ${r2.error}`);
+    const out = JSON.parse(r2.output);
+    assert.ok(!out.error, `second call must not be an error, got: ${r2.output}`);
+    assert.strictEqual(out.outcome, 'idempotent', 'a no-change repeat is explicitly idempotent');
+    assert.deepStrictEqual(out.updated, [], 'an idempotent repeat reports no updated fields');
+  });
+
+  // Mixed shape — labels live in a `## Configuration` section, Current Position is
+  // narrative. The authoritative Status IS advanced (planning is recorded), so the
+  // transition APPLIES; it does not fail loud on a shape it can legitimately move.
+  test('mixed shape (labels in Configuration, narrative Current Position) → applies, advances Status', () => {
+    const MIXED = [
+      '---', 'status: ready_to_plan', 'current_phase: 07.15',
+      'progress:', '  total_plans: 0', '---', '',
+      '# Project State', '',
+      '## Configuration', '',
+      'Status: Ready to plan', 'Total Plans in Phase: 0', '',
+      '## Current Position', '',
+      '**Resume here: Phase 07.15 is ready for planning.**', '',
+    ].join('\n');
+    writeState(MIXED);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `mixed shape with a labeled authoritative Status must apply, got: ${r.error}`);
+    const out = JSON.parse(r.output);
+    assert.notStrictEqual(out.outcome, 'unsupported-shape', 'a labeled Status IS a supported shape');
+    assert.match(readState(), /Status:\s*Ready to execute/, 'the authoritative Status must be advanced');
+  });
+
+  // Preserved custom status — #397/#500 deliberately keep an executor-authored
+  // Status. A no-change repeat is `idempotent`, and idempotent must NOT be read
+  // as "Status is now Ready to execute": the custom status survives.
+  test('preserved custom status → applied ≠ Status-advanced; idempotent no-op keeps executor Status', () => {
+    writeState(CANONICAL.replace('Status: Ready to plan', 'Status: Blocked: waiting on infra review'));
+    const args = ['state', 'planned-phase', '--phase', '07.15', '--name', 'Example', '--plans', '23'];
+    // First call settles the mutable fields (plan count, last activity) → `applied`
+    // (≥1 transition-owned field changed) — but `applied` does NOT imply Status
+    // advanced: the executor-authored Status is preserved throughout (#397).
+    const r1 = runGsdTools(args, tmpDir);
+    assert.ok(r1.success, `Command failed: ${r1.error}`);
+    assert.strictEqual(JSON.parse(r1.output).outcome, 'applied', 'plan-count change → applied');
+    assert.match(readState(), /Status:\s*Blocked: waiting on infra review/, 'applied must not overwrite an executor-authored Status');
+    // Second call changes nothing → a genuine idempotent no-op. `idempotent` must
+    // NOT be read as "Status is now Ready to execute": the custom status survives.
+    const r2 = runGsdTools(args, tmpDir);
+    assert.ok(r2.success, `Command failed: ${r2.error}`);
+    assert.strictEqual(JSON.parse(r2.output).outcome, 'idempotent', 'nothing changed → idempotent');
+    assert.match(readState(), /Status:\s*Blocked: waiting on infra review/, 'executor-authored Status must be preserved');
+    assert.doesNotMatch(readState(), /Status:\s*Ready to execute/, 'idempotent must not silently mean Ready to execute');
+  });
+
+  // Blocker #1 (Codex round-2) — a "Total Plans in Phase" field with NO labeled
+  // Status is NOT an advanceable lifecycle shape: advancing only the plan count
+  // while the authoritative Status stays put is the very silent-no-op #2400 fixes.
+  test('Total Plans in Phase present but NO labeled Status → unsupported, fails loud', () => {
+    const NO_STATUS = [
+      '---', 'status: ready_to_plan', 'current_phase: 07.15',
+      'progress:', '  total_plans: 0', '---', '',
+      '# Project State', '',
+      '## Current Position', '',
+      '**Resume here: Phase 07.15 is ready for planning.**', '',
+      'Total Plans in Phase: 0', '',
+    ].join('\n');
+    writeState(NO_STATUS);
+    const before = readState();
+    // --json-errors so the failure is asserted as a TYPED reason, not by matching
+    // stderr prose (#2418 review m2).
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir, { GSD_JSON_ERRORS: '1' });
+    assert.ok(!r.success, `a plan-count-only shape must exit non-zero, got success=${r.success} output=${r.output}`);
+    assert.strictEqual(JSON.parse(r.error).reason, 'sdk_fail_fast', `expected the typed fail-fast reason, got: ${r.error}`);
+    assert.strictEqual(readState(), before, 'must not advance the plan count on a shape with no authoritative Status');
+  });
+
+  // Blocker #4 — `--name` is interpolated LITERALLY. Replacement metacharacters
+  // ($&, $1, $`, $') in the advertised, unsanitized name must not be expanded.
+  test('--name with $ replacement metacharacters is written literally, not expanded', () => {
+    writeState(CANONICAL);
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'R&D $& Migration', '--plans', '1'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    const s = readState();
+    assert.match(s, /Phase: 07\.15 of 1 \(R&D \$& Migration\)/, `metachars must be literal, got:\n${s}`);
+    assert.doesNotMatch(s, /R&D Phase: 07\.15/, 'must not expand $& into the matched text');
+  });
+
+  // Blocker #4 — a parenthesized phase-name suffix (an established roadmap format)
+  // is replaced whole, with no dangling ")".
+  test('--name replaces a nested-parenthesis phase label cleanly (no dangling paren)', () => {
+    writeState(CANONICAL.replace('Phase: 07.15 of 1 (Example)', 'Phase: 07.15 of 1 (Critical Fix (INSERTED))'));
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'New Name', '--plans', '1'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    const s = readState();
+    assert.match(s, /Phase: 07\.15 of 1 \(New Name\)\n/, `label must be replaced whole, got:\n${s}`);
+    assert.doesNotMatch(s, /\(New Name\)\)/, 'must not leave a dangling paren');
+  });
+
+  // #2418 review m2 — the shape probe must not be fooled by an illustrative
+  // `Status:` inside a fenced block. A narrative STATE.md that happens to quote
+  // a canonical template in a code fence has NO authoritative Status of its own,
+  // so it must still fail loud rather than being certified as advanceable —
+  // otherwise the #2400 silent-no-op class returns through the fence.
+  test('a Status: that exists only inside a code fence does not certify the shape', () => {
+    writeState([
+      '---',
+      'status: ready_to_plan',
+      'current_phase: 07.15',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Current Position',
+      '',
+      '**Resume here: Phase 07.15 is ready for planning.**',
+      '',
+      'A canonical STATE.md looks like:',
+      '',
+      '```markdown',
+      'Status: Ready to plan',
+      'Total Plans in Phase: 0',
+      '```',
+      '',
+    ].join('\n'));
+    const before = readState();
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir, { GSD_JSON_ERRORS: '1' });
+    assert.ok(!r.success, `a fenced-only Status must not certify the shape, got success=${r.success} output=${r.output}`);
+    assert.strictEqual(JSON.parse(r.error).reason, 'sdk_fail_fast', `expected the typed fail-fast reason, got: ${r.error}`);
+    assert.strictEqual(readState(), before, 'the fenced example must never be rewritten');
+  });
+
+  // Codex round-4 blocker on the m2 fix: `stripFencedCode` tolerates ≤3 spaces
+  // of opener indent but tracks no list/container context, so a fence opened in
+  // a nested list whose closer sits at 4+ spaces is never seen as closed and
+  // masks everything to EOF — including the document's REAL top-level Status.
+  // Hard-failing a valid STATE.md (non-zero exit, plan-phase halts) is strictly
+  // worse than the false-certify m2 closes, so an unreliable mask must degrade
+  // to the raw-body probe, not to a block.
+  test('an unterminated fence must not hard-fail a STATE.md that has a real Status', () => {
+    writeState([
+      '---',
+      'status: ready_to_plan',
+      'current_phase: 07.15',
+      '---',
+      '',
+      '# Project State',
+      '',
+      '## Notes',
+      '',
+      '- Example of the canonical block:',
+      '   ```markdown',
+      '       Status: Ready to plan',
+      '       ```',
+      '',
+      '## Current Position',
+      '',
+      'Phase: 07.15 of 1 (Example)',
+      'Status: Ready to plan',
+      'Total Plans in Phase: 0',
+      '',
+    ].join('\n'));
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `a valid STATE.md must not be blocked by an unterminated fence, got: ${r.error}`);
+    assert.strictEqual(JSON.parse(r.output).outcome, 'applied', `expected applied, got: ${r.output}`);
+    assert.match(readState(), /Total Plans in Phase[:*\s]+23/, 'the real Status must drive the advance');
+  });
+
+  // A real Status outside the fence still works when a fence is present — the
+  // strip must not throw the baby out with the bathwater.
+  test('a real Status alongside a fenced example still advances', () => {
+    writeState(CANONICAL + ['', 'Example block:', '', '```markdown', 'Status: Ignore me', '```', ''].join('\n'));
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    const s = readState();
+    assert.match(s, /Total Plans in Phase[:*\s]+23/, 'the real Status must still drive the advance');
+    assert.match(s, /```markdown\r?\nStatus: Ignore me\r?\n```/, `the fenced example must survive verbatim, got:\n${s}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2418 review: the two-layer EOL contract for STATE.md.
+//
+// The transition CORE must not mix line endings (fixed at the shared
+// `reassembleFrontmatter` seam; pinned in tests/frontmatter{,.property}.test.cjs).
+// The WRITE seam — `platformWriteSync` → `normalizeContent` — independently
+// normalizes every `.md` write to LF, which is why the core's mixed-EOL output
+// never reached disk through the CLI.
+//
+// Both halves are asserted because they are each other's safety net: if the
+// writer is ever made EOL-preserving (a reasonable future change) the core's
+// correctness becomes user-visible, and if the core regresses the writer hides
+// it. These tests pin the on-disk half; a bare-LF assertion here would be
+// vacuous (the writer guarantees it regardless of the core).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#2418 CRLF: STATE.md is written in one consistent line ending', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createFixture(); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const CANONICAL_LF = [
+    '---',
+    'status: ready_to_plan',
+    'current_phase: 07.15',
+    'current_phase_name: example',
+    'progress:',
+    '  total_phases: 1',
+    '  completed_phases: 0',
+    '  total_plans: 0',
+    '  completed_plans: 0',
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Current Position',
+    '',
+    'Phase: 07.15 of 1 (Example)',
+    'Plan: 0 of 0 in current phase',
+    'Status: Ready to plan',
+    'Last activity: 2026-07-17',
+    '',
+    'Total Plans in Phase: 0',
+    '',
+    '## Session',
+    '',
+    'Notes.',
+    '',
+  ].join('\n');
+
+  const statePath = () => path.join(tmpDir, '.planning', 'STATE.md');
+  const readRaw = () => fs.readFileSync(statePath(), 'utf-8');
+  const bareLf = (s) => (s.match(/\n/g) || []).length - (s.match(/\r\n/g) || []).length;
+
+  // The mixed-EOL document the pre-fix core produced (LF frontmatter block over
+  // a CRLF body) must not be observable on disk under ANY verb: `planned-phase`
+  // is the one this PR extends, `sync` is the auto-triggered one every other
+  // command runs. A single consistent ending — never a mix — is the contract.
+  for (const [label, argv] of [
+    ['planned-phase', ['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23']],
+    ['sync', ['state', 'sync']],
+  ]) {
+    test(`${label} on a CRLF STATE.md leaves no mixed line endings on disk`, () => {
+      fs.writeFileSync(statePath(), CANONICAL_LF.replace(/\n/g, '\r\n'));
+      const r = runGsdTools(argv, tmpDir);
+      assert.ok(r.success, `Command failed: ${r.error}`);
+      const s = readRaw();
+      const crlfPairs = (s.match(/\r\n/g) || []).length;
+      assert.ok(
+        crlfPairs === 0 || bareLf(s) === 0,
+        `STATE.md must be all-LF or all-CRLF, never mixed — got ${crlfPairs} CRLF + ${bareLf(s)} bare LF:\n${JSON.stringify(s)}`,
+      );
+      // Pins the current write policy explicitly (`normalizeContent` rewrites
+      // every `.md` write to LF) so a change to it is a deliberate, visible one
+      // rather than a silent drift that also un-hides a core EOL regression.
+      assert.ok(!s.includes('\r'), `the .md write seam normalizes to LF; got a \\r:\n${JSON.stringify(s)}`);
+    });
+  }
+
+  test('planned-phase still applies the transition on a CRLF input (not a silent no-op)', () => {
+    fs.writeFileSync(statePath(), CANONICAL_LF.replace(/\n/g, '\r\n'));
+    const r = runGsdTools(['state', 'planned-phase', '--phase', '07.15', '--name', 'example', '--plans', '23'], tmpDir);
+    assert.ok(r.success, `Command failed: ${r.error}`);
+    // A CRLF document must reach the #2400 shape probe as canonical — a `\r`
+    // clinging to the `Status:` value must not read as a non-canonical shape
+    // and fail the file loud.
+    assert.match(readRaw(), /Total Plans in Phase[:*\s]+23/, `transition must have applied, got:\n${readRaw()}`);
+    assert.strictEqual(JSON.parse(r.output).outcome, 'applied', `CRLF input must classify as applied, got: ${r.output}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // bug #1070 regression: "Complete ✓" terminal status must yield to planned-phase
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -10859,5 +11249,52 @@ describe('bug #2440 — shouldPreserveExistingProgress does not ratchet total_pl
       'completed_plans ratchet must still work');
   });
 });
+
   });
 }
+
+// ─── #2418 review m1 — `--name` literal-interpolation property ───────────────
+//
+// `mutateCurrentPositionForAdvance` repairs the `Phase: N of M (Name)` label with
+// a regex replace. A raw string replacement would let `$&` / `$1` / `` $` `` in an
+// operator-supplied name expand into surrounding document text — a silent
+// corruption of STATE.md driven by ordinary phase names ("R&D $& Migration").
+// The callback replacer makes interpolation literal; this property asserts that
+// over arbitrary names rather than the three hand-picked ones above.
+describe('#2418: --name is interpolated literally into the Phase label (property)', () => {
+  // Required here rather than inherited: this suite is top-level, so it does not
+  // sit inside the folded block that requires fast-check for its own tests.
+  const fc = require('./helpers/fast-check-setup.cjs');
+  const { transitionCore } = require('../gsd-core/bin/lib/state-transition.cjs');
+  const deps = { clock: { localToday: () => '2026-07-20' } };
+  const doc = (label) => [
+    '---', 'status: ready_to_plan', 'current_phase: 3', '---', '',
+    '# Project State', '', '## Current Position', '',
+    `Phase: 3 of 9 (${label})`, 'Status: Ready to plan', 'Total Plans in Phase: 0', '',
+  ].join('\n');
+
+  test('property: any single-line name lands verbatim, leaving the rest of the line intact', () => {
+    fc.assert(
+      fc.property(
+        // Any printable name without a newline or a `)` (a `)` would end the
+        // parenthetical — a different, already-pinned nesting case).
+        fc.stringMatching(/^[^\n\r)]{1,60}$/),
+        (name) => {
+          const out = transitionCore(doc('Old Label'), {
+            kind: 'plannedPhase', phaseNumber: 3, phaseName: name, planCount: 4,
+          }, deps).content;
+
+          // The name appears VERBATIM — no `$&`/`$1`/`` $` `` expansion.
+          assert.ok(
+            out.includes(`Phase: 3 of 9 (${name})`),
+            `name must be interpolated literally, got: ${JSON.stringify(out.match(/^Phase:.*$/m)?.[0])}`,
+          );
+          // ...and only the label changed: the line keeps its `N of M` prefix
+          // and no second Phase line is spliced in.
+          assert.equal((out.match(/^Phase:/gm) || []).length, 1, 'exactly one Phase line survives');
+          assert.ok(!out.includes('Old Label'), 'the stale label is gone');
+        },
+      ),
+    );
+  });
+});

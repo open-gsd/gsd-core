@@ -1464,13 +1464,12 @@ after thousands of dollars of execution.
 
 ## 13b. Record Planning Completion in STATE.md
 
-After plans pass all gates, record that planning is complete so STATE.md reflects the new phase status:
+Record planning completion. Non-zero exit = no labeled `Status:` to advance, nothing recorded — stop and reconcile STATE.md (#2400):
 
 ```bash
-gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}"
+gsd_run query state.planned-phase --phase "${PHASE_NUMBER}" --name "${PHASE_NAME}" --plans "${PLAN_COUNT}" \
+  || { echo "STOP: STATE.md not canonical; planning NOT recorded." >&2; exit 1; }
 ```
-
-This updates STATUS to "Ready to execute", sets the correct plan count, and timestamps Last Activity.
 
 ## 13c. Annotate ROADMAP with Wave Dependencies and Cross-cutting Constraints
 

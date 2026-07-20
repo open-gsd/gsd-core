@@ -14,6 +14,7 @@ const assert = require('node:assert/strict');
 const {
   extractFrontmatter,
   reconstructFrontmatter,
+  reassembleFrontmatter,
   spliceFrontmatter,
   stripFrontmatter,
   parseMustHavesBlock,
@@ -294,6 +295,61 @@ describe('reconstructFrontmatter', () => {
     const roundTrip = `---\n${reconstructed}\n---\n`;
     const extracted2 = extractFrontmatter(roundTrip);
     assert.deepStrictEqual(extracted2, extracted1, 'round-trip should preserve multiple data types');
+  });
+});
+
+// ─── reassembleFrontmatter ──────────────────────────────────────────────────
+
+// #2418 review blocker. Every STATE.md write path (planned-phase, begin/complete
+// phase, advance-plan, milestone switch/complete, sync, rebuild, patch, update)
+// re-attaches frontmatter through this seam. It previously hardcoded `\n`
+// joiners, so rewriting a CRLF document emitted an LF frontmatter block above a
+// still-CRLF body — a mixed-EOL file (#1658/#1668/#2206/#2449/#2450 class).
+//
+// WHY IT MATTERS: the corrupted files are exactly the STATE.md documents the
+// #2400 fail-loud path exists to protect. A mixed-EOL STATE.md is what the next
+// reader/parser has to cope with, and every one of those parsers is a place the
+// silent-no-op class comes back.
+describe('#2418 reassembleFrontmatter — rewrites a document in its own line ending', () => {
+  const FM = { status: 'executing', progress: { total_plans: 12 } };
+  const LF_DOC = '---\nstatus: planning\n---\n\n# S\n\nStatus: Planning\n';
+  const CRLF_DOC = LF_DOC.replace(/\n/g, '\r\n');
+  const bareLfCount = (s) => (s.match(/\n/g) || []).length - (s.match(/\r\n/g) || []).length;
+
+  test('a CRLF document keeps CRLF through the whole reassembled frontmatter block', () => {
+    const out = reassembleFrontmatter(CRLF_DOC, FM, stripFrontmatter(CRLF_DOC));
+    assert.strictEqual(bareLfCount(out), 0, `no bare LF may survive, got:\n${JSON.stringify(out)}`);
+    assert.ok(out.startsWith('---\r\n'), 'opening delimiter is CRLF-terminated');
+    assert.match(out, /\r\n---\r\n\r\n/, 'closing delimiter + separator blank line are CRLF');
+    assert.match(out, /status: executing\r\n/, 'YAML interior lines are CRLF');
+    assert.match(out, /progress:\r\n {2}total_plans: 12/, 'nested YAML lines are CRLF too');
+  });
+
+  test('an LF document stays byte-pure LF (no \\r is ever introduced)', () => {
+    const out = reassembleFrontmatter(LF_DOC, FM, stripFrontmatter(LF_DOC));
+    assert.ok(!out.includes('\r'), `LF input must not gain a \\r, got:\n${JSON.stringify(out)}`);
+  });
+
+  test('the EOL is read from the header being rewritten, not from stray body bytes', () => {
+    // An LF-headed document that quotes a CRLF fragment in its body: the
+    // frontmatter block belongs to the LF header, so it stays LF. Anchoring on
+    // "does the document contain \r\n anywhere" would flip it to CRLF and
+    // rewrite a file the author wrote in LF.
+    const mixedBody = '# S\n\nPasted fragment:\r\n\r\n    Status: x\r\n';
+    const out = reassembleFrontmatter('---\nstatus: planning\n---\n\n' + mixedBody, FM, mixedBody);
+    assert.ok(out.startsWith('---\nstatus: executing\n'), `LF header must stay LF, got:\n${JSON.stringify(out.slice(0, 40))}`);
+    assert.ok(out.endsWith(mixedBody), 'body bytes pass through untouched');
+  });
+
+  test('round-trips: the reassembled CRLF document re-parses to the same frontmatter', () => {
+    const out = reassembleFrontmatter(CRLF_DOC, FM, stripFrontmatter(CRLF_DOC));
+    // (`extractFrontmatter` yields scalars as strings — unrelated pre-existing
+    // parser behavior; what this pins is that no key is lost or mangled.)
+    assert.deepStrictEqual(
+      extractFrontmatter(out),
+      { status: 'executing', progress: { total_plans: '12' } },
+      'a CRLF rewrite must remain machine-readable',
+    );
   });
 });
 

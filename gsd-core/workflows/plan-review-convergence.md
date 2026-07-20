@@ -302,8 +302,11 @@ fi
 **If HIGH_COUNT == 0 and ACTIONABLE_COUNT == 0 (converged):**
 
 ```bash
-gsd_run state planned-phase --phase "${PHASE}" --name "${phase_name}" --plans "${PLAN_COUNT}"
+gsd_run state planned-phase --phase "${PHASE}" --name "${phase_name}" --plans "${PLAN_COUNT}" \
+  || { echo "STOP: STATE.md is non-canonical — planning was NOT recorded (state stays ready_to_plan). Do NOT show CONVERGENCE COMPLETE; reconcile STATE.md to the template shape, then re-run." >&2; exit 1; }
 ```
+
+**The command fails loud (#2400):** a non-zero exit (`outcome: "unsupported-shape"` — no labeled `Status:` to advance) stops the block above, so a non-canonical STATE.md can never be followed by the success display. Only on success (`applied` / `idempotent`):
 
 Display:
 ```text

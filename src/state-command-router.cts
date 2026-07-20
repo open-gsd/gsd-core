@@ -46,7 +46,7 @@ interface StateModule {
   cmdStateBeginPhase(cwd: string, phase: string | null | undefined, name: string | null | undefined, plans: number | null, raw: boolean): void;
   cmdSignalWaiting(cwd: string, type: string | null | undefined, question: string | null | undefined, options: string | null | undefined, phase: string | null | undefined, raw: boolean): void;
   cmdSignalResume(cwd: string, raw: boolean): void;
-  cmdStatePlannedPhase(cwd: string, phase: string | null | undefined, plans: number | null, raw: boolean): void;
+  cmdStatePlannedPhase(cwd: string, phase: string | null | undefined, name: string | null | undefined, plans: number | null, raw: boolean): void;
   cmdStateValidate(cwd: string, raw: boolean): void;
   cmdStateSync(cwd: string, opts: { verify: string | boolean | null | undefined }, raw: boolean): void;
   cmdStatePrune(cwd: string, opts: { keepRecent: string; dryRun: boolean }, raw: boolean): void;
@@ -180,7 +180,7 @@ function routeStateCommand({ state, args, cwd, raw, error }: RouteStateCommandOp
       'signal-resume': () => state.cmdSignalResume(cwd, raw),
       'planned-phase': () => {
         const a = parseNamedArgs(args, ['phase', 'name', 'plans']);
-        state.cmdStatePlannedPhase(cwd, strArg(a, 'phase'), parsePlans(strArg(a, 'plans')), raw);
+        state.cmdStatePlannedPhase(cwd, strArg(a, 'phase'), strArg(a, 'name'), parsePlans(strArg(a, 'plans')), raw);
       },
       validate: () => state.cmdStateValidate(cwd, raw),
       sync: () => {

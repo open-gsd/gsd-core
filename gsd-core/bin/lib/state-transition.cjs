@@ -28,7 +28,7 @@ const markdown_sectionizer_cjs_1 = require("./markdown-sectionizer.cjs");
 const phase_lifecycle_cjs_1 = require("./phase-lifecycle.cjs");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const phaseIdMod = require("./phase-id.cjs");
-const { extractFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
+const { extractFrontmatter, reassembleFrontmatter, reconstructFrontmatter, stripFrontmatter } = frontmatter;
 const { escapeRegex } = phaseIdMod;
 // Stop predicate for section-body slicing: a level-2+ heading ends the section.
 const STOP_H2_PLUS = (lv) => lv >= 2;
@@ -244,9 +244,7 @@ function beginPhaseCore(content, intent, deps) {
     const existingFm = extractFrontmatter(content);
     const hasFrontmatter = Object.keys(existingFm).length > 0;
     let body = stripFrontmatter(content);
-    const reassemble = (b) => hasFrontmatter
-        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
-        : b;
+    const reassemble = (b) => hasFrontmatter ? reassembleFrontmatter(content, existingFm, b) : b;
     const today = deps.clock.localToday();
     // Consult the field-classification table for the frontmatter keys this
     // transition touches (codex Phase 1 review: "table not consulted by
@@ -466,6 +464,21 @@ function mutateCurrentPositionForAdvance(content, fields, statusDefaults, lastAc
         return content;
     let sectionBody = content.slice(span.start, span.end);
     let mutated = false;
+    // Phase name — #2400: thread the transition's --name into the "Phase: N of M
+    // (Name)" line so a stale/placeholder name is repaired. A callback replacer
+    // keeps the (unsanitised, advertised) --name literal — `$&`, `$1`, `` $` `` in
+    // the name are NOT expanded — and matching the parenthetical to the LAST `)`
+    // on the line replaces a nested-paren name whole ("(Critical Fix (v2))").
+    if (fields.phaseName) {
+        const phaseLineRe = /^(Phase:[^\n(]*\()[^\n]*(\)[^\n]*)$/m;
+        if (phaseLineRe.test(sectionBody)) {
+            const replaced = sectionBody.replace(phaseLineRe, (_m, pre, post) => pre + fields.phaseName + post);
+            if (replaced !== sectionBody) {
+                sectionBody = replaced;
+                mutated = true;
+            }
+        }
+    }
     if (fields.status) {
         const replaced = (0, state_document_cjs_1.stateReplaceFieldIfTemplate)(sectionBody, 'Status', statusDefaults, fields.status);
         if (replaced !== null && replaced !== sectionBody) {
@@ -526,9 +539,7 @@ function advancePlanCore(content, deps) {
     const existingFm = extractFrontmatter(content);
     const hasFrontmatter = Object.keys(existingFm).length > 0;
     let body = stripFrontmatter(content);
-    const reassemble = (b) => hasFrontmatter
-        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
-        : b;
+    const reassemble = (b) => hasFrontmatter ? reassembleFrontmatter(content, existingFm, b) : b;
     // Parse plan number — legacy first, then compound.
     const legacyPlan = (0, state_document_cjs_1.stateExtractField)(content, 'Current Plan');
     const legacyTotal = (0, state_document_cjs_1.stateExtractField)(content, 'Total Plans in Phase');
@@ -648,9 +659,7 @@ function completePhaseCore(content, intent, deps) {
     const existingFm = extractFrontmatter(content);
     const hasFrontmatter = Object.keys(existingFm).length > 0;
     let body = stripFrontmatter(content);
-    const reassemble = (b) => hasFrontmatter
-        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
-        : b;
+    const reassemble = (b) => hasFrontmatter ? reassembleFrontmatter(content, existingFm, b) : b;
     // Current Phase — preserve the existing `of <total>` shape and the phase name
     // in parens (mirrors phase.cts:1675-1697 byte-for-behaviour).
     const phaseValue = intent.nextPhaseNum || intent.phaseNum;
@@ -781,6 +790,47 @@ function completePhaseCore(content, intent, deps) {
 function plannedPhaseCore(content, intent, deps) {
     const updated = [];
     const today = deps.clock.localToday();
+    // #2400: the authoritative lifecycle field this transition advances is a
+    // labeled `Status:` (wherever it lives — Current Position, a Configuration
+    // section, or top-level bold). A narrative / non-canonical STATE.md with NO
+    // labeled Status anywhere carries nothing authoritative to advance: the Status
+    // replacement silently misses and planning would be "recorded" only as a stale
+    // plan count while the lifecycle status stays `ready_to_plan`. Detect that up
+    // front and report an explicit unsupported-shape outcome (the adapter fails
+    // loud) rather than an empty — or plan-count-only — `updated` that reads as a
+    // successful advance. The probe is whole-body, not scoped to "## Current
+    // Position": valid STATE.md files carry Status outside that section, and as
+    // long as the authoritative Status advances planning IS recorded even if a
+    // narrative Current Position prose line is left as-is. A labeled Status is
+    // REQUIRED (a "Total Plans in Phase" field alone cannot establish an
+    // advanceable lifecycle shape — Codex #2400 round-2).
+    //
+    // #2418 review m2: the probe reads a FENCE-STRIPPED copy. `stateExtractField`
+    // is a whole-body regex, so an illustrative `Status: …` inside a fenced
+    // example or a quoted STATE.md template would otherwise certify a narrative
+    // document as canonical — a narrower replay of the #2400 bug this closes. The
+    // strip is for the PROBE only; the mutation below still runs against the real
+    // body, so a fenced example is never rewritten.
+    //
+    // An UNTERMINATED fence disables the mask (Codex round-4 blocker). The
+    // stripper tolerates ≤3 spaces of opener indent but tracks no container
+    // context, so a fence opened inside a nested list whose closer sits at 4+
+    // spaces is never seen as closed and everything to EOF is discarded — taking
+    // a real, top-level `Status:` with it and hard-failing a VALID STATE.md.
+    // Reproduced: an `## Notes` list example above `## Current Position` yielded
+    // `unsupported-shape` on a document carrying `Status: Ready to plan`.
+    // Blocking a well-formed file is strictly worse than the fenced-example
+    // false-certify m2 closes, so when the mask is known-unreliable the probe
+    // falls back to the raw body (the pre-#2418 behavior). The narrow residue —
+    // an unterminated fence AND a Status that exists ONLY inside it — degrades to
+    // that same prior behavior rather than to a false hard failure.
+    let body = stripFrontmatter(content);
+    const fenceScan = (0, markdown_sectionizer_cjs_1.stripFencedCode)(body);
+    const probeText = fenceScan.unterminatedFence ? body : fenceScan.text;
+    const shapeSupported = (0, state_document_cjs_1.stateExtractField)(probeText, 'Status') !== null;
+    if (!shapeSupported) {
+        return { content, updated: [], data: { outcome: 'unsupported-shape' } };
+    }
     for (const fmKey of ['status', 'last_activity', 'last_activity_desc']) {
         const cls = getFieldClassification(fmKey);
         if (cls === null) {
@@ -788,13 +838,11 @@ function plannedPhaseCore(content, intent, deps) {
                 `add a row per ADR-1769 §4 before touching it.`);
         }
     }
-    // #1255: body-field replacements operate on body only.
+    // #1255: body-field replacements operate on body only (`body` is stripped
+    // above for the shape probe and reused here — no second stripFrontmatter pass).
     const existingFm = extractFrontmatter(content);
     const hasFrontmatter = Object.keys(existingFm).length > 0;
-    let body = stripFrontmatter(content);
-    const reassemble = (b) => hasFrontmatter
-        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
-        : b;
+    const reassemble = (b) => hasFrontmatter ? reassembleFrontmatter(content, existingFm, b) : b;
     const statusDefaults = state_document_cjs_2.KNOWN_TEMPLATE_DEFAULTS['Status'];
     const lastActivityDefaults = state_document_cjs_2.KNOWN_TEMPLATE_DEFAULTS['Last Activity'];
     // Status — template-aware (preserve executor-authored values).
@@ -803,10 +851,12 @@ function plannedPhaseCore(content, intent, deps) {
         body = statusAfter;
         updated.push('Status');
     }
-    // Total Plans in Phase — system-derived; always replaced when a count is given.
+    // Total Plans in Phase — system-derived; replaced when a count is given.
+    // Push only on an ACTUAL change so a re-run at the same count classifies as
+    // idempotent, not a phantom "applied" (#2400).
     if (intent.planCount !== null && intent.planCount !== undefined) {
         const result = (0, state_document_cjs_1.stateReplaceField)(body, 'Total Plans in Phase', String(intent.planCount));
-        if (result) {
+        if (result && result !== body) {
             body = result;
             updated.push('Total Plans in Phase');
         }
@@ -819,19 +869,26 @@ function plannedPhaseCore(content, intent, deps) {
     }
     // Last Activity Description.
     const ladResult = (0, state_document_cjs_1.stateReplaceField)(body, 'Last Activity Description', `Phase ${intent.phaseNumber} planning complete — ${intent.planCount || '?'} plans ready`);
-    if (ladResult) {
+    if (ladResult && ladResult !== body) {
         body = ladResult;
         updated.push('Last Activity Description');
     }
-    // ## Current Position section — Status + Last activity (template-aware).
+    // ## Current Position section — Status + Last activity + phase name (#2400).
     const beforePos = body;
     body = mutateCurrentPositionForAdvance(body, {
         status: 'Ready to execute',
         lastActivity: `${today} — Phase ${intent.phaseNumber} planning complete`,
+        phaseName: intent.phaseName ?? undefined,
     }, statusDefaults, lastActivityDefaults);
     if (body !== beforePos)
         updated.push('Current Position');
-    return { content: reassemble(body), updated };
+    // #2400: the shape is canonical (checked above), so an empty `updated` is a
+    // safe NO-OP, not a failure — every field was already at its value OR an
+    // executor-authored Status was intentionally preserved (#397). Either way the
+    // caller must NOT fail loud; it just cannot assume the Status is now "Ready to
+    // execute". Classify it distinctly from `applied` and from `unsupported-shape`.
+    const outcome = updated.length > 0 ? 'applied' : 'idempotent';
+    return { content: reassemble(body), updated, data: { outcome } };
 }
 // ----------------------------------------------------------------------------
 // milestoneSwitch — intent implementation (Phase 4)
@@ -872,10 +929,17 @@ function milestoneSwitchCore(content, intent, deps) {
     const body = stripFrontmatter(content);
     const resolvedName = (intent.name && intent.name.trim()) || 'milestone';
     // ## Current Position reset body (mirrors state.cts:2371-2375).
-    const resetPositionBody = `\nPhase: Not started (defining requirements)\n` +
-        `Plan: —\n` +
-        `Status: Defining requirements\n` +
-        `Last activity: ${today} — Milestone ${intent.version} started\n\n`;
+    //
+    // #2418 review (CRLF class #1658/#1668/#2206/#2449/#2450): compose the reset
+    // in the document's OWN line ending. A literal `\n` here splices bare LFs
+    // into a CRLF STATE.md — the same mixed-EOL corruption the frontmatter
+    // reassemble seam was fixed for, one layer down. Identical bytes on an LF
+    // document (`eol === '\n'`), so LF byte-parity is unchanged.
+    const eol = /\r\n/.test(body) ? '\r\n' : '\n';
+    const resetPositionBody = `${eol}Phase: Not started (defining requirements)${eol}` +
+        `Plan: —${eol}` +
+        `Status: Defining requirements${eol}` +
+        `Last activity: ${today} — Milestone ${intent.version} started${eol}${eol}`;
     let newBody;
     const hs = (0, markdown_sectionizer_cjs_1.tokenizeHeadings)(body);
     const posIdx = hs.findIndex((h) => h.level === 2 && /^current\s+position$/i.test(h.text));
@@ -887,15 +951,15 @@ function milestoneSwitchCore(content, intent, deps) {
         let bodyEnd = body.length;
         for (let j = posIdx + 1; j < hs.length; j++) {
             if (STOP_H2_PLUS(hs[j].level)) {
-                bodyEnd = hs[j].offset - 1;
+                bodyEnd = newlineStartBefore(body, hs[j].offset);
                 break;
             }
         }
         newBody = body.slice(0, bodyStart) + resetPositionBody + body.slice(bodyEnd);
     }
     else {
-        const preface = body.trim().length > 0 ? body : '# Project State\n';
-        newBody = `${preface.trimEnd()}\n\n## Current Position\n${resetPositionBody}`;
+        const preface = body.trim().length > 0 ? body : `# Project State${eol}`;
+        newBody = `${preface.trimEnd()}${eol}${eol}## Current Position${eol}${resetPositionBody}`;
     }
     // Rebuilt frontmatter — curated fields are intentionally reset (milestone
     // boundary). gsd_state_version is preserved.
@@ -914,8 +978,7 @@ function milestoneSwitchCore(content, intent, deps) {
             percent: 0,
         },
     };
-    const yamlStr = reconstructFrontmatter(fm);
-    const assembled = `---\n${yamlStr}\n---\n\n${newBody.replace(/^\n+/, '')}`;
+    const assembled = reassembleFrontmatter(content, fm, newBody.replace(/^(?:\r?\n)+/, ''));
     return { content: assembled, updated };
 }
 // ----------------------------------------------------------------------------
@@ -944,6 +1007,21 @@ function milestoneSwitchCore(content, intent, deps) {
  * retired regex's `pattern.test(body)` miss) — callers fall back to their own
  * append-a-new-section path.
  */
+/**
+ * Offset of the START of the single newline that precedes the heading at
+ * `headingOffset` — 2 bytes back for a CRLF pair, 1 for a bare LF.
+ *
+ * The section-reset paths keep "exactly one newline unconsumed before the next
+ * heading" by slicing at `offset - 1`. On a CRLF document that lands BETWEEN
+ * the `\r` and the `\n`, so the `\r` falls into the discarded body span and the
+ * document keeps a bare `\n` before the heading (#2418 review, CRLF class
+ * #1658/#1668/#2206/#2449/#2450). Identical to `offset - 1` on LF input.
+ */
+function newlineStartBefore(content, headingOffset) {
+    return headingOffset >= 2 && content[headingOffset - 2] === '\r' && content[headingOffset - 1] === '\n'
+        ? headingOffset - 2
+        : headingOffset - 1;
+}
 function resetSectionVerbatim(content, headingPredicate, newBody) {
     const headings = (0, markdown_sectionizer_cjs_1.tokenizeHeadings)(content);
     const idx = headings.findIndex(headingPredicate);
@@ -979,7 +1057,7 @@ function resetSectionVerbatim(content, headingPredicate, newBody) {
     let bodyEnd = content.length;
     for (let j = idx + 1; j < headings.length; j++) {
         if (STOP_H2_PLUS(headings[j].level)) {
-            bodyEnd = headings[j].offset - 1;
+            bodyEnd = newlineStartBefore(content, headings[j].offset);
             break;
         }
     }
@@ -1016,9 +1094,7 @@ function milestoneCompleteCore(content, intent, deps) {
     const existingFm = extractFrontmatter(content);
     const hasFrontmatter = Object.keys(existingFm).length > 0;
     let body = stripFrontmatter(content);
-    const reassemble = (b) => hasFrontmatter
-        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${b}`
-        : b;
+    const reassemble = (b) => hasFrontmatter ? reassembleFrontmatter(content, existingFm, b) : b;
     // Status — `<version> milestone complete`.
     const statusAfter = (0, state_document_cjs_1.stateReplaceFieldWithFallback)(body, 'Status', null, `${version} milestone complete`);
     if (statusAfter !== body) {
@@ -1039,25 +1115,28 @@ function milestoneCompleteCore(content, intent, deps) {
     }
     // ## Current Position reset — stop resume/progress flows pointing at closed
     // execution instructions.
-    const closedPositionBody = `\nPhase: Milestone ${version} complete\n` +
-        `Plan: —\n` +
-        `Status: Awaiting next milestone\n` +
-        `Last activity: ${today} — Milestone ${version} completed and archived\n\n`;
+    // #2418 review (CRLF class): compose in the document's own line ending —
+    // see the identical note in `milestoneSwitchCore`. Byte-identical on LF.
+    const eol = /\r\n/.test(body) ? '\r\n' : '\n';
+    const closedPositionBody = `${eol}Phase: Milestone ${version} complete${eol}` +
+        `Plan: —${eol}` +
+        `Status: Awaiting next milestone${eol}` +
+        `Last activity: ${today} — Milestone ${version} completed and archived${eol}${eol}`;
     const positionReset = resetSectionVerbatim(body, (h) => h.level === 2 && /^current\s+position$/i.test(h.text), closedPositionBody);
     if (positionReset !== null) {
         body = positionReset;
     }
     else {
-        body = `${body.trimEnd()}\n\n## Current Position\n${closedPositionBody}`;
+        body = `${body.trimEnd()}${eol}${eol}## Current Position${eol}${closedPositionBody}`;
     }
     updated.push('Current Position');
     // ## Operator Next Steps — normalize stale tails that can persist after close.
-    const operatorReset = resetSectionVerbatim(body, (h) => h.level === 2 && /^operator\s+next\s+steps$/i.test(h.text), `\n- Start the next milestone with ${intent.nextMilestoneCommand}\n\n`);
+    const operatorReset = resetSectionVerbatim(body, (h) => h.level === 2 && /^operator\s+next\s+steps$/i.test(h.text), `${eol}- Start the next milestone with ${intent.nextMilestoneCommand}${eol}${eol}`);
     if (operatorReset !== null) {
         body = operatorReset;
     }
     else {
-        body = `${body.trimEnd()}\n\n## Operator Next Steps\n\n- Start the next milestone with ${intent.nextMilestoneCommand}\n`;
+        body = `${body.trimEnd()}${eol}${eol}## Operator Next Steps${eol}${eol}- Start the next milestone with ${intent.nextMilestoneCommand}${eol}`;
     }
     updated.push('Operator Next Steps');
     return { content: reassemble(body), updated };
@@ -1119,7 +1198,7 @@ function updateCore(content, intent) {
         return { content, updated: [], data: { updated: false } };
     }
     const reassembled = hasFrontmatter
-        ? `---\n${reconstructFrontmatter(existingFm)}\n---\n\n${result}`
+        ? reassembleFrontmatter(content, existingFm, result)
         : result;
     return { content: reassembled, updated: [intent.field], data: { updated: true } };
 }

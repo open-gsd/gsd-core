@@ -241,6 +241,32 @@ function reconstructFrontmatter(obj: Frontmatter): string {
 }
 
 /**
+ * Re-attach a frontmatter block to a stripped body, preserving the line-ending
+ * style `original` was authored in.
+ *
+ * Canonical home for the reassemble contract (#2418 review). The nine callers
+ * in `state-transition.cts` / `state.cts` each hardcoded
+ * `` `---\n${reconstructFrontmatter(fm)}\n---\n\n${body}` ``, so rewriting a CRLF
+ * document emitted an LF frontmatter block above a still-CRLF body — the
+ * recurring mixed-EOL corruption class (#1658 / #1668 / #2206 / #2449 / #2450).
+ * Every STATE.md write path (planned-phase, begin/complete phase, advance-plan,
+ * milestone-complete, sync, rebuild, patch, update) flows through this seam.
+ *
+ * The EOL is read from `original`'s frontmatter header (`---\r\n` vs `---\n`) —
+ * the same byte-0 anchor `extractFrontmatter` uses to find the block being
+ * rewritten, so a document is re-emitted in the ending it was authored in.
+ * `reconstructFrontmatter` always joins with LF, so its output is re-joined
+ * here; `\r?\n` (not `\n`) keeps that idempotent if a raw value already carries
+ * CRLF. Body bytes are passed through untouched — the body keeps whatever
+ * endings `stripFrontmatter` left on it.
+ */
+function reassembleFrontmatter(original: string, fm: Frontmatter, body: string): string {
+  const eol = original.startsWith('---\r\n') ? '\r\n' : '\n';
+  const yaml = reconstructFrontmatter(fm).replace(/\r?\n/g, eol);
+  return `---${eol}${yaml}${eol}---${eol}${eol}${body}`;
+}
+
+/**
  * Slice a frontmatter YAML body into per-top-level-key raw text segments. Each segment
  * runs from a column-0 `key:` line through the line before the next column-0 key (or the
  * end), capturing all nested indented content. Used by `spliceFrontmatter` for per-key
@@ -633,6 +659,7 @@ export = {
   // the alias so the prohibition schema round-trip and any future caller can use the canonical name.
   parseFrontmatter: extractFrontmatter,
   reconstructFrontmatter,
+  reassembleFrontmatter,
   spliceFrontmatter,
   stripFrontmatter,
   noOpObjectListSetError,
