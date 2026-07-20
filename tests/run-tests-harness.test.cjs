@@ -1702,15 +1702,19 @@ describe('chunk packing weights measured cost (#2456)', () => {
       assert.strictEqual(positiveNumberEnv('0.5', 60), 0.5);
     });
 
-    test('a file named after an Object.prototype member resolves to the median, not a function', () => {
-      // Without an own-property guard, timings['constructor'] walks the
-      // prototype chain and yields the Object constructor.
+    test('a key that resolves on Object.prototype still weighs a number, not a function', () => {
+      // The table is JSON-parsed, so a bare index would walk the prototype
+      // chain. Real selections are `*.test.cjs` basenames, which can never equal
+      // an Object.prototype member — so these BARE names are the only inputs
+      // that actually reach that path, and makeFileWeigher is exported, so it
+      // does not control its caller's strings. The contract is that any key not
+      // present in the table weighs the median, whatever it resolves to.
       const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
       try {
         const weigh = makeFileWeigher(loadTestTimings(t.path));
-        for (const name of ['constructor.test.cjs', 'toString.test.cjs', 'valueOf.test.cjs', 'hasOwnProperty.test.cjs']) {
+        for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
           const w = weigh(name);
-          assert.strictEqual(typeof w, 'number', `${name} must weigh a number`);
+          assert.strictEqual(typeof w, 'number', `${name} must weigh a number, not a function`);
           assert.strictEqual(w, 20000 / 30000, `${name} must fall back to the median weight`);
         }
       } finally {

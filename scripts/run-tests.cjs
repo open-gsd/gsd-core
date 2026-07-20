@@ -288,11 +288,15 @@ function makeFileWeigher(timings) {
   if (!timings) return () => 1;
   return (f) => {
     const key = basename(f);
-    // Own-property check before the lookup: the table is JSON-parsed, so a bare
-    // `timings[key]` would walk the prototype chain and return a FUNCTION for a
-    // file named `constructor.test.cjs` or `toString.test.cjs`. The typeof guard
-    // below already rejects that, but resolving the key correctly in the first
-    // place keeps the lookup honest and the pattern legible to CodeQL.
+    // Own-property check before the lookup. This is defense-in-depth, NOT a
+    // behavior change: the table is JSON-parsed, so a bare `timings[key]` would
+    // walk the prototype chain, but the only keys that resolve there are
+    // Object.prototype members (`constructor`, `toString`, …) and every real
+    // selection is a `*.test.cjs` basename, which can never equal one. Even if
+    // it could, the `typeof ms === 'number'` guard below already rejects the
+    // function it would return. `Object.hasOwn` makes the intent explicit and
+    // keeps the lookup correct for arbitrary input, since this function is
+    // exported and does not control its caller's strings.
     const ms = Object.hasOwn(timings.timings, key) ? timings.timings[key] : undefined;
     return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
       ? ms / timings.mean

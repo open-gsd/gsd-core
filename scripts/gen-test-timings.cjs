@@ -146,9 +146,24 @@ function main() {
     );
   }
 
+  // Every key must be a plain test-file basename. This is a data-integrity
+  // check on a stream we do not control (the reporter emits whatever path the
+  // runner saw), and it structurally excludes a computed key like `__proto__`
+  // or `constructor` from being written into the table object below — the
+  // `js/prototype-polluting-assignment` shape, even though the value here is
+  // always a number and could not actually pollute.
+  const SAFE_BASENAME_RE = /^[A-Za-z0-9._-]+\.test\.cjs$/;
+  const rejected = [...acc.keys()].filter((base) => !SAFE_BASENAME_RE.test(base));
+  if (rejected.length > 0) {
+    throw new ExitError(
+      2,
+      `gen-test-timings: refusing to emit non-test-file keys: ${rejected.sort().join(', ')}`,
+    );
+  }
+
   // Sorted keys keep the checked-in diff reviewable: a regeneration shows only
   // the files whose cost actually moved, not a reshuffled object.
-  const timings = {};
+  const timings = Object.create(null);
   for (const base of [...acc.keys()].sort()) {
     timings[base] = Math.round(acc.get(base));
   }
