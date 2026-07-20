@@ -731,6 +731,14 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
         fast_mode: (globalDefaults['fast_mode']) || null,
         agent_skills: (globalDefaults['agent_skills']) || {},
         response_language: (globalDefaults['response_language']) || null,
+        // #2069: forward model_policy / model_profile_overrides / runtime so the global-defaults
+        // path is at parity with the project-config path (which forwards these three from
+        // parsed['…'] at the top of this function). Without these entries, ~/.gsd/defaults.json
+        // silently drops them — model_policy/provider/budget etc. are honored when set in a
+        // project but ignored when set globally.
+        runtime: (globalDefaults['runtime']) || null,
+        model_profile_overrides: (globalDefaults['model_profile_overrides']) || null,
+        model_policy: (globalDefaults['model_policy']) || null,
       };
       // Branch D: global-defaults
       try {
