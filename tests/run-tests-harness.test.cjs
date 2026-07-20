@@ -1335,6 +1335,7 @@ const {
   packChunks,
   makeFileWeigher,
   loadTestTimings,
+  positiveNumberEnv,
   DEFAULT_TIMINGS_PATH,
 } = require('../scripts/run-tests.cjs');
 
@@ -1647,6 +1648,83 @@ describe('chunk packing weights measured cost (#2456)', () => {
           [...positions].sort((a, b) => a - b),
           'within a chunk, files must stay in selection order',
         );
+      }
+    });
+  });
+
+  describe('degenerate knobs degrade safely rather than hanging or crashing', () => {
+    // These knobs come from the environment via Number(), so a typo yields NaN
+    // and an explicit 0 yields 0. Both reach the chunk-count arithmetic. Before
+    // hardening, NaN spun packChunks' retry loop forever (a hung CI job with no
+    // output) and 0 threw `RangeError: Invalid array length` from Array.from.
+    // Every case below must return a valid packing instead.
+    const files = ['a.test.cjs', 'b.test.cjs', 'c.test.cjs'];
+    const packWith = (opts) =>
+      packChunks(files, {
+        weightOf: () => 1,
+        maxWeight: 60,
+        maxChars: ROOMY_CHARS,
+        fixedOverhead: FIXED_OVERHEAD,
+        ...opts,
+      });
+    const conserves = (chunks) =>
+      JSON.stringify(chunks.flat().sort()) === JSON.stringify([...files].sort());
+
+    for (const [label, opts] of [
+      ['a NaN weight budget', { maxWeight: NaN }],
+      ['a zero weight budget', { maxWeight: 0 }],
+      ['a negative weight budget', { maxWeight: -5 }],
+      ['a NaN argv ceiling', { maxChars: NaN }],
+      ['a zero argv ceiling', { maxChars: 0 }],
+      ['a NaN fixed overhead', { fixedOverhead: NaN }],
+      ['a weight function returning NaN', { weightOf: () => NaN }],
+      ['a weight function returning Infinity', { weightOf: () => Infinity }],
+      ['a weight function returning a negative', { weightOf: () => -1 }],
+    ]) {
+      test(`${label} still packs every file exactly once`, () => {
+        const chunks = packWith(opts);
+        assert.ok(conserves(chunks), `${label} must still pack all files; got ${JSON.stringify(chunks)}`);
+      });
+    }
+
+    test('positiveNumberEnv falls back for every non-positive-finite input', () => {
+      for (const bad of [undefined, null, '', '   ', 'abc', '0', '-1', 'NaN', 'Infinity', '1e999']) {
+        assert.strictEqual(
+          positiveNumberEnv(bad, 60),
+          60,
+          `${JSON.stringify(bad)} must fall back to the default`,
+        );
+      }
+    });
+
+    test('positiveNumberEnv accepts a legitimate override', () => {
+      assert.strictEqual(positiveNumberEnv('3', 60), 3);
+      assert.strictEqual(positiveNumberEnv('0.5', 60), 0.5);
+    });
+
+    test('a file named after an Object.prototype member resolves to the median, not a function', () => {
+      // Without an own-property guard, timings['constructor'] walks the
+      // prototype chain and yields the Object constructor.
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        const weigh = makeFileWeigher(loadTestTimings(t.path));
+        for (const name of ['constructor.test.cjs', 'toString.test.cjs', 'valueOf.test.cjs', 'hasOwnProperty.test.cjs']) {
+          const w = weigh(name);
+          assert.strictEqual(typeof w, 'number', `${name} must weigh a number`);
+          assert.strictEqual(w, 20000 / 30000, `${name} must fall back to the median weight`);
+        }
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('a __proto__ key in the table does not pollute Object.prototype', () => {
+      const t = tableFrom(JSON.parse('{"__proto__":{"polluted":true},"a.test.cjs":1000}'));
+      try {
+        makeFileWeigher(loadTestTimings(t.path))('a.test.cjs');
+        assert.strictEqual({}.polluted, undefined, 'Object.prototype must not be polluted');
+      } finally {
+        cleanup(t.dir);
       }
     });
   });
