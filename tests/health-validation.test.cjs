@@ -1043,6 +1043,114 @@ describe('Drift item W005 — phaseDirNameRe: 999.X-name dirs must not trigger W
   });
 });
 
+// ── W023 (#2408): collision warning for two on-disk phase dirs normalizing to
+//    the same phase key. The check groups phaseDirEntries by their normalized
+//    key (normalizePhaseName) and emits a warning for any group with ≥2 dirs,
+//    listing both directory names and each one's independently-computed status.
+//    Wording is neutral — never guesses which directory is "real".
+describe('W023 — colliding phase directories (issue #2408)', () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2408-'));
+    const { planningDir, phasesDir } = mkplanning(tmpDir);
+    writeProjectMd(planningDir);
+    writeStateMd(planningDir, '1.0');
+    writeConfigJson(planningDir);
+
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## Milestone v1.0',
+        '',
+        '### Phase 5: Real',
+        '**Goal:** The real phase',
+      ].join('\n'),
+    );
+
+    // 05-real/ — Complete (PLAN + SUMMARY + passing VERIFICATION)
+    const realDir = path.join(phasesDir, '05-real');
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.writeFileSync(path.join(realDir, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(realDir, '01-01-SUMMARY.md'), '# Summary');
+    fs.writeFileSync(path.join(realDir, 'VERIFICATION.md'), '---\nstatus: passed\n---\n# Verified');
+
+    // 05-real-stray/ — empty → Not Started
+    fs.mkdirSync(path.join(phasesDir, '05-real-stray'), { recursive: true });
+  });
+
+  after(() => { cleanup(tmpDir); });
+
+  test('emits W023 naming both colliding directories and their statuses', () => {
+    const result = runGsdTools(['validate', 'health', '--json'], tmpDir);
+    assert.strictEqual(result.success, true, `unexpected failure: ${result.error}`);
+    const data = JSON.parse(result.output);
+    const w023 = (data.warnings ?? []).filter((w) => w.code === 'W023');
+    assert.strictEqual(w023.length, 1, `Expected exactly one W023, got: ${JSON.stringify(w023)}`);
+    const msg = w023[0].message;
+    assert.ok(msg.includes('"05"'), `W023 message must name the normalized phase key, got: ${msg}`);
+    assert.ok(msg.includes('05-real'), `W023 must name the real dir, got: ${msg}`);
+    assert.ok(msg.includes('05-real-stray'), `W023 must name the stray dir, got: ${msg}`);
+    // Independently-computed statuses appear alongside each dir.
+    assert.ok(msg.includes('Complete'), `W023 must include 05-real's Complete status, got: ${msg}`);
+    assert.ok(msg.includes('Not Started'), `W023 must include 05-real-stray's Not Started status, got: ${msg}`);
+    // Neutral wording across every rendered field (message AND fix/action) —
+    // never guesses which dir is "the real one" or names a specific dir as the
+    // one to remove. The check scans the union of message+fix so a future drift
+    // toward "remove 05-real-stray" in either field fails this test.
+    const combined = `${w023[0].message} ${w023[0].fix || ''}`;
+    assert.ok(!/real directory is/i.test(combined) && !/remove\s+05-real-stray/i.test(combined),
+      `W023 wording must stay neutral across all rendered fields, got: ${combined}`);
+  });
+
+  test('W023 listing order is deterministic across readdirSync orders (tie-break on dir name)', () => {
+    // Re-running validate health should produce the same W023 message byte-for-
+    // byte. The collision case itself (two dirs sharing the same phase token)
+    // is exactly where comparePhaseNum returns 0 — the dir-name tie-break is
+    // what keeps the comma-separated order stable. fs.readdirSync order is
+    // non-deterministic across platforms; without the tie-break, this test
+    // could flake on some hosts. Run twice and assert identical output.
+    const r1 = runGsdTools(['validate', 'health', '--json'], tmpDir);
+    const r2 = runGsdTools(['validate', 'health', '--json'], tmpDir);
+    assert.strictEqual(r1.success && r2.success, true);
+    const m1 = JSON.parse(r1.output).warnings.find((w) => w.code === 'W023').message;
+    const m2 = JSON.parse(r2.output).warnings.find((w) => w.code === 'W023').message;
+    assert.strictEqual(m1, m2, `W023 must be deterministic across runs, got:\n  ${m1}\n  ${m2}`);
+    // And specifically: the lower-name dir comes first under localeCompare.
+    assert.ok(m1.indexOf('05-real (') < m1.indexOf('05-real-stray ('),
+      `tie-break must place '05-real' before '05-real-stray' (localeCompare), got: ${m1}`);
+  });
+
+  test('does NOT emit W023 when no collision exists (single dir per key)', () => {
+    // Fresh tree with a single non-colliding dir.
+    const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2408-clean-'));
+    const { planningDir, phasesDir } = mkplanning(clean);
+    writeProjectMd(planningDir);
+    writeStateMd(planningDir, '1.0');
+    writeConfigJson(planningDir);
+    fs.writeFileSync(
+      path.join(planningDir, 'ROADMAP.md'),
+      '# Roadmap\n\n## Milestone v1.0\n\n### Phase 5: Real\n**Goal:** The real phase\n',
+    );
+    const realDir = path.join(phasesDir, '05-real');
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.writeFileSync(path.join(realDir, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(realDir, '01-01-SUMMARY.md'), '# Summary');
+
+    try {
+      const result = runGsdTools(['validate', 'health', '--json'], clean);
+      assert.strictEqual(result.success, true, `unexpected failure: ${result.error}`);
+      const data = JSON.parse(result.output);
+      const w023 = (data.warnings ?? []).filter((w) => w.code === 'W023');
+      assert.strictEqual(w023.length, 0, `Expected zero W023 without collision, got: ${JSON.stringify(w023)}`);
+    } finally {
+      cleanup(clean);
+    }
+  });
+});
+
 // ── Drift Item W006-archived: PHASE_TOKEN_FROM_DIR_RE / MILESTONE_ARCHIVE_DIR_RE ─
 //
 // forEachArchivedPhaseToken() in verify.cjs uses two inline regex constants.
