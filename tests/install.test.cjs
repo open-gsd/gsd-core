@@ -10390,5 +10390,132 @@ test('real install: claude-emitted execute-phase.md keeps claude default + workt
     'claude install must NOT have use_worktrees=false stamped',
   );
 });
+
   });
 }
+
+// Bug #2395 — finishInstall for non-Claude runtimes never persisted `runtime: <id>`
+// into ~/.gsd/defaults.json. resolveRuntime() precedence is GSD_RUNTIME > config.runtime
+// > 'claude', so both inputs being empty on a Cursor (or any non-Claude) install caused
+// every runtime-branded output (agent_runtime, formatGsdSlash hints, etc.) to silently
+// fall through to 'claude'. Fix mirrors the resolve_model_ids: "omit" write site that
+// already exists for non-Claude runtimes — writes runtime: <runtime> when absent.
+describe('Bug #2395: finishInstall persists runtime identity for non-Claude runtimes', () => {
+  const LOCAL_ROOT = path.join(__dirname, '..');
+  const LOCAL_FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2395-test-'));
+  const LOCAL_GSD_DIR = path.join(LOCAL_FAKE_HOME, '.gsd');
+  const LOCAL_DEFAULTS_PATH = path.join(LOCAL_GSD_DIR, 'defaults.json');
+  const LOCAL_INSTALL_MODULE = require(path.join(LOCAL_ROOT, 'bin', 'install.js'));
+  const LOCAL_SETTINGS_PATH = path.join(LOCAL_FAKE_HOME, `gsd-test-settings-${process.pid}-2395.json`);
+
+  const { before: __before, after: __after } = require('node:test');
+  const __savedHome = process.env.HOME;
+  const __savedUserProfile = process.env.USERPROFILE;
+  __before(() => {
+    process.env.HOME = LOCAL_FAKE_HOME;
+    process.env.USERPROFILE = LOCAL_FAKE_HOME;
+  });
+  __after(() => {
+    if (__savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = __savedHome;
+    if (__savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = __savedUserProfile;
+    try { cleanup(LOCAL_FAKE_HOME); } catch { /* best-effort */ }
+  });
+
+  function callFinishInstall(runtime) {
+    const original = console.log;
+    console.log = () => {};
+    try {
+      LOCAL_INSTALL_MODULE.finishInstall(
+        LOCAL_SETTINGS_PATH,
+        {}, null, false, runtime, true, null,
+      );
+    } finally {
+      console.log = original;
+    }
+  }
+
+  function seedDefaults(obj) {
+    fs.mkdirSync(LOCAL_GSD_DIR, { recursive: true });
+    fs.writeFileSync(LOCAL_DEFAULTS_PATH, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+  }
+
+  function withUserPath(fn) {
+    const saved = process.env.GSD_TEST_MODE;
+    delete process.env.GSD_TEST_MODE;
+    try {
+      return fn();
+    } finally {
+      process.env.GSD_TEST_MODE = saved;
+    }
+  }
+
+  test('absent runtime → written to <install runtime> (cursor install surfaces cursor branding)', () => {
+    withUserPath(() => {
+      seedDefaults({ model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'cursor', 'absent runtime must be populated with the install runtime identity');
+    });
+  });
+
+  test('null runtime → written to <install runtime> (treated as absent)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: null, model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'cursor', 'null runtime must be treated as absent and populated');
+    });
+  });
+
+  test('empty-string runtime → written to <install runtime> (treated as absent)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: '', model_profile: 'balanced' });
+      callFinishInstall('codex');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'codex', 'empty-string runtime must be treated as absent and populated');
+    });
+  });
+
+  test('explicit pre-existing runtime is preserved (no clobber across runtimes)', () => {
+    withUserPath(() => {
+      // User explicitly set runtime: 'cursor' — a subsequent opencode install must not clobber.
+      seedDefaults({ runtime: 'cursor', resolve_model_ids: 'omit' });
+      callFinishInstall('opencode');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'cursor', 'explicit user-set runtime must be preserved across install of a different runtime');
+    });
+  });
+
+  // The clobber guard is runtime-agnostic; parameterize across a representative slice of
+  // non-Claude runtimes. Each should populate its own runtime identity when absent.
+  for (const runtime of ['cursor', 'codex', 'opencode', 'antigravity', 'windsurf']) {
+    test(`${runtime} install populates runtime: "${runtime}" when absent`, () => {
+      withUserPath(() => {
+        seedDefaults({ model_profile: 'balanced' });
+        callFinishInstall(runtime);
+        const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+        assert.equal(after.runtime, runtime, `${runtime} install must persist runtime: "${runtime}" so resolveRuntime() does not fall through to 'claude'`);
+      });
+    });
+  }
+
+  test('same-runtime idempotence: second cursor install is a no-op (runtime already set)', () => {
+    withUserPath(() => {
+      seedDefaults({ model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after1 = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after1.runtime, 'cursor', 'first install must populate runtime: cursor');
+      // Capture mtime; wait briefly so a no-op vs rewrite is distinguishable.
+      const beforeMtime = fs.statSync(LOCAL_DEFAULTS_PATH).mtimeMs;
+      const start = Date.now();
+      while (Date.now() - start < 20) { /* spin briefly */ }
+      callFinishInstall('cursor');  // second install — should be a no-op on runtime
+      const after2 = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      const afterMtime = fs.statSync(LOCAL_DEFAULTS_PATH).mtimeMs;
+      assert.equal(after2.runtime, 'cursor', 'second install must leave runtime: cursor intact');
+      assert.equal(afterMtime, beforeMtime, 'second install must NOT rewrite defaults.json (runtime already set, idempotent)');
+    });
+  });
+});
