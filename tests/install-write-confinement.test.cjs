@@ -2888,4 +2888,79 @@ describe('#2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest 
       cleanup(configHome);
     }
   });
+
+  // Reviewer-driven (Medium): transitive symlink chains. The opt-in is transitive
+  // and unbounded by design — once a symlink is followed, the walk continues from
+  // the resolved real path WITHOUT re-checking that further segments stay inside
+  // a confining boundary. Test pins the documented behavior so a future change is
+  // deliberate. (Default behavior refuses at the first symlink.)
+  test('transitive symlink chain: opt-in follows transitively; default refuses at first hop', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-trans-'));
+    const outside1 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-t1-'));
+    const outside2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-t2-'));
+    try {
+      // configHome/outer -> outside1, outside1/inner -> outside2 (two-hop chain).
+      try {
+        fs.symlinkSync(outside1, path.join(configHome, 'outer'));
+        fs.symlinkSync(outside2, path.join(outside1, 'inner'));
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(configHome, 'outer', 'inner', 'gsd-foo');
+
+      // Default: refuses at the first hop (configHome/outer is a symlink).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        true,
+        'default must refuse at the first symlink (configHome/outer)',
+      );
+
+      // Opt-in: follows transitively through both hops to outside2 (no threat-(b)
+      // match — outside2 is neither lexical nor real form of configHome).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        false,
+        'opt-in must follow transitive chain (outer → outside1 → outside2/inner) — documented transitivity',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'outer')); } catch { /* already gone */ }
+      try { fs.unlinkSync(path.join(outside1, 'inner')); } catch { /* already gone */ }
+      cleanup(configHome);
+      cleanup(outside1);
+      cleanup(outside2);
+    }
+  });
+
+  // Reviewer-driven (Medium): isSymlinkedDestOptIn env-var parsing is itself
+  // behavioral — a typo in the env-var name or an accepted-values change would
+  // silently disable the opt-in. Pin the contract directly via the exported helper.
+  test('isSymlinkedDestOptIn: accepts only documented values (1, true)', () => {
+    const installEngine = require('../gsd-core/bin/lib/install-engine.cjs');
+    if (typeof installEngine.isSymlinkedDestOptIn !== 'function') {
+      // Skipping — helper not exported in this build (assertion-only test).
+      return;
+    }
+    const cases = [
+      { v: '1', expected: true },
+      { v: 'true', expected: true },
+      { v: 'TRUE', expected: false },   // only lowercase 'true' documented
+      { v: 'True', expected: false },
+      { v: 'yes', expected: false },
+      { v: 'on', expected: false },
+      { v: '0', expected: false },
+      { v: 'false', expected: false },
+      { v: '', expected: false },
+      { v: undefined, expected: false }, // unset
+    ];
+    for (const { v, expected } of cases) {
+      if (v === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+      else process.env.GSD_ALLOW_SYMLINKED_DEST = v;
+      assert.strictEqual(
+        installEngine.isSymlinkedDestOptIn(),
+        expected,
+        `GSD_ALLOW_SYMLINKED_DEST=${JSON.stringify(v)} should yield isSymlinkedDestOptIn()=${expected}`,
+      );
+    }
+  });
 });

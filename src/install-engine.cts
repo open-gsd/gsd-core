@@ -1320,6 +1320,7 @@ export = {
   _hostBehaviors,
   _copyStaged,
   hasExistingSymlinkBetween,
+  isSymlinkedDestOptIn,
   preserveUserArtifacts,
   restoreUserArtifacts,
   migrateLegacyDevPreferencesToSkill,

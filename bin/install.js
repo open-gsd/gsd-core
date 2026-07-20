@@ -579,6 +579,7 @@ const {
   _installNativePluginIfDeclared,
   _copyStaged,
   hasExistingSymlinkBetween,
+  isSymlinkedDestOptIn,
   preserveUserArtifacts,
   restoreUserArtifacts,
   migrateLegacyDevPreferencesToSkill,
@@ -6923,12 +6924,14 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
   // Symlink-escape guard (parity with _copyStaged / copyWithPathReplacement): the
   // lexical gate above does not resolve symlinks, so a pre-existing config.toml or
   // agents/ symlink could redirect writes outside targetDir. Reject those.
+  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+  const symlinkOptIn = isSymlinkedDestOptIn();
   if (
-    hasExistingSymlinkBetween(resolvedTargetRoot, configPath) ||
-    hasExistingSymlinkBetween(resolvedTargetRoot, path.resolve(agentsTomlDir))
+    hasExistingSymlinkBetween(resolvedTargetRoot, configPath, { allowOptInFollow: symlinkOptIn }) ||
+    hasExistingSymlinkBetween(resolvedTargetRoot, path.resolve(agentsTomlDir), { allowOptInFollow: symlinkOptIn })
   ) {
     throw new Error(
-      `installCodexConfig: a Codex config path under "${targetDir}" contains a symlink escaping the install root — refusing to write`,
+      `installCodexConfig: a Codex config path under "${targetDir}" contains a symlink the install root does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
     );
   }
   fs.mkdirSync(agentsTomlDir, { recursive: true });
@@ -6979,9 +6982,9 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // `name` containing path separators must not escape agents/ (which would let
     // it clobber config.toml or write elsewhere under the configHome).
     const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
-    if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath)) {
+    if (hasExistingSymlinkBetween(resolvedTargetRoot, agentTomlPath, { allowOptInFollow: symlinkOptIn })) {
       throw new Error(
-        `installCodexConfig: agent toml path "${agentTomlPath}" contains a symlink escaping the install root — refusing to write`,
+        `installCodexConfig: agent toml path "${agentTomlPath}" contains a symlink the install root does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
       );
     }
     fs.writeFileSync(agentTomlPath, tomlContent);
@@ -7644,9 +7647,10 @@ function copyWithPathReplacement(srcDir, destDir, pathPrefix, runtime, isCommand
   }
   const resolvedConfinementRoot = path.resolve(confinementRoot);
   const resolvedDestDir = assertDestWithinConfigHome(confinementRoot, destDir);
-  if (hasExistingSymlinkBetween(resolvedConfinementRoot, resolvedDestDir)) {
+  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+  if (hasExistingSymlinkBetween(resolvedConfinementRoot, resolvedDestDir, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `copyWithPathReplacement: destDir "${destDir}" contains a symlink escaping the install root "${confinementRoot}" — refusing to write`,
+      `copyWithPathReplacement: destDir "${destDir}" contains a symlink the install root "${confinementRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
     );
   }
   // Use the validated absolute path for all writes below so the gate validates
@@ -9305,7 +9309,7 @@ function resolveInstallRelativePath(baseDir, relPath) {
   if (fullPath !== root && !fullPath.startsWith(root + path.sep)) {
     return null;
   }
-  if (hasExistingSymlinkBetween(root, fullPath)) {
+  if (hasExistingSymlinkBetween(root, fullPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     return null;
   }
   return { relPath: normalized, fullPath };
