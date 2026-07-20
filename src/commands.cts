@@ -95,6 +95,45 @@ interface EffortSyncChange {
 // ─── Phase Status ─────────────────────────────────────────────────────────────
 
 /**
+ * Phase-status precedence ladder — furthest-along wins (#2408).
+ *
+ * `cmdStats` builds `phasesByNumber` by scanning on-disk phase directories.
+ * When two directories normalize to the same phase key (e.g. `05-real/` and
+ * `05-real-stray/`), the status field must be folded by precedence rather
+ * than overwritten last-write-wins — otherwise `/gsd-stats` reports whatever
+ * directory `fs.readdirSync` happened to yield last, which is non-deterministic
+ * across platforms and can silently call a `Complete` phase `Not Started`.
+ */
+const PHASE_STATUS_PRECEDENCE: ReadonlyArray<string> = [
+  'Complete',
+  'Needs Review',
+  'Executed',
+  'In Progress',
+  'Planned',
+  'Not Started',
+  'Pending',
+];
+const PHASE_STATUS_RANK = new Map<string, number>(
+  PHASE_STATUS_PRECEDENCE.map((s, i) => [s, i]),
+);
+
+/**
+ * Fold two phase statuses by precedence — returns whichever is further along
+ * the {@link PHASE_STATUS_PRECEDENCE} ladder. Unrecognized statuses fall behind
+ * every recognized one (so a recognized status always wins over an unknown one;
+ * two unrecognized statuses favor `a` for determinism).
+ */
+function foldPhaseStatus(a: string, b: string): string {
+  const ra = PHASE_STATUS_RANK.get(a);
+  const rb = PHASE_STATUS_RANK.get(b);
+  if (ra === undefined && rb === undefined) return a;
+  if (ra === undefined) return b;
+  if (rb === undefined) return a;
+  // Lower rank = higher precedence (Complete=0 wins over Not Started=5).
+  return ra <= rb ? a : b;
+}
+
+/**
  * Determine phase status by checking plan/summary counts AND verification state.
  * Introduces "Executed" for phases with all summaries but no passing verification.
  */
@@ -1632,7 +1671,12 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
         name: existing?.name || phaseName,
         plans: (existing?.plans || 0) + plans,
         summaries: (existing?.summaries || 0) + summaries,
-        status,
+        // #2408: fold colliding statuses by precedence rather than overwriting
+        // last-write-wins. fs.readdirSync order is non-deterministic across
+        // platforms, so a naive overwrite can report a Complete phase as Not
+        // Started (or vice versa) depending on read order. The fold picks the
+        // furthest-along status, matching what an operator expects.
+        status: existing ? foldPhaseStatus(existing.status, status) : status,
       });
     }
   } catch { /* intentionally empty */ }
@@ -1763,6 +1807,8 @@ function cmdCheckCommit(cwd: string, raw: boolean): void {
 export = {
   groupFilesBySubrepo,
   determinePhaseStatus,
+  foldPhaseStatus,
+  PHASE_STATUS_PRECEDENCE,
   cmdGenerateSlug,
   cmdCurrentTimestamp,
   cmdListTodos,

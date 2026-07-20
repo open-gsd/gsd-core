@@ -40,7 +40,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE, extractPhaseToken, comparePhaseNum } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -50,6 +50,9 @@ const { getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone } = ro
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 const { inspectWorktreeHealth } = worktreeSafetyMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
+import commandsMod = require('./commands.cjs');
+const { determinePhaseStatus } = commandsMod;
 
 const { planningDir, planningRoot } = planningWorkspace;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
@@ -1456,6 +1459,52 @@ function cmdValidateHealth(
         'W005',
         `Phase directory "${e.name}" doesn't follow NN-name format`,
         'Rename to match pattern (e.g., 01-setup)',
+      );
+    }
+  }
+
+  // W023 (#2408): detect two or more real on-disk phase directories that
+  // normalize to the same phase key (e.g. `05-real/` + `05-real-stray/`).
+  // The collision silently breaks /gsd-stats status accuracy (now folded by
+  // precedence — see commands.cts foldPhaseStatus) and forces an operator
+  // decision. Wording is neutral — never guesses which directory is "real".
+  {
+    const groups = new Map<string, string[]>();
+    for (const e of phaseDirEntries) {
+      // extractPhaseToken never returns empty — for unparseable dir names it
+      // falls back to the dir name itself. Two distinct unparseable names
+      // therefore normalize to distinct keys and cannot false-positive here;
+      // only dirs whose tokens collapse to the same key (e.g. `05-real` and
+      // `05-real-stray` → token `05`) produce a collision group.
+      const token = extractPhaseToken(e.name);
+      const key = normalizePhaseName(token);
+      const list = groups.get(key);
+      if (list) list.push(e.name);
+      else groups.set(key, [e.name]);
+    }
+    for (const [key, dirs] of groups) {
+      if (dirs.length < 2) continue;
+      // Compute each dir's status independently so the warning is informative.
+      // Sort by phase id for stable output regardless of readdir order; tie-
+      // break on the dir name itself so two dirs sharing the same phase token
+      // (the collision case itself) still sort deterministically (V8's stable
+      // sort would otherwise fall back to non-portable fs.readdirSync order).
+      const described = dirs
+        .slice()
+        .sort((a, b) => comparePhaseNum(a, b) || String(a).localeCompare(String(b)))
+        .map((d) => {
+          const files = phaseDirFiles.get(d) || [];
+          const plans = files.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md').length;
+          const summaries = files.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md').length;
+          const status = determinePhaseStatus(plans, summaries, path.join(phasesDir, d), 'Not Started');
+          return `${d} (${status})`;
+        })
+        .join(', ');
+      addIssue(
+        'warning',
+        'W023',
+        `Phase directories collide on normalized key "${key}": ${described}`,
+        'Inspect each directory; rename or remove the duplicate so only one directory maps to this phase key',
       );
     }
   }
