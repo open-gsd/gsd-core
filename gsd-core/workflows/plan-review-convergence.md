@@ -34,7 +34,9 @@ echo "$ARGUMENTS" | grep -q '\-\-ollama' && REVIEWER_FLAGS="$REVIEWER_FLAGS --ol
 echo "$ARGUMENTS" | grep -q '\-\-lm-studio' && REVIEWER_FLAGS="$REVIEWER_FLAGS --lm-studio"
 echo "$ARGUMENTS" | grep -q '\-\-llama-cpp' && REVIEWER_FLAGS="$REVIEWER_FLAGS --llama-cpp"
 echo "$ARGUMENTS" | grep -q '\-\-all' && REVIEWER_FLAGS="$REVIEWER_FLAGS --all"
-if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi
+# #2315: do NOT default REVIEWER_FLAGS to --codex here. The default is resolved
+# against review.default_reviewers in step 1.5 (after the config gate) so a bare
+# invocation respects the configured reviewer lineup per ADR-0011 / ADR-0015.
 
 MAX_CYCLES=$(echo "$ARGUMENTS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
 if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
@@ -60,7 +62,36 @@ Enable it with:
 
   gsd config-set workflow.plan_review_convergence true
 
-Then re-run: /gsd:plan-review-convergence {PHASE}
+Then re-run: /gsd-plan-review-convergence {PHASE}
+```
+
+```bash
+# #2315: Resolve reviewer selection when no explicit flag was given.
+# The pre-fix bug unconditionally set REVIEWER_FLAGS="--codex" in step 1, BEFORE
+# the config gate — silently overriding any configured review.default_reviewers
+# (and, transitively, review.reviewer_instances). gsd-review sees the injected
+# --codex as an explicit flag (precedence rule 1) and never reaches rule 3
+# (review.default_reviewers). ADR-0011 and ADR-0015 both assume convergence
+# respects review.default_reviewers on the no-flag path.
+#
+# After the fix: leave REVIEWER_FLAGS empty when default_reviewers is configured
+# so gsd-review applies review.default_reviewers itself (rule 3). Only fall back
+# to --codex when no default is configured, preserving the pre-fix default for
+# unconfigured users (#2315 AC3). REVIEWER_DISPLAY mirrors the resolved value
+# so the startup banner reflects what will actually run (#2315 AC4).
+if [ -z "$REVIEWER_FLAGS" ]; then
+  DEFAULT_REVIEWERS_JSON=$(gsd_run query config-get review.default_reviewers 2>/dev/null || echo "")
+  DEFAULT_REVIEWERS_COUNT=$(printf '%s' "$DEFAULT_REVIEWERS_JSON" | jq 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)
+  if [ "${DEFAULT_REVIEWERS_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+    : # leave REVIEWER_FLAGS empty — gsd-review applies review.default_reviewers itself
+    REVIEWER_DISPLAY="review.default_reviewers ($(printf '%s' "$DEFAULT_REVIEWERS_JSON" | jq -r 'join(", ")' 2>/dev/null))"
+  else
+    REVIEWER_FLAGS="--codex"
+    REVIEWER_DISPLAY="--codex (default; configure review.default_reviewers to change)"
+  fi
+else
+  REVIEWER_DISPLAY="$REVIEWER_FLAGS"
+fi
 ```
 
 ## 2. Initialize
@@ -91,7 +122,7 @@ Display startup banner:
  GSD ► PLAN CONVERGENCE — Phase {phase_number}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
- Reviewers: {REVIEWER_FLAGS}
+ Reviewers: {REVIEWER_DISPLAY}
  Max cycles: {MAX_CYCLES}
 ```
 
