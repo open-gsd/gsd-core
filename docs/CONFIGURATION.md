@@ -1581,6 +1581,7 @@ Use `provider: "generic"` (or `"custom"`) for OpenRouter, LiteLLM, local gateway
 | `GSD_AUDIT_ARGS` | Set to `1` to include command args in audit/error events (omitted by default) |
 | `GSD_PROJECT` | Override project root for multi-project workspace support (v1.32) |
 | `GSD_SKIP_SCHEMA_CHECK` | Skip schema drift detection during execute-phase (v1.31) |
+| `GSD_ALLOW_SYMLINKED_DEST` | Set to `1` (or `true`) to permit install/update when `CLAUDE_CONFIG_DIR` (or any artifact-kind child like `skills/`, `hooks/`) is an **intentional, user-owned symlink** pointing outside the install root. v1.7.x write-confinement (ADR-1239 Phase B) refuses such layouts by default to prevent untrusted `destSubpath` traversal. Opt in only if you manage configHome via symlinked external dirs, multi-account config layouts (`~/.claude-personal`, `~/.claude-team`), or dotfiles-managed configHome (nix-darwin, etc.). Two refusals remain load-bearing even with opt-in: path-traversal in `destSubpath` (`../../etc`-style), and a symlink whose resolved target equals the install root itself (would let the prune pass wipe it). |
 | `WSL_DISTRO_NAME` | Detected by installer for WSL path handling |
 
 ---

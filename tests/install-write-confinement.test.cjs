@@ -10,7 +10,7 @@
  *   - _copyStaged: escape rejection, symlink escape (regression preserved)
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -2656,3 +2656,311 @@ describe('bug #3442: shim/wrapper serialized-command drift guard', () => {
 });
   });
 }
+
+// ─── #2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest layouts ────
+//
+// Three reporter layouts, all refused by the pre-#2393 guard with no opt-out:
+//   (lars-hh) CLAUDE_CONFIG_DIR=~/.claude-personal with skills/hooks symlinked to
+//             a user-owned external dir
+//   (Mamiki)   ~/.claude/skills is a Windows Junction to D:\claude-shared-resources\skills
+//   (Azd325)   ~/.claude itself is a symlink to a dotfiles repo (root-is-symlink)
+//
+// Fix: GSD_ALLOW_SYMLINKED_DEST=1 follows symlinks instead of refusing them,
+// while preserving the load-bearing refusals from #1704 / ADR-1239 Phase B:
+//   (a) path-traversal in the destSubpath string itself ('../../etc')
+//   (b) a resolved symlink target equal to the install root (would let _removeGsdEntries
+//       wipe the root — the config-root-wipe threat)
+
+describe('#2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest layouts', () => {
+  const { hasExistingSymlinkBetween } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  beforeEach(() => {
+    delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+
+  afterEach(() => {
+    delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+
+  // Reporter case (lars-hh / Mamiki): a child component of configHome is a symlink
+  // to a user-owned dir outside configHome. Default refuses; opt-in follows.
+  test('child-symlink layout: default refuses, GSD_ALLOW_SYMLINKED_DEST=1 allows', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-cfg-'));
+    const outsideTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-out-'));
+    try {
+      const linkPath = path.join(configHome, 'skills');
+      try {
+        fs.symlinkSync(outsideTarget, linkPath);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(linkPath, 'gsd-foo');
+
+      // Default: refuse (existing pre-#2393 behavior unchanged).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        true,
+        'default must refuse symlinked destDir (pre-#2393 behavior)',
+      );
+
+      // Opt-in: allow (user asserted they trust the target).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        false,
+        'GSD_ALLOW_SYMLINKED_DEST=1 must allow intentional user-owned child symlink',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'skills')); } catch { /* already gone */ }
+      cleanup(configHome);
+      cleanup(outsideTarget);
+    }
+  });
+
+  // Reporter case (Azd325): the install root ITSELF is a symlink. The pre-#2393
+  // guard had an early-return for this before the component loop even ran.
+  test('root-is-symlink layout (Azd325/nix-darwin): default refuses, opt-in allows', (t) => {
+    const dotfilesTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-dot-'));
+    const rootLink = path.join(os.tmpdir(), 'gsd-2393-rootlink-' + Date.now());
+    try {
+      try {
+        fs.symlinkSync(dotfilesTarget, rootLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      // Inside the dotfiles target, skills is a real dir (not a symlink).
+      fs.mkdirSync(path.join(dotfilesTarget, 'skills'), { recursive: true });
+      const destDir = path.join(rootLink, 'skills', 'gsd-foo');
+
+      // Default: refuse (root itself is a symlink → early-return true).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(rootLink, destDir),
+        true,
+        'default must refuse when install root itself is a symlink',
+      );
+
+      // Opt-in: follow the root symlink, walk to the real skills dir — allow.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(rootLink, destDir, { allowOptInFollow: true }),
+        false,
+        'GSD_ALLOW_SYMLINKED_DEST=1 must follow a root symlink whose target has no further symlinks',
+      );
+    } finally {
+      try { fs.unlinkSync(rootLink); } catch { /* already gone */ }
+      cleanup(dotfilesTarget);
+    }
+  });
+
+  // Load-bearing refusal (a): path-traversal in the destSubpath string itself.
+  // MUST refuse regardless of opt-in — this is the #1704 threat (a).
+  test('path-traversal destSubpath ("../../etc") refused EVEN WITH opt-in', () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-trav-'));
+    try {
+      const escapePath = path.join(configHome, '..', '..', 'etc-passwd-' + Date.now());
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, escapePath, { allowOptInFollow: true }),
+        true,
+        'path-traversal destSubpath must ALWAYS refuse regardless of opt-in (#1704 threat a)',
+      );
+    } finally {
+      cleanup(configHome);
+    }
+  });
+
+  // Load-bearing refusal (b): a symlink whose resolved target equals the install root
+  // itself would let _removeGsdEntries wipe the root. MUST refuse regardless of opt-in.
+  test('resolved-target-equals-install-root refused EVEN WITH opt-in (wipe protection)', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-wipe-'));
+    try {
+      // Symlink configHome/loop -> configHome (circular). Resolved target == install root.
+      const loopLink = path.join(configHome, 'loop');
+      try {
+        fs.symlinkSync(configHome, loopLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(loopLink, 'gsd-foo');
+
+      // Default refuses.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        true,
+        'default must refuse symlink to install root (wipe protection)',
+      );
+
+      // Opt-in STILL refuses — this is threat (b), load-bearing even with opt-in.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        true,
+        'opt-in must NOT allow a symlink resolving to install root itself (#1704 threat b — wipe)',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'loop')); } catch { /* already gone */ }
+      cleanup(configHome);
+    }
+  });
+
+  // #2393 security-review finding: realpathSync fully resolves symlinks while
+  // path.resolve is lexical. On macOS, /var is a symlink to /private/var, so
+  // `resolvedRoot` carries `/var/...` while the symlink's realtarget carries
+  // `/private/var/...` — a naive `realtarget === resolvedRoot` check would miss
+  // the equality and let threat (b) through. Fix compares against BOTH the
+  // lexical and real forms of root. Test constructs the macOS-style divergence
+  // explicitly: spell configHome one way, point the symlink at its real path.
+  test('resolved-target-equals-install-root via /var ↔ /private/var normalization (macOS-style)', (t) => {
+    if (process.platform !== 'darwin') {
+      t.skip('test exercises the macOS /var → /private/var symlink — darwin only');
+      return;
+    }
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-realpath-'));
+    try {
+      // `os.tmpdir()` is spelled with `/var/...` on macOS; realpathSync resolves it
+      // to `/private/var/...`. The lexical resolvedRoot and the real realRoot differ.
+      const realConfigHome = fs.realpathSync(configHome);
+      if (realConfigHome === configHome) {
+        // Defensive — if for some reason there's no /var symlink in the chain, the
+        // test isn't exercising what it claims. Skip rather than pass vacuously.
+        t.skip('os.tmpdir() path contains no symlink component — test does not exercise the /var normalization');
+        return;
+      }
+
+      // Symlink spelled via the REAL path — its realtarget will equal realConfigHome,
+      // NOT lexical configHome. The bug shape: realtarget !== resolvedRoot (lexical).
+      const loopLink = path.join(configHome, 'loop');
+      try {
+        fs.symlinkSync(realConfigHome, loopLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(loopLink, 'gsd-foo');
+
+      // The fix compares against BOTH lexical and real forms — guard fires.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        true,
+        'opt-in must refuse a symlink resolving to install root by real path even when ' +
+          'lexical and real forms differ (macOS /var ↔ /private/var normalization)',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'loop')); } catch { /* already gone */ }
+      cleanup(configHome);
+    }
+  });
+
+  // Documented edge case: a broken symlink (target missing) is silently passed by
+  // both the default and opt-in paths. fs.existsSync follows the link and returns
+  // false, so the component loop terminates before the symlink check fires. This is
+  // pre-existing behavior — the fix preserves it. Subsequent mkdir may then fail or
+  // create the path through the resolved target; that's the caller's responsibility,
+  // not the symlink-escape guard's. Test pins the current behavior so any future
+  // change (e.g. switching to lstatSync for existence) is intentional.
+  test('broken symlink: silently passed (current behavior, preserved by fix)', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-broken-'));
+    try {
+      const danglingLink = path.join(configHome, 'skills');
+      const notPresentTarget = path.join(os.tmpdir(), 'gsd-2393-not-present-' + Date.now());
+      try {
+        fs.symlinkSync(notPresentTarget, danglingLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(danglingLink, 'gsd-foo');
+
+      // existsSync(danglingLink) follows the link → false → loop returns false early.
+      // Same behavior with and without opt-in. Test documents this so a future
+      // refactor (e.g. lstatSync-based existence) is a deliberate behavior change.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        false,
+        'broken symlink: component loop terminates early (existsSync follows link → false)',
+      );
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        false,
+        'broken symlink with opt-in: same early-termination behavior',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'skills')); } catch { /* already gone */ }
+      cleanup(configHome);
+    }
+  });
+
+  // Reviewer-driven (Medium): transitive symlink chains. The opt-in is transitive
+  // and unbounded by design — once a symlink is followed, the walk continues from
+  // the resolved real path WITHOUT re-checking that further segments stay inside
+  // a confining boundary. Test pins the documented behavior so a future change is
+  // deliberate. (Default behavior refuses at the first symlink.)
+  test('transitive symlink chain: opt-in follows transitively; default refuses at first hop', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-trans-'));
+    const outside1 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-t1-'));
+    const outside2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-t2-'));
+    try {
+      // configHome/outer -> outside1, outside1/inner -> outside2 (two-hop chain).
+      try {
+        fs.symlinkSync(outside1, path.join(configHome, 'outer'));
+        fs.symlinkSync(outside2, path.join(outside1, 'inner'));
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(configHome, 'outer', 'inner', 'gsd-foo');
+
+      // Default: refuses at the first hop (configHome/outer is a symlink).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        true,
+        'default must refuse at the first symlink (configHome/outer)',
+      );
+
+      // Opt-in: follows transitively through both hops to outside2 (no threat-(b)
+      // match — outside2 is neither lexical nor real form of configHome).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        false,
+        'opt-in must follow transitive chain (outer → outside1 → outside2/inner) — documented transitivity',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'outer')); } catch { /* already gone */ }
+      try { fs.unlinkSync(path.join(outside1, 'inner')); } catch { /* already gone */ }
+      cleanup(configHome);
+      cleanup(outside1);
+      cleanup(outside2);
+    }
+  });
+
+  // Reviewer-driven (Medium): isSymlinkedDestOptIn env-var parsing is itself
+  // behavioral — a typo in the env-var name or an accepted-values change would
+  // silently disable the opt-in. Pin the contract directly via the exported helper.
+  test('isSymlinkedDestOptIn: accepts only documented values (1, true)', () => {
+    const installEngine = require('../gsd-core/bin/lib/install-engine.cjs');
+    if (typeof installEngine.isSymlinkedDestOptIn !== 'function') {
+      // Skipping — helper not exported in this build (assertion-only test).
+      return;
+    }
+    const cases = [
+      { v: '1', expected: true },
+      { v: 'true', expected: true },
+      { v: 'TRUE', expected: false },   // only lowercase 'true' documented
+      { v: 'True', expected: false },
+      { v: 'yes', expected: false },
+      { v: 'on', expected: false },
+      { v: '0', expected: false },
+      { v: 'false', expected: false },
+      { v: '', expected: false },
+      { v: undefined, expected: false }, // unset
+    ];
+    for (const { v, expected } of cases) {
+      if (v === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+      else process.env.GSD_ALLOW_SYMLINKED_DEST = v;
+      assert.strictEqual(
+        installEngine.isSymlinkedDestOptIn(),
+        expected,
+        `GSD_ALLOW_SYMLINKED_DEST=${JSON.stringify(v)} should yield isSymlinkedDestOptIn()=${expected}`,
+      );
+    }
+  });
+});

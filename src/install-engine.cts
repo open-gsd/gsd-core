@@ -182,19 +182,97 @@ function restoreUserArtifacts(destDir: string, saved: Map<string, string>): void
 // ---------------------------------------------------------------------------
 
 /**
- * Returns true if any path component between `root` and `fullPath` is a
- * symbolic link (which could redirect writes outside the install root).
+ * Opt-in for intentional symlinked-dest layouts (#2393). When the env var is
+ * set to "1" or "true", `hasExistingSymlinkBetween` follows symlinks instead of
+ * refusing them, EXCEPT for two load-bearing cases that always refuse regardless
+ * of opt-in (preserving ADR-1239 Phase B's threat model):
+ *
+ *   (a) The `fullPath` itself, before any symlink resolution, escapes `root`
+ *       via `..`-traversal — protects against untrusted `destSubpath` strings
+ *       like `../../etc`. This is the line `resolvedFullPath !== resolvedRoot
+ *       && !resolvedFullPath.startsWith(resolvedRoot + path.sep)` below.
+ *   (b) A symlink's resolved real path equals the install root itself — this
+ *       would let `_removeGsdEntries` (the prune pass) wipe the install root,
+ *       which is the config-root-wipe threat from #1704 threat model item (b).
+ *
+ * What opt-in RELAXES specifically: the "pre-existing symlink that points
+ * outside configHome" refusal — threat (c) in #1704. The user has asserted
+ * they own and trust the symlink target. The default (no env var) keeps all
+ * three refusals, exactly the pre-#2393 behavior.
+ *
+ * Cross-platform note: on Windows, `fs.lstatSync().isSymbolicLink()` returns
+ * true for both symbolic links and NTFS junctions (Node ≥ 16), so Mamiki's
+ * Junction case (#2393 comment) is handled by the same code path as POSIX
+ * symlinks.
+ *
+ * @returns true when the caller MUST refuse; false when writes may proceed.
  */
-function hasExistingSymlinkBetween(root: string, fullPath: string): boolean {
+function isSymlinkedDestOptIn(): boolean {
+  const v = process.env.GSD_ALLOW_SYMLINKED_DEST;
+  return v === '1' || v === 'true';
+}
+
+/**
+ * Returns true if any path component between `root` and `fullPath` is a
+ * symbolic link that would redirect writes outside the install root in a way
+ * the caller must refuse.
+ *
+ * When `options.allowOptInFollow` is true (caller checked `isSymlinkedDestOptIn`),
+ * symlinks are followed instead of refused, except for the two always-refuse
+ * cases documented on `isSymlinkedDestOptIn` — (a) path-traversal in `fullPath`
+ * itself, (b) a resolved symlink target that equals the install root (would let
+ * the prune pass wipe it).
+ */
+function hasExistingSymlinkBetween(
+  root: string,
+  fullPath: string,
+  options: { allowOptInFollow?: boolean } = {},
+): boolean {
   const resolvedRoot = path.resolve(root);
   const resolvedFullPath = path.resolve(fullPath);
+  // (a) Path-traversal refusal — ALWAYS enforced, even with opt-in. An untrusted
+  // destSubpath string that escapes the install root via '..' is rejected
+  // regardless of user opt-in state (ADR-1239 Phase B threat (a)).
   if (resolvedFullPath !== resolvedRoot && !resolvedFullPath.startsWith(resolvedRoot + path.sep)) {
     return true;
   }
 
+  // #2393 (security-review finding): realpathSync fully resolves all symlink
+  // components, path.resolve only normalizes lexically. On macOS, /var is a
+  // symlink to /private/var — so resolvedRoot='/var/foo/.claude' but its real
+  // path is '/private/var/foo/.claude'. A symlink whose real target equals the
+  // install root (the threat-(b) wipe case) would compare unequal without this
+  // normalization, defeating the guard exactly in the reporter's case (Azd325,
+  // nix-darwin: ~/.claude is itself a symlink). Compute realRoot once; fall
+  // back to the lexical form on any realpath failure (broken/missing/exotic FS)
+  // — threat (a) above still confines regardless.
+  let realRoot: string;
+  try {
+    realRoot = fs.existsSync(resolvedRoot) ? fs.realpathSync(resolvedRoot) : resolvedRoot;
+  } catch {
+    realRoot = resolvedRoot;
+  }
+
+  const allowFollow = options.allowOptInFollow === true;
+
+  // #2393: when root itself is a symlink (e.g. nix-darwin manages ~/.claude as a
+  // symlink to a dotfiles repo — Azd325's #2393 report), the pre-#2393 guard
+  // refused unconditionally via an early return before the component loop. The
+  // wipe threat (b) does NOT apply to the root itself being a symlink: destDir is
+  // a CHILD of root, and resolving root gives root's target — there is no
+  // circular back-reference to root from a path that descends from a resolved
+  // root. So under opt-in, just follow the root symlink and continue the walk.
+  // Default behavior (no opt-in) preserves the pre-#2393 refuse.
   let cursor = resolvedRoot;
   if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) {
-    return true;
+    if (!allowFollow) return true;
+    try {
+      cursor = fs.realpathSync(cursor);
+    } catch {
+      // realpathSync failed (broken symlink, permission denied, exotic FS) — refuse,
+      // matching fail-closed posture.
+      return true;
+    }
   }
 
   const relative = path.relative(resolvedRoot, resolvedFullPath);
@@ -202,7 +280,34 @@ function hasExistingSymlinkBetween(root: string, fullPath: string): boolean {
     if (!segment) continue;
     cursor = path.join(cursor, segment);
     if (!fs.existsSync(cursor)) return false;
-    if (fs.lstatSync(cursor).isSymbolicLink()) return true;
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      if (!allowFollow) return true;
+      // Opt-in active: follow the symlink. Refuse if the resolved target is the
+      // install root itself (threat (b) — would let _removeGsdEntries wipe the
+      // root). Other targets are acceptable per the user's explicit opt-in. A
+      // broken symlink (realpathSync throws) is still refused.
+      //
+      // Threat (b) check uses BOTH lexical and real forms of root to defend
+      // against macOS /var ↔ /private/var-style normalization gaps: realpathSync
+      // fully resolves, path.resolve only normalizes lexically, so a root path
+      // containing a symlink component would compare unequal to a realtarget
+      // that matches by real path. Compare both.
+      //
+      // Transitivity note: once followed, the walk continues from the resolved
+      // real path WITHOUT re-checking that further segments stay inside any
+      // confining boundary. The user's opt-in asserts trust in the target dir
+      // AND any further symlinks reachable through it — transitive and unbounded
+      // by design (one opt-in trusts the whole reachable tree). This is the
+      // documented opt-in semantics; do not add a "follow one symlink only"
+      // expectation here without revisiting the threat model.
+      try {
+        const realTarget = fs.realpathSync(cursor);
+        if (realTarget === realRoot || realTarget === resolvedRoot) return true; // (b)
+        cursor = realTarget;
+      } catch {
+        return true;
+      }
+    }
   }
 
   return false;
@@ -249,9 +354,10 @@ function migrateLegacyDevPreferencesToSkill(targetDir: string, saved: Map<string
   if (fs.existsSync(skillFile)) return false;
   // Symlink-escape guard: reject if any path component between targetDir and
   // skillDir is a symlink that would redirect writes outside the config root.
-  if (hasExistingSymlinkBetween(path.resolve(targetDir), skillDir)) {
+  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+  if (hasExistingSymlinkBetween(path.resolve(targetDir), skillDir, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `migrateLegacyDevPreferencesToSkill: skillDir "${skillDir}" contains a symlink escaping the install root "${targetDir}" — refusing to write`,
+      `migrateLegacyDevPreferencesToSkill: skillDir "${skillDir}" contains a symlink the install root "${targetDir}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
     );
   }
   try {
@@ -303,9 +409,10 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
   const resolvedDest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, destDir);
   // Symlink-escape guard: reject if any path component between the install root and
   // destDir is a symlink that would redirect writes outside the install root.
-  if (hasExistingSymlinkBetween(path.resolve(installRoot), resolvedDest)) {
+  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+  if (hasExistingSymlinkBetween(path.resolve(installRoot), resolvedDest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `_copyStaged: destDir "${destDir}" contains a symlink escaping the install root "${installRoot}" — refusing to write`,
+      `_copyStaged: destDir "${destDir}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
     );
   }
   // Use the validated absolute path for the actual writes below.
@@ -664,9 +771,12 @@ function installRuntimeArtifacts(
       // resolved alternate root instead, matching assertDestWithinConfigHome's
       // own root selection in createRuntimeArtifactInstallPlan.
       const installRoot = (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
-      if (hasExistingSymlinkBetween(path.resolve(installRoot), dest)) {
+      // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+      // Threat model from #1704 / ADR-1239 Phase B preserved: path-traversal and
+      // resolved-target-equals-root still refuse regardless of opt-in.
+      if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
         throw new Error(
-          `installRuntimeArtifacts: destDir "${dest}" contains a symlink escaping the install root "${installRoot}" — refusing to create`,
+          `installRuntimeArtifacts: destDir "${dest}" contains a symlink the install root "${installRoot}" does not trust — refusing to create. If this is an intentional user-owned symlink layout (e.g. externalized skills/hooks dir, multi-account configHome, or a dotfiles-managed configHome), re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
         );
       }
       fs.mkdirSync(dest, { recursive: true });
@@ -805,9 +915,10 @@ function installOpencodeFamilySkills(
   const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(targetDir, skillsKindEntry.destSubpath);
   // Symlink-escape guard: reject if any path component between targetDir and
   // dest is a symlink that would redirect writes outside the config root.
-  if (hasExistingSymlinkBetween(path.resolve(targetDir), dest)) {
+  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+  if (hasExistingSymlinkBetween(path.resolve(targetDir), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
     throw new Error(
-      `installOpencodeFamilySkills: destDir "${dest}" contains a symlink escaping the install root "${targetDir}" — refusing to write`,
+      `installOpencodeFamilySkills: destDir "${dest}" contains a symlink the install root "${targetDir}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
     );
   }
   fs.mkdirSync(dest, { recursive: true });
@@ -1209,6 +1320,7 @@ export = {
   _hostBehaviors,
   _copyStaged,
   hasExistingSymlinkBetween,
+  isSymlinkedDestOptIn,
   preserveUserArtifacts,
   restoreUserArtifacts,
   migrateLegacyDevPreferencesToSkill,
