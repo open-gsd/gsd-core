@@ -55,6 +55,7 @@
   "gsd-core/references/execute-mvp-tdd.md",
   "gsd-core/references/execute-phase-between-wave-reset.md",
   "gsd-core/references/execute-phase-context-guard.md",
+  "gsd-core/references/execute-phase-quota-recovery.md",
   "gsd-core/references/execute-phase-requirement-revert.md",
   "gsd-core/references/execute-phase-response-language.md",
   "gsd-core/references/execute-phase-wave-guard.md",
