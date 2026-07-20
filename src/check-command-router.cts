@@ -139,7 +139,30 @@ function loadPlanContents(phaseDir: string): string[] {
 }
 
 const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objective)\b/i;
-const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action)(?:\s[^>]{0,1000})?>((?:(?!<(?:objective|tasks?|action)[\s>])[\s\S])*?)<\/(?:objective|tasks?|action)>/gi;
+// #2372: scanned-tag set must match the planner-canonical surfaces where a D-NN citation
+// is meaningful. `<objective>`/`<tasks>`/`<task>`/`<action>` are the historical core. The
+// planner is also explicitly told (plan-phase.md) to cite decisions in `<read_first>`,
+// `<behavior>`, `<verify>`, `<acceptance_criteria>`, and `<done>` — those are now scanned too,
+// so the gate no longer reports a false coverage gap when a decision is cited in any of them.
+//
+// Implementation: per-tag matching, NOT a single wide alternation. A single alternation
+// like `<(?:a|b|c)>...<\/(?:a|b|c)>` halts the outer tag's body capture at any inner tag
+// in the set, dropping any citation in the outer tag's prefix prose — e.g.
+// `<action>per D-05 <verify>npm test</verify></action>` would lose D-05 because `<verify>`
+// halts the `<action>` body before the citation. Per-tag matching avoids this: each tag's
+// body terminates only at its OWN closing tag, so `<verify>` inside `<action>` is absorbed
+// into `<action>`'s body (D-05 caught) AND `<verify>` is matched separately on its own pass.
+// Each per-tag regex keeps the ReDoS-safe negative-lookahead tempering (#2128).
+const XML_DECISION_TAG_NAMES = ['objective', 'tasks', 'task', 'action', 'read_first', 'behavior', 'verify', 'acceptance_criteria', 'done'] as const;
+
+function buildXmlDecisionTagRegex(tagName: string): RegExp {
+  // Per-tag: body tempering stops only at the SAME tag's reopening or closing — other
+  // scanned tags pass through as text into this body. Non-greedy `*?` to first close.
+  return new RegExp(
+    `<${tagName}(?:\\s[^>]{0,1000})?>((?:(?!<${tagName}[\\s>])[\\s\\S])*?)<\\/${tagName}>`,
+    'gi',
+  );
+}
 
 function stripCommentsAndFences(text: string): string {
   // HTML-comment stripping stays caller-side (the seam does not strip HTML comments).
@@ -167,8 +190,11 @@ function extractYamlBlock(frontmatter: string, key: string): string {
 
 function extractXmlTagBodies(text: string): string {
   const parts: string[] = [];
-  for (const match of text.matchAll(XML_DECISION_TAGS_RE)) {
-    if (match[1]) parts.push(match[1]);
+  for (const tagName of XML_DECISION_TAG_NAMES) {
+    const re = buildXmlDecisionTagRegex(tagName);
+    for (const match of text.matchAll(re)) {
+      if (match[1]) parts.push(match[1]);
+    }
   }
   return parts.join('\n');
 }
@@ -219,7 +245,10 @@ function buildPlanMessage(uncovered: UncoveredItem[]): string {
     '',
     ...uncovered.map((item) => `- **${item.id}** (${item.category || 'uncategorized'}): ${item.text}`),
     '',
-    'Resolve by citing `D-NN:` in a relevant plan\'s `must_haves`/`truths` (or body),',
+    'Resolve by citing `D-NN:` in any of the scanned plan surfaces: front-matter',
+    '`must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective`',
+    'heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>`',
+    'tag body. Other locations (prose outside those headings, comments, other XML tags) are not scanned.',
     'OR move the decision to `### Claude\'s Discretion` / tag it `[informational]` if it should not be tracked.',
   ].join('\n');
 }

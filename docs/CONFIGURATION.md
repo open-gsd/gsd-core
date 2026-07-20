@@ -927,7 +927,9 @@ plans and shipped code (issue #2492).
 existing requirements coverage gate, before plans are committed. For each
 trackable decision in `<decisions>`, it checks that the decision id
 (`D-NN`) or its text appears in at least one plan's `must_haves`,
-`truths`, or body. A miss surfaces the missing decision by id and refuses
+`truths`, or `objective` (front-matter), a `## must_haves`/`truths`/`tasks`/`objective`
+heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>`
+tag body. A miss surfaces the missing decision by id and refuses
 to mark the phase planned.
 
 **Verify-phase validation gate (NON-BLOCKING).** Runs alongside the other
