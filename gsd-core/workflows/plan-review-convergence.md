@@ -62,7 +62,7 @@ Enable it with:
 
   gsd config-set workflow.plan_review_convergence true
 
-Then re-run: /gsd-plan-review-convergence {PHASE}
+Then re-run: /gsd:plan-review-convergence {PHASE}
 ```
 
 ```bash

@@ -31,6 +31,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('node:child_process');
 
 const COMMAND_PATH = path.join(__dirname, '..', 'commands', 'gsd', 'plan-review-convergence.md');
 const WORKFLOW_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-review-convergence.md');
@@ -38,6 +39,15 @@ const CONFIG_DOC_PATH = path.join(__dirname, '..', 'docs', 'CONFIGURATION.md');
 const PLAN_PHASE_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'plan-phase.md');
 const PLANNER_REVIEWS_PATH = path.join(__dirname, '..', 'gsd-core', 'references', 'planner-reviews.md');
 const PLAN_CHECKER_PATH = path.join(__dirname, '..', 'agents', 'gsd-plan-checker.md');
+
+// #2315: the workflow's reviewer-resolution block pipes through `jq`, which is
+// a documented production dependency (review.md:244 "install jq if missing")
+// but is NOT present in every test container (gsd-test's linux-node{22,24}
+// images lack it; see tests/opencode-review-reconstruction.property.test.cjs
+// for the same skip pattern). Behavioral tests that exercise the deployed jq
+// pipeline skip when jq is absent; structural tests still run.
+let jqAvailable = false;
+try { execFileSync('jq', ['--version'], { stdio: 'ignore', timeout: 10000, killSignal: 'SIGKILL' }); jqAvailable = true; } catch { /* no jq on PATH */ }
 
 // ─── Command source ────────────────────────────────────────────────────────
 
@@ -272,6 +282,7 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
   //   - explicit --gemini + default set     → --gemini wins (explicit flags unaffected, #2315 AC5)
   test('[behavioral] no-flag invocation resolves to default_reviewers when configured, --codex otherwise', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
+    if (!jqAvailable) { t.skip('jq not on PATH — workflow resolution block pipes through jq (production dependency, review.md:244); structural tests above still validate the fix'); return; }
     const { execFileSync } = require('node:child_process');
 
     // Parse block: from REVIEWER_FLAGS="" to the last grep line (--all).
