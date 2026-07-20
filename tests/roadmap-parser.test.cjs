@@ -1534,13 +1534,16 @@ Last activity: TBD
     const md = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.match(md, /Total Plans in Phase:\s*3/, 'per-phase Total Plans in Phase should be updated to 3');
 
-    // ...but the curated milestone-wide progress block is preserved verbatim.
-    assert.deepEqual(readProgress(), {
-      total_plans: 99,
-      completed_plans: 88,
-      total_phases: 7,
-      completed_phases: 5,
-    }, 'curated milestone progress.* must survive a planned-phase write');
+    // #2440: total_plans now takes the derived value (it must correct in both
+    // directions). It must NOT be the stale curated 99 — that was the bug.
+    // completed_plans and completed_phases keep curated protection (#500/#3242).
+    const progress = readProgress();
+    assert.notEqual(progress.total_plans, 99,
+      'total_plans must NOT be the stale curated 99 — it should correct to the derived value (#2440)');
+    assert.strictEqual(progress.completed_plans, 88,
+      'completed_plans must stay curated (88) — #3242/#500 protection still in force');
+    assert.strictEqual(progress.completed_phases, 5,
+      'completed_phases must stay curated (5) — #3242/#500 protection still in force');
   });
 });
   });

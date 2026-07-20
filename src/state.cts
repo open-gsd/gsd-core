@@ -63,6 +63,8 @@ interface StateLockClock {
 
 interface ReadModifyWriteOptions {
   resync?: boolean;
+  /** #2440: when true, total_plans/total_phases take derived values even under !resync. */
+  deriveProgressKeys?: boolean;
 }
 
 interface StateRecordMetricOptions {
@@ -2117,6 +2119,7 @@ function readModifyWriteStateMd(statePath: string, transformFn: (content: string
     const postFm = extractFrontmatter(synced) as Record<string, unknown>;
     const preservation = applyStatePreservation({
       preFm, postFm, preFmSnapshot, resync,
+      deriveProgressKeys: options?.deriveProgressKeys === true,
       preBodyStatus, postBodyStatus,
       preBodyStoppedAt, postBodyStoppedAt,
       preBodyPhaseSource, postBodyPhaseSource,
@@ -2477,7 +2480,7 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCou
     const result = transitionCore(content, intent, deps);
     updated = result.updated;
     return result.content;
-  }, cwd, { resync: false });
+  }, cwd, { resync: false, deriveProgressKeys: true });
 
   output({ updated, phase: phaseNumber, plan_count: planCount }, raw, updated.length > 0 ? 'true' : 'false');
 }

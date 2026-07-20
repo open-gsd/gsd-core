@@ -10659,5 +10659,43 @@ describe('bug #1514 — extractRetiredPhaseNumbers property: returns exactly the
     );
   });
 });
+
+// ─── #2440: total_plans excluded from progress ratchet (per-counter) ──────────
+//
+// Pre-fix: shouldPreserveExistingProgress included total_plans in the ratchet.
+// Fix: total_plans joins total_phases as always-derived (both move in both
+// directions). Only completed_phases and completed_plans keep ratchet behaviour.
+
+describe('bug #2440 — shouldPreserveExistingProgress does not ratchet total_plans', () => {
+  const { shouldPreserveExistingProgress } = require('../gsd-core/bin/lib/state-document.cjs');
+
+  test('existing total_plans:50 > derived:64 → returns false (upward correction)', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 49 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 64, completed_plans: 49 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false,
+      'total_plans upward correction must NOT trigger ratchet');
+  });
+
+  test('existing total_plans:50 > derived:30 → returns false (downward correction)', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 30 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 30, completed_plans: 30 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false,
+      'total_plans downward correction must NOT trigger ratchet');
+  });
+
+  test('boundary: existing total_plans == derived → false', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 50 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 50 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false,
+      'total_plans equality must NOT trigger ratchet');
+  });
+
+  test('completed_plans:5 > derived:2 → true (ratchet still active for completed_plans)', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 6, completed_plans: 5 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 6, completed_plans: 2 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), true,
+      'completed_plans ratchet must still work');
+  });
+});
   });
 }

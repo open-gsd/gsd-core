@@ -100,7 +100,28 @@ function applyStatePreservation(input) {
         !resync &&
         preFm &&
         preFm['progress']) {
-        postFm['progress'] = preFm['progress'];
+        // #2440: when the caller opts in (deriveProgressKeys), total_plans and
+        // total_phases always take the derived (post-sync) value even under !resync.
+        // This is used by cmdStatePlannedPhase where total_plans must correct upward
+        // after plans are added. For body-only writes (state.update/patch without
+        // the flag), the wholesale restore preserves everything as before — the
+        // #3242 Bug A protection stays fully in force.
+        if (input.deriveProgressKeys && postFm['progress']) {
+            const curated = preFm['progress'];
+            const derived = (postFm['progress'] ?? {});
+            const merged = { ...derived };
+            if (curated) {
+                for (const [key, value] of Object.entries(curated)) {
+                    if (key !== 'total_plans' && key !== 'total_phases') {
+                        merged[key] = value;
+                    }
+                }
+            }
+            postFm['progress'] = merged;
+        }
+        else {
+            postFm['progress'] = preFm['progress'];
+        }
         mutated = true;
     }
     // status — #1230 body-delta heuristic. Table: preserve-when-unchanged.

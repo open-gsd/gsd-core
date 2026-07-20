@@ -147,6 +147,14 @@ export type StatePreservationInput = {
   postBodyStoppedAt: string | null;
   preBodyPhaseSource: string | null;
   postBodyPhaseSource: string | null;
+  /**
+   * #2440: when true, total_plans and total_phases take the derived (post-sync)
+   * value even under !resync, instead of the wholesale curated restore. Used
+   * by callers (e.g. cmdStatePlannedPhase) where total_plans must correct to
+   * disk truth after plans are added. Body-only writes (state.update/patch)
+   * leave this false — the #3242 wholesale protection stays in force.
+   */
+  deriveProgressKeys?: boolean;
 };
 
 export type StatePreservationResult = {
@@ -176,7 +184,27 @@ export function applyStatePreservation(input: StatePreservationInput): StatePres
     preFm &&
     preFm['progress']
   ) {
-    postFm['progress'] = preFm['progress'];
+    // #2440: when the caller opts in (deriveProgressKeys), total_plans and
+    // total_phases always take the derived (post-sync) value even under !resync.
+    // This is used by cmdStatePlannedPhase where total_plans must correct upward
+    // after plans are added. For body-only writes (state.update/patch without
+    // the flag), the wholesale restore preserves everything as before — the
+    // #3242 Bug A protection stays fully in force.
+    if (input.deriveProgressKeys && postFm['progress']) {
+      const curated = preFm['progress'] as Record<string, unknown> | null;
+      const derived = (postFm['progress'] ?? {}) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...derived };
+      if (curated) {
+        for (const [key, value] of Object.entries(curated)) {
+          if (key !== 'total_plans' && key !== 'total_phases') {
+            merged[key] = value;
+          }
+        }
+      }
+      postFm['progress'] = merged;
+    } else {
+      postFm['progress'] = preFm['progress'];
+    }
     mutated = true;
   }
 
