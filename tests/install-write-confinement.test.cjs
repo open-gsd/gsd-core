@@ -10,7 +10,7 @@
  *   - _copyStaged: escape rejection, symlink escape (regression preserved)
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
