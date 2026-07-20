@@ -201,10 +201,14 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     assert.strictEqual(config.runtime, runtime);
   });
 
-  test('#2069 defaults.json parity: model_policy survives identically to project-config path', (t) => {
-    // Identical policy in ~/.gsd/defaults.json (no .planning/) vs .planning/config.json (no defaults.json)
-    // must produce identical config.model_policy. Previously the global path silently dropped it.
+  test('#2069 defaults.json parity: model_policy / model_profile_overrides / runtime survive identically to project-config path', (t) => {
+    // Identical values in ~/.gsd/defaults.json (no .planning/) vs .planning/config.json (no defaults.json)
+    // must produce identical config.<key> for each of the three previously-dropped keys. A future
+    // regression breaking shape-parity for just one key — e.g. changing the project path to
+    // `parsed['runtime'] ?? null` — would slip a single-key test, so all three are asserted here.
     const policy = { provider: 'anthropic', budget: 'low' };
+    const overrides = { claude: { planner: { model: 'claude-opus-4-5' } } };
+    const runtime = 'codex';
 
     // Global path: ~/.gsd/defaults.json only, no .planning/
     const globalDir = createBareTmpDir();
@@ -212,7 +216,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     fs.mkdirSync(globalGsdDir, { recursive: true });
     fs.writeFileSync(
       path.join(globalGsdDir, 'defaults.json'),
-      JSON.stringify({ model_policy: policy })
+      JSON.stringify({ model_policy: policy, model_profile_overrides: overrides, runtime })
     );
 
     process.env.GSD_HOME = globalDir;
@@ -225,7 +229,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     fs.mkdirSync(path.join(projectDir, '.planning'), { recursive: true });
     fs.writeFileSync(
       path.join(projectDir, '.planning', 'config.json'),
-      JSON.stringify({ model_policy: policy })
+      JSON.stringify({ model_policy: policy, model_profile_overrides: overrides, runtime })
     );
 
     // GSD_HOME pointing somewhere with no defaults.json so the project path is the sole source.
@@ -236,5 +240,7 @@ describe('loadConfig ~/.gsd/defaults.json fallback (#1683)', () => {
     t.after(() => { cleanup(projectDir); cleanup(emptyHome); });
 
     assert.deepStrictEqual(globalConfig.model_policy, projectConfig.model_policy);
+    assert.deepStrictEqual(globalConfig.model_profile_overrides, projectConfig.model_profile_overrides);
+    assert.strictEqual(globalConfig.runtime, projectConfig.runtime);
   });
 });
