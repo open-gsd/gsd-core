@@ -2656,3 +2656,174 @@ describe('bug #3442: shim/wrapper serialized-command drift guard', () => {
 });
   });
 }
+
+// ─── #2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest layouts ────
+//
+// Three reporter layouts, all refused by the pre-#2393 guard with no opt-out:
+//   (lars-hh) CLAUDE_CONFIG_DIR=~/.claude-personal with skills/hooks symlinked to
+//             a user-owned external dir
+//   (Mamiki)   ~/.claude/skills is a Windows Junction to D:\claude-shared-resources\skills
+//   (Azd325)   ~/.claude itself is a symlink to a dotfiles repo (root-is-symlink)
+//
+// Fix: GSD_ALLOW_SYMLINKED_DEST=1 follows symlinks instead of refusing them,
+// while preserving the load-bearing refusals from #1704 / ADR-1239 Phase B:
+//   (a) path-traversal in the destSubpath string itself ('../../etc')
+//   (b) a resolved symlink target equal to the install root (would let _removeGsdEntries
+//       wipe the root — the config-root-wipe threat)
+
+describe('#2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest layouts', () => {
+  const { hasExistingSymlinkBetween } = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  beforeEach(() => {
+    delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+
+  afterEach(() => {
+    delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+  });
+
+  // Reporter case (lars-hh / Mamiki): a child component of configHome is a symlink
+  // to a user-owned dir outside configHome. Default refuses; opt-in follows.
+  test('child-symlink layout: default refuses, GSD_ALLOW_SYMLINKED_DEST=1 allows', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-cfg-'));
+    const outsideTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-out-'));
+    try {
+      const linkPath = path.join(configHome, 'skills');
+      try {
+        fs.symlinkSync(outsideTarget, linkPath);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(linkPath, 'gsd-foo');
+
+      // Default: refuse (existing pre-#2393 behavior unchanged).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        true,
+        'default must refuse symlinked destDir (pre-#2393 behavior)',
+      );
+
+      // Opt-in: allow (user asserted they trust the target).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        false,
+        'GSD_ALLOW_SYMLINKED_DEST=1 must allow intentional user-owned child symlink',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'skills')); } catch { /* already gone */ }
+      cleanup(configHome);
+      cleanup(outsideTarget);
+    }
+  });
+
+  // Reporter case (Azd325): the install root ITSELF is a symlink. The pre-#2393
+  // guard had an early-return for this before the component loop even ran.
+  test('root-is-symlink layout (Azd325/nix-darwin): default refuses, opt-in allows', (t) => {
+    const dotfilesTarget = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-dot-'));
+    const rootLink = path.join(os.tmpdir(), 'gsd-2393-rootlink-' + Date.now());
+    try {
+      try {
+        fs.symlinkSync(dotfilesTarget, rootLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      // Inside the dotfiles target, skills is a real dir (not a symlink).
+      fs.mkdirSync(path.join(dotfilesTarget, 'skills'), { recursive: true });
+      const destDir = path.join(rootLink, 'skills', 'gsd-foo');
+
+      // Default: refuse (root itself is a symlink → early-return true).
+      assert.strictEqual(
+        hasExistingSymlinkBetween(rootLink, destDir),
+        true,
+        'default must refuse when install root itself is a symlink',
+      );
+
+      // Opt-in: follow the root symlink, walk to the real skills dir — allow.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(rootLink, destDir, { allowOptInFollow: true }),
+        false,
+        'GSD_ALLOW_SYMLINKED_DEST=1 must follow a root symlink whose target has no further symlinks',
+      );
+    } finally {
+      try { fs.unlinkSync(rootLink); } catch { /* already gone */ }
+      cleanup(dotfilesTarget);
+    }
+  });
+
+  // Load-bearing refusal (a): path-traversal in the destSubpath string itself.
+  // MUST refuse regardless of opt-in — this is the #1704 threat (a).
+  test('path-traversal destSubpath ("../../etc") refused EVEN WITH opt-in', () => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-trav-'));
+    try {
+      const escapePath = path.join(configHome, '..', '..', 'etc-passwd-' + Date.now());
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, escapePath, { allowOptInFollow: true }),
+        true,
+        'path-traversal destSubpath must ALWAYS refuse regardless of opt-in (#1704 threat a)',
+      );
+    } finally {
+      cleanup(configHome);
+    }
+  });
+
+  // Load-bearing refusal (b): a symlink whose resolved target equals the install root
+  // itself would let _removeGsdEntries wipe the root. MUST refuse regardless of opt-in.
+  test('resolved-target-equals-install-root refused EVEN WITH opt-in (wipe protection)', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-wipe-'));
+    try {
+      // Symlink configHome/loop -> configHome (circular). Resolved target == install root.
+      const loopLink = path.join(configHome, 'loop');
+      try {
+        fs.symlinkSync(configHome, loopLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(loopLink, 'gsd-foo');
+
+      // Default refuses.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir),
+        true,
+        'default must refuse symlink to install root (wipe protection)',
+      );
+
+      // Opt-in STILL refuses — this is threat (b), load-bearing even with opt-in.
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        true,
+        'opt-in must NOT allow a symlink resolving to install root itself (#1704 threat b — wipe)',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'loop')); } catch { /* already gone */ }
+      cleanup(configHome);
+    }
+  });
+
+  // Fail-closed: a broken symlink (target missing) is still refused even with opt-in.
+  test('broken symlink refused EVEN WITH opt-in (fail-closed)', (t) => {
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2393-broken-'));
+    try {
+      const danglingLink = path.join(configHome, 'skills');
+      const notPresentTarget = path.join(os.tmpdir(), 'gsd-2393-not-present-' + Date.now());
+      try {
+        fs.symlinkSync(notPresentTarget, danglingLink);
+      } catch (_e) {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      const destDir = path.join(danglingLink, 'gsd-foo');
+
+      assert.strictEqual(
+        hasExistingSymlinkBetween(configHome, destDir, { allowOptInFollow: true }),
+        true,
+        'broken symlink must refuse even with opt-in (realpathSync throws → fail-closed)',
+      );
+    } finally {
+      try { fs.unlinkSync(path.join(configHome, 'skills')); } catch { /* already gone */ }
+      cleanup(configHome);
+    }
+  });
+});
