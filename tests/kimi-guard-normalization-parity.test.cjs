@@ -100,3 +100,41 @@ describe('Kimi guard normalization parity', () => {
     }
   });
 });
+
+// The two shell guards (gsd-graphify-update.sh, gsd-phase-boundary.sh) carry
+// the same #2304 normalization reimplemented in shell — a byte-identity
+// assertion cannot span the JS↔shell boundary, so instead of faking one this
+// block pins the two vocabulary facts each script depends on to the
+// installer's live mapping. Behavior is covered by negative-controlled tests
+// beside each hook's existing suite (graphify-auto-update.slow.test.cjs,
+// hooks-opt-in.test.cjs); this block is only the vocabulary-drift alarm
+// (a convertKimiToolName rename fails HERE).
+describe('Kimi shell-guard vocabulary parity (#2304)', () => {
+  const readHook = (file) =>
+    fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+
+  test('gsd-graphify-update.sh maps the installer\'s Bash vocabulary back to Bash', () => {
+    const modulePath = convertKimiToolName('Bash');
+    assert.ok(modulePath, 'installer no longer maps Bash — update this test');
+    const kimiName = modulePath.slice(modulePath.lastIndexOf(':') + 1);
+    const src = readHook('hooks/gsd-graphify-update.sh');
+    assert.ok(
+      src.includes('TOOL_NAME="${TOOL_NAME##*:}"'),
+      'gsd-graphify-update.sh no longer strips the Kimi module-path prefix'
+    );
+    assert.ok(
+      src.includes(`[ "$TOOL_NAME" = "${kimiName}" ]`) && src.includes('TOOL_NAME="Bash"'),
+      `gsd-graphify-update.sh no longer maps Kimi '${kimiName}' to Bash — ` +
+        'the hook is silently dormant on Kimi (#2304)'
+    );
+  });
+
+  test('gsd-phase-boundary.sh falls back to Kimi\'s tool_input.path field', () => {
+    const src = readHook('hooks/gsd-phase-boundary.sh');
+    assert.ok(
+      src.includes('i.file_path||(typeof i.path===\'string\'?i.path:\'\')'),
+      'gsd-phase-boundary.sh no longer falls back to tool_input.path — ' +
+        'the hook reads an empty path on Kimi (#2304)'
+    );
+  });
+});
