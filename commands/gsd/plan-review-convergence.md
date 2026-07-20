@@ -40,7 +40,7 @@ Replaces gsd-plan-phase's internal gsd-plan-checker with external AI reviewers (
 Phase number: extracted from $ARGUMENTS (required)
 
 **Flags:**
-- `--codex` — Use Codex CLI as reviewer (default if no reviewer specified)
+- `--codex` — Use Codex CLI as reviewer (default if no reviewer flag given AND `review.default_reviewers` is unset; otherwise `review.default_reviewers` wins per ADR-0011 — #2315)
 - `--gemini` — Use Gemini CLI as reviewer
 - `--agy` / `--antigravity` — Use Antigravity CLI as reviewer (successor to the discontinued Gemini CLI)
 - `--claude` — Use Claude CLI as reviewer (separate session)
