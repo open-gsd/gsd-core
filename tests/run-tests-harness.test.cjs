@@ -667,6 +667,68 @@ setInterval(() => {}, 1 << 30);
       );
     });
 
+    test('a timed-out chunk aborts the remaining chunks instead of burning the job budget', () => {
+      // Guards against a real CI failure mode (observed live on CI run
+      // 29749380190, windows-latest full-lane shard 2/3): the per-chunk
+      // timeout is HALF the 20m CI job cap (600000ms default vs a 1,200,000ms
+      // job), so if the loop pressed on to the next chunk after a timeout
+      // instead of aborting, a healthy full pass (~11m42s on that lane) could
+      // never finish and the CI runner cancels the whole job. That
+      // cancellation surfaces as an opaque "The operation was canceled."
+      // and buries the actual timeout diagnostic thousands of lines back in
+      // the log (in the real incident, ~38,000 lines from the end — and
+      // `gh run view --log-failed` returned nothing). Proving chunk 2 never
+      // runs pins the fix: abort the remaining chunks as soon as one times
+      // out, so the loud diagnostic above survives as the visible failure.
+      //
+      // Force exactly one file per chunk so chunk 1 = the hanging file and
+      // chunk 2 = a marker-writing file; sorted order (a- before b-, and
+      // walkTestFiles(...).sort() sorts selection) fixes which chunk runs
+      // first, deterministically — the margin between a 2s timeout and a
+      // file that never terminates is unbounded, so there is no race.
+      fs.writeFileSync(path.join(tmpDir, 'a-leaky.test.cjs'), LEAKY_BODY, 'utf8');
+      const markerPath = path.join(tmpDir, 'chunk-2-ran.marker');
+      const secondBody = `'use strict';
+const fs = require('fs');
+const { test } = require('node:test');
+fs.writeFileSync(${JSON.stringify(markerPath)}, 'ran');
+test('noop', () => {});
+`;
+      fs.writeFileSync(path.join(tmpDir, 'b-marker.test.cjs'), secondBody, 'utf8');
+
+      const r = runHarness(tmpDir, [], {
+        RUN_TESTS_NO_FORCE_EXIT: '1',
+        RUN_TESTS_CHUNK_TIMEOUT_MS: '2000',
+        RUN_TESTS_MAX_FILES_PER_CHUNK: '1',
+      });
+
+      assert.notStrictEqual(
+        r.status,
+        0,
+        `expected non-zero exit from an aborted run; got status=${r.status}\nSTDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /exceeded the per-chunk timeout/,
+        `expected timeout diagnostic in stderr; STDERR:\n${r.stderr}`,
+      );
+      assert.match(
+        r.stderr,
+        /aborting — skipping the remaining 1 chunk/,
+        `expected the new abort message in stderr; STDERR:\n${r.stderr}`,
+      );
+      assert.strictEqual(
+        fs.existsSync(markerPath),
+        false,
+        `chunk 2's marker file must NOT exist — proves the second chunk's test file never executed; STDERR:\n${r.stderr}`,
+      );
+      assert.doesNotMatch(
+        r.stderr,
+        /chunk 2\/2/,
+        `chunk 2's progress line must never print — proves the loop broke before starting chunk 2; STDERR:\n${r.stderr}`,
+      );
+    });
+
     test('force-exit lets a chunk with a leaked handle exit cleanly', () => {
       const nodeMajor = Number(process.versions.node.split('.')[0]);
       // --test-force-exit was added in Node 22; skip on older engines.
