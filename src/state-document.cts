@@ -171,12 +171,17 @@ export function shouldPreserveExistingProgress(existingProgress: unknown, derive
     return false;
   const existing = existingProgress as ProgressRecord;
   const derived = derivedProgress as ProgressRecord;
-  // total_phases is intentionally excluded from the ratchet: it must always
-  // take the freshly derived value so it can correct downward (#1446).
-  // Only completed_phases, total_plans, and completed_plans keep ratchet behaviour.
-  return (existingProgressExceedsDerived(existing, derived, 'completed_phases') ||
-    existingProgressExceedsDerived(existing, derived, 'total_plans') ||
-    existingProgressExceedsDerived(existing, derived, 'completed_plans'));
+  // total_phases (#1446) and total_plans (#2440) are intentionally excluded
+  // from the ratchet: both must always take the freshly derived value so they
+  // can correct in BOTH directions. total_plans legitimately moves up (a new
+  // phase adds plans) and down (milestone reorganization removes phases).
+  // Ratcheting it freezes stale values. Only completed_phases and
+  // completed_plans keep ratchet behaviour — they are monotonic (once a
+  // phase/plan is complete, it stays complete).
+  return (
+    existingProgressExceedsDerived(existing, derived, 'completed_phases') ||
+    existingProgressExceedsDerived(existing, derived, 'completed_plans')
+  );
 }
 
 export function normalizeProgressNumbers(progress: unknown): unknown {
