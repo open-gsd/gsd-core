@@ -10391,6 +10391,9 @@ test('real install: claude-emitted execute-phase.md keeps claude default + workt
   );
 });
 
+  });
+}
+
 // Bug #2395 — finishInstall for non-Claude runtimes never persisted `runtime: <id>`
 // into ~/.gsd/defaults.json. resolveRuntime() precedence is GSD_RUNTIME > config.runtime
 // > 'claude', so both inputs being empty on a Cursor (or any non-Claude) install caused
@@ -10497,6 +10500,22 @@ describe('Bug #2395: finishInstall persists runtime identity for non-Claude runt
       });
     });
   }
-});
+
+  test('same-runtime idempotence: second cursor install is a no-op (runtime already set)', () => {
+    withUserPath(() => {
+      seedDefaults({ model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after1 = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after1.runtime, 'cursor', 'first install must populate runtime: cursor');
+      // Capture mtime; wait briefly so a no-op vs rewrite is distinguishable.
+      const beforeMtime = fs.statSync(LOCAL_DEFAULTS_PATH).mtimeMs;
+      const start = Date.now();
+      while (Date.now() - start < 20) { /* spin briefly */ }
+      callFinishInstall('cursor');  // second install — should be a no-op on runtime
+      const after2 = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      const afterMtime = fs.statSync(LOCAL_DEFAULTS_PATH).mtimeMs;
+      assert.equal(after2.runtime, 'cursor', 'second install must leave runtime: cursor intact');
+      assert.equal(afterMtime, beforeMtime, 'second install must NOT rewrite defaults.json (runtime already set, idempotent)');
+    });
   });
-}
+});
