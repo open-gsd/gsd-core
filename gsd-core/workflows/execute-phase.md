@@ -1541,7 +1541,13 @@ for TODO_FILE in "$PENDING_DIR"/*.md; do
 done
 
 if [ ${#CLOSED[@]} -gt 0 ]; then
-  gsd_run query commit "docs(phase-${PHASE_NUMBER}): auto-close ${#CLOSED[@]} todo(s) resolved by this phase" --files .planning/todos/completed/ .planning/STATE.md|| true
+  # #2415: include pending/ in --files so `git add` of that dir stages the deletion
+  # of each moved file. Without this, only completed/ is staged and the moved-away
+  # file persists as an unstaged deletion in git status indefinitely (until some
+  # later broad `git add -A` happens to catch it). Plain `mv` + this two-dir
+  # --files list is more robust than `git mv` (which fails on untracked todos and
+  # when .planning is not yet git-tracked).
+  gsd_run query commit "docs(phase-${PHASE_NUMBER}): auto-close ${#CLOSED[@]} todo(s) resolved by this phase" --files .planning/todos/completed/ .planning/todos/pending/ .planning/STATE.md|| true
   echo "◆ Closed ${#CLOSED[@]} todo(s) resolved by Phase ${PHASE_NUMBER}:"
   for f in "${CLOSED[@]}"; do echo "  ✓ $f"; done
 fi
