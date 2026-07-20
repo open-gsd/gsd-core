@@ -505,6 +505,101 @@ function resolveModelForTier(cwd: string, agentType: string, attempt?: number): 
   return alias;
 }
 
+/**
+ * #2296 — Outcome of consulting the provider-escalation ladder for one attempt.
+ *
+ * `from`/`to` describe the PROVIDER ladder only; they are equal whenever the
+ * ladder was not consulted or had nothing to offer.
+ */
+interface ProviderEscalationResult {
+  from: string;
+  to: string;
+  escalated: boolean;
+  exhausted: boolean;
+  attempted: string[];
+  index: number;
+}
+
+/**
+ * Keep only usable model ids: non-empty strings. A malformed config can put
+ * anything in here (nulls, numbers, blank strings), and a blank model id would
+ * resolve to an unusable agent invocation rather than failing visibly. Invalid
+ * entries are dropped and the surviving order is preserved, so the ladder stays
+ * predictable (ADR 227 — validate shape, not just type).
+ */
+function sanitizeProviderEscalation(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+}
+
+/**
+ * #2296 — Resolve the model for one attempt of the PROVIDER escalation ladder.
+ *
+ * The tier ladder (`resolveModelForTier`) escalates within one provider's
+ * `tier_models`, which does not help when that provider is the thing that is
+ * throttled. This walks `dynamic_routing.provider_escalation` instead: an
+ * ordered list of alternative model ids, capped by
+ * `min(max_escalations, list length)`.
+ *
+ * `applicable` is the caller's policy decision (only a quota-exceeded
+ * classification should consult this ladder). It is a parameter rather than a
+ * class check here so this module keeps depending only on leaf modules, per
+ * CONTEXT.md's Model Resolution module contract.
+ *
+ * Attempt 0 — and every non-applicable call — stays on the source model.
+ * `exhausted` reports that the ladder is spent so the caller can fail loudly
+ * naming every model it tried.
+ */
+function resolveProviderEscalation(
+  cwd: string,
+  agentType: string,
+  attempt: number | undefined,
+  applicable: boolean,
+): ProviderEscalationResult {
+  // The model that would be used with no provider escalation at all.
+  const from = resolveModelForTier(cwd, agentType, 0);
+  const stay = (exhausted = false): ProviderEscalationResult => ({
+    from,
+    to: from,
+    escalated: false,
+    exhausted,
+    attempted: [from],
+    index: 0,
+  });
+
+  if (!applicable) return stay();
+
+  const config = loadConfig(cwd);
+  const dr = config['dynamic_routing'] as Record<string, unknown> | null | undefined;
+  if (!dr || typeof dr !== 'object' || dr['enabled'] !== true) return stay();
+  if (dr['escalate_on_failure'] === false) return stay();
+
+  const list = sanitizeProviderEscalation(dr['provider_escalation']);
+  if (list.length === 0) return stay();
+
+  // Same default and same validity rule as the tier ladder above — a negative or
+  // non-integer max_escalations is invalid config, not a request for zero.
+  const maxEscalations = Number.isInteger(dr['max_escalations']) && (dr['max_escalations'] as number) >= 0
+    ? (dr['max_escalations'] as number)
+    : 1;
+  const cap = Math.min(maxEscalations, list.length);
+  // An explicit cap of 0 means the ladder exists but is spent before it starts.
+  if (cap === 0) return stay(true);
+
+  const attemptN = Number.isInteger(attempt) && (attempt as number) > 0 ? (attempt as number) : 0;
+  if (attemptN === 0) return stay();
+
+  const index = Math.min(attemptN, cap);
+  return {
+    from,
+    to: list[index - 1],
+    escalated: true,
+    exhausted: attemptN > cap,
+    attempted: [from, ...list.slice(0, index)],
+    index,
+  };
+}
+
 // ─── #443 — Unified effort + fast_mode resolvers ─────────────────────────────
 
 const VALID_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -691,6 +786,7 @@ export = {
   resolveGranularityInternal,
   assertValidGranularityOverride,
   resolveModelForTier,
+  resolveProviderEscalation,
   VALID_EFFORTS,
   EFFORT_SET,
   nextEffort,

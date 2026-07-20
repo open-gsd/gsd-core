@@ -30,7 +30,10 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone, stripShippedMilestones: _stripShippedMilestones, getMilestoneInfo, getMilestonePhaseFilter, getRoadmapPhaseInternal } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, resolveModelForTier, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { resolveModelInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import agentCommandRouterMod = require('./agent-command-router.cjs');
+const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
 import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -482,9 +485,10 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
  *   { model, profile, effort, effort_rendered, effort_param, effort_propagation,
  *     fast_mode, fast_mode_supported, [unknown_agent] }
  *
- * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>
+ * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>,
+ *        --failure-class <class> (#2296)
  */
-function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number }): void {
+function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string }): void {
   if (!agentType) {
     error('agent-type required');
   }
@@ -499,9 +503,22 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   // including dynamic_routing-enabled users who don't pass --attempt), and only an
   // explicit attempt routes through the tier ladder. resolveModelForTier itself
   // still falls back to resolveModelInternal when dynamic_routing is off.
-  const model = (opts.attempt !== undefined && opts.attempt !== null)
+  let model = (opts.attempt !== undefined && opts.attempt !== null)
     ? resolveModelForTier(cwd, agentType!, opts.attempt)
     : resolveModelInternal(cwd, agentType!);
+
+  // #2296: when the caller reports WHY the previous attempt failed, consult the
+  // provider-escalation ladder. Only a quota/rate-limit class warrants it — a
+  // heavier tier on the same throttled provider is still throttled, so this
+  // ladder swaps providers instead. Gated on an explicit --failure-class so the
+  // JSON contract is byte-identical for every existing caller.
+  let escalation: Record<string, unknown> | undefined;
+  if (opts.failureClass !== undefined) {
+    const applicable = opts.failureClass === AGENT_FAILURE_CLASSES.QUOTA_EXCEEDED;
+    const resolved = resolveProviderEscalation(cwd, agentType!, opts.attempt, applicable);
+    if (resolved.escalated) model = resolved.to;
+    escalation = { class: opts.failureClass, ...resolved };
+  }
 
   const effortOpts: Record<string, unknown> = {};
   if (typeof opts.effortOverride === 'string') effortOpts['override'] = opts.effortOverride;
@@ -532,6 +549,7 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     fast_mode_supported: fastModeSupported,
   };
   if (!agentModels) result['unknown_agent'] = true;
+  if (escalation) result['escalation'] = escalation;
   output(result, raw, effort);
 }
 

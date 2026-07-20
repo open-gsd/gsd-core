@@ -317,6 +317,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `execute-phase-context-guard.md` | Context exhaustion guard step for `execute-phase` wave loop — `workflow.context_guard_mode` dispatch table (warn/auto/off) and POOR-tier pause-work trigger (#1452). |
 | `execute-phase-requirement-revert.md` | Gap-report step for `execute-phase` — reverts this phase's own shared requirement IDs out of `Complete` in REQUIREMENTS.md before rendering a `gaps_found` report, scoped to `PHASE_REQ_IDS` so other phases' rows are untouched (#2388). |
 | `execute-phase-response-language.md` | Response-language directive for `execute-phase` orchestrator output (questions, narration, report-template prose); extracted to keep the workflow under the frozen pre-phase-6 byte ceiling (#2402). |
+| `execute-phase-quota-recovery.md` | Step 7.1 detail for `execute-phase` — `quota-exceeded` recovery: the opt-in `dynamic_routing.provider_escalation` ladder (swap provider, honor `Retry-After`, fail loudly when spent) and the default manual wait-for-reset prompt (#2296). |
 | `continuation-format.md` | Session continuation/resume format. |
 | `domain-probes.md` | Domain-specific probing questions for discuss-phase. |
 | `edge-probe.md` | Spec-phase edge-completeness probe — 8-category edge taxonomy, shape classification, and the `requirements → checks → verifier` resolution model (Step 5.5). |

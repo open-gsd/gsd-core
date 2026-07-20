@@ -229,6 +229,7 @@
       "execute-mvp-tdd.md",
       "execute-phase-between-wave-reset.md",
       "execute-phase-context-guard.md",
+      "execute-phase-quota-recovery.md",
       "execute-phase-requirement-revert.md",
       "execute-phase-response-language.md",
       "execute-phase-wave-guard.md",

@@ -295,7 +295,7 @@ const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
 const { routeRoadmapCommand } = require('./lib/roadmap-command-router.cjs');
 const { routeCapabilityCommand } = require('./lib/capability-command-router.cjs');
-const { routeAgentCommand } = require('./lib/agent-command-router.cjs');
+const { routeAgentCommand, AGENT_FAILURE_CLASSES } = require('./lib/agent-command-router.cjs');
 const smartEntryMod = require('./lib/smart-entry.cjs');
 const { routeCheckCommand } = require('./lib/check-command-router.cjs');
 const { routeTaskCommand } = require('./lib/task-command-router.cjs');
@@ -609,7 +609,20 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     let effortOverride;
     let fastModeOverride;
     let attempt;
+    let failureClass;
     const positionals = [];
+    // #2296: the valid classes come from the classifier's own frozen enum, so
+    // this validator can never drift from what `agent classify-failure` emits.
+    const validFailureClasses = Object.values(AGENT_FAILURE_CLASSES);
+    const setFailureClass = (v) => {
+      if (!validFailureClasses.includes(v)) {
+        error(
+          `--failure-class must be one of: ${validFailureClasses.join(', ')}`,
+          ERROR_REASON.USAGE,
+        );
+      }
+      failureClass = v;
+    };
     for (let i = 0; i < execArgs.length; i++) {
       const a = execArgs[i];
       if (a.startsWith('--effort=')) {
@@ -626,6 +639,10 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         const n = parseInt(v, 10);
         if (!Number.isInteger(n) || n < 0) error('--attempt requires a non-negative integer', ERROR_REASON.USAGE);
         attempt = n;
+        continue;
+      }
+      if (a.startsWith('--failure-class=')) {
+        setFailureClass(a.slice('--failure-class='.length));
         continue;
       }
       if (a === '--effort') {
@@ -651,6 +668,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         i++;
         continue;
       }
+      if (a === '--failure-class') {
+        const val = execArgs[i + 1];
+        if (val === undefined || val.startsWith('--')) error('Missing value for --failure-class', ERROR_REASON.USAGE);
+        setFailureClass(val);
+        i++;
+        continue;
+      }
       if (a === '--raw') continue;
       if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
       positionals.push(a);
@@ -662,6 +686,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       effortOverride,
       fastModeOverride,
       attempt,
+      failureClass,
     });
   }
 
