@@ -291,19 +291,27 @@ describe('frontmatter get SECURITY.md threats_open — type contract', () => {
 
 describe('real registry ship:pre — structural guards', () => {
 
-  test('ship:pre byLoopPoint entry has exactly 1 gate and 0 steps/contributions', () => {
+  test('ship:pre byLoopPoint entry has only gates (no steps/contributions) and includes security + broken-windows', () => {
     const entry = realRegistry.byLoopPoint['ship:pre'];
     assert.ok(entry, 'ship:pre must exist in byLoopPoint');
     assert.strictEqual(entry.steps.length, 0, 'ship:pre must have 0 steps');
     assert.strictEqual(entry.contributions.length, 0, 'ship:pre must have 0 contributions');
-    assert.strictEqual(entry.gates.length, 1, 'ship:pre must have exactly 1 gate (security)');
+    // Two predicate-style gates as of #1950: security (workflow.security_enforcement)
+    // and broken-windows (workflow.windows_enforce). Both default-off in tests via
+    // their respective when keys; both surface in the registry regardless of activation.
+    assert.strictEqual(entry.gates.length, 2, 'ship:pre must have exactly 2 gates (security + broken-windows)');
+    const capIds = entry.gates.map(g => g.capId).sort();
+    assert.deepEqual(capIds, ['broken-windows', 'security'], 'ship:pre gate capIds must be {security, broken-windows}');
   });
 
-  test('ship:pre gate capId is "security" and check has predicate not query', () => {
-    const gate = realRegistry.byLoopPoint['ship:pre'].gates[0];
-    assert.strictEqual(gate.capId, 'security');
-    assert.ok(gate.check.predicate, 'ship:pre gate must use predicate, not query');
-    assert.strictEqual(gate.check.query, undefined, 'ship:pre must NOT have a check.query (predicate-only gate)');
+  test('every ship:pre gate uses predicate (not query) and the security gate is present', () => {
+    const gates = realRegistry.byLoopPoint['ship:pre'].gates;
+    for (const gate of gates) {
+      assert.ok(gate.check.predicate, `ship:pre gate ${gate.capId} must use predicate, not query`);
+      assert.strictEqual(gate.check.query, undefined, `ship:pre gate ${gate.capId} must NOT have a check.query (predicate-only gate)`);
+    }
+    const security = gates.find(g => g.capId === 'security');
+    assert.ok(security, 'ship:pre must include the security gate');
   });
 
 });

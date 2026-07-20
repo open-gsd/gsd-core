@@ -106,6 +106,43 @@ Verify the work is ready to ship:
      ```
 
    If no active security `ship:pre` gate hook is present (security enforcement off), skip this check silently.
+
+7. **Broken-windows ship gate (capability-driven, issue #1950).**
+
+   The `SHIP_PRE_HOOKS_JSON` resolved in step 6 already includes any `broken-windows` gate. Inspect `activeHooks` for an entry with `capId == "broken-windows"` and `kind == "gate"`:
+
+   ```bash
+   WINDOWS_GATE_ACTIVE=$(printf '%s' "$SHIP_PRE_HOOKS_JSON" | jq -r \
+     '.activeHooks[]? | select(.capId == "broken-windows" and .kind == "gate" and .blocking == true) | .capId' \
+     2>/dev/null | head -1)
+   ```
+
+   If `$WINDOWS_GATE_ACTIVE` is non-empty, enforce the gate by reading the ledger's typed status. The ledger lives at the **project root** (cross-phase, not phase-scoped):
+
+   ```bash
+   WINDOWS_STATUS_JSON=$(gsd_run windows status --raw 2>/dev/null || echo '')
+   WINDOWS_OPEN_COUNT=$(printf '%s' "$WINDOWS_STATUS_JSON" | jq -r '.ledger.open_count // "?"' 2>/dev/null || echo '?')
+   ```
+
+   - **`WINDOWS_OPEN_COUNT == "0"`** → gate passes; continue to the next preflight check.
+   - **`WINDOWS_OPEN_COUNT` is a positive integer** → block with `WINDOWS_SHIP_GATE_OPEN`:
+     ```
+     ⚠ Broken-windows ship gate: WINDOWS.md has {WINDOWS_OPEN_COUNT} open window(s).
+     Resolve each entry before shipping, or explicitly waive with a recorded reason:
+       gsd-tools windows fixed <id>      # defect resolved
+       gsd-tools windows waive <id> "<reason>"   # justified deferral (reason required)
+     Then re-run /gsd:ship.
+     ```
+   - **`WINDOWS_OPEN_COUNT` is `"?"`, empty, or non-numeric** → **fail closed and block** with `WINDOWS_SHIP_GATE_READ_FAILED` (the gate is strict equality to `0`; never ship on an unreadable ledger):
+     ```
+     ⚠ Broken-windows ship gate: could not read open_count from .planning/WINDOWS.md.
+     Inspect the file or run `gsd-tools windows status --raw` to diagnose. The ledger
+     may be malformed; fix it before shipping (an unparseable ledger is a broken window).
+     ```
+
+   The ledger is **optional and backward-compatible**: on a project where `gsd_run windows status` returns `open_count: 0` (no `.planning/WINDOWS.md` yet, or an empty ledger), the gate passes silently. The gate only blocks when at least one entry is `open`.
+
+   If no active `broken-windows` `ship:pre` gate hook is present (gate disabled via `workflow.windows_enforce=false`, the default — tracking continues but the gate is opt-in), skip this check silently.
 </step>
 
 <step name="push_branch">

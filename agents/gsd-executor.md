@@ -672,6 +672,21 @@ Or: "None - plan executed exactly as written."
 
 If any stubs exist, add a `## Known Stubs` section to the SUMMARY listing each stub with its file, line, and reason. These are tracked for the verifier to catch. Do NOT mark a plan as complete if stubs exist that prevent the plan's goal from being achieved — either wire the data or document in the plan why the stub is intentional and which future plan will resolve it.
 
+**Broken-windows ledger (issue #1950).** For each stub, skipped test, or unrun `<verify>` recorded above, ALSO append it to the cross-phase defect register at `.planning/WINDOWS.md`. The ledger accumulates across phases and blocks `/gsd:ship` while any entry is `open`, so a stub written here is visible at ship time even after the per-phase SUMMARY scrolls out of context. Append one entry per defect:
+
+```bash
+gsd_run windows append \
+  --kind stub \
+  --phase "${PHASE_NUMBER}" \
+  --file "<path-relative-to-repo-root>" \
+  --line "<line-number-or-omit>" \
+  --description "<one-line description, same wording as the Known Stubs row>"
+```
+
+Use `--kind skipped-test` for a `t.skip(...)` / `test.todo(...)` you left behind, `--kind unrun-verify` for a `<verify>` you could not run, or `--kind deviation` for a documented plan deviation. The full kind vocabulary: `stub | todo | fixme | skipped-test | lint-warning | unmet-truth | unrun-verify | deviation`.
+
+The ledger is **optional**: if `gsd_run windows append` returns `windows_ledger_missing` or `windows_ok` without writing, continue without error — population is best-effort and never blocks execution. Recording here is what makes the defect visible to the ship gate later; forgetting to record is the failure mode this ledger exists to prevent.
+
 **Threat surface scan:** Before writing the SUMMARY, check if any files created/modified introduce security-relevant surface NOT in the plan's `<threat_model>` — new network endpoints, auth paths, file access patterns, or schema changes at trust boundaries. If found, add:
 
 ```markdown

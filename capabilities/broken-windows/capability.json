@@ -1,0 +1,46 @@
+{
+  "id": "broken-windows",
+  "role": "feature",
+  "version": "1.7.0",
+  "title": "Broken-windows ledger",
+  "description": "Cross-phase defect register accumulating stubs, TODOs, skipped tests, unrun verifies, and unmet truths into .planning/WINDOWS.md. Blocks /gsd-ship while any window is open unless explicitly waived with a recorded reason. Operationalizes GSD's no-defer discipline as a tracked, enforced artifact (issue #1950).",
+  "tier": "full",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.7.0"
+  },
+  "runtimeCompat": {
+    "supported": [
+      "*"
+    ],
+    "unsupported": []
+  },
+  "skills": [],
+  "agents": [],
+  "hooks": [],
+  "config": {
+    "workflow.windows_enforce": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable the blocking ship:pre gate for the broken-windows ledger. When true (opt-in), /gsd-ship blocks while .planning/WINDOWS.md has any open entry. When false (default), windows are still tracked (the executor and verifier still populate WINDOWS.md via gsd-tools windows append) but ship does not block — teams can adopt tracking before enforcement. Issue #1950."
+    }
+  },
+  "steps": [],
+  "contributions": [],
+  "gates": [
+    {
+      "point": "ship:pre",
+      "check": {
+        "predicate": {
+          "kind": "artifact-frontmatter-equals",
+          "artifact": "WINDOWS.md",
+          "field": "open_count",
+          "equals": 0
+        }
+      },
+      "when": "workflow.windows_enforce",
+      "blocking": true,
+      "onError": "halt"
+    }
+  ]
+}

@@ -383,6 +383,52 @@ const capabilities = {
       }
     }
   },
+  "broken-windows": {
+    "id": "broken-windows",
+    "role": "feature",
+    "version": "1.7.0",
+    "title": "Broken-windows ledger",
+    "description": "Cross-phase defect register accumulating stubs, TODOs, skipped tests, unrun verifies, and unmet truths into .planning/WINDOWS.md. Blocks /gsd-ship while any window is open unless explicitly waived with a recorded reason. Operationalizes GSD's no-defer discipline as a tracked, enforced artifact (issue #1950).",
+    "tier": "full",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtimeCompat": {
+      "supported": [
+        "*"
+      ],
+      "unsupported": []
+    },
+    "skills": [],
+    "agents": [],
+    "hooks": [],
+    "config": {
+      "workflow.windows_enforce": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the blocking ship:pre gate for the broken-windows ledger. When true (opt-in), /gsd-ship blocks while .planning/WINDOWS.md has any open entry. When false (default), windows are still tracked (the executor and verifier still populate WINDOWS.md via gsd-tools windows append) but ship does not block — teams can adopt tracking before enforcement. Issue #1950."
+      }
+    },
+    "steps": [],
+    "contributions": [],
+    "gates": [
+      {
+        "point": "ship:pre",
+        "check": {
+          "predicate": {
+            "kind": "artifact-frontmatter-equals",
+            "artifact": "WINDOWS.md",
+            "field": "open_count",
+            "equals": 0
+          }
+        },
+        "when": "workflow.windows_enforce",
+        "blocking": true,
+        "onError": "halt"
+      }
+    ]
+  },
   "claude": {
     "id": "claude",
     "role": "runtime",
@@ -3537,6 +3583,21 @@ const byLoopPoint = {
     "contributions": [],
     "gates": [
       {
+        "capId": "broken-windows",
+        "point": "ship:pre",
+        "check": {
+          "predicate": {
+            "kind": "artifact-frontmatter-equals",
+            "artifact": "WINDOWS.md",
+            "field": "open_count",
+            "equals": 0
+          }
+        },
+        "when": "workflow.windows_enforce",
+        "blocking": true,
+        "onError": "halt"
+      },
+      {
         "capId": "security",
         "point": "ship:pre",
         "check": {
@@ -3578,6 +3639,7 @@ const configKeys = {
   "workflow.ai_integration_phase": "ai-integration",
   "workflow.api_coverage_gate": "ai-integration",
   "workflow.assumption_delta": "assumption-delta",
+  "workflow.windows_enforce": "broken-windows",
   "claude_orchestration.enabled": "claude-orchestration",
   "claude_orchestration.execution_backend": "claude-orchestration",
   "claude_orchestration.min_agent_sdk_version": "claude-orchestration",
@@ -3637,6 +3699,12 @@ const configSchema = {
     "type": "boolean",
     "default": true,
     "description": "Enable the assumption-delta architecture checkpoint during planning. When a pluralization/optional/chosen signal is detected in the phase scope, the planner is prompted to re-ask whether the primary key / identity model still names the right thing. Advisory (non-blocking)."
+  },
+  "workflow.windows_enforce": {
+    "owner": "broken-windows",
+    "type": "boolean",
+    "default": false,
+    "description": "Enable the blocking ship:pre gate for the broken-windows ledger. When true (opt-in), /gsd-ship blocks while .planning/WINDOWS.md has any open entry. When false (default), windows are still tracked (the executor and verifier still populate WINDOWS.md via gsd-tools windows append) but ship does not block — teams can adopt tracking before enforcement. Issue #1950."
   },
   "claude_orchestration.enabled": {
     "owner": "claude-orchestration",
@@ -5738,6 +5806,7 @@ const _requiresGraph = {
   "assumption-delta": [],
   "audit": [],
   "augment": [],
+  "broken-windows": [],
   "claude": [],
   "claude-orchestration": [],
   "cline": [],

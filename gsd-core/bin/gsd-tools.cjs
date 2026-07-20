@@ -289,6 +289,7 @@ const { routeInitCommand } = require('./lib/init-command-router.cjs');
 // here, invoked from case 'init' below.
 const { warnIfStaleBake } = require('./lib/stale-bake-guard.cjs');
 const loopResolver = require('./lib/loop-resolver.cjs');
+const brokenWindows = require('./lib/broken-windows.cjs');
 const { routePhaseCommand } = require('./lib/phase-command-router.cjs');
 const { routePhasesCommand } = require('./lib/phases-command-router.cjs');
 const { routeValidateCommand } = require('./lib/validate-command-router.cjs');
@@ -1477,6 +1478,39 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
           }
   }
 
+  function routeWindows({ args, cwd, raw, error }) {
+    // windows status | append | waive | fixed  (issue #1950)
+    // All subcommands emit JSON; `--raw` is accepted for forward-compat with
+    // capture-stdout hooks but is a no-op (output shape is JSON in both modes).
+    const subcommand = args[1];
+    const rest = args.slice(2);
+    try {
+      if (subcommand === 'status') {
+        brokenWindows.cmdWindowsStatus(cwd, { raw });
+      } else if (subcommand === 'append') {
+        brokenWindows.cmdWindowsAppend(cwd, rest, { raw });
+      } else if (subcommand === 'waive') {
+        brokenWindows.cmdWindowsWaive(cwd, rest, { raw });
+      } else if (subcommand === 'fixed') {
+        brokenWindows.cmdWindowsMarkFixed(cwd, rest, { raw });
+      } else {
+        error(
+          `Unknown windows subcommand: ${subcommand || '(none)'}. Available: status, append, waive, fixed`,
+          ERROR_REASON.SDK_UNKNOWN_COMMAND,
+        );
+      }
+    } catch (e) {
+      // WindowsError carries a REASON code; surface it through the structured
+      // error path so tests can assert on the typed reason. `error()` calls
+      // process.exit(1) internally so we never reach the fall-through.
+      if (e && e.name === 'WindowsError' && typeof e.reason === 'string') {
+        error(e.message || 'broken-windows error', e.reason);
+      }
+      // Non-WindowsError: surface the message verbatim and exit non-zero.
+      error(`broken-windows: ${(e && e.message) ? e.message : String(e)}`, ERROR_REASON.UNKNOWN);
+    }
+  }
+
   function routeTeamsStatus({ args, cwd, raw, error }) {
     const teamsStatus = require('./lib/teams-status.cjs');
           teamsStatus.cmdTeamsStatus(cwd, { active: args.includes('--active') });
@@ -2044,6 +2078,7 @@ const HOST_COMMAND_ROUTERS = {
     'effort': routeEffort,
     'user-story': routeUserStory,
     'drift-guard': routeDriftGuard,
+    'windows': routeWindows,
 };
 
 // Returns true when consumed (suppress "Unknown command"), false to fall
