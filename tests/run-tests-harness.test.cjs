@@ -383,46 +383,66 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
         /run-tests: chunk 1\/3 — 3 files/,
         `expected file-count chunking marker in stderr; STDERR:\n${r.stderr}`,
       );
+      // #2456 changed the packer from sequential first-fit to LPT, so 7 equal-cost
+      // files across 3 chunks now balance {3,2,2} instead of filling greedily to
+      // {3,3,1}. The chunk COUNT is unchanged; only the tail is no longer starved.
       assert.match(
         r.stderr,
-        /run-tests: chunk 3\/3 — 1 files/,
+        /run-tests: chunk 3\/3 — 2 files/,
         `expected final file-count chunking marker in stderr; STDERR:\n${r.stderr}`,
       );
     });
 
-    // #2088: install-heavy files (real installs) are weighted so they never all
-    // land in one chunk — otherwise the unsharded targeted lane packs the whole
-    // install surface into a single chunk that blows the 600s per-chunk backstop
-    // on the slow Windows runner.
-    test('install-heavy files carry more weight so they SPREAD across chunks (#2088)', () => {
-      // 4 install-* files at weight 3 = 12 against a 6-weight cap → 2 chunks
-      // (2 heavy each). The whole install load is never in a single chunk.
-      const heavy = Array.from({ length: 4 }, (_, i) => `install-weighttest-${i}.test.cjs`);
+    // #2088: expensive files must never all land in one chunk — otherwise the
+    // unsharded targeted lane packs the whole install surface into a single chunk
+    // that blows the 600s per-chunk backstop on the slow Windows runner. #2088
+    // approximated "expensive" from the filename prefix; #2456 replaced that with
+    // measured durations. This test carries the #2088 GUARANTEE forward onto the
+    // new mechanism: the cost signal is now the timings table, injected via
+    // RUN_TESTS_TIMINGS_FILE so the assertion does not depend on the real suite's
+    // (regenerable, drifting) cost profile.
+    function writeTimings(dir, timings) {
+      const p = path.join(dir, 'timings.json');
+      fs.writeFileSync(p, JSON.stringify({ schema_version: 1, unit: 'ms', timings }), 'utf8');
+      return p;
+    }
+
+    test('expensive files SPREAD across chunks instead of clustering (#2088, #2456)', () => {
+      // 4 files measured at 30s each = weight 4 (mean is 30s, so each weighs 1)
+      // … against a 2-weight cap → 2 chunks, 2 expensive files each. The whole
+      // expensive load is never in a single chunk.
+      const heavy = Array.from({ length: 4 }, (_, i) => `costly-${i}.test.cjs`);
       seed(tmpDir, heavy);
+      const timingsFile = writeTimings(tmpDir, Object.fromEntries(heavy.map((f) => [f, 30000])));
       const rh = runHarness(tmpDir, [], {
         RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
-        RUN_TESTS_MAX_FILES_PER_CHUNK: '6',
-        RUN_TESTS_HEAVY_FILE_WEIGHT: '3',
+        RUN_TESTS_MAX_FILES_PER_CHUNK: '2',
+        RUN_TESTS_TIMINGS_FILE: timingsFile,
       });
       assert.strictEqual(rh.status, 0, `heavy: expected zero exit; STDERR:\n${rh.stderr}`);
-      assert.match(rh.stderr, /run-tests: chunk 1\/2 — 2 files/, `install-heavy files must split into 2 chunks; STDERR:\n${rh.stderr}`);
+      assert.match(rh.stderr, /run-tests: chunk 1\/2 — 2 files/, `expensive files must split into 2 chunks; STDERR:\n${rh.stderr}`);
       assert.match(rh.stderr, /run-tests: chunk 2\/2 — 2 files/, `STDERR:\n${rh.stderr}`);
     });
 
-    test('light files of the same count stay in ONE chunk — split is weight-driven, not count-driven (#2088)', () => {
-      // Same file COUNT (4) but LIGHT (weight 1 each): 4 < 6 cap → a single
-      // chunk. Proves the split above is driven by install-heavy WEIGHT.
-      const light = Array.from({ length: 4 }, (_, i) => `lightweighttest-${i}.test.cjs`);
+    test('cheap files of the same count stay in ONE chunk — split is cost-driven, not count-driven (#2088, #2456)', () => {
+      // Same file COUNT (4) but each measured CHEAP against one expensive sibling
+      // that sets the mean. 4 cheap files weigh far under the 6-weight cap → a
+      // single chunk. Proves the split above is driven by measured COST.
+      const light = Array.from({ length: 4 }, (_, i) => `cheap-${i}.test.cjs`);
       seed(tmpDir, light);
+      const timingsFile = writeTimings(tmpDir, {
+        ...Object.fromEntries(light.map((f) => [f, 50])),
+        'a-costly-sibling.test.cjs': 60000, // not seeded; only sets the table's scale
+      });
       const rl = runHarness(tmpDir, [], {
         RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
         RUN_TESTS_MAX_FILES_PER_CHUNK: '6',
-        RUN_TESTS_HEAVY_FILE_WEIGHT: '3',
+        RUN_TESTS_TIMINGS_FILE: timingsFile,
       });
       assert.strictEqual(rl.status, 0, `light: expected zero exit; STDERR:\n${rl.stderr}`);
       // A single chunk emits NO `chunk N/M` split marker (it only prints when
-      // chunks.length > 1), so its absence proves the 4 light files stayed together.
-      assert.doesNotMatch(rl.stderr, /run-tests: chunk \d+\/\d+ — /, `4 light files must stay in one chunk (no split marker); STDERR:\n${rl.stderr}`);
+      // chunks.length > 1), so its absence proves the 4 cheap files stayed together.
+      assert.doesNotMatch(rl.stderr, /run-tests: chunk \d+\/\d+ — /, `4 cheap files must stay in one chunk (no split marker); STDERR:\n${rl.stderr}`);
     });
   });
 
@@ -1302,3 +1322,353 @@ describe('bug #969 C — ensureBuiltHooks populates hooks/dist before concurrent
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// #2456 — chunk weights must reflect MEASURED cost, not a filename guess.
+//
+// These tests drive the packer's pure IR (`packChunks` / `makeFileWeigher` /
+// `loadTestTimings`) rather than the `run-tests: chunk N/M` stderr line, so they
+// assert on typed values (chunk composition, weights) instead of rendered text.
+// ---------------------------------------------------------------------------
+
+const {
+  packChunks,
+  makeFileWeigher,
+  loadTestTimings,
+  DEFAULT_TIMINGS_PATH,
+} = require('../scripts/run-tests.cjs');
+
+describe('chunk packing weights measured cost (#2456)', () => {
+  // A cost profile modelled on the real measurements in the issue. It is the
+  // MISCALIBRATION that matters: the pre-#2456 heuristic scored basenames
+  // matching /^(?:install|codex-)/ at 12 and everything else at 1, which is
+  // wrong in BOTH directions here —
+  //   * run-tests-harness / release-tarball-smoke.install are the two most
+  //     expensive files yet scored 1 (the regex is anchored to the START of the
+  //     basename, so a mid-name "install" never matches), and
+  //   * installer-migration-authoring / codex-declarative-reference scored 12
+  //     while costing almost nothing.
+  const MEASURED_MS = {
+    'run-tests-harness.test.cjs': 150180,
+    'release-tarball-smoke.install.test.cjs': 144420,
+    'phase.test.cjs': 136770,
+    'install-minimal-hooks.test.cjs': 136330,
+    'config.test.cjs': 114420,
+    'state.test.cjs': 94290,
+    'commands.test.cjs': 70580,
+    'init.test.cjs': 64100,
+    'installer-migration-authoring.test.cjs': 90,
+    'installer-migration-report.test.cjs': 120,
+    'install-update-marker.test.cjs': 95,
+    'codex-declarative-reference.test.cjs': 110,
+  };
+  const FILES = Object.keys(MEASURED_MS);
+  const FIXED_OVERHEAD = 120;
+  const ROOMY_CHARS = 100000;
+
+  function tableFrom(timings) {
+    const tmp = createTempDir('gsd-2456-timings-');
+    const p = path.join(tmp, 'timings.json');
+    fs.writeFileSync(p, JSON.stringify({ schema_version: 1, unit: 'ms', timings }), 'utf8');
+    return { path: p, dir: tmp };
+  }
+
+  function packMeasured(files, maxWeight, extra = {}) {
+    const t = tableFrom(MEASURED_MS);
+    try {
+      return packChunks(files, {
+        weightOf: makeFileWeigher(loadTestTimings(t.path)),
+        maxWeight,
+        maxChars: ROOMY_CHARS,
+        fixedOverhead: FIXED_OVERHEAD,
+        ...extra,
+      });
+    } finally {
+      cleanup(t.dir);
+    }
+  }
+
+  const costOf = (chunk) => chunk.reduce((sum, f) => sum + MEASURED_MS[f], 0);
+
+  /**
+   * THE REGRESSION (#2456). Under the pre-fix packer the two most expensive
+   * files both scored weight 1 and, being adjacent in selection order, packed
+   * into the SAME chunk — that chunk ran ~3.9x the lightest and sat near the
+   * 600s per-chunk timeout. Weighting by measured cost and packing with LPT must
+   * separate them.
+   */
+  test('the two most expensive files never land in the same chunk', () => {
+    const chunks = packMeasured(FILES, 4);
+    const chunkOf = (f) => chunks.findIndex((c) => c.includes(f));
+    const a = chunkOf('run-tests-harness.test.cjs');
+    const b = chunkOf('release-tarball-smoke.install.test.cjs');
+    assert.ok(a !== -1 && b !== -1, 'both heavy files must be packed');
+    assert.notStrictEqual(
+      a,
+      b,
+      `the two most expensive files must be split across chunks; got both in chunk ${a + 1}. ` +
+        `Chunk costs (s): ${chunks.map((c) => (costOf(c) / 1000).toFixed(1)).join(', ')}`,
+    );
+  });
+
+  test('chunk costs are balanced — slowest chunk stays well under 2x the fastest', () => {
+    const chunks = packMeasured(FILES, 4);
+    const costs = chunks.map(costOf);
+    const ratio = Math.max(...costs) / Math.min(...costs);
+    assert.ok(
+      ratio < 2,
+      `LPT must balance measured cost; imbalance was ${ratio.toFixed(2)}x ` +
+        `(costs in s: ${costs.map((c) => (c / 1000).toFixed(1)).join(', ')})`,
+    );
+  });
+
+  test('weights follow measured duration, correcting the old prefix heuristic both ways', () => {
+    const t = tableFrom(MEASURED_MS);
+    try {
+      const weigh = makeFileWeigher(loadTestTimings(t.path));
+      // Old heuristic: 1. Actual: the most expensive file in the suite.
+      assert.ok(
+        weigh('run-tests-harness.test.cjs') > 1,
+        'the heaviest file must weigh above the table average',
+      );
+      // Old heuristic: 12 (install prefix). Actual: ~0.1s.
+      assert.ok(
+        weigh('installer-migration-authoring.test.cjs') < 1,
+        'a trivially cheap install-prefixed file must weigh below the table average',
+      );
+      // The old regex is anchored to the START of the basename, so a mid-name
+      // "install" scored 1. Measured, it is the second most expensive file.
+      assert.ok(
+        weigh('release-tarball-smoke.install.test.cjs')
+          > weigh('installer-migration-authoring.test.cjs') * 100,
+        'mid-name "install" must be ranked by cost, not by prefix position',
+      );
+    } finally {
+      cleanup(t.dir);
+    }
+  });
+
+  test('an average-cost file weighs exactly 1, preserving the MAX_FILES_PER_CHUNK scale', () => {
+    // Three files at 10s, 20s, 30s → mean 20s. The 20s file is the average.
+    const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 30000 });
+    try {
+      const weigh = makeFileWeigher(loadTestTimings(t.path));
+      assert.strictEqual(weigh('b.test.cjs'), 1, 'the mean-cost file must weigh 1');
+      assert.strictEqual(weigh('a.test.cjs'), 0.5);
+      assert.strictEqual(weigh('c.test.cjs'), 1.5);
+    } finally {
+      cleanup(t.dir);
+    }
+  });
+
+  describe('timings are advisory, never gated', () => {
+    test('a file missing from the table falls back to the median weight', () => {
+      // 10s, 20s, 60s → mean 30s, median 20s → median weight = 20/30.
+      const t = tableFrom({ 'a.test.cjs': 10000, 'b.test.cjs': 20000, 'c.test.cjs': 60000 });
+      try {
+        const weigh = makeFileWeigher(loadTestTimings(t.path));
+        assert.strictEqual(weigh('brand-new-test.test.cjs'), 20000 / 30000);
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('an unknown file packs without error rather than failing the run', () => {
+      const chunks = packMeasured([...FILES, 'never-measured.test.cjs'], 4);
+      assert.ok(
+        chunks.flat().includes('never-measured.test.cjs'),
+        'a file absent from the timings table must still be packed',
+      );
+    });
+
+    test('a missing timings file degrades to uniform weight, not an error', () => {
+      const missing = path.join(createTempDir('gsd-2456-absent-'), 'does-not-exist.json');
+      assert.strictEqual(loadTestTimings(missing), null, 'a missing table must load as null');
+      const weigh = makeFileWeigher(null);
+      assert.strictEqual(weigh('anything.test.cjs'), 1, 'a null table must weigh every file 1');
+    });
+
+    test('a corrupt timings file degrades to uniform weight, not an error', () => {
+      const tmp = createTempDir('gsd-2456-corrupt-');
+      try {
+        const p = path.join(tmp, 'timings.json');
+        fs.writeFileSync(p, '{ this is not json', 'utf8');
+        assert.strictEqual(loadTestTimings(p), null, 'unparseable JSON must load as null');
+      } finally {
+        cleanup(tmp);
+      }
+    });
+
+    test('a structurally valid but empty table degrades to uniform weight', () => {
+      const t = tableFrom({});
+      try {
+        assert.strictEqual(loadTestTimings(t.path), null, 'an empty table must load as null');
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+
+    test('chunk count never drops below what count-based packing would produce', () => {
+      const files = Array.from({ length: 30 }, (_, i) => `unmeasured-${i}.test.cjs`);
+      assert.ok(
+        packMeasured(files, 6).length >= Math.ceil(files.length / 6),
+        'the count floor must hold for a fully-unknown file set',
+      );
+    });
+
+    test('a right-skewed table cannot collapse unknown files into fat chunks', () => {
+      // The safety floor in its worst case. In a realistically right-skewed suite
+      // (many trivial files, a few very expensive ones) the median weight is far
+      // below 1, so weighting ALONE would pack 30 unknown files into a single
+      // chunk — exactly the failure mode this fix exists to prevent. The count
+      // floor pins the result at what the pre-#2456 packer produced.
+      const skewed = {
+        ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`t-${i}.test.cjs`, 100])),
+        'one-huge.test.cjs': 100000,
+      };
+      const t = tableFrom(skewed);
+      try {
+        const table = loadTestTimings(t.path);
+        assert.ok(table.medianWeight < 0.05, 'fixture must actually be right-skewed');
+        const files = Array.from({ length: 30 }, (_, i) => `unmeasured-${i}.test.cjs`);
+        const chunks = packChunks(files, {
+          weightOf: makeFileWeigher(table),
+          maxWeight: 6,
+          maxChars: ROOMY_CHARS,
+          fixedOverhead: FIXED_OVERHEAD,
+        });
+        assert.strictEqual(
+          chunks.length,
+          Math.ceil(files.length / 6),
+          'a right-skewed table must still chunk exactly as count-based packing did',
+        );
+      } finally {
+        cleanup(t.dir);
+      }
+    });
+  });
+
+  describe('boundary coverage', () => {
+    // 12 files, each weighing exactly 1 (uniform) → total weight 12.
+    const uniform = Array.from({ length: 12 }, (_, i) => `u-${String(i).padStart(2, '0')}.test.cjs`);
+    const packUniform = (maxWeight) =>
+      packChunks(uniform, {
+        weightOf: () => 1,
+        maxWeight,
+        maxChars: ROOMY_CHARS,
+        fixedOverhead: FIXED_OVERHEAD,
+      });
+
+    test('weight budget at limit-1 forces a second chunk', () => {
+      assert.strictEqual(packUniform(11).length, 2, 'total weight 12 over budget 11 → 2 chunks');
+    });
+
+    test('weight budget exactly at the limit stays in one chunk', () => {
+      assert.strictEqual(packUniform(12).length, 1, 'total weight 12 at budget 12 → 1 chunk');
+    });
+
+    test('weight budget at limit+1 stays in one chunk', () => {
+      assert.strictEqual(packUniform(13).length, 1, 'total weight 12 under budget 13 → 1 chunk');
+    });
+
+    // argv ceiling: two files of identical length in one chunk occupies
+    // fixedOverhead + 2*(len+1) chars.
+    const two = ['argv-boundary-aaa.test.cjs', 'argv-boundary-bbb.test.cjs'];
+    const exactChars = FIXED_OVERHEAD + two.reduce((sum, f) => sum + f.length + 1, 0);
+    const packChars = (maxChars) =>
+      packChunks(two, {
+        weightOf: () => 1,
+        maxWeight: 1000, // never the binding constraint here
+        maxChars,
+        fixedOverhead: FIXED_OVERHEAD,
+      });
+
+    test('argv ceiling at limit-1 splits the chunk', () => {
+      assert.strictEqual(packChars(exactChars - 1).length, 2, 'one char short → must split');
+    });
+
+    test('argv ceiling exactly at the limit keeps one chunk', () => {
+      assert.strictEqual(packChars(exactChars).length, 1, 'exactly at the ceiling → fits');
+    });
+
+    test('argv ceiling at limit+1 keeps one chunk', () => {
+      assert.strictEqual(packChars(exactChars + 1).length, 1, 'one char spare → fits');
+    });
+
+    test('a single file wider than the argv ceiling is packed alone, not dropped or looped', () => {
+      const chunks = packChunks(['x'.repeat(500) + '.test.cjs', 'small.test.cjs'], {
+        weightOf: () => 1,
+        maxWeight: 1000,
+        maxChars: FIXED_OVERHEAD + 50, // narrower than the long file alone
+        fixedOverhead: FIXED_OVERHEAD,
+      });
+      assert.strictEqual(chunks.flat().length, 2, 'both files must survive packing');
+      assert.strictEqual(chunks.length, 2, 'the over-long file must occupy its own chunk');
+    });
+
+    test('an empty selection packs to no chunks', () => {
+      assert.deepStrictEqual(
+        packChunks([], {
+          weightOf: () => 1,
+          maxWeight: 60,
+          maxChars: ROOMY_CHARS,
+          fixedOverhead: FIXED_OVERHEAD,
+        }),
+        [],
+      );
+    });
+  });
+
+  describe('packing invariants', () => {
+    test('every selected file is packed exactly once', () => {
+      const chunks = packMeasured(FILES, 3);
+      const flat = chunks.flat();
+      assert.strictEqual(flat.length, FILES.length, 'no file may be dropped or duplicated');
+      assert.deepStrictEqual([...flat].sort(), [...FILES].sort(), 'the packed set must equal the selection');
+    });
+
+    test('no chunk is empty', () => {
+      const chunks = packMeasured(FILES, 3);
+      for (const [i, c] of chunks.entries()) {
+        assert.ok(c.length > 0, `chunk ${i + 1} must not be empty`);
+      }
+    });
+
+    test('packing is deterministic — identical input yields byte-identical chunks', () => {
+      assert.deepStrictEqual(packMeasured(FILES, 4), packMeasured(FILES, 4));
+    });
+
+    test('files keep their original selection order within a chunk', () => {
+      const chunks = packMeasured(FILES, 3);
+      for (const chunk of chunks) {
+        const positions = chunk.map((f) => FILES.indexOf(f));
+        assert.deepStrictEqual(
+          positions,
+          [...positions].sort((a, b) => a - b),
+          'within a chunk, files must stay in selection order',
+        );
+      }
+    });
+  });
+
+  describe('the checked-in timings table', () => {
+    test('loads, is non-empty, and yields usable weights', () => {
+      const table = loadTestTimings(DEFAULT_TIMINGS_PATH);
+      assert.ok(table !== null, `${DEFAULT_TIMINGS_PATH} must parse into a usable timing table`);
+      assert.ok(Object.keys(table.timings).length > 0, 'the table must not be empty');
+      assert.ok(table.mean > 0, 'the table mean must be positive');
+      assert.ok(table.medianWeight > 0, 'the median fallback weight must be positive');
+    });
+
+    // Schema guard on a static checked-in data file — NOT a timing assertion.
+    // Reported as a list so a corrupt regeneration names every bad entry at once
+    // rather than failing on the first.
+    test('every recorded cost is a finite non-negative number', () => {
+      const table = loadTestTimings(DEFAULT_TIMINGS_PATH);
+      const invalid = Object.entries(table.timings)
+        .filter(([, value]) => typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+        .map(([file, value]) => `${file}=${value}`);
+      assert.deepStrictEqual(invalid, [], 'every timing-table entry must be a finite non-negative number');
+    });
+  });
+});
