@@ -221,25 +221,29 @@ describe('plan-review-convergence: --agy/--antigravity reviewer whitelist (#2293
 
 describe('plan-review-convergence: #2315 respects review.default_reviewers (no-flag default)', () => {
   const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  const command = fs.readFileSync(COMMAND_PATH, 'utf8');
+  const SKILL_PATH = path.join(__dirname, '..', 'skills', 'gsd-plan-review-convergence', 'SKILL.md');
+  const skill = fs.readFileSync(SKILL_PATH, 'utf8');
 
   // Pre-fix #2315: the workflow unconditionally set REVIEWER_FLAGS="--codex" in
   // step 1 (line 37) BEFORE the workflow.plan_review_convergence config gate.
   // gsd-review sees the injected --codex as an explicit flag (precedence rule 1)
   // and never reaches rule 3 (review.default_reviewers), silently overriding
   // any configured default — a violation of ADR-0011 and ADR-0015.
-  test('workflow does NOT unconditionally default REVIEWER_FLAGS to --codex before the config gate', () => {
+  //
+  // The buggy one-liner must not appear ANYWHERE in the workflow — the post-fix
+  // resolution lives in step 1.5 as a config-gated if/else/fi block, never as
+  // the bare one-liner. (Earlier versions of this test only asserted the line
+  // was not BEFORE the gate, which still allowed a re-introduction after the
+  // gate; the assertion is now unconditional per review.)
+  test('workflow does NOT contain the unconditional REVIEWER_FLAGS=--codex one-liner anywhere', () => {
     const buggyLine = 'if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi';
-    const buggyIdx = workflow.indexOf(buggyLine);
-    const configGateIdx = workflow.indexOf('CONVERGENCE_ENABLED=$(gsd_run query config-get workflow.plan_review_convergence');
-    assert.ok(configGateIdx !== -1, 'config gate must exist');
-    if (buggyIdx !== -1) {
-      assert.ok(
-        buggyIdx > configGateIdx,
-        `Unconditional --codex fallback must not appear BEFORE the config gate ` +
-        `(offset ${buggyIdx} < gate ${configGateIdx}). Pre-fix #2315 bug: this ` +
-        `fallback silently overrides review.default_reviewers.`
-      );
-    }
+    assert.strictEqual(
+      workflow.indexOf(buggyLine),
+      -1,
+      'the unconditional --codex one-liner must not appear anywhere in the workflow (#2315); ' +
+      'default resolution is conditional on review.default_reviewers in step 1.5 (if/else/fi block).'
+    );
   });
 
   test('workflow resolves REVIEWER_FLAGS against review.default_reviewers AFTER the config gate', () => {
@@ -267,10 +271,34 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
     // AC4 of #2315: banner must reflect actual reviewers, not a hardcoded value.
     // When REVIEWER_FLAGS is empty (because default_reviewers is configured),
     // the banner must show the resolved default — not an empty string and not
-    // a misleading "--codex".
+    // a misleading "--codex". Assert the literal banner placeholder so a
+    // maintainer cannot satisfy this by defining REVIEWER_DISPLAY in a comment
+    // while leaving the banner pointing at REVIEWER_FLAGS.
     assert.ok(
-      workflow.includes('REVIEWER_DISPLAY'),
-      'workflow must define REVIEWER_DISPLAY so the banner reflects the resolved reviewer selection (#2315 AC4)'
+      workflow.includes('Reviewers: {REVIEWER_DISPLAY}'),
+      'startup banner must use the {REVIEWER_DISPLAY} placeholder, not {REVIEWER_FLAGS} (#2315 AC4)'
+    );
+    assert.ok(
+      !/\bReviewers:\s*\{REVIEWER_FLAGS\}/.test(workflow),
+      'startup banner must NOT reference {REVIEWER_FLAGS} directly (#2315 AC4)'
+    );
+  });
+
+  test('command and skill doc both document the review.default_reviewers precedence (content parity)', () => {
+    // The #2315 fix updated the --codex flag description in BOTH the command
+    // (commands/gsd/plan-review-convergence.md) and the generated skill mirror
+    // (skills/gsd-plan-review-convergence/SKILL.md). The two are kept in sync
+    // by `npm run gen:plugin-skills`; this assertion catches a manual edit to
+    // one that the other doesn't mirror. Both must mention review.default_reviewers
+    // alongside the --codex default claim.
+    const expected = 'review.default_reviewers';
+    assert.ok(
+      command.includes(expected),
+      `command file must document the review.default_reviewers precedence on the --codex flag (#2315)`
+    );
+    assert.ok(
+      skill.includes(expected),
+      `skill file must mirror the command file's review.default_reviewers precedence (#2315)`
     );
   });
 
@@ -307,12 +335,16 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
     const run = ({ args, defaultReviewers }) => {
       // Stub gsd_run: only `query config-get review.default_reviewers` is exercised.
       // Empty/default → unset key (gsd_run returns nothing → empty stdout).
-      // Single-quoted bash string so the JSON value (which contains double
-      // quotes) survives verbatim — no shell interpolation of the JSON contents.
-      const stub = `gsd_run() { case "$*" in *"config-get review.default_reviewers"*) printf '%s' '${defaultReviewers ?? ''}';; *) return 0;; esac; }`;
+      //
+      // The default_reviewers value is passed via env var ($GSD_TEST_DEFAULT_REVIEWERS)
+      // rather than inline-interpolated into the bash script. This avoids a quoting
+      // fragility: a future test input containing a single quote would otherwise
+      // break the bash single-quoted string and execute as bash. With env-var
+      // handoff, the value never crosses an interpreting shell context.
+      const stub = `gsd_run() { case "$*" in *"config-get review.default_reviewers"*) printf '%s' "$GSD_TEST_DEFAULT_REVIEWERS";; *) return 0;; esac; }`;
       const script = `${stub}\n${parseBlock}\n${resolutionBlock}\nprintf 'REVIEWER_FLAGS=[%s] REVIEWER_DISPLAY=[%s]' "$REVIEWER_FLAGS" "$REVIEWER_DISPLAY"`;
       return execFileSync('bash', ['-c', script], {
-        env: { ...process.env, ARGUMENTS: args },
+        env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '' },
         encoding: 'utf8',
         timeout: 5000,
       });
@@ -339,6 +371,78 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
     // AC5 (out of scope but must not regress): explicit --gemini overrides configured default.
     r = run({ args: '5 --gemini', defaultReviewers: '["claude"]' });
     assert.ok(/REVIEWER_FLAGS=\[.*--gemini.*\]/.test(r), `explicit flag wins over configured default, got: "${r}"`);
+  });
+
+  // Property test — CLAUDE.md mandates at least one fast-check (fc) property
+  // test for parsers and bijective contracts. The resolution block parses the
+  // configured review.default_reviewers JSON and classifies it into one of two
+  // outcomes: "non-empty array → delegate to gsd-review" (REVIEWER_FLAGS empty)
+  // or "anything else → fall back to --codex" (defensive — schema rejects most
+  // of these at config-set time, but corruption/edge cases must not crash or
+  // misclassify). Locks the contract so a future change can't subtly narrow or
+  // widen the accepted shape.
+  const fc = require('fast-check');
+  test('[property] resolution classifies arbitrary JSON values: non-empty array → empty flags, anything else → --codex fallback', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
+    if (!jqAvailable) { t.skip('jq not on PATH — workflow resolution block pipes through jq; structural tests above still validate the fix'); return; }
+
+    // Re-extract the blocks (the test above proved extraction works; we re-use
+    // the same logic rather than promoting to a helper to keep the test scope local).
+    const parseStart = workflow.indexOf('REVIEWER_FLAGS=""');
+    const parseEndMarker = "echo \"$ARGUMENTS\" | grep -q '\\-\\-all' && REVIEWER_FLAGS=\"$REVIEWER_FLAGS --all\"";
+    const parseEnd = workflow.indexOf(parseEndMarker);
+    const parseBlock = workflow.slice(parseStart, parseEnd + parseEndMarker.length);
+    const configGateIdx = workflow.indexOf('CONVERGENCE_ENABLED=$(gsd_run query config-get workflow.plan_review_convergence');
+    const resolutionStart = workflow.indexOf('if [ -z "$REVIEWER_FLAGS" ]; then', configGateIdx);
+    const closingFence = workflow.indexOf('\n```\n', resolutionStart);
+    const resolutionBlock = workflow.slice(resolutionStart, closingFence);
+    const { execFileSync } = require('node:child_process');
+    const run = ({ args, defaultReviewers }) => {
+      const stub = `gsd_run() { case "$*" in *"config-get review.default_reviewers"*) printf '%s' "$GSD_TEST_DEFAULT_REVIEWERS";; *) return 0;; esac; }`;
+      const script = `${stub}\n${parseBlock}\n${resolutionBlock}\nprintf 'REVIEWER_FLAGS=[%s] REVIEWER_DISPLAY=[%s]' "$REVIEWER_FLAGS" "$REVIEWER_DISPLAY"`;
+      return execFileSync('bash', ['-c', script], {
+        env: { ...process.env, ARGUMENTS: args, GSD_TEST_DEFAULT_REVIEWERS: defaultReviewers ?? '' },
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+    };
+
+    // Slug pattern mirrors the schema (ADR-0011: ^[a-zA-Z0-9_-]+$).
+    const slug = fc.stringMatching(/^[a-zA-Z0-9_-]{1,8}$/);
+    // Non-empty arrays of slugs → MUST classify as "use default" (REVIEWER_FLAGS empty).
+    const nonEmptyArray = fc.array(slug, { minLength: 1, maxLength: 4 }).map((a) => JSON.stringify(a));
+    // Defensive-corpus: empty array, scalar JSON, malformed JSON. All MUST fall
+    // back to --codex. The schema rejects the first two at config-set time, but
+    // a corruption/typo landing in the file directly would still reach this code.
+    const emptyArray = fc.constant('[]');
+    const scalarJson = fc.oneof(
+      fc.string({ maxLength: 8 }).filter((s) => !s.includes('"')).map((s) => JSON.stringify(s)),
+      fc.integer({ min: -10, max: 10 }).map((n) => JSON.stringify(n)),
+      fc.constant('null'),
+      fc.constant('true'),
+      fc.constant('false')
+    );
+    const malformedJson = fc.oneof(
+      fc.constant('[unclosed'),
+      fc.constant('{bad json'),
+      fc.constant('not json at all'),
+      fc.constant('{"k":'),
+      fc.string({ maxLength: 12 }).filter((s) => {
+        try { JSON.parse(s); return false; } catch { return true; }
+      })
+    );
+
+    // Property A: any non-empty array of slugs → empty REVIEWER_FLAGS.
+    fc.assert(
+      fc.property(nonEmptyArray, (dr) => /REVIEWER_FLAGS=\[\s*\]/.test(run({ args: '5', defaultReviewers: dr }))),
+      { numRuns: 25 }
+    );
+
+    // Property B: anything in the defensive corpus → --codex fallback.
+    fc.assert(
+      fc.property(fc.oneof(emptyArray, scalarJson, malformedJson), (dr) => /REVIEWER_FLAGS=\[--codex\]/.test(run({ args: '5', defaultReviewers: dr }))),
+      { numRuns: 25 }
+    );
   });
 });
 
