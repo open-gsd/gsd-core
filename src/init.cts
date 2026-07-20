@@ -2092,7 +2092,9 @@ function cmdInitRemoveWorkspace(cwd: string, name: string | undefined, raw: bool
     has_dirty_repos: dirtyRepos.length > 0,
   };
 
-  output(result, raw);
+  // #2402: sibling init commands route through withProjectRoot so response_language
+  // (and project_root/agents_installed) reach the workflow; this one didn't.
+  output(withProjectRoot(cwd, result), raw);
 }
 
 function buildAgentSkillsBlock(

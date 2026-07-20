@@ -28,6 +28,7 @@ Extract from init JSON:
 - `doc_tooling` — object with booleans: `docusaurus`, `vitepress`, `mkdocs`, `storybook`
 - `monorepo_workspaces` — array of workspace glob patterns (empty if not a monorepo)
 - `project_root` — absolute path to the project root
+- `response_language` — if set, present all user-facing questions, prompts, and explanations in this workflow in that language; technical terms, code, file paths, and subagent prompts stay in English
 </step>
 
 <step name="classify_project">

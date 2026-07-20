@@ -38,7 +38,9 @@ INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `phase_dir`, `phase_number`, `phase_name`.
+Extract from init JSON: `phase_dir`, `phase_number`, `phase_name`, `response_language`.
+
+**If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
 Verify the phase directory exists. If not:
 ```

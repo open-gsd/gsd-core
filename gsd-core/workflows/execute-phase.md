@@ -86,7 +86,7 @@ Parse JSON for: `executor_model`, `verifier_model`, `commit_docs`, `parallelizat
 
 **Model resolution:** If `executor_model` is `"inherit"`, omit the `model=` parameter from all `Agent()` calls — do NOT pass `model="inherit"` to Agent. Omitting the `model=` parameter causes Claude Code to inherit the current orchestrator model automatically. Only set `model=` when `executor_model` is an explicit model name (e.g., `"claude-sonnet-5"`, `"claude-opus-4-8"`).
 
-**If `response_language` is set:** Include `response_language: {value}` in all spawned subagent prompts so any user-facing output stays in the configured language.
+@~/.claude/gsd-core/references/execute-phase-response-language.md
 
 Read runtime/worktree config and fail closed before any executor dispatch:
 
@@ -1415,7 +1415,7 @@ Commit the file:
 gsd_run query commit "test({phase_num}): persist human verification items as UAT" --files "{phase_dir}/{phase_num}-UAT.md"
 ```
 
-**Step B: Present to user:**
+**Step B: Present to user**:
 
 ```
 ## ◷ Phase {X}: {Name} — Human Verification Needed
@@ -1481,7 +1481,7 @@ The CLI handles:
 
 Extract from result: `next_phase`, `next_phase_name`, `is_last_phase`, `warnings`, `has_warnings`.
 
-**If has_warnings is true:**
+**If has_warnings is true**:
 ```
 ## Phase {X} marked complete with {N} warnings:
 
