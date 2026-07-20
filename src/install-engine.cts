@@ -255,17 +255,19 @@ function hasExistingSymlinkBetween(
 
   const allowFollow = options.allowOptInFollow === true;
 
+  // #2393: when root itself is a symlink (e.g. nix-darwin manages ~/.claude as a
+  // symlink to a dotfiles repo — Azd325's #2393 report), the pre-#2393 guard
+  // refused unconditionally via an early return before the component loop. The
+  // wipe threat (b) does NOT apply to the root itself being a symlink: destDir is
+  // a CHILD of root, and resolving root gives root's target — there is no
+  // circular back-reference to root from a path that descends from a resolved
+  // root. So under opt-in, just follow the root symlink and continue the walk.
+  // Default behavior (no opt-in) preserves the pre-#2393 refuse.
   let cursor = resolvedRoot;
-  // Root itself is a symlink (e.g. nix-darwin manages ~/.claude as a symlink to
-  // a dotfiles repo, per Azd325's #2393 report). When opt-in is active, resolve
-  // and continue walking from the real path; refuse if it points back at the
-  // install root itself (circular / config-root-wipe protection, threat (b)).
   if (fs.existsSync(cursor) && fs.lstatSync(cursor).isSymbolicLink()) {
     if (!allowFollow) return true;
     try {
-      const realCursor = fs.realpathSync(cursor);
-      if (realCursor === realRoot || realCursor === resolvedRoot) return true; // (b) config-root-wipe threat
-      cursor = realCursor;
+      cursor = fs.realpathSync(cursor);
     } catch {
       // realpathSync failed (broken symlink, permission denied, exotic FS) — refuse,
       // matching fail-closed posture.
@@ -280,10 +282,16 @@ function hasExistingSymlinkBetween(
     if (!fs.existsSync(cursor)) return false;
     if (fs.lstatSync(cursor).isSymbolicLink()) {
       if (!allowFollow) return true;
-      // Opt-in active: follow the symlink. Refuse only if the resolved target
-      // is the install root itself (threat (b) — would let _removeGsdEntries
-      // wipe the root). Other targets are acceptable per the user's explicit
-      // opt-in. A broken symlink (realpathSync throws) is still refused.
+      // Opt-in active: follow the symlink. Refuse if the resolved target is the
+      // install root itself (threat (b) — would let _removeGsdEntries wipe the
+      // root). Other targets are acceptable per the user's explicit opt-in. A
+      // broken symlink (realpathSync throws) is still refused.
+      //
+      // Threat (b) check uses BOTH lexical and real forms of root to defend
+      // against macOS /var ↔ /private/var-style normalization gaps: realpathSync
+      // fully resolves, path.resolve only normalizes lexically, so a root path
+      // containing a symlink component would compare unequal to a realtarget
+      // that matches by real path. Compare both.
       //
       // Transitivity note: once followed, the walk continues from the resolved
       // real path WITHOUT re-checking that further segments stay inside any
