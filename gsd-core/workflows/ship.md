@@ -289,6 +289,8 @@ Pair commits by their conventional-commit type (the `type:` prefix of the subjec
 
 Surface each commit's `gate_status:` value, normalized to exactly one of `skill`, `fallback`, `exempt`, or `missing` — never the raw trailer text. A commit whose trailer is absent, whose value is none of the first three, or which carries more than one `gate_status:` trailer (ambiguous) is counted as **missing** and still listed. This section is informational; it never blocks the ship.
 
+**Self-suppress when every commit is missing (#2431):** the execute pipeline only writes `gate_status:` trailers when TDD mode is active. If every commit in the scan normalizes to `missing`, skip this section and the aggregate trailer (step 9) entirely — a 100%-missing table is pure noise. Only emit when at least one commit carries a real value (`skill`, `fallback`, or `exempt`).
+
 Harden every table cell against injection, not just subjects: escape `|` as `\|` and strip `\r`/`\n` from both commit subjects and the rendered `gate_status` value. Prefer NUL (`-z` / `%x00`) record separation, and reject any record whose fields contain the `\x1f`/`\x1e` delimiters, so an adversarial commit message cannot corrupt record or field boundaries.
 
 ```markdown
@@ -305,7 +307,7 @@ Aggregate: 2 skill, 1 fallback, 1 exempt — 0 missing.
 
 This `## TDD Audit` section is the final body section — it renders after the configured `pr_body_sections`, immediately before the aggregate trailer — so the frozen core sections and the append-only configured sections both keep their existing order.
 
-**9. Aggregate gate_status trailer (final line):**
+**9. Aggregate gate_status trailer (final line)** (only when step 8 was emitted — i.e., at least one real `gate_status` value exists):
 
 After every other section — including any configured `pr_body_sections` — emit the audit aggregate as a single Git trailer on the **final line** of the PR body, preceded by a blank line so it parses as a valid trailer:
 

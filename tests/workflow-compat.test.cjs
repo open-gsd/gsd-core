@@ -143,6 +143,39 @@ describe('feat-41: ship.md TDD Audit gate_status extraction', () => {
     assert.match(workflow, /final line|last line/i);
   });
 
+  // ─── #2431: TDD Audit section self-suppresses when all commits are missing ─
+  //
+  // The execute pipeline only writes `gate_status:` git trailers when TDD mode
+  // is active. Without TDD mode, every commit is `missing` and the section is
+  // pure noise. The fix adds a self-suppress instruction: skip the section
+  // entirely when every commit normalizes to `missing`. This is data-driven
+  // (no inline config-get of a capability-owned key — Phase 6 compliant).
+
+  test('#2431: documents self-suppress when every commit is missing', () => {
+    assert.match(workflow, /self-suppress/i,
+      'ship.md must instruct the agent to self-suppress the TDD Audit when all commits are missing (#2431)');
+    assert.match(workflow, /100%.?missing|every commit.*missing/i,
+      'ship.md must explain that a 100%-missing table is noise and should be skipped (#2431)');
+  });
+
+  test('#2431: step 9 (aggregate trailer) is also gated on real values existing', () => {
+    // The aggregate gate_status trailer is the companion to the TDD Audit
+    // section; both must be skipped together when no real gate_status exists.
+    const step9 = workflow.match(/\*\*9\.\s*Aggregate gate_status trailer[\s\S]*?(?=\*\*10\.|\z)/);
+    assert.ok(step9, 'step 9 must exist in the workflow');
+    assert.match(step9[0], /step 8|at least one|real/i,
+      'step 9 must reference step 8 or require at least one real gate_status value (#2431)');
+  });
+
+  test('#2431: does NOT read workflow.tdd_mode inline (ADR-857 Phase 6 compliant)', () => {
+    // ADR-857 Phase 6 forbids host loop workflows from reading capability-owned
+    // config keys via inline config-get. workflow.tdd_mode is owned by the tdd
+    // capability. The self-suppress approach avoids any config-get — it's
+    // purely data-driven (check the actual trailer values).
+    assert.doesNotMatch(workflow, /config-get\s+workflow\.tdd_mode/,
+      'ship.md must NOT read workflow.tdd_mode via inline config-get (ADR-857 Phase 6 violation — use self-suppress instead, #2431)');
+  });
+
   test('does not disturb the frozen #3167 core section order (Key Decisions precedes the new section)', () => {
     assert.match(workflow, /## Key Decisions[\s\S]*## TDD Audit/);
   });
