@@ -240,14 +240,17 @@ function positiveNumberEnv(raw, fallback) {
 // gsd-test reporter event streams. Overridable so tests can inject a synthetic
 // table instead of depending on the real suite's cost profile.
 const DEFAULT_TIMINGS_PATH = join(__dirname, '..', 'tests', 'test-timings.json');
+// Must track SCHEMA_VERSION in scripts/gen-test-timings.cjs.
+const SUPPORTED_TIMINGS_SCHEMA = 1;
 
 // Load the timing table and reduce it to what the packer needs.
 //
 // Weights are normalized by the table's MEAN duration, so an average-cost file
 // weighs exactly 1 and `MAX_FILES_PER_CHUNK` keeps its original meaning ("about
-// N average files per chunk"). That makes the weighted packing a strict
-// generalization of the old count-based packing: when every file costs the same,
-// total weight equals file count and the chunk count is unchanged.
+// N average files per chunk"). When every file costs the same, total weight
+// equals file count, so the chunk COUNT matches count-based packing exactly.
+// The chunk COMPOSITION still differs — LPT balances where first-fit filled
+// greedily, so 7 uniform files at budget 3 pack {3,2,2} rather than {3,3,1}.
 //
 // `medianWeight` is the fallback for a file absent from the table (a new test,
 // or a table that has drifted). The median — not the mean — because the cost
@@ -263,7 +266,15 @@ function loadTestTimings(timingsPath) {
   } catch {
     return null;
   }
-  const timings = parsed && typeof parsed === 'object' ? parsed.timings : null;
+  if (!parsed || typeof parsed !== 'object') return null;
+  // Refuse a table written by a future generator: a v2 schema could change the
+  // unit or the key format, and consuming it under v1 semantics would silently
+  // mis-weight every file. Returning null falls back to uniform weight, which
+  // is the same graceful degradation as a missing table.
+  if (parsed.schema_version !== undefined && parsed.schema_version !== SUPPORTED_TIMINGS_SCHEMA) {
+    return null;
+  }
+  const timings = parsed.timings;
   if (!timings || typeof timings !== 'object') return null;
   const values = Object.values(timings).filter(
     (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
@@ -329,9 +340,9 @@ function makeFileWeigher(timings) {
 // that file; when no chunk has room, the chunk count grows and packing restarts.
 // A single file longer than the budget lands alone rather than looping forever.
 //
-// Ordering is fully deterministic — ties break on the file path, and each
-// chunk's files are emitted in their original selection order — so the packing
-// is byte-identical across Windows/macOS/Linux.
+// Ordering is fully deterministic — ties break on the separator-normalized file
+// path, and each chunk's files are emitted in their original selection order —
+// so the packing is byte-identical across Windows/macOS/Linux.
 function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
   if (files.length === 0) return [];
   // packChunks is exported, so it cannot assume its caller normalized these.
@@ -353,16 +364,29 @@ function packChunks(files, { weightOf, maxWeight, maxChars, fixedOverhead }) {
     chars: file.length + 1, // +1 for the inter-arg separator
   }));
   const totalWeight = entries.reduce((sum, e) => sum + e.weight, 0);
-  const heaviestFirst = [...entries].sort(
-    (a, b) => b.weight - a.weight || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0),
-  );
+  // Ties break on a SEPARATOR-NORMALIZED path so a subdir file orders the same
+  // on Windows as on POSIX: '/' is 0x2F and '\' is 0x5C, which straddle the
+  // uppercase range, so comparing raw paths can order `sub/x.test.cjs` against
+  // `subZ.test.cjs` differently per platform and silently produce a different
+  // (still valid, but non-reproducible) packing.
+  const sortKey = (f) => f.replace(/\\/g, '/');
+  const heaviestFirst = [...entries].sort((a, b) => {
+    if (b.weight !== a.weight) return b.weight - a.weight;
+    const ka = sortKey(a.file);
+    const kb = sortKey(b.file);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
 
   // Termination: the empty-bin rule below guarantees every file is placeable
   // once chunkCount reaches files.length, so the retry loop cannot run forever.
-  let chunkCount = Math.max(
-    1,
-    Math.ceil(totalWeight / weightBudget),
-    Math.ceil(files.length / weightBudget),
+  // The upper clamp matters as much as the lower bound: a legitimate but tiny
+  // budget (RUN_TESTS_MAX_FILES_PER_CHUNK=1e-9) would otherwise ask for
+  // 637,000,000,000 bins and throw `RangeError: Invalid array length`. More
+  // chunks than files is never useful — one file per chunk is the finest
+  // possible packing.
+  let chunkCount = Math.min(
+    files.length,
+    Math.max(1, Math.ceil(totalWeight / weightBudget), Math.ceil(files.length / weightBudget)),
   );
   for (;;) {
     const bins = Array.from({ length: chunkCount }, () => ({

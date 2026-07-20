@@ -408,32 +408,44 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
     }
 
     test('expensive files SPREAD across chunks instead of clustering (#2088, #2456)', () => {
-      // 4 files measured at 30s each = weight 4 (mean is 30s, so each weighs 1)
-      // … against a 2-weight cap → 2 chunks, 2 expensive files each. The whole
-      // expensive load is never in a single chunk.
-      const heavy = Array.from({ length: 4 }, (_, i) => `costly-${i}.test.cjs`);
-      seed(tmpDir, heavy);
-      const timingsFile = writeTimings(tmpDir, Object.fromEntries(heavy.map((f) => [f, 30000])));
+      // Discriminating by construction: the three EXPENSIVE files carry names the
+      // old prefix heuristic scored 1, and the three TRIVIAL ones carry the
+      // `install-` prefix it scored 12 — i.e. exactly inverted from their real
+      // cost. Under the old packer this packs {2,2,1,1} (4 chunks, with two
+      // expensive files sharing chunk 1); under measured weights it packs
+      // {2,2,2}, one expensive file per chunk. The assertion below therefore
+      // cannot pass on the old algorithm, nor with the timings file removed.
+      const heavy = ['heavy-0.test.cjs', 'heavy-1.test.cjs', 'heavy-2.test.cjs'];
+      const trivial = ['install-cheap-0.test.cjs', 'install-cheap-1.test.cjs', 'install-cheap-2.test.cjs'];
+      seed(tmpDir, [...heavy, ...trivial]);
+      const timingsFile = writeTimings(tmpDir, {
+        ...Object.fromEntries(heavy.map((f) => [f, 30000])),
+        ...Object.fromEntries(trivial.map((f) => [f, 10])),
+      });
       const rh = runHarness(tmpDir, [], {
         RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
         RUN_TESTS_MAX_FILES_PER_CHUNK: '2',
         RUN_TESTS_TIMINGS_FILE: timingsFile,
       });
       assert.strictEqual(rh.status, 0, `heavy: expected zero exit; STDERR:\n${rh.stderr}`);
-      assert.match(rh.stderr, /run-tests: chunk 1\/2 — 2 files/, `expensive files must split into 2 chunks; STDERR:\n${rh.stderr}`);
-      assert.match(rh.stderr, /run-tests: chunk 2\/2 — 2 files/, `STDERR:\n${rh.stderr}`);
+      for (const n of [1, 2, 3]) {
+        assert.match(
+          rh.stderr,
+          new RegExp(`run-tests: chunk ${n}/3 — 2 files`),
+          `expensive files must spread one-per-chunk across exactly 3 chunks; STDERR:\n${rh.stderr}`,
+        );
+      }
     });
 
-    test('cheap files of the same count stay in ONE chunk — split is cost-driven, not count-driven (#2088, #2456)', () => {
-      // Same file COUNT (4) but each measured CHEAP against one expensive sibling
-      // that sets the mean. 4 cheap files weigh far under the 6-weight cap → a
-      // single chunk. Proves the split above is driven by measured COST.
-      const light = Array.from({ length: 4 }, (_, i) => `cheap-${i}.test.cjs`);
-      seed(tmpDir, light);
-      const timingsFile = writeTimings(tmpDir, {
-        ...Object.fromEntries(light.map((f) => [f, 50])),
-        'a-costly-sibling.test.cjs': 60000, // not seeded; only sets the table's scale
-      });
+    test('trivial files the old heuristic over-weighted now stay in ONE chunk (#2088, #2456)', () => {
+      // The other direction of the miscalibration. These four files carry the
+      // `install-` prefix the old heuristic scored 12, so it split them into
+      // FOUR single-file chunks against a 6-weight budget. Measured, they cost
+      // 10ms each and belong together. The absence of a split marker cannot be
+      // produced by the old algorithm.
+      const trivial = Array.from({ length: 4 }, (_, i) => `install-triv-${i}.test.cjs`);
+      seed(tmpDir, trivial);
+      const timingsFile = writeTimings(tmpDir, Object.fromEntries(trivial.map((f) => [f, 10])));
       const rl = runHarness(tmpDir, [], {
         RUN_TESTS_MAX_CMDLINE_CHARS: '100000',
         RUN_TESTS_MAX_FILES_PER_CHUNK: '6',
@@ -441,8 +453,8 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       });
       assert.strictEqual(rl.status, 0, `light: expected zero exit; STDERR:\n${rl.stderr}`);
       // A single chunk emits NO `chunk N/M` split marker (it only prints when
-      // chunks.length > 1), so its absence proves the 4 cheap files stayed together.
-      assert.doesNotMatch(rl.stderr, /run-tests: chunk \d+\/\d+ — /, `4 cheap files must stay in one chunk (no split marker); STDERR:\n${rl.stderr}`);
+      // chunks.length > 1), so its absence proves the four stayed together.
+      assert.doesNotMatch(rl.stderr, /run-tests: chunk \d+\/\d+ — /, `4 trivial install-prefixed files must stay in one chunk; STDERR:\n${rl.stderr}`);
     });
   });
 
@@ -1483,7 +1495,9 @@ describe('chunk packing weights measured cost (#2456)', () => {
     });
 
     test('a missing timings file degrades to uniform weight, not an error', () => {
-      const missing = path.join(createTempDir('gsd-2456-absent-'), 'does-not-exist.json');
+      // No temp dir needed — the point is a path that does NOT exist. Creating
+      // one here would leak it (createTempDir has no registry).
+      const missing = path.join(__dirname, 'no-such-dir-2456', 'does-not-exist.json');
       assert.strictEqual(loadTestTimings(missing), null, 'a missing table must load as null');
       const weigh = makeFileWeigher(null);
       assert.strictEqual(weigh('anything.test.cjs'), 1, 'a null table must weigh every file 1');
@@ -1686,6 +1700,38 @@ describe('chunk packing weights measured cost (#2456)', () => {
         assert.ok(conserves(chunks), `${label} must still pack all files; got ${JSON.stringify(chunks)}`);
       });
     }
+
+    test('a legitimate but tiny weight budget does not explode the chunk count', () => {
+      // positiveNumberEnv accepts any positive finite number, so 1e-9 is a valid
+      // budget. Without an upper clamp the packer asks for files.length / 1e-9
+      // bins and throws `RangeError: Invalid array length`. More chunks than
+      // files is never useful, so the count clamps at one file per chunk.
+      const many = Array.from({ length: 200 }, (_, i) => `m-${i}.test.cjs`);
+      const chunks = packChunks(many, {
+        weightOf: () => 1,
+        maxWeight: 1e-9,
+        maxChars: ROOMY_CHARS,
+        fixedOverhead: FIXED_OVERHEAD,
+      });
+      assert.strictEqual(chunks.length, many.length, 'must clamp to one file per chunk');
+      assert.strictEqual(chunks.flat().length, many.length, 'no file may be dropped');
+    });
+
+    test('a timings table from a future schema is ignored rather than mis-read', () => {
+      // A v2 table could change the unit or key format; consuming it under v1
+      // semantics would silently mis-weight every file. Falling back to null
+      // (uniform weight) is the same graceful degradation as a missing table.
+      const tmp = createTempDir('gsd-2456-schema-');
+      try {
+        const p2 = path.join(tmp, 'timings.json');
+        fs.writeFileSync(p2, JSON.stringify({ schema_version: 2, timings: { 'a.test.cjs': 100 } }), 'utf8');
+        assert.strictEqual(loadTestTimings(p2), null, 'an unknown schema_version must load as null');
+        fs.writeFileSync(p2, JSON.stringify({ schema_version: 1, timings: { 'a.test.cjs': 100 } }), 'utf8');
+        assert.ok(loadTestTimings(p2) !== null, 'the supported schema_version must load');
+      } finally {
+        cleanup(tmp);
+      }
+    });
 
     test('positiveNumberEnv falls back for every non-positive-finite input', () => {
       for (const bad of [undefined, null, '', '   ', 'abc', '0', '-1', 'NaN', 'Infinity', '1e999']) {

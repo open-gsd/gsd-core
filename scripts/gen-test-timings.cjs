@@ -66,15 +66,23 @@ function parseArgs(argv) {
 }
 
 // Fold one reporter event stream into `acc`, keeping the MAX duration seen for
-// each test file. Returns per-stream counters for the summary line.
+// each test file. Returns per-stream counters plus any basename collisions
+// found WITHIN this stream.
 //
 // Keying is by BASENAME, matching how run-tests.cjs weights a selected file:
 // the reporter reports absolute in-container paths (/work/tests/foo.test.cjs)
 // while the harness carries paths relative to its test dir, so the basename is
-// the only stable join key between the two. `dirsByBase` records every distinct
-// directory a basename was seen in so a genuine collision fails loudly rather
-// than silently letting one file's timing stand in for another's.
-function foldStream(text, acc, dirsByBase) {
+// the only stable join key between the two. A basename seen in two different
+// directories would make the table ambiguous, so it must fail loudly.
+//
+// Collision detection is scoped to a SINGLE stream deliberately. Every lane
+// writes its own stream under its own container root (`/work/tests` on Linux,
+// `C:/work/tests` on Windows), so comparing directories ACROSS streams reports
+// every shared basename as a collision — which is the script's own documented
+// usage (globbing `test-events-*.jsonl` across lanes). Within one stream the
+// root is constant, so a differing directory is a real collision.
+function foldStream(text, acc) {
+  const dirsByBase = new Map();
   let files = 0;
   let malformed = 0;
   for (const line of text.split('\n')) {
@@ -99,7 +107,10 @@ function foldStream(text, acc, dirsByBase) {
     if (prev === undefined || ms > prev) acc.set(base, ms);
     files++;
   }
-  return { files, malformed };
+  const collisions = [...dirsByBase.entries()]
+    .filter(([, dirs]) => dirs.size > 1)
+    .map(([base, dirs]) => `${base} (${[...dirs].sort().join(', ')})`);
+  return { files, malformed, collisions };
 }
 
 function main() {
@@ -107,7 +118,7 @@ function main() {
   if (parsed.error) throw new ExitError(2, `gen-test-timings: ${parsed.error}`);
 
   const acc = new Map();
-  const dirsByBase = new Map();
+  const allCollisions = new Set();
   const sources = [];
   for (const input of parsed.inputs) {
     let text;
@@ -116,7 +127,8 @@ function main() {
     } catch (err) {
       throw new ExitError(2, `gen-test-timings: cannot read "${input}": ${err.message}`);
     }
-    const { files, malformed } = foldStream(text, acc, dirsByBase);
+    const { files, malformed, collisions } = foldStream(text, acc);
+    for (const c of collisions) allCollisions.add(c);
     sources.push(basename(input));
     console.error(
       `gen-test-timings: ${basename(input)} — ${files} file summaries` +
@@ -132,17 +144,14 @@ function main() {
     );
   }
 
-  // A basename that resolves to two different directories would make the
-  // table ambiguous: run-tests.cjs joins on basename alone, so one file's
-  // measured cost would silently be applied to the other. Fail rather than
-  // emit a table that lies.
-  const collisions = [...dirsByBase.entries()]
-    .filter(([, dirs]) => dirs.size > 1)
-    .map(([base, dirs]) => `${base} (${[...dirs].sort().join(', ')})`);
-  if (collisions.length > 0) {
+  // A basename that resolves to two different directories within one lane makes
+  // the table ambiguous: run-tests.cjs joins on basename alone, so one file's
+  // measured cost would silently be applied to the other. Fail rather than emit
+  // a table that lies.
+  if (allCollisions.size > 0) {
     throw new ExitError(
       2,
-      `gen-test-timings: basename collision — the table cannot key on basename alone:\n  ${collisions.join('\n  ')}`,
+      `gen-test-timings: basename collision — the table cannot key on basename alone:\n  ${[...allCollisions].sort().join('\n  ')}`,
     );
   }
 
