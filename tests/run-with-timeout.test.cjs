@@ -163,18 +163,27 @@ describe('#2351 run-with-timeout — kill semantics (POSIX process groups)', () 
     // `kill(pid, 0)`: a SIGKILL'd orphan lingers as a zombie until reaped, and a
     // container's PID 1 reaps slowly, so `kill(pid,0)` reads a dead child as
     // "alive". A reaped child stops ticking; a genuine orphan keeps ticking.
+    //
+    // The child writes its FIRST heartbeat synchronously at startup, before
+    // arming the interval, and the kill window is 3s rather than 1s. Both are
+    // load-independence requirements, not cosmetics: with the first write
+    // deferred to the interval's initial 100ms tick inside a 1s window, a loaded
+    // CI container can group-kill before that tick ever lands, and the existence
+    // check below then fails for a reason that has nothing to do with reaping —
+    // the behavior under test is the FREEZE assertion further down, which is
+    // unaffected by writing one extra sample at t=0.
     const dir = createTempDir('rwt-c1');
     t.after(() => cleanup(dir));
     const parentFile = path.join(dir, 'parent.js');
     const hbFile = path.join(dir, 'heartbeat');
     fs.writeFileSync(parentFile, [
       'const cp = require("child_process");',
-      "const childCode = 'const fs=require(\"fs\");const hb=process.argv[1];process.on(\"SIGTERM\",()=>{});setInterval(()=>fs.writeFileSync(hb,String(Date.now())),100);';",
+      "const childCode = 'const fs=require(\"fs\");const hb=process.argv[1];const tick=()=>fs.writeFileSync(hb,String(Date.now()));process.on(\"SIGTERM\",()=>{});tick();setInterval(tick,100);';",
       'cp.spawn(process.execPath, ["-e", childCode, process.argv[2]], { stdio: "ignore" });',
       'process.on("SIGTERM", () => process.exit(0));',
       'setInterval(() => {}, 1000);',
     ].join('\n'));
-    const r = runVerb(['1', '--', NODE, parentFile, hbFile], { timeout: 20000 });
+    const r = runVerb(['3', '--', NODE, parentFile, hbFile], { timeout: 20000 });
     assert.equal(r.status, 124, 'must report a timeout (124), not hang');
     assert.ok(fs.existsSync(hbFile), 'child heartbeat should exist');
     await sleep(300); // let any in-flight write settle after the SIGKILL
