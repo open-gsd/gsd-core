@@ -1,1 +1,37 @@
-[]
+[
+  {
+    "id": "gsd-omp",
+    "name": "GSD for Oh My Pi",
+    "type": "eos",
+    "repo": "tchivs/gsd-omp",
+    "description": "Embeds GSD in Oh My Pi through OMP's native ExtensionAPI, programmatic slash commands, task isolation, lifecycle events, filesystem state, and managed agent and skill projection.",
+    "author": "tchivs",
+    "license": "MIT",
+    "enginesGsd": ">=1.7.0",
+    "protocolVersion": 1,
+    "install": "npm install --global github:tchivs/gsd-omp#v1.0.0 && gsd-omp install",
+    "uninstall": "gsd-omp uninstall && npm uninstall --global gsd-omp",
+    "interactions": {
+      "interfacePoints": [
+        "command",
+        "dispatch",
+        "model",
+        "hooks",
+        "state",
+        "artifact"
+      ],
+      "profile": "programmatic-cli",
+      "axes": {
+        "embeddingMode": "imperative",
+        "commandSurface": "slash-programmatic",
+        "dispatch": "Native named and nested OMP task dispatch with background execution, full subagent tools, and host-managed isolation",
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "native-extension",
+        "runtime": "bun"
+      }
+    },
+    "discussion": "https://github.com/open-gsd/gsd-core/discussions/2342"
+  }
+]
