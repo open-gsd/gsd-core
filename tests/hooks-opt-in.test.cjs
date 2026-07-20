@@ -394,6 +394,67 @@ describe('hook execution when enabled', { skip: isWindows ? 'bash hooks require 
     assert.strictEqual(parsed.hookSpecificOutput.planning_modified, true);
     assert.strictEqual(parsed.hookSpecificOutput.file_path, '.planning/STATE.md');
   });
+
+  // #2304 — Kimi tool vocabulary engages the hook: Kimi CLI registers this
+  // hook with matcher 'WriteFile|StrReplaceFile' and its file tools name the
+  // path field `path`, not `file_path` (kimi-cli src/kimi_cli/tools/file/
+  // write.py + replace.py). Pre-fix, the hook read '' on Kimi payloads and
+  // .planning/ writes were silently undetected.
+  test('phase-boundary detects .planning/ writes from Kimi tool_input.path (#2304)', () => {
+    const hookPath = path.join(HOOKS_DIR, 'gsd-phase-boundary.sh');
+    const input = JSON.stringify({
+      tool_name: 'kimi_cli.tools.file:WriteFile',
+      tool_input: { path: '.planning/STATE.md', content: 'x' }
+    });
+
+    const result = spawnHook(hookPath, {
+      input,
+      encoding: 'utf-8',
+      cwd: tmpDir,
+    });
+
+    assert.strictEqual(result.status, 0, `Should exit 0: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.hookSpecificOutput.planning_modified, true,
+      'Kimi path field must be detected — pre-fix the hook read an empty path (#2304)');
+    assert.strictEqual(parsed.hookSpecificOutput.file_path, '.planning/STATE.md');
+  });
+
+  test('phase-boundary prefers Claude file_path when both fields are present (#2304)', () => {
+    const hookPath = path.join(HOOKS_DIR, 'gsd-phase-boundary.sh');
+    const input = JSON.stringify({
+      tool_input: { file_path: '.planning/STATE.md', path: 'unrelated.txt' }
+    });
+
+    const result = spawnHook(hookPath, {
+      input,
+      encoding: 'utf-8',
+      cwd: tmpDir,
+    });
+
+    assert.strictEqual(result.status, 0, `Should exit 0: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.hookSpecificOutput.file_path, '.planning/STATE.md',
+      'file_path must win over path — normalization is a fallback, not an override');
+  });
+
+  test('phase-boundary negative control: Kimi path outside .planning/ stays silent (#2304)', () => {
+    const hookPath = path.join(HOOKS_DIR, 'gsd-phase-boundary.sh');
+    const input = JSON.stringify({
+      tool_name: 'kimi_cli.tools.file:StrReplaceFile',
+      tool_input: { path: 'src/index.ts', edit: { old: 'a', new: 'b' } }
+    });
+
+    const result = spawnHook(hookPath, {
+      input,
+      encoding: 'utf-8',
+      cwd: tmpDir,
+    });
+
+    assert.strictEqual(result.status, 0, `Should exit 0: ${result.stderr}`);
+    assert.equal(result.stdout.trim(), '',
+      'non-.planning/ Kimi writes must produce no output');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
