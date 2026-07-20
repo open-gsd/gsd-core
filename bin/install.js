@@ -12262,6 +12262,19 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
         fs.writeFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n');
         console.log(`  ${green}✓${reset} Set resolve_model_ids: "omit" in ~/.gsd/defaults.json`);
       }
+
+      // #2395: also persist `runtime: <runtime>` for non-Claude runtimes, so
+      // resolveRuntime() (precedence: GSD_RUNTIME env > config.runtime > 'claude')
+      // resolves to the install's actual runtime identity out of the box — without
+      // this, agent_runtime and every runtime-branded slash hint falls through to
+      // the hard-coded 'claude' default. Mirrors the resolve_model_ids write above:
+      // honor an explicit pre-existing value (any string), only default-populating
+      // when absent. Claude is the resolveRuntime() fallback, so it needs no write.
+      if (defaults.runtime === undefined || defaults.runtime === null || defaults.runtime === '') {
+        defaults.runtime = runtime;
+        fs.writeFileSync(defaultsPath, JSON.stringify(defaults, null, 2) + '\n');
+        console.log(`  ${green}✓${reset} Set runtime: "${runtime}" in ~/.gsd/defaults.json`);
+      }
     } catch (e) {
       console.log(`  ${yellow}⚠${reset} Could not write ~/.gsd/defaults.json: ${e.message}`);
     }
