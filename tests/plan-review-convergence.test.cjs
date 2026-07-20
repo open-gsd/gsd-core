@@ -123,12 +123,16 @@ describe('plan-review-convergence command source (#2306)', () => {
     );
   });
 
-  test('--codex is the default reviewer when no flag is specified', () => {
+  test('--codex is the default reviewer when no flag is given AND review.default_reviewers is unset (#2315)', () => {
+    // #2315: a bare invocation now respects review.default_reviewers per
+    // ADR-0011. The command must document that --codex is the default ONLY
+    // when review.default_reviewers is unset; otherwise the configured default
+    // wins. The pre-fix claim ("default if no reviewer specified") was the
+    // user-facing mirror of the #2315 bug.
     assert.ok(
-      command.includes('default if no reviewer specified') ||
-      command.includes('default: --codex') ||
-      command.includes('(default if no reviewer specified)'),
-      '--codex must be documented as the default reviewer'
+      command.includes('default if no reviewer flag given') &&
+      command.includes('review.default_reviewers'),
+      'command must document that --codex is the default ONLY when review.default_reviewers is unset (#2315)'
     );
   });
 
@@ -159,17 +163,25 @@ describe('plan-review-convergence: --agy/--antigravity reviewer whitelist (#2293
     assert.ok(skill.includes('--agy'), 'generated SKILL.md must document --agy (regenerate via gen:plugin-skills)');
   });
 
-  // Behavioral: execute the ACTUAL deployed REVIEWER_FLAGS accumulation block and
-  // assert --antigravity passes through instead of being dropped to the --codex
-  // default. POSIX-only — the block is /bin/sh-style grep pipework; skip on Windows
-  // where a bash shim is not guaranteed on PATH.
-  test('[behavioral] the deployed extraction passes --antigravity through (not the --codex fallback)', (t) => {
+  // Behavioral: execute the ACTUAL deployed REVIEWER_FLAGS parse block and
+  // assert --antigravity passes through instead of being dropped. POSIX-only —
+  // the block is /bin/sh-style grep pipework; skip on Windows where a bash
+  // shim is not guaranteed on PATH.
+  //
+  // #2315: the parse block no longer applies a --codex default. The endMarker
+  // was previously the unconditional `if [ -z "$REVIEWER_FLAGS" ]; then
+  // REVIEWER_FLAGS="--codex"; fi` line; that line was the #2315 bug and is now
+  // gone. Default resolution moved to step 1.5 after the config gate (see the
+  // #2315 describe block below). The bare-invocation assertion now expects an
+  // empty REVIEWER_FLAGS from the parse block — the default is applied later,
+  // respecting review.default_reviewers.
+  test('[behavioral] the deployed parse block passes --antigravity through (parse block no longer applies a --codex default — #2315)', (t) => {
     if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
     const { execFileSync } = require('node:child_process');
     const startIdx = workflow.indexOf('REVIEWER_FLAGS=""');
-    const endMarker = 'if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi';
+    const endMarker = "echo \"$ARGUMENTS\" | grep -q '\\-\\-all' && REVIEWER_FLAGS=\"$REVIEWER_FLAGS --all\"";
     const endIdx = workflow.indexOf(endMarker);
-    assert.ok(startIdx !== -1 && endIdx !== -1, 'the REVIEWER_FLAGS accumulation block must exist in the workflow');
+    assert.ok(startIdx !== -1 && endIdx !== -1, 'the REVIEWER_FLAGS parse block must exist in the workflow');
     const block = workflow.slice(startIdx, endIdx + endMarker.length) + '\nprintf "%s" "$REVIEWER_FLAGS"';
     const run = (args) => execFileSync('bash', ['-c', block], {
       env: { ...process.env, ARGUMENTS: args },
@@ -179,16 +191,143 @@ describe('plan-review-convergence: --agy/--antigravity reviewer whitelist (#2293
 
     const agy = run('5 --antigravity');
     assert.ok(agy.split(/\s+/).includes('--antigravity'), `--antigravity must pass through, got: "${agy}"`);
-    assert.notStrictEqual(agy, '--codex', 'must NOT collapse to the --codex-only fallback when --antigravity is given');
+    // The parse block must NOT inject --codex when an explicit flag is present.
+    assert.notStrictEqual(agy, '--codex', 'must NOT produce --codex-only when --antigravity is given');
 
     assert.ok(run('5 --agy').split(/\s+/).includes('--agy'), '--agy short form must pass through');
 
-    // Regressions: default + existing flags unchanged.
-    assert.strictEqual(run('5'), '--codex', 'no reviewer flag → --codex default preserved');
+    // #2315 regression: the parse block no longer applies a default. The bare
+    // invocation (no flag) MUST yield an empty REVIEWER_FLAGS here; the default
+    // is resolved later in step 1.5 against review.default_reviewers.
+    assert.strictEqual(run('5'), '', 'no reviewer flag → empty REVIEWER_FLAGS from parse (default applied in step 1.5 per #2315)');
     const mixed = run('5 --codex --gemini');
     assert.ok(mixed.includes('--codex') && mixed.includes('--gemini'), 'existing flags still recognized');
     // --agy must not be spuriously matched by an unrelated flag (independence).
     assert.ok(!run('5 --gemini').includes('--agy'), '--gemini must not trip the --agy whitelist');
+  });
+});
+
+// ─── #2315: bare invocation respects review.default_reviewers ──────────────
+
+describe('plan-review-convergence: #2315 respects review.default_reviewers (no-flag default)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+
+  // Pre-fix #2315: the workflow unconditionally set REVIEWER_FLAGS="--codex" in
+  // step 1 (line 37) BEFORE the workflow.plan_review_convergence config gate.
+  // gsd-review sees the injected --codex as an explicit flag (precedence rule 1)
+  // and never reaches rule 3 (review.default_reviewers), silently overriding
+  // any configured default — a violation of ADR-0011 and ADR-0015.
+  test('workflow does NOT unconditionally default REVIEWER_FLAGS to --codex before the config gate', () => {
+    const buggyLine = 'if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi';
+    const buggyIdx = workflow.indexOf(buggyLine);
+    const configGateIdx = workflow.indexOf('CONVERGENCE_ENABLED=$(gsd_run query config-get workflow.plan_review_convergence');
+    assert.ok(configGateIdx !== -1, 'config gate must exist');
+    if (buggyIdx !== -1) {
+      assert.ok(
+        buggyIdx > configGateIdx,
+        `Unconditional --codex fallback must not appear BEFORE the config gate ` +
+        `(offset ${buggyIdx} < gate ${configGateIdx}). Pre-fix #2315 bug: this ` +
+        `fallback silently overrides review.default_reviewers.`
+      );
+    }
+  });
+
+  test('workflow resolves REVIEWER_FLAGS against review.default_reviewers AFTER the config gate', () => {
+    const resolutionIdx = workflow.indexOf('gsd_run query config-get review.default_reviewers');
+    const configGateIdx = workflow.indexOf('CONVERGENCE_ENABLED=$(gsd_run query config-get workflow.plan_review_convergence');
+    assert.ok(resolutionIdx !== -1, 'workflow must query review.default_reviewers to resolve the no-flag default (#2315)');
+    assert.ok(
+      resolutionIdx > configGateIdx,
+      'review.default_reviewers resolution must come AFTER the config gate (only runs when convergence is enabled)'
+    );
+  });
+
+  test('workflow documents that empty REVIEWER_FLAGS lets gsd-review apply review.default_reviewers', () => {
+    // After the fix, an empty REVIEWER_FLAGS is INTENTIONAL — it signals "let
+    // gsd-review apply its own precedence (rule 3: review.default_reviewers)".
+    // A comment must document this so a future maintainer does not re-add the
+    // unconditional --codex fallback and resurrect the #2315 bug.
+    assert.ok(
+      /gsd-review applies.*review\.default_reviewers|review\.default_reviewers.*gsd-review applies/i.test(workflow),
+      'workflow must document that empty REVIEWER_FLAGS lets gsd-review apply review.default_reviewers (prevent #2315 regression)'
+    );
+  });
+
+  test('startup banner uses REVIEWER_DISPLAY (not raw REVIEWER_FLAGS) so users see what will actually run', () => {
+    // AC4 of #2315: banner must reflect actual reviewers, not a hardcoded value.
+    // When REVIEWER_FLAGS is empty (because default_reviewers is configured),
+    // the banner must show the resolved default — not an empty string and not
+    // a misleading "--codex".
+    assert.ok(
+      workflow.includes('REVIEWER_DISPLAY'),
+      'workflow must define REVIEWER_DISPLAY so the banner reflects the resolved reviewer selection (#2315 AC4)'
+    );
+  });
+
+  // Behavioral: extract the parse block + the post-config-gate resolution block
+  // and execute them with a stubbed gsd_run. Proves the matrix:
+  //   - bare + default_reviewers configured → empty REVIEWER_FLAGS (gsd-review applies default)
+  //   - bare + default_reviewers unset      → --codex fallback (pre-fix behavior preserved)
+  //   - bare + empty-array default          → --codex fallback (defensive — schema would reject)
+  //   - explicit --gemini + default set     → --gemini wins (explicit flags unaffected, #2315 AC5)
+  test('[behavioral] no-flag invocation resolves to default_reviewers when configured, --codex otherwise', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
+    const { execFileSync } = require('node:child_process');
+
+    // Parse block: from REVIEWER_FLAGS="" to the last grep line (--all).
+    const parseStart = workflow.indexOf('REVIEWER_FLAGS=""');
+    const parseEndMarker = "echo \"$ARGUMENTS\" | grep -q '\\-\\-all' && REVIEWER_FLAGS=\"$REVIEWER_FLAGS --all\"";
+    const parseEnd = workflow.indexOf(parseEndMarker);
+    assert.ok(parseStart !== -1 && parseEnd !== -1, 'parse block must exist');
+    const parseBlock = workflow.slice(parseStart, parseEnd + parseEndMarker.length);
+
+    // Resolution block: the `if [ -z "$REVIEWER_FLAGS" ]; then` that appears
+    // AFTER the config gate (CONVERGENCE_ENABLED=). This is the #2315 fix.
+    // Extract to the closing fence of the enclosing ```bash block — the block
+    // contains a nested if/else/fi, so a naive "first \nfi\n" match would stop
+    // at the inner fi and yield unbalanced bash.
+    const configGateIdx = workflow.indexOf('CONVERGENCE_ENABLED=$(gsd_run query config-get workflow.plan_review_convergence');
+    const resolutionStart = workflow.indexOf('if [ -z "$REVIEWER_FLAGS" ]; then', configGateIdx);
+    assert.ok(resolutionStart !== -1, 'post-config-gate REVIEWER_FLAGS resolution block must exist (#2315)');
+    const closingFence = workflow.indexOf('\n```\n', resolutionStart);
+    assert.ok(closingFence !== -1, 'could not locate closing fence of resolution block');
+    const resolutionBlock = workflow.slice(resolutionStart, closingFence);
+
+    const run = ({ args, defaultReviewers }) => {
+      // Stub gsd_run: only `query config-get review.default_reviewers` is exercised.
+      // Empty/default → unset key (gsd_run returns nothing → empty stdout).
+      // Single-quoted bash string so the JSON value (which contains double
+      // quotes) survives verbatim — no shell interpolation of the JSON contents.
+      const stub = `gsd_run() { case "$*" in *"config-get review.default_reviewers"*) printf '%s' '${defaultReviewers ?? ''}';; *) return 0;; esac; }`;
+      const script = `${stub}\n${parseBlock}\n${resolutionBlock}\nprintf 'REVIEWER_FLAGS=[%s] REVIEWER_DISPLAY=[%s]' "$REVIEWER_FLAGS" "$REVIEWER_DISPLAY"`;
+      return execFileSync('bash', ['-c', script], {
+        env: { ...process.env, ARGUMENTS: args },
+        encoding: 'utf8',
+        timeout: 5000,
+      });
+    };
+
+    // AC1: bare invocation with default_reviewers configured → empty REVIEWER_FLAGS
+    // (gsd-review applies configured default per its rule 3) and banner shows the resolved default.
+    let r = run({ args: '5', defaultReviewers: '["gemini","claude"]' });
+    assert.ok(/REVIEWER_FLAGS=\[\s*\]/.test(r), `configured default → REVIEWER_FLAGS empty, got: "${r}"`);
+    assert.ok(/review\.default_reviewers \(gemini, claude\)/.test(r), `banner shows configured default, got: "${r}"`);
+
+    // AC2: reviewer instances participate via default_reviewers — same path.
+    r = run({ args: '5', defaultReviewers: '["opencode-deepseek","opencode-mimo"]' });
+    assert.ok(/REVIEWER_FLAGS=\[\s*\]/.test(r), `instance default → REVIEWER_FLAGS empty, got: "${r}"`);
+
+    // AC3: bare invocation with default_reviewers unset → --codex fallback preserved.
+    r = run({ args: '5', defaultReviewers: '' });
+    assert.ok(/REVIEWER_FLAGS=\[--codex\]/.test(r), `unset default → --codex fallback, got: "${r}"`);
+
+    // AC3 defensive: empty-array default → --codex fallback (schema rejects this, but be safe).
+    r = run({ args: '5', defaultReviewers: '[]' });
+    assert.ok(/REVIEWER_FLAGS=\[--codex\]/.test(r), `empty-array default → --codex fallback, got: "${r}"`);
+
+    // AC5 (out of scope but must not regress): explicit --gemini overrides configured default.
+    r = run({ args: '5 --gemini', defaultReviewers: '["claude"]' });
+    assert.ok(/REVIEWER_FLAGS=\[.*--gemini.*\]/.test(r), `explicit flag wins over configured default, got: "${r}"`);
   });
 });
 
