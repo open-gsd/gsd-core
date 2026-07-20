@@ -269,11 +269,33 @@ describe('resolve-execution: provider escalation on quota-exceeded (#2296)', () 
       assert.strictEqual({}.polluted, undefined);
     });
 
-    test('a negative max_escalations does not invert the cap', () => {
-      writeConfig(tmpDir, routingConfig({ provider_escalation: ['gpt-5'], max_escalations: -3 }));
-      const parsed = resolve(tmpDir, 'gsd-executor --attempt 1 --failure-class quota-exceeded');
-      assert.strictEqual(parsed.escalation.index, 0);
-      assert.strictEqual(parsed.escalation.escalated, false);
+    // A negative max_escalations is invalid config, not a request for zero. The
+    // tier ladder in resolveModelForTier already falls back to the documented
+    // default of 1 for any non-integer/negative value; the provider ladder must
+    // apply the SAME rule for the SAME key, or one config value would mean two
+    // different things inside one dynamic_routing block.
+    test('a negative max_escalations falls back to the default cap of 1, never inverts', () => {
+      writeConfig(tmpDir, routingConfig({
+        provider_escalation: ['gpt-5', 'llama-3.3'],
+        max_escalations: -3,
+      }));
+      const first = resolve(tmpDir, 'gsd-executor --attempt 1 --failure-class quota-exceeded');
+      assert.strictEqual(first.model, 'gpt-5');
+      assert.strictEqual(first.escalation.index, 1);
+
+      const past = resolve(tmpDir, 'gsd-executor --attempt 2 --failure-class quota-exceeded');
+      assert.strictEqual(past.escalation.index, 1, 'cap stays 1, never negative and never wider');
+      assert.strictEqual(past.escalation.exhausted, true);
+    });
+
+    test('a non-integer max_escalations also falls back to the default cap of 1', () => {
+      writeConfig(tmpDir, routingConfig({
+        provider_escalation: ['gpt-5', 'llama-3.3'],
+        max_escalations: 2.7,
+      }));
+      const parsed = resolve(tmpDir, 'gsd-executor --attempt 2 --failure-class quota-exceeded');
+      assert.strictEqual(parsed.escalation.index, 1);
+      assert.strictEqual(parsed.escalation.exhausted, true);
     });
   });
 

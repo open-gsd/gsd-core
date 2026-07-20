@@ -149,8 +149,8 @@
     },
     {
       "topLevel": "dynamic_routing",
-      "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|tier_models\\.(light|standard|heavy))$",
-      "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|tier_models.<light|standard|heavy>>"
+      "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|provider_escalation|tier_models\\.(light|standard|heavy))$",
+      "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|provider_escalation|tier_models.<light|standard|heavy>>"
     },
     {
       "topLevel": "model_overrides",
