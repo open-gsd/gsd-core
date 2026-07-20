@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { buildCheckpoint } = require('../gsd-core/bin/lib/uat.cjs');
 
 describe('audit-uat command', () => {
   let tmpDir;
@@ -833,6 +834,99 @@ describe('uat render-checkpoint', () => {
     cleanup(tmpDir);
   });
 
+  test('buildCheckpoint: unset/unrecognized language falls back to English default (#2402)', () => {
+    const currentTest = { number: 1, name: 'Sample', expected: 'Something happens.' };
+    const defaultOutput = buildCheckpoint(currentTest);
+    const explicitEnglish = buildCheckpoint(currentTest, 'English');
+    const unrecognized = buildCheckpoint(currentTest, 'Klingon');
+
+    assert.strictEqual(defaultOutput, explicitEnglish, 'unset language should equal the English frame');
+    assert.strictEqual(defaultOutput, unrecognized, 'unrecognized language should fall back to the English frame');
+    assert.ok(defaultOutput.includes('CHECKPOINT: Verification Required'));
+  });
+
+  test('buildCheckpoint: recognized language swaps only the two frame strings (#2402)', () => {
+    const currentTest = { number: 1, name: 'Sample', expected: 'Something happens.' };
+    const english = buildCheckpoint(currentTest);
+    const japanese = buildCheckpoint(currentTest, 'Japanese');
+
+    assert.ok(japanese.includes('チェックポイント'));
+    assert.ok(japanese.includes('`pass`'));
+    // Structural lines (borders, separators, Test N heading, expected content) are untouched.
+    assert.ok(japanese.includes('╔══════════════════════════════════════════════════════════════╗'));
+    assert.ok(japanese.includes('╚══════════════════════════════════════════════════════════════╝'));
+    assert.ok(japanese.includes('──────────────────────────────────────────────────────────────'));
+    assert.ok(japanese.includes('**Test 1: Sample**'));
+    assert.ok(japanese.includes('Something happens.'));
+    assert.notStrictEqual(japanese, english);
+  });
+
+  // Regression: #2402 review medium finding — checkpointBoxLine() padded using
+  // JS string `.length` (UTF-16 code units), not display width. Japanese/
+  // Chinese/Korean use full-width characters that render at 2 terminal
+  // columns each, so the padded line was JS-length-correct (64) but visually
+  // 8-15 columns too wide, misaligning the right `║` border relative to the
+  // box's single-width border lines. Independently recomputes display width
+  // (East Asian Width W/F ranges) rather than reading source, so this test
+  // fails if the fix regresses even if the banner copy itself later changes.
+  describe('CJK checkpoint banner padding uses display width, not UTF-16 length (#2402)', () => {
+    function isWideCodePoint(codePoint) {
+      return (
+        (codePoint >= 0x1100 && codePoint <= 0x115f) ||
+        codePoint === 0x2329 || codePoint === 0x232a ||
+        (codePoint >= 0x2e80 && codePoint <= 0x303e) ||
+        (codePoint >= 0x3041 && codePoint <= 0x33ff) ||
+        (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+        (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+        (codePoint >= 0xa000 && codePoint <= 0xa4cf) ||
+        (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+        (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+        (codePoint >= 0xfe30 && codePoint <= 0xfe4f) ||
+        (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+        (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+        (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+      );
+    }
+    function displayWidth(text) {
+      let width = 0;
+      for (const ch of text) width += isWideCodePoint(ch.codePointAt(0)) ? 2 : 1;
+      return width;
+    }
+
+    for (const lang of ['Japanese', 'Chinese', 'Korean']) {
+      test(`${lang} checkpoint banner line renders at display-width 64, aligning the right border`, () => {
+        const currentTest = { number: 1, name: 'Sample', expected: 'Something happens.' };
+        const output = buildCheckpoint(currentTest, lang);
+        const lines = output.split('\n');
+        const topBorder = lines[0];
+        const bannerLine = lines[1];
+        const bottomBorder = lines[2];
+
+        assert.strictEqual(displayWidth(topBorder), 64, 'top border is the 64-column reference width');
+        assert.strictEqual(displayWidth(bottomBorder), 64, 'bottom border is the 64-column reference width');
+        assert.strictEqual(displayWidth(bannerLine), 64,
+          `${lang} banner line must render at the same 64-column display width as the borders — ` +
+          'padding by UTF-16 .length under-pads full-width characters and overflows the box');
+      });
+    }
+
+    test('exact rendered banner lines for Japanese/Chinese/Korean (regression pin)', () => {
+      const currentTest = { number: 1, name: 'Sample', expected: 'Something happens.' };
+      assert.strictEqual(
+        buildCheckpoint(currentTest, 'Japanese').split('\n')[1],
+        '║  チェックポイント: 検証が必要です                            ║',
+      );
+      assert.strictEqual(
+        buildCheckpoint(currentTest, 'Chinese').split('\n')[1],
+        '║  检查点：需要验证                                            ║',
+      );
+      assert.strictEqual(
+        buildCheckpoint(currentTest, 'Korean').split('\n')[1],
+        '║  체크포인트: 검증 필요                                       ║',
+      );
+    });
+  });
+
   test('renders the current checkpoint as raw output', () => {
     fs.writeFileSync(uatPath, `---
 status: testing
@@ -1033,5 +1127,86 @@ phase: 01-test-phase
     const result = runGsdTools(['uat', 'render-checkpoint', '--file', '.planning/phases/01-test-phase/01-UAT.md'], tmpDir);
     assert.strictEqual(result.success, false, 'Should fail when no current test exists');
     assert.ok(result.error.includes('already complete'));
+  });
+
+  // #2402: response_language must reach the checkpoint frame itself — verify-work.md
+  // requires the model to reprint the checkpoint byte-for-byte, so translation can't
+  // happen after the fact. The renderer has to already emit localized frame strings.
+  test('localizes the checkpoint frame when response_language is configured (#2402)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ response_language: 'Spanish' })
+    );
+    fs.writeFileSync(uatPath, `---
+status: testing
+phase: 01-test-phase
+---
+
+## Current Test
+
+number: 2
+name: Submit form validation
+expected: |
+  Empty submit keeps controls visible.
+  Validation error copy is shown.
+awaiting: user response
+`);
+
+    const result = runGsdTools(['uat', 'render-checkpoint', '--file', '.planning/phases/01-test-phase/01-UAT.md', '--raw'], tmpDir);
+    assert.strictEqual(result.success, true, `render-checkpoint failed: ${result.error}`);
+
+    // Frame strings must be localized, not English.
+    assert.ok(!result.output.includes('CHECKPOINT: Verification Required'),
+      'banner should be localized, not the English default');
+    assert.ok(!result.output.includes("Type `pass` or describe what's wrong."),
+      'instruction line should be localized, not the English default');
+    assert.ok(result.output.includes('Verificación requerida'), 'banner should be in Spanish');
+    assert.ok(result.output.includes('Escribe `pass`'), 'instruction line should be in Spanish');
+
+    // Structure/IDs stay untranslated: box borders, the Test N: name line, and the
+    // expected content are preserved verbatim.
+    assert.ok(result.output.includes('╔══════════════════════════════════════════════════════════════╗'));
+    assert.ok(result.output.includes('╚══════════════════════════════════════════════════════════════╝'));
+    assert.ok(result.output.includes('──────────────────────────────────────────────────────────────'));
+    assert.ok(result.output.includes('**Test 2: Submit form validation**'));
+    assert.ok(result.output.includes('Empty submit keeps controls visible.'));
+    assert.ok(result.output.includes('Validation error copy is shown.'));
+  });
+
+  // Regression guard for the "unset ⇒ byte-identical English" acceptance criterion.
+  test('renders byte-identical English checkpoint when response_language is unset (#2402)', () => {
+    fs.writeFileSync(uatPath, `---
+status: testing
+phase: 01-test-phase
+---
+
+## Current Test
+
+number: 2
+name: Submit form validation
+expected: |
+  Empty submit keeps controls visible.
+  Validation error copy is shown.
+awaiting: user response
+`);
+
+    const result = runGsdTools(['uat', 'render-checkpoint', '--file', '.planning/phases/01-test-phase/01-UAT.md', '--raw'], tmpDir);
+    assert.strictEqual(result.success, true, `render-checkpoint failed: ${result.error}`);
+
+    const expected = [
+      '╔══════════════════════════════════════════════════════════════╗',
+      '║  CHECKPOINT: Verification Required                           ║',
+      '╚══════════════════════════════════════════════════════════════╝',
+      '',
+      '**Test 2: Submit form validation**',
+      '',
+      'Empty submit keeps controls visible.\nValidation error copy is shown.',
+      '',
+      '──────────────────────────────────────────────────────────────',
+      'Type `pass` or describe what\'s wrong.',
+      '──────────────────────────────────────────────────────────────',
+    ].join('\n');
+
+    assert.strictEqual(result.output, expected);
   });
 });

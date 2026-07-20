@@ -36,6 +36,9 @@ const { extractFrontmatter } = frontmatter;
 import phaseIdMod = require('./phase-id.cjs');
 const { PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
 import { requireSafePath, sanitizeForDisplay } from './security.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- config-loader.cjs is an export= CommonJS module
+import configLoader = require('./config-loader.cjs');
+const { loadConfig } = configLoader;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -200,7 +203,9 @@ function cmdRenderCheckpoint(cwd: string, options: { file?: string } = {}, raw: 
     error('UAT session is already complete; no pending checkpoint to render');
   }
 
-  const checkpoint = buildCheckpoint(currentTest as Required<Omit<CurrentTest, 'complete'>> & { complete: false });
+  const config = loadConfig(cwd);
+  const responseLanguage = typeof config.response_language === 'string' ? config.response_language : undefined;
+  const checkpoint = buildCheckpoint(currentTest as Required<Omit<CurrentTest, 'complete'>> & { complete: false }, responseLanguage);
   output({
     file_path: toPosixPath(path.relative(cwd, resolvedPath)),
     test_number: currentTest.number,
@@ -342,11 +347,130 @@ function parseExpectedFromTestBlock(block: string): string | null {
 }
 
 // ─── buildCheckpoint ──────────────────────────────────────────────────────────
+//
+// Localized frame strings (#2402): the checkpoint banner + instruction line are
+// the byte-for-byte block verify-work.md reprints verbatim, so the model can't
+// translate it after the fact — the frame must already be in `response_language`
+// when this function returns it. Bounded table with an ENGLISH FALLBACK for
+// unset/unrecognized languages keeps the default path byte-identical.
 
-function buildCheckpoint(currentTest: { number: number; name: string; expected: string }): string {
+interface CheckpointFrame {
+  banner: string;
+  instruction: string;
+}
+
+const CHECKPOINT_BOX_WIDTH = 64; // total column width of the ╔══...╗ border, borders stay byte-identical
+
+const CHECKPOINT_FRAMES: Record<string, CheckpointFrame> = {
+  english: {
+    banner: 'CHECKPOINT: Verification Required',
+    instruction: 'Type `pass` or describe what\'s wrong.',
+  },
+  spanish: {
+    banner: 'PUNTO DE CONTROL: Verificación requerida',
+    instruction: 'Escribe `pass` o describe qué está mal.',
+  },
+  french: {
+    banner: 'POINT DE CONTRÔLE : Vérification requise',
+    instruction: 'Tapez `pass` ou décrivez ce qui ne va pas.',
+  },
+  german: {
+    banner: 'KONTROLLPUNKT: Überprüfung erforderlich',
+    instruction: 'Gib `pass` ein oder beschreibe, was nicht stimmt.',
+  },
+  portuguese: {
+    banner: 'PONTO DE VERIFICAÇÃO: Verificação necessária',
+    instruction: 'Digite `pass` ou descreva o que está errado.',
+  },
+  japanese: {
+    banner: 'チェックポイント: 検証が必要です',
+    instruction: '`pass` と入力するか、問題点を説明してください。',
+  },
+  chinese: {
+    banner: '检查点：需要验证',
+    instruction: '输入 `pass` 或描述问题所在。',
+  },
+  korean: {
+    banner: '체크포인트: 검증 필요',
+    instruction: '`pass`를 입력하거나 문제를 설명하세요.',
+  },
+  italian: {
+    banner: 'PUNTO DI CONTROLLO: Verifica richiesta',
+    instruction: 'Digita `pass` o descrivi cosa non va.',
+  },
+};
+
+// Free-form response_language aliases → canonical CHECKPOINT_FRAMES key.
+const CHECKPOINT_LANGUAGE_ALIASES: Record<string, string> = {
+  english: 'english', en: 'english', 'en-us': 'english', 'en-gb': 'english',
+  spanish: 'spanish', es: 'spanish', 'español': 'spanish', espanol: 'spanish', castellano: 'spanish',
+  french: 'french', fr: 'french', 'français': 'french', francais: 'french',
+  german: 'german', de: 'german', deutsch: 'german',
+  portuguese: 'portuguese', pt: 'portuguese', 'pt-br': 'portuguese', 'português': 'portuguese', portugues: 'portuguese', 'brazilian portuguese': 'portuguese',
+  japanese: 'japanese', ja: 'japanese', '日本語': 'japanese',
+  chinese: 'chinese', zh: 'chinese', 'zh-cn': 'chinese', 'zh-tw': 'chinese', mandarin: 'chinese', 'simplified chinese': 'chinese', 'traditional chinese': 'chinese', '中文': 'chinese',
+  korean: 'korean', ko: 'korean', '한국어': 'korean',
+  italian: 'italian', it: 'italian', italiano: 'italian',
+};
+
+function resolveCheckpointFrame(responseLanguage: string | undefined): CheckpointFrame {
+  if (!responseLanguage) return CHECKPOINT_FRAMES.english;
+  const key = CHECKPOINT_LANGUAGE_ALIASES[responseLanguage.trim().toLowerCase()];
+  return (key && CHECKPOINT_FRAMES[key]) || CHECKPOINT_FRAMES.english;
+}
+
+// Approximate East Asian Width ranges (Unicode property values W and F) — the
+// CJK scripts CHECKPOINT_FRAMES ships (Japanese/Chinese/Korean) render each
+// matching code point at 2 terminal/display columns, not 1. Padding computed
+// from `.length` (UTF-16 code units) undercounts these by one column per
+// wide character, visually misaligning the box's right border (#2402 review
+// medium finding). Latin-script frames (English/Spanish/French/German/
+// Portuguese/Italian) contain no wide code points, so displayWidth === length
+// for them — no behavior change there.
+function isWideCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x1100 && codePoint <= 0x115f) || // Hangul Jamo
+    codePoint === 0x2329 || codePoint === 0x232a ||
+    (codePoint >= 0x2e80 && codePoint <= 0x303e) || // CJK Radicals .. CJK Symbols and Punctuation
+    (codePoint >= 0x3041 && codePoint <= 0x33ff) || // Hiragana .. CJK Compatibility
+    (codePoint >= 0x3400 && codePoint <= 0x4dbf) || // CJK Unified Ideographs Extension A
+    (codePoint >= 0x4e00 && codePoint <= 0x9fff) || // CJK Unified Ideographs
+    (codePoint >= 0xa000 && codePoint <= 0xa4cf) || // Yi Syllables
+    (codePoint >= 0xac00 && codePoint <= 0xd7a3) || // Hangul Syllables
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) || // CJK Compatibility Ideographs
+    (codePoint >= 0xfe30 && codePoint <= 0xfe4f) || // CJK Compatibility Forms
+    (codePoint >= 0xff00 && codePoint <= 0xff60) || // Fullwidth Forms
+    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+    (codePoint >= 0x20000 && codePoint <= 0x3fffd) // CJK Unified Ideographs Extension B+ / supplementary
+  );
+}
+
+// Iterates by Unicode code point (not UTF-16 code unit) so astral characters
+// are measured once, not as two surrogate units.
+function displayWidth(text: string): number {
+  let width = 0;
+  for (const ch of text) {
+    width += isWideCodePoint(ch.codePointAt(0) as number) ? 2 : 1;
+  }
+  return width;
+}
+
+// Pads `text` into a `║  text…  ║` line matching CHECKPOINT_BOX_WIDTH. Content
+// that overflows the box (a longer translated string) is left unpadded rather
+// than truncated — a slightly ragged border beats losing text.
+function checkpointBoxLine(text: string): string {
+  const innerWidth = CHECKPOINT_BOX_WIDTH - 2;
+  const content = `  ${text}`;
+  const padLength = innerWidth - displayWidth(content);
+  const padded = padLength > 0 ? content + ' '.repeat(padLength) : content;
+  return `║${padded}║`;
+}
+
+function buildCheckpoint(currentTest: { number: number; name: string; expected: string }, responseLanguage?: string): string {
+  const frame = resolveCheckpointFrame(responseLanguage);
   return [
     '╔══════════════════════════════════════════════════════════════╗',
-    '║  CHECKPOINT: Verification Required                           ║',
+    checkpointBoxLine(frame.banner),
     '╚══════════════════════════════════════════════════════════════╝',
     '',
     `**Test ${currentTest.number}: ${currentTest.name}**`,
@@ -354,7 +478,7 @@ function buildCheckpoint(currentTest: { number: number; name: string; expected: 
     currentTest.expected,
     '',
     '──────────────────────────────────────────────────────────────',
-    'Type `pass` or describe what\'s wrong.',
+    frame.instruction,
     '──────────────────────────────────────────────────────────────',
   ].join('\n');
 }

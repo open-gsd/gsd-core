@@ -21,7 +21,11 @@ INIT=$(gsd_run query state.load)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract `commit_docs` from init JSON. Extract `debug_dir` from init JSON — an absolute path anchored on `project_root` (#2376: `debug_file_path` values handed to the spawned `gsd-debug-session-manager` must resolve regardless of that subagent's own cwd, which may differ from the orchestrator's — build them as `{debug_dir}/{slug}.md`, never a bare `.planning/debug/...` literal). Resolve debugger model:
+Extract `commit_docs` and `config.response_language` from init JSON. Extract `debug_dir` from init JSON — an absolute path anchored on `project_root` (#2376: `debug_file_path` values handed to the spawned `gsd-debug-session-manager` must resolve regardless of that subagent's own cwd, which may differ from the orchestrator's — build them as `{debug_dir}/{slug}.md`, never a bare `.planning/debug/...` literal).
+
+**If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
+
+Resolve debugger model:
 ```bash
 debugger_model=$(gsd_run query resolve-model gsd-debugger 2>/dev/null | jq -r '.model' 2>/dev/null || true)
 ```
