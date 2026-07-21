@@ -35,6 +35,10 @@ const RUNTIME_INSTALL_CONTRACTS = {
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
   kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
+  // #2454 PR 1: Kimi Code (Node CLI) registers the same install shape as Kimi
+  // for now — Agent Skills + the standard gsd-core layout. PR 2 will specialize
+  // this once the kimi-code Agent Skills converter lands.
+  'kimi-code': { surface: 'kimi-skills-agents', settings: false, packageJson: false },
   // #2305: Kilo's native plugin spawns the staged guard hooks, so it receives
   // the shared hooks bundle + the CommonJS package.json marker, like OpenCode.
   // (#1821 excluded Kilo on the false premise that it had no plugin surface.)
