@@ -1155,6 +1155,16 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       const existingCanonicalSession = /^## Session[ \t]*$/im.test(content);
       const existingSessionContinuity = /^## Session Continuity[ \t]*$/im.test(content);
 
+      // Track whether the chosen branch's rewrite actually matched. The detector
+      // regexes (existingCanonicalSession/existingSessionContinuity) are CRLF-
+      // tolerant ($ under /m treats \r as a line terminator); the writer regexes
+      // below must be too. If a writer regex silently fails to match (line-ending
+      // mismatch, unexpected heading shape, ...), do NOT report success — the
+      // caller would believe fields were persisted that were silently dropped
+      // (#2450). The append branch always sets rewriteMatched=true (it always
+      // mutates content).
+      let rewriteMatched = false;
+
       if (existingCanonicalSession) {
         // Normalize in place: replace the ENTIRE BODY of the existing ## Session
         // section (heading + all content up to the next ## heading or EOF) with
@@ -1162,17 +1172,27 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
         // `(?!^## )[\s\S]` consumes every line that doesn't start with "## ",
         // which correctly stops at the next section boundary without consuming it.
         // A trailing blank line is added so the next ## heading keeps its spacing.
+        //
+        // CRLF-tolerant (`\r?\n` after `[ \t]*`): the prior literal `\n` could not
+        // match a CRLF STATE.md (`---\r\n`), silently no-op'ing the replace while
+        // updated.push(...) reported success — #2450. The detector regex on the
+        // line above (`/^## Session[ \t]*$/im`) was already CRLF-tolerant, so the
+        // asymmetry armed the bug.
+        const canonicalReplacement = [
+          '## Session',
+          '',
+          `**Last session:** ${now}`,
+          `**Stopped at:** ${stoppedAtValue}`,
+          `**Resume file:** ${resumeValue}`,
+          '',
+          '',
+        ].join('\n');
         content = content.replace(
-          /^(## Session[ \t]*\n(?:(?!^## )[\s\S])*)/m,
-          [
-            '## Session',
-            '',
-            `**Last session:** ${now}`,
-            `**Stopped at:** ${stoppedAtValue}`,
-            `**Resume file:** ${resumeValue}`,
-            '',
-            '',
-          ].join('\n'),
+          /^(## Session[ \t]*\r?\n(?:(?!^## )[\s\S])*)/m,
+          () => {
+            rewriteMatched = true;
+            return canonicalReplacement;
+          },
         );
       } else if (existingSessionContinuity) {
         // #1101: a `## Session Continuity` section already exists (bootstrap
@@ -1183,6 +1203,8 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
         // (e.g. prose like "Next recommended action"). Fields already updated in
         // place above (needs* false) are not re-inserted. A function replacement
         // is used so `$`-bearing caller values are inserted literally (#3454).
+        //
+        // CRLF-tolerant (`\r?\n`): same #2450 fix as the canonical branch above.
         const linesToInsert: string[] = [];
         if (needsLastSession) linesToInsert.push(`**Last session:** ${now}`);
         if (needsStoppedAt) linesToInsert.push(`**Stopped at:** ${stoppedAtValue}`);
@@ -1192,10 +1214,20 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
           // above (#1101 review F3) — otherwise a lowercase heading would detect
           // but no-op the insert while still reporting the fields as updated.
           content = content.replace(
-            /^(## Session Continuity[ \t]*\n)/im,
-            (_m, heading: string) => heading + linesToInsert.join('\n') + '\n',
+            /^(## Session Continuity[ \t]*\r?\n)/im,
+            (_m, heading: string) => {
+              rewriteMatched = true;
+              return heading + linesToInsert.join('\n') + '\n';
+            },
           );
         }
+        // No `else` branch: if linesToInsert.length === 0 the outer guard at
+        // :1144 (callerSuppliedValues && (needsStoppedAt || needsResumeFile
+        // || needsLastSession)) could not have fired, so this whole block is
+        // unreachable. Leaving `rewriteMatched = false` here is the fail-loud
+        // posture — a future change to the outer guard or needs* computation
+        // that makes this branch reachable will surface as a missing
+        // updated[] entry (silent recorded:false) rather than re-arming #2450.
       } else {
         // No session heading exists at all — append a new canonical section.
         const scaffold = [
@@ -1208,13 +1240,28 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
           '',
         ].join('\n');
         content = content.trimEnd() + '\n' + scaffold;
+        rewriteMatched = true;
       }
 
-      sessionCreated = true;
-
-      if (needsLastSession) updated.push('Last session');
-      if (needsStoppedAt) updated.push('Stopped At');
-      if (needsResumeFile) updated.push('Resume File');
+      // #2450 defensive invariant: only report sessionCreated/updated when the
+      // chosen branch's rewrite actually mutated content. Unreachable when the
+      // writer regexes above stay in sync with the CRLF-tolerant detector —
+      // but unreachable-defensive is the right posture for a silent-success
+      // gate. A no-op replace here means a future line-ending or shape drift
+      // between detector and writer; fail to record rather than claim success.
+      //
+      // Scope limitation (not a regression of this fix): the gate covers only
+      // the section-rewrite block. The earlier in-place stateReplaceField
+      // successes at :1081/:1083/:1089/:1101/:1108/:1114 push to `updated`
+      // unconditionally — those represent fields that DID land on disk via
+      // same-line replace (CRLF-agnostic seam), so unconditional push is
+      // correct. The class-defect防御 here is for the INSERT path only.
+      if (rewriteMatched) {
+        sessionCreated = true;
+        if (needsLastSession) updated.push('Last session');
+        if (needsStoppedAt) updated.push('Stopped At');
+        if (needsResumeFile) updated.push('Resume File');
+      }
     }
 
     return content;
