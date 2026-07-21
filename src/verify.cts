@@ -557,6 +557,162 @@ function scanFileWideNegativeGateConflict(content: string): { warnings: string[]
   return { warnings, valid: true as const };
 }
 
+// ─── Plan-task structure validation (#2444) ──────────────────────────────────
+
+/**
+ * Per-task structural information extracted from a PLAN.md `<tasks>` block.
+ * Captures the task's `type` attribute (so `checkpoint:*` tasks validate
+ * against their type-specific canonical field set per
+ * `gsd-core/references/checkpoints.md`) plus presence flags for every tag the
+ * validator cares about. Pure data — no I/O.
+ */
+interface PlanTaskInfo {
+  name: string;
+  /** Lowercased `type` attribute value, or '' when the opening tag has no type. */
+  type: string;
+  hasName: boolean;
+  // auto-task fields
+  hasFiles: boolean;
+  hasAction: boolean;
+  hasVerify: boolean;
+  hasDone: boolean;
+  // checkpoint:human-verify fields
+  hasWhatBuilt: boolean;
+  hasHowToVerify: boolean;
+  // checkpoint:decision fields
+  hasDecision: boolean;
+  hasOptions: boolean;
+  // checkpoint:human-action fields
+  hasInstructions: boolean;
+  hasVerification: boolean;
+  // cross-checkpoint common
+  hasResumeSignal: boolean;
+}
+
+/**
+ * Single pass over `<task ...>…</task>` blocks. The body pattern is
+ * ReDoS-safe stop-at-next-open (mirrors `taggedBlockPattern` in
+ * markdown-sectionizer.cts): bounded attributes (`[^>]{0,1000}`) and a body
+ * boundary that terminates at the NEXT `<task[\s>]` opening, so a document
+ * full of unclosed `<task>` openings scans linearly. Captures both the
+ * attribute string (group 1, so the `type=` selector is not lost the way it is
+ * with `extractTaggedBlocks`) and the body (group 2).
+ */
+const PLAN_TASK_BLOCK_RE = /<task(\s[^>]{0,1000})?>((?:(?!<task[\s>])[\s\S])*?)<\/task>/g;
+
+/**
+ * Extract one `PlanTaskInfo` per `<task …>…</task>` block in `content`.
+ *
+ * Why a dedicated regex instead of `extractTaggedBlocks('task', true)`:
+ * `extractTaggedBlocks` discards the opening tag, so the task's `type=`
+ * attribute (which selects the validation branch) is lost. This helper
+ * captures both the attribute string and the body in one pass, then reuses
+ * `extractTaggedBlocks` on the body for sub-element extraction.
+ */
+function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
+  const infos: PlanTaskInfo[] = [];
+  if (typeof content !== 'string' || content.length === 0) return infos;
+
+  PLAN_TASK_BLOCK_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = PLAN_TASK_BLOCK_RE.exec(content)) !== null) {
+    const attrs = match[1] ?? '';
+    const body = match[2] ?? '';
+
+    const typeMatch = attrs.match(/\btype\s*=\s*["']?([^"'>\s]+)/i);
+    const type = typeMatch ? typeMatch[1].toLowerCase() : '';
+
+    const nameArr = extractTaggedBlocks(body, 'name');
+    const hasName = nameArr.length > 0;
+    const name = hasName ? nameArr[0].trim() : '';
+
+    infos.push({
+      name,
+      type,
+      hasName,
+      hasFiles: /<files>/.test(body),
+      hasAction: /<action>/.test(body),
+      hasVerify: /<verify>/.test(body),
+      hasDone: /<done>/.test(body),
+      hasWhatBuilt: /<what-built>/.test(body),
+      hasHowToVerify: /<how-to-verify>/.test(body),
+      hasDecision: /<decision>/.test(body),
+      hasOptions: /<options>/.test(body),
+      hasInstructions: /<instructions>/.test(body),
+      hasVerification: /<verification>/.test(body),
+      hasResumeSignal: /<resume-signal>/.test(body),
+    });
+
+    // Guard against zero-length matches looping forever.
+    if (match.index === PLAN_TASK_BLOCK_RE.lastIndex) {
+      PLAN_TASK_BLOCK_RE.lastIndex++;
+    }
+  }
+  return infos;
+}
+
+function isCheckpointType(type: string): boolean {
+  return type.startsWith('checkpoint:');
+}
+
+/**
+ * Validate one plan task's structure against its type-specific canonical field
+ * set (per `gsd-core/references/checkpoints.md`):
+ *   - `checkpoint:human-verify` requires `<what-built>` / `<how-to-verify>` /
+ *      `<resume-signal>` (the "checkpoint triple").
+ *   - `checkpoint:decision` requires `<decision>` / `<options>` /
+ *      `<resume-signal>`.
+ *   - `checkpoint:human-action` requires `<action>` / `<instructions>` /
+ *      `<verification>` / `<resume-signal>`.
+ *   - Unknown `checkpoint:*` subtypes require only the universal
+ *      `<resume-signal>` (forward-compat — newer checkpoint types registered
+ *      in the reference don't need a verifier change to pass structure
+ *      validation).
+ *   - All other types (`auto`, `tracer`, `manual`, bare `<task>`, …) keep the
+ *      historical `<action>` / `<verify>` / `<done>` / `<files>` requirements.
+ */
+function validatePlanTaskStructure(task: PlanTaskInfo): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const taskName = task.hasName ? task.name : 'unnamed';
+
+  if (!task.hasName) {
+    errors.push('Task missing <name> element');
+  }
+
+  if (isCheckpointType(task.type)) {
+    if (!task.hasResumeSignal) {
+      errors.push(`Task '${taskName}' missing <resume-signal>`);
+    }
+    switch (task.type) {
+      case 'checkpoint:human-verify':
+        if (!task.hasWhatBuilt) errors.push(`Task '${taskName}' missing <what-built>`);
+        if (!task.hasHowToVerify) errors.push(`Task '${taskName}' missing <how-to-verify>`);
+        break;
+      case 'checkpoint:decision':
+        if (!task.hasDecision) errors.push(`Task '${taskName}' missing <decision>`);
+        if (!task.hasOptions) errors.push(`Task '${taskName}' missing <options>`);
+        break;
+      case 'checkpoint:human-action':
+        if (!task.hasAction) errors.push(`Task '${taskName}' missing <action>`);
+        if (!task.hasInstructions) errors.push(`Task '${taskName}' missing <instructions>`);
+        if (!task.hasVerification) errors.push(`Task '${taskName}' missing <verification>`);
+        break;
+      default:
+        // Unknown checkpoint:* subtype: <resume-signal> is the only universal
+        // requirement (forward-compat).
+        break;
+    }
+  } else {
+    if (!task.hasAction) errors.push(`Task '${taskName}' missing <action>`);
+    if (!task.hasVerify) warnings.push(`Task '${taskName}' missing <verify>`);
+    if (!task.hasDone) warnings.push(`Task '${taskName}' missing <done>`);
+    if (!task.hasFiles) warnings.push(`Task '${taskName}' missing <files>`);
+  }
+
+  return { errors, warnings };
+}
+
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -577,22 +733,20 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
     if (fm[field] === undefined) errors.push(`Missing required frontmatter field: ${field}`);
   }
 
+  const extractedTasks = extractPlanTaskInfos(content);
   const tasks: Record<string, unknown>[] = [];
-  for (const taskContent of extractTaggedBlocks(content, 'task', true)) {
-    const nameArr = extractTaggedBlocks(taskContent, 'name');
-    const taskName = nameArr.length ? nameArr[0].trim() : 'unnamed';
-    const hasFiles = /<files>/.test(taskContent);
-    const hasAction = /<action>/.test(taskContent);
-    const hasVerify = /<verify>/.test(taskContent);
-    const hasDone = /<done>/.test(taskContent);
-
-    if (nameArr.length === 0) errors.push('Task missing <name> element');
-    if (!hasAction) errors.push(`Task '${taskName}' missing <action>`);
-    if (!hasVerify) warnings.push(`Task '${taskName}' missing <verify>`);
-    if (!hasDone) warnings.push(`Task '${taskName}' missing <done>`);
-    if (!hasFiles) warnings.push(`Task '${taskName}' missing <files>`);
-
-    tasks.push({ name: taskName, hasFiles, hasAction, hasVerify, hasDone });
+  for (const task of extractedTasks) {
+    const verdict = validatePlanTaskStructure(task);
+    errors.push(...verdict.errors);
+    warnings.push(...verdict.warnings);
+    tasks.push({
+      name: task.hasName ? task.name : 'unnamed',
+      type: task.type,
+      hasFiles: task.hasFiles,
+      hasAction: task.hasAction,
+      hasVerify: task.hasVerify,
+      hasDone: task.hasDone,
+    });
   }
 
   if (tasks.length === 0) warnings.push('No <task> elements found');
