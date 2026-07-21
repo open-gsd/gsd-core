@@ -2130,7 +2130,7 @@ const capabilities = {
     "role": "runtime",
     "version": "1.7.0",
     "title": "pi",
-    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.cjs; no shared-settings hook surface; tier-2 support.",
+    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -2178,7 +2178,7 @@ const capabilities = {
       "hostBehaviors": {
         "nativePlugin": {
           "dir": "extensions",
-          "file": "gsd.cjs",
+          "file": "gsd.js",
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true
@@ -5159,7 +5159,7 @@ const runtimes = {
     "role": "runtime",
     "version": "1.7.0",
     "title": "pi",
-    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.cjs; no shared-settings hook surface; tier-2 support.",
+    "description": "pi (pi.dev) — bun-runtime programmatic-CLI; TS ExtensionAPI (registerCommand/registerTool/registerProvider/pi.on); single native-extension file at ~/.pi/agent/extensions/gsd.js (.js, not .cjs — pi's extension auto-discovery accepts only .ts/.js, #2470); no shared-settings hook surface; tier-2 support.",
     "tier": "core",
     "requires": [],
     "engines": {
@@ -5207,7 +5207,7 @@ const runtimes = {
       "hostBehaviors": {
         "nativePlugin": {
           "dir": "extensions",
-          "file": "gsd.cjs",
+          "file": "gsd.js",
           "source": "pi/gsd.cjs"
         },
         "pluginOnlyInstall": true

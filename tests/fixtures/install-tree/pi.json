@@ -1,7 +1,7 @@
 [
   ".gsd-profile",
   ".gsd/defaults.json",
-  "extensions/gsd.cjs",
+  "extensions/gsd.js",
   "gsd-core/.gsd-runtime",
   "gsd-core/VERSION",
   "gsd-core/bin/check-latest-version.cjs",

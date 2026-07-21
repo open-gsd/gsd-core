@@ -1665,6 +1665,14 @@ test('shipped installer-migration checksums are locked to a committed baseline (
     // fix-forward migration widens the scanned surface without touching 000.
     '2026-07-17-opencode-baseline-commands-dir':
       'sha256:0f6080b5f9b75fb5adbe9664a71152e23a5336813453b0a77e4df6fd483ad38e',
+    // Migration 006 (NEW, added here per this test's own sanctioned "adding a new
+    // migration" case — not a shipped-body edit): retire pi's stale
+    // extensions/gsd.cjs. #2470 renamed the installed extension to
+    // extensions/gsd.js because pi's isExtensionFile() auto-discovery accepts
+    // only .ts/.js and silently skips everything else; without this migration the
+    // old path drops out of the manifest and uninstall can never remove it.
+    '2026-07-20-pi-extension-cjs-to-js':
+      'sha256:185fa926ae24d83cbdd95c31a9ad2cc8d123e176ad543669b3b0ed75e6ca6f4a',
   };
 
   const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');
@@ -2564,4 +2572,241 @@ describe('migration.plan()', () => {
   });
 });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Symlinked managed path: backup must never dereference (#2470 security review)
+// ---------------------------------------------------------------------------
+//
+// `fs.copyFileSync` follows symlinks. Before this hardening, a managed path
+// replaced by a link would have had the LINK TARGET's bytes copied into the
+// journal's backup tree — e.g. a `gsd.cjs` symlinked at a private key would
+// land that key's contents under gsd-migration-journal/. Nothing GSD installs
+// is ever a symlink, so the faithful snapshot is the link itself.
+
+{
+  const { describe, test } = require('node:test');
+  describe('symlinked managed path is snapshotted as a link, never dereferenced', () => {
+  const piExtensionMigration = require('../gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs');
+  const SECRET = 'TOP-SECRET-PRIVATE-KEY-MATERIAL\n';
+
+  test('backup-and-remove on a symlinked managed file copies the link, not the referent', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    try {
+      const secretPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(secretPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(secretPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      // Manifest records the path as managed with a hash that cannot match the
+      // referent -> classification 'managed-modified' -> backup-and-remove.
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+
+      const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+      assert.ok(backupAction, 'expected a backup-and-remove action for the modified managed file');
+
+      // The referent is untouched and still holds its content.
+      assert.ok(fs.existsSync(secretPath), 'symlink target must survive');
+      assert.equal(fs.readFileSync(secretPath, 'utf8'), SECRET, 'symlink target content must be unchanged');
+
+      // The link itself is gone from the install tree.
+      assert.equal(
+        fs.lstatSync(linkPath, { throwIfNoEntry: false }),
+        undefined,
+        'the symlink at the managed path must be removed',
+      );
+
+      // Nothing anywhere under configDir may contain the referent's bytes.
+      const leaked = [];
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue; // a link is fine; its content is not copied
+          if (entry.isDirectory()) { walk(full); continue; }
+          let body;
+          try { body = fs.readFileSync(full, 'utf8'); } catch { continue; }
+          if (body.includes('TOP-SECRET')) leaked.push(path.relative(configDir, full));
+        }
+      };
+      walk(configDir);
+      assert.deepEqual(leaked, [], `symlink referent content leaked into: ${leaked.join(', ')}`);
+    } finally {
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+
+  test('a regular managed file is still backed up by content (no behavior change)', (t) => {
+    const configDir = createTempInstall();
+    try {
+      writeFile(configDir, 'extensions/gsd.cjs', 'locally patched extension\n');
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+
+      const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+      assert.ok(backupAction, 'expected backup-and-remove for the locally patched file');
+
+      // The PLAN carries backupRelPath: null — the concrete backup location is
+      // chosen during apply and recorded in the journal, so read it from there.
+      const journal = JSON.parse(fs.readFileSync(path.join(configDir, result.journalRelPath), 'utf8'));
+      const journalled = journal.actions.find((a) => a.backupRelPath);
+      assert.ok(journalled, 'apply must record the backup path in the journal for the user');
+      const backupPath = path.join(configDir, journalled.backupRelPath);
+      assert.equal(
+        fs.readFileSync(backupPath, 'utf8'),
+        'locally patched extension\n',
+        'a real file must still be backed up by content so the user can recover it',
+      );
+      assert.ok(!fs.existsSync(path.join(configDir, 'extensions', 'gsd.cjs')));
+    } finally {
+      cleanup(configDir);
+    }
+  });
+
+  // In-flight failure recovery: when a later step of the SAME apply() attempt
+  // throws, the catch block replays the rollback snapshots it already took.
+  // Those snapshots are themselves symlinks, so a raw copy there dereferences
+  // and writes the referent's bytes back to the LIVE install path — worse than
+  // the journal-tree leak, because it is user-visible at a predictable path.
+  //
+  // The failure is injected by monkeypatching fs.rmSync (restored in finally)
+  // rather than by chmod/permission tricks: deterministic, root- and
+  // OS-independent. The delete of the managed path is allowed to SUCCEED and
+  // then throws once, modelling a later step failing after the delete. That
+  // ordering is load-bearing: if the live path still existed, the pre-fix
+  // copyFileSync would hit a same-file collision and throw instead of leaking,
+  // and this test would pass against the very bug it exists to catch.
+  test('apply failure after a symlinked snapshot does not leak the referent into the live tree', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    const realRmSync = fs.rmSync;
+    try {
+      const secretPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(secretPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(secretPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      let fired = false;
+      fs.rmSync = function patched(target, options) {
+        const result = realRmSync.call(fs, target, options);
+        if (!fired && path.resolve(String(target)) === path.resolve(linkPath)) {
+          fired = true;
+          throw new Error('injected post-delete failure');
+        }
+        return result;
+      };
+
+      assert.throws(() => runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      }), /injected post-delete failure/, 'the injected failure must propagate, not be swallowed');
+
+      fs.rmSync = realRmSync;
+
+      // The referent is untouched...
+      assert.ok(fs.existsSync(secretPath));
+      assert.equal(fs.readFileSync(secretPath, 'utf8'), SECRET);
+
+      // ...the managed path is restored as a LINK, not a dereferenced copy...
+      const restored = fs.lstatSync(linkPath, { throwIfNoEntry: false });
+      assert.ok(restored, 'failure recovery must restore the managed path');
+      assert.ok(
+        restored.isSymbolicLink(),
+        'restored path must be a symlink — a regular file here means the referent was dereferenced into the live tree',
+      );
+
+      // ...and its bytes appear nowhere under the install tree.
+      const leaked = [];
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue;
+          if (entry.isDirectory()) { walk(full); continue; }
+          let body;
+          try { body = fs.readFileSync(full, 'utf8'); } catch { continue; }
+          if (body.includes('TOP-SECRET')) leaked.push(path.relative(configDir, full));
+        }
+      };
+      walk(configDir);
+      assert.deepEqual(leaked, [], `referent content leaked into: ${leaked.join(', ')}`);
+    } finally {
+      fs.rmSync = realRmSync;
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+
+  test('rollback() restores a symlinked managed path as a link, not a dereferenced copy', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    try {
+      const targetPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(targetPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(targetPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+      assert.equal(fs.lstatSync(linkPath, { throwIfNoEntry: false }), undefined, 'link removed by apply');
+
+      result.rollback();
+
+      const restored = fs.lstatSync(linkPath, { throwIfNoEntry: false });
+      assert.ok(restored, 'rollback must restore the managed path');
+      assert.ok(restored.isSymbolicLink(), 'restored path must be a symlink, not a dereferenced copy');
+      assert.equal(fs.readlinkSync(linkPath), targetPath, 'restored link must point at the original target');
+      assert.equal(fs.readFileSync(targetPath, 'utf8'), SECRET, 'target content must be untouched throughout');
+    } finally {
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+});
 }

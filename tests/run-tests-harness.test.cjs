@@ -488,6 +488,54 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       assert.doesNotMatch(r.stderr, /shard-02\.test\.cjs/);
     });
 
+    // #2472 E2E: every other --shard test here uses synthetic filenames that
+    // are absent from the real tests/test-timings.json, so they all collapse to
+    // one uniform median weight — under which LPT is mathematically identical
+    // to k % n. That means none of them can tell whether main() actually
+    // threads fileWeightOf() into selectShard: a typo on that single line would
+    // pass the entire existing suite. This test injects a table via
+    // RUN_TESTS_TIMINGS_FILE with DIFFERING costs, so the weighted partition is
+    // provably distinguishable from round-robin.
+    test('--shard routes by measured cost end-to-end, not by index', (t) => {
+      seed(tmpDir, SHARD_NAMES);
+      // Heavy files sit at indices 0/3/6 — exactly the slice round-robin hands
+      // to shard 1. Cost-weighting must NOT put all three on one shard.
+      const timings = {
+        schema_version: 1, unit: 'ms', timings: Object.fromEntries(
+          SHARD_NAMES.map((n, i) => [n, i % 3 === 0 ? 30000 : 100]),
+        ),
+      };
+      const tablePath = path.join(tmpDir, 'injected-timings.json');
+      fs.writeFileSync(tablePath, JSON.stringify(timings));
+      t.after(() => { try { fs.unlinkSync(tablePath); } catch { /* best effort */ } });
+
+      const r = runHarness(tmpDir, ['--shard', '1/3'], { RUN_TESTS_TIMINGS_FILE: tablePath });
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      // Round-robin would give shard 1 exactly {00,03,06} — all three heavies.
+      const heavies = ['shard-00', 'shard-03', 'shard-06']
+        .filter(n => new RegExp(`${n}\\.test\\.cjs`).test(r.stderr)).length;
+      assert.ok(
+        heavies < 3,
+        `cost-weighted shard 1 must not receive all three heavy files (that is the `
+        + `round-robin split, proving the weigher was not threaded); stderr: ${r.stderr}`,
+      );
+      // And the diagnostic must show the table was actually consumed.
+      assert.match(r.stderr, /table=loaded/, 'shard diagnostics must report the injected table as loaded');
+      assert.match(r.stderr, /sig=[0-9a-f]+/, 'shard diagnostics must emit an input fingerprint');
+    });
+
+    test('shard diagnostics report an identical input fingerprint across shards', () => {
+      seed(tmpDir, SHARD_NAMES);
+      // The cross-runner divergence guard: every shard of one run computes the
+      // partition independently, so all of them must agree on the INPUT. A
+      // differing sig between shard jobs is the only observable signal that
+      // they disagreed — which is how the union could silently drop a file.
+      const sigOf = (out) => (out.match(/sig=([0-9a-f]+)/) || [])[1];
+      const sigs = [1, 2, 3].map((i) => sigOf(runHarness(tmpDir, ['--shard', `${i}/3`]).stderr));
+      assert.ok(sigs.every(Boolean), `every shard must emit a sig; got ${JSON.stringify(sigs)}`);
+      assert.strictEqual(new Set(sigs).size, 1, `all shards must fingerprint the same input; got ${sigs}`);
+    });
+
     test('--shard 2/3 selects the second round-robin slice', () => {
       seed(tmpDir, SHARD_NAMES);
       const r = runHarness(tmpDir, ['--shard', '2/3']);
@@ -871,7 +919,212 @@ describe('selectShard round-robin partition (#1212)', () => {
           assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `sizes=${sizes}`);
         },
       ),
-      { numRuns: 200 },
+      // Seed pinned so a failure is reproducible (repo convention for property
+      // tests); previously unseeded, flagged by the #2472 isolated review.
+      { numRuns: 200, seed: 12120 },
+    );
+  });
+});
+
+// ─── #2472: weight-aware shard partition ────────────────────────────────────
+//
+// Equal file COUNTS is not equal file COST. Round-robin by array index balances
+// the former and ignores the latter, which on the real suite produced Windows
+// shard weights of 12.4m / 19.2m / 15.2m against a 20-minute job cap — a 1.23x
+// max/ideal ratio and a 5%-of-cap margin on the heaviest shard. Adding any test
+// file re-indexed the partition and tipped it over (#2472).
+//
+// Passing a weigher switches the partition to LPT (longest-processing-time
+// first), the same algorithm packChunks already uses one level down (#2456 /
+// #2463), so both layers share one cost model. Omitting the weigher keeps the
+// legacy round-robin exactly — every test above still exercises that path.
+
+describe('selectShard weight-aware partition (#2472)', () => {
+  const fc = require('fast-check');
+
+  const shardWeights = (files, total, weightOf) => {
+    const out = [];
+    for (let i = 1; i <= total; i++) {
+      out.push(selectShard(files, { index: i, total }, weightOf).reduce((a, f) => a + weightOf(f), 0));
+    }
+    return out;
+  };
+
+  // The regression: a right-skewed cost distribution (the real suite's shape —
+  // a few dominant files among many cheap ones) laid out so that filename order
+  // clusters the heavy files onto one shard.
+  const skewed = {
+    'a01.test.cjs': 30000, 'a02.test.cjs': 100, 'a03.test.cjs': 100,
+    'a04.test.cjs': 28000, 'a05.test.cjs': 100, 'a06.test.cjs': 100,
+    'a07.test.cjs': 26000, 'a08.test.cjs': 100, 'a09.test.cjs': 100,
+    'a10.test.cjs': 24000, 'a11.test.cjs': 100, 'a12.test.cjs': 100,
+  };
+  const skewedFiles = Object.keys(skewed).sort();
+  const skewedWeight = (f) => skewed[f];
+
+  test('REGRESSION: round-robin clusters heavy files; LPT does not', () => {
+    const ideal = Object.values(skewed).reduce((a, b) => a + b, 0) / 3;
+
+    // Legacy partition (no weigher) scored with the same cost function, so the
+    // two strategies are compared on identical inputs.
+    const rr = [1, 2, 3].map((i) =>
+      selectShard(skewedFiles, { index: i, total: 3 }).reduce((a, f) => a + skewedWeight(f), 0));
+    const lpt = shardWeights(skewedFiles, 3, skewedWeight);
+
+    // Every heavy file sits at an index ≡ 0 (mod 3), so round-robin hands them
+    // all to shard 1 — the exact clustering that produced the 19-minute shard.
+    assert.ok(
+      Math.max(...rr) / ideal > 1.5,
+      `round-robin should be badly imbalanced on skewed costs; got ${rr} (ideal ${ideal})`,
+    );
+    // Graham's list-scheduling bound: makespan <= average + heaviest item. This
+    // is the bound that is actually provable. The 4/3 figure quoted for LPT is
+    // relative to the OPTIMAL makespan, not to the average — and the two differ
+    // whenever item sizes force a pairing, as they do here: four items above
+    // 24000 into three bins means some bin holds two of them, so 50000 is
+    // optimal even though the average is 36267.
+    const heaviest = Math.max(...Object.values(skewed));
+    assert.ok(
+      Math.max(...lpt) <= ideal + heaviest,
+      `LPT must hold the average+max bound; got ${lpt} (bound ${ideal + heaviest})`,
+    );
+    assert.ok(
+      Math.max(...lpt) < Math.max(...rr),
+      `LPT must beat round-robin on skewed costs; lpt=${lpt} rr=${rr}`,
+    );
+  });
+
+  test('back-compat: omitting the weigher reproduces round-robin exactly', () => {
+    for (let i = 1; i <= 3; i++) {
+      assert.deepStrictEqual(
+        selectShard(skewedFiles, { index: i, total: 3 }),
+        skewedFiles.filter((_, k) => k % 3 === i - 1),
+        'the unweighted path must stay byte-identical to the legacy partition',
+      );
+    }
+  });
+
+  test('a uniform weigher degenerates to equal counts', () => {
+    const sizes = [1, 2, 3].map(
+      (i) => selectShard(skewedFiles, { index: i, total: 3 }, () => 1).length,
+    );
+    assert.ok(
+      Math.max(...sizes) - Math.min(...sizes) <= 1,
+      `equal weights must give equal counts; got ${sizes}`,
+    );
+  });
+
+  test('n=1 is still a pure no-op with a weigher', () => {
+    assert.deepStrictEqual(selectShard(skewedFiles, { index: 1, total: 1 }, skewedWeight), skewedFiles);
+  });
+
+  test('preserves the caller sort order within a weighted shard', () => {
+    const slice = selectShard(skewedFiles, { index: 1, total: 3 }, skewedWeight);
+    assert.deepStrictEqual(slice, [...slice].sort(), 'downstream chunking assumes caller order');
+  });
+
+  test('determinism: the weighted partition is stable across calls', () => {
+    const a = selectShard(skewedFiles, { index: 2, total: 3 }, skewedWeight);
+    const b = selectShard(skewedFiles, { index: 2, total: 3 }, skewedWeight);
+    assert.deepStrictEqual(a, b);
+  });
+
+  test('ties break deterministically, not by object iteration order', () => {
+    const flat = () => 5;
+    const a = selectShard(skewedFiles, { index: 1, total: 3 }, flat);
+    const b = selectShard([...skewedFiles], { index: 1, total: 3 }, flat);
+    assert.deepStrictEqual(a, b, 'equal weights must still partition identically');
+  });
+
+  // A partition is a covering contract: every file lands in exactly one shard.
+  // Getting this wrong silently DROPS tests from CI — the worst possible failure
+  // mode for a test harness — so it is property-tested rather than sampled.
+  test('property: the weighted partition is exhaustive and disjoint', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 0, max: 60000 }), { minLength: 1, maxLength: 60 }),
+        fc.integer({ min: 1, max: 8 }),
+        (weights, total) => {
+          const files = weights.map((_, i) => `p${String(i).padStart(3, '0')}.test.cjs`);
+          const w = (f) => weights[Number(f.slice(1, 4))];
+          const seen = [];
+          for (let i = 1; i <= total; i++) seen.push(...selectShard(files, { index: i, total }, w));
+          assert.strictEqual(new Set(seen).size, seen.length, 'a file appeared in two shards');
+          assert.deepStrictEqual([...seen].sort(), [...files].sort(), 'a file was dropped or invented');
+        },
+      ),
+      { numRuns: 200, seed: 24720 },
+    );
+  });
+
+  // Graham's bound for any greedy-into-lightest schedule, and the reason the
+  // shard cap stops being reachable: the heaviest shard cannot exceed the
+  // average by more than one file's cost, however the names happen to sort.
+  test('property: no shard exceeds average + heaviest file', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 1, max: 60000 }), { minLength: 3, maxLength: 60 }),
+        fc.integer({ min: 2, max: 6 }),
+        (weights, total) => {
+          const files = weights.map((_, i) => `p${String(i).padStart(3, '0')}.test.cjs`);
+          const w = (f) => weights[Number(f.slice(1, 4))];
+          const sums = shardWeights(files, total, w);
+          const bound = weights.reduce((a, b) => a + b, 0) / total + Math.max(...weights);
+          assert.ok(
+            Math.max(...sums) <= bound + 1e-9,
+            `bound violated: max=${Math.max(...sums)} bound=${bound}`,
+          );
+        },
+      ),
+      { numRuns: 200, seed: 24721 },
+    );
+  });
+
+  // Deliberately NOT asserted: "weighted is never worse than round-robin".
+  // fast-check falsifies it — weights [19316,10190,1,9128,29353,20227] over 2
+  // shards give round-robin 48670 and LPT 48671. Round-robin can win by luck on
+  // a specific input; LPT's guarantee is the worst-case bound above, not
+  // universal dominance. The value for #2472 is that the bound holds for EVERY
+  // distribution, so no arrangement of filenames can produce the 1.23x cluster
+  // that round-robin allowed — which the skewed regression above pins directly.
+
+  // Zero-weight regression (isolated review, HIGH). Adding a zero-weight file
+  // leaves its bin's weight unchanged, so a weight-only tiebreak kept bin 0
+  // tied-minimum forever and every such file landed there: all-zero weights put
+  // the entire suite on shard 1 and left the other runners idle. Reachable via
+  // safeWeight's clamp of a NaN/negative/Infinity entry, or any genuine 0ms
+  // measurement. The file-count tiebreak is what makes ties rotate.
+  test('REGRESSION: zero weights still split evenly across shards', () => {
+    const files = Array.from({ length: 9 }, (_, i) => `z${i}.test.cjs`);
+    const sizes = [1, 2, 3].map((i) => selectShard(files, { index: i, total: 3 }, () => 0).length);
+    assert.deepStrictEqual(sizes, [3, 3, 3], `all-zero weights must not collapse onto one shard; got ${sizes}`);
+  });
+
+  test('REGRESSION: clamped NaN/negative/Infinity weights do not collapse', () => {
+    const files = ['a', 'b', 'c', 'd', 'e', 'f'].map((x) => `${x}.test.cjs`);
+    const hostile = { 'a.test.cjs': NaN, 'b.test.cjs': -5, 'c.test.cjs': Infinity };
+    const sizes = [1, 2, 3].map(
+      (i) => selectShard(files, { index: i, total: 3 }, (f) => (f in hostile ? hostile[f] : 1)).length,
+    );
+    assert.ok(
+      Math.max(...sizes) - Math.min(...sizes) <= 1,
+      `weights that clamp to 0 must still spread; got ${sizes}`,
+    );
+  });
+
+  test('property: zero weights spread evenly for any list size and shard count', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 40 }),
+        fc.integer({ min: 2, max: 6 }),
+        (n, total) => {
+          const files = Array.from({ length: n }, (_, i) => `p${String(i).padStart(3, '0')}.test.cjs`);
+          const sizes = Array.from({ length: total }, (_, i) =>
+            selectShard(files, { index: i + 1, total }, () => 0).length);
+          assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `sizes=${sizes}`);
+        },
+      ),
+      { numRuns: 200, seed: 24723 },
     );
   });
 });

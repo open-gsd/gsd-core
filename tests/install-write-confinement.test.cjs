@@ -2964,3 +2964,104 @@ describe('#2393: GSD_ALLOW_SYMLINKED_DEST opt-in for intentional symlinked-dest 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// _installNativePluginIfDeclared write-confinement (#2470)
+// ---------------------------------------------------------------------------
+//
+// The native-plugin copy previously confined only `nativePlugin.dir`, then
+// joined `nativePlugin.file` onto the validated directory unchecked. #2470
+// makes `file` a field we actively change (pi: gsd.cjs -> gsd.js), so the full
+// dest path is now confined. Descriptors are first-party and compiled into the
+// capability registry at build time, so this was never reachable in a shipped
+// build — these tests keep it that way.
+
+describe('_installNativePluginIfDeclared write-confinement', () => {
+  const engine = require('../gsd-core/bin/lib/install-engine.cjs');
+
+  /** Build a src tree containing the declared plugin source. */
+  function stageSource() {
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-src-'));
+    const full = path.join(src, 'pi', 'gsd.cjs');
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, "'use strict';\n// plugin\n", 'utf8');
+    return src;
+  }
+
+  const behaviorsWith = (file) => ({
+    nativePlugin: { dir: 'extensions', file, source: 'pi/gsd.cjs' },
+  });
+
+  test('happy path: declared dir/file lands inside configDir', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-cfg-'));
+    const src = stageSource();
+    try {
+      engine._installNativePluginIfDeclared('pi', configDir, behaviorsWith('gsd.js'), src);
+      assert.ok(
+        fs.existsSync(path.join(configDir, 'extensions', 'gsd.js')),
+        'plugin should be copied to <configDir>/extensions/gsd.js',
+      );
+    } finally {
+      cleanup(configDir);
+      cleanup(src);
+    }
+  });
+
+  const ESCAPE_CASES = [
+    ['traversal', '../../evil.js'],
+    ['deep traversal', '../../../../../../tmp/evil.js'],
+    ['NUL byte', 'gsd\u0000.js'],
+  ];
+
+  for (const [label, file] of ESCAPE_CASES) {
+    test(`escape rejected: nativePlugin.file with ${label} → throws`, () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-esc-'));
+      const src = stageSource();
+      try {
+        assert.throws(
+          () => engine._installNativePluginIfDeclared('pi', configDir, behaviorsWith(file), src),
+          /escap|strict subpath|configHome|NUL byte/i,
+          `nativePlugin.file=${JSON.stringify(file)} must be rejected, not joined onto the validated dir`,
+        );
+      } finally {
+        cleanup(configDir);
+        cleanup(src);
+      }
+    });
+  }
+
+  test('nothing is written outside configDir when file tries to escape', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-out-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-outside-'));
+    const src = stageSource();
+    try {
+      const escapeFile = path.join('..', '..', path.basename(outside), 'pwned.js');
+      assert.throws(
+        () => engine._installNativePluginIfDeclared('pi', configDir, behaviorsWith(escapeFile), src),
+        /escap|strict subpath|configHome/i,
+      );
+      assert.ok(
+        !fs.existsSync(path.join(outside, 'pwned.js')),
+        'nothing may be written outside configDir',
+      );
+    } finally {
+      cleanup(configDir);
+      cleanup(outside);
+      cleanup(src);
+    }
+  });
+
+  test('missing source is a silent no-op (unchanged behavior)', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-nosrc-'));
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-np-emptysrc-'));
+    try {
+      assert.doesNotThrow(() =>
+        engine._installNativePluginIfDeclared('pi', configDir, behaviorsWith('gsd.js'), src),
+      );
+      assert.ok(!fs.existsSync(path.join(configDir, 'extensions', 'gsd.js')));
+    } finally {
+      cleanup(configDir);
+      cleanup(src);
+    }
+  });
+});

@@ -748,7 +748,11 @@ function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean
         const planPath = path.join(phaseDir, file);
         const content = readIfExists(planPath);
         // Check frontmatter for type: tdd
-        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        // CRLF-tolerant: a PLAN.md written with Windows line endings (---\r\n...---)
+        // must still match. The same CRLF-tolerant form is already used at line 205
+        // (extractPlanDesignatedSections); this is the same canonical pattern, applied
+        // here for the tdd-classification path. Fixes #2449.
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
         if (frontmatterMatch) {
           const fm = frontmatterMatch[1];
           if (/^type:\s*tdd\s*$/m.test(fm)) {

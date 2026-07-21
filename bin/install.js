@@ -10524,7 +10524,8 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   } else if (_hostBehaviors(runtime).pluginOnlyInstall) {
     // pi (ADR-1239 / #2102 Stage 1): plugin-only install — pi's /gsd command is
     // registered programmatically by the native extension (pi/gsd.cjs →
-    // extensions/gsd.cjs, staged separately below) and dispatches in-process
+    // extensions/gsd.js, staged separately below; the dest suffix must be
+    // .ts/.js or pi's auto-discovery skips it silently — #2470) and dispatches in-process
     // through the embedded gsd-core command-routing hub. pi has no host-read
     // markdown surface (unlike Claude/OpenCode/etc., which scan commands/ or
     // command/ directories), so writing flat gsd-<cmd>.md files here would be
