@@ -1,3 +1,6 @@
+// allow-test-rule: source-text-is-the-product #2304 — this test's whole job is
+// scanning hooks/*.js source text for the inlined KIMI_TOOL_NAMES copies; the
+// text IS the artifact under test (the copies have no runtime binding).
 /**
  * Kimi guard-normalization parity test (#2304 / PR #2326 review Major 1).
  *
@@ -26,12 +29,28 @@ const path = require('node:path');
 
 const { convertKimiToolName } = require('../bin/install.js');
 
-const HOOK_FILES = [
+// Enumerated by scanning, never hardcoded: a sixth guard added later with its
+// own copy of the block must be swept in automatically, or the copies diverge
+// exactly the way this test exists to prevent (PR #2326 review M2). The
+// dynamic scan is also what makes the no-shared-module decision safe.
+const KIMI_MARKER = 'const KIMI_TOOL_NAMES';
+const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
+const HOOK_FILES = fs
+  .readdirSync(HOOKS_DIR)
+  .filter((f) => f.endsWith('.js'))
+  .filter((f) => fs.readFileSync(path.join(HOOKS_DIR, f), 'utf8').includes(KIMI_MARKER))
+  .map((f) => `hooks/${f}`)
+  .sort();
+
+// The five guards normalized for #2304. A scan that misses one of these is a
+// broken scan, not a passing test — without this floor, an over-narrow filter
+// would "pass" by finding nothing to check.
+const KNOWN_NORMALIZED_GUARDS = [
   'hooks/gsd-prompt-guard.js',
   'hooks/gsd-read-guard.js',
-  'hooks/gsd-worktree-path-guard.js',
   'hooks/gsd-read-injection-scanner.js',
   'hooks/gsd-workflow-guard.js',
+  'hooks/gsd-worktree-path-guard.js',
 ];
 
 // Claude tool names whose PreToolUse/PostToolUse guards are registered with a
@@ -51,18 +70,29 @@ function extractBlock(file) {
 }
 
 function parseMap(block) {
-  const m = block.match(/const KIMI_TOOL_NAMES = \{([^}]*)\};/);
-  assert.ok(m, 'KIMI_TOOL_NAMES literal not parseable');
+  // The guards declare `new Map([['KimiName', 'ClaudeName'], …])` (a Map so
+  // prototype keys resolve to undefined — review M1); parse the pair list.
+  const m = block.match(/const KIMI_TOOL_NAMES = new Map\(\[([\s\S]*?)\]\);/);
+  assert.ok(m, 'KIMI_TOOL_NAMES Map literal not parseable');
   const entries = {};
-  for (const pair of m[1].split(',')) {
-    const kv = pair.match(/\s*(\w+):\s*'(\w+)'/);
-    if (kv) entries[kv[1]] = kv[2];
+  for (const kv of m[1].matchAll(/\['(\w+)', '(\w+)'\]/g)) {
+    entries[kv[1]] = kv[2];
   }
   assert.ok(Object.keys(entries).length > 0, 'KIMI_TOOL_NAMES parsed empty');
   return entries;
 }
 
 describe('Kimi guard normalization parity', () => {
+  test('the scan finds every known normalized guard (floor — a scan that finds nothing must fail)', () => {
+    for (const known of KNOWN_NORMALIZED_GUARDS) {
+      assert.ok(
+        HOOK_FILES.includes(known),
+        `${known} carries no '${KIMI_MARKER}' block — either its normalization ` +
+          'was removed or the scan filter broke; both mean lost coverage'
+      );
+    }
+  });
+
   test('all inlined copies of the normalization block are byte-identical', () => {
     const blocks = HOOK_FILES.map(extractBlock);
     for (let i = 1; i < blocks.length; i++) {
