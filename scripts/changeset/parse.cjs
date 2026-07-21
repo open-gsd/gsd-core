@@ -65,10 +65,23 @@ function extractDocsExempt(body) {
   // is CRLF-aware so Windows-authored fragments don't leave residual `\r`
   // characters that would shift the `(#NNNN)` PR suffix to a blank line in
   // the rendered CHANGELOG.md / GitHub release-notes bullet.
+  //
+  // Both leading AND trailing line terminators are stripped. `DOCS_EXEMPT_RE`
+  // removes the marker's own text but its `$` anchor (multiline mode) does
+  // not consume the `\n` that terminates the marker's line. When the marker
+  // is the FIRST line of the body, that leftover `\n` becomes the new first
+  // character of `body` — serializeChangelog then emits an empty `- ` bullet
+  // followed by an orphaned continuation paragraph, and parseChangelog's
+  // bullet-continuation check (which requires a leading `\s`) treats that
+  // non-indented paragraph as terminating the bullet, silently dropping the
+  // entry's content on re-parse. Stripping leading terminators here closes
+  // that gap the same way the trailing strip already does for the opposite
+  // (marker-last) position.
   const cleaned = body
     .replace(DOCS_EXEMPT_RE, '')
     .replace(/[ \t\r]+$/gm, '')             // strip trailing \r/spaces on each line
     .replace(/(?:\r?\n){3,}/g, '\n\n')      // collapse 3+ blank lines (CRLF-aware)
+    .replace(/^[\r\n]+/, '')                // strip terminators left by a first-line marker
     .replace(/[\r\n]+$/, '');               // strip every trailing line terminator
   return { docsExempt: reason, body: cleaned };
 }
@@ -105,6 +118,19 @@ function parseFragment(src) {
   if (body.endsWith('\r\n')) verbatimBody = body.slice(0, -2);
   else if (body.endsWith('\n')) verbatimBody = body.slice(0, -1);
   else verbatimBody = body;
+  // Some fragments have a blank line between the closing frontmatter `---`
+  // and the first line of actual content (purely a stylistic authoring
+  // choice — the blank line carries no significant content, unlike
+  // indentation inside a code block). Strip any such leading blank line(s)
+  // here, mirroring the trailing-terminator strip above. Without this,
+  // `body` starts with `\n`/`\r\n`, serializeChangelog emits an empty `- `
+  // bullet followed by an orphaned paragraph, and parseChangelog's
+  // continuation check (requires a leading `\s` on the line) treats that
+  // non-indented paragraph as terminating the bullet — silently dropping
+  // the fragment's content on re-parse. This is the same downstream failure
+  // mode as a first-line docs-exempt marker (see extractDocsExempt below);
+  // it just arises from plain authoring whitespace instead of a marker.
+  verbatimBody = verbatimBody.replace(/^(?:[ \t]*\r?\n)+/, '');
   const { docsExempt, body: visibleBody } = extractDocsExempt(verbatimBody);
   if (!visibleBody.trim()) return { ok: false, reason: FRAGMENT_ERROR.EMPTY_BODY };
 

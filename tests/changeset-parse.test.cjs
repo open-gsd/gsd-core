@@ -27,6 +27,48 @@ describe('changeset parse: fragment file → typed record (#2975)', () => {
     assert.equal(r.fragment.body, '```js\nlet x = 1;\n```');
   });
 
+  test('strips a blank line between the frontmatter close and the body content (no marker involved)', () => {
+    // Same downstream failure mode as a first-line docs-exempt marker, but
+    // triggered purely by authoring whitespace (a blank line right after the
+    // closing `---`) with no docs-exempt marker present at all — a distinct
+    // root cause than extractDocsExempt's marker-stripping path, discovered
+    // via the .changeset/ fleet scan while regression-testing #1929.
+    const src = '---\ntype: Changed\npr: 2036\n---\n\n**Bold text describing the fix.** More detail follows.\n';
+    const r = parseFragment(src);
+    assert.equal(r.ok, true);
+    assert.equal(r.fragment.docsExempt, null);
+    assert.doesNotMatch(r.fragment.body, /^[\r\n]/);
+    assert.match(r.fragment.body, /^\*\*Bold text describing the fix\.\*\*/);
+  });
+
+  test('CRLF variant: blank line between frontmatter close and body content is stripped identically', () => {
+    const src = '---\r\ntype: Changed\r\npr: 2036\r\n---\r\n\r\n**Bold text describing the fix.** More detail follows.\r\n';
+    const r = parseFragment(src);
+    assert.equal(r.ok, true);
+    assert.doesNotMatch(r.fragment.body, /^[\r\n]/);
+    assert.doesNotMatch(r.fragment.body, /[\r]/);
+    const lfSrc = '---\ntype: Changed\npr: 2036\n---\n\n**Bold text describing the fix.** More detail follows.\n';
+    assert.equal(r.fragment.body, parseFragment(lfSrc).fragment.body);
+  });
+
+  test('end-to-end: leading-blank-line fragment survives serializeChangelog → parseChangelog round-trip', () => {
+    const src = '---\ntype: Changed\npr: 2036\n---\n\n**Bold text describing the fix.** More detail follows.\n';
+    const r = parseFragment(src);
+    assert.equal(r.ok, true);
+
+    const { serializeChangelog, parseChangelog } = require(path.join(__dirname, '..', 'scripts', 'changeset', 'serialize.cjs'));
+    const out = serializeChangelog({
+      releaseHeader: { version: '1.0.0', date: '2026-01-01' },
+      sections: [{ type: 'Changed', bullets: [{ pr: r.fragment.pr, body: r.fragment.body }] }],
+      priorChangelog: null,
+    });
+    const parsed = parseChangelog(out);
+    assert.equal(parsed.releases.length, 1);
+    assert.deepEqual(parsed.releases[0].sections, [
+      { type: 'Changed', bullets: [{ body: '**Bold text describing the fix.** More detail follows.', pr: 2036 }] },
+    ]);
+  });
+
   test('exposes a frozen FRAGMENT_ERROR enum with the documented codes', () => {
     assert.deepEqual(
       Object.keys(FRAGMENT_ERROR).sort(),
@@ -174,6 +216,58 @@ describe('changeset parse: docs-exempt extraction (#3213)', () => {
     assert.equal(r.ok, true);
     assert.equal(r.fragment.docsExempt, null);
     assert.match(r.fragment.body, /bug fix\./);
+  });
+
+  test('marker as the FIRST line of the body does not leave a leading line terminator (root-cause fix)', () => {
+    // Before the fix: DOCS_EXEMPT_RE's `$` (multiline mode) does not consume
+    // the `\n` terminating the marker's own line, so when the marker is the
+    // first line, `body` was left starting with `\n`. serializeChangelog then
+    // emits an empty `- ` bullet followed by an orphaned paragraph, and
+    // parseChangelog's continuation check (requires leading `\s`) treats the
+    // non-indented paragraph as terminating the bullet — dropping the
+    // content on re-parse.
+    const src = '---\ntype: Fixed\npr: 1929\n---\n<!-- docs-exempt: first-line marker -->\nBold text describing the fix.\n';
+    const r = parseFragment(src);
+    assert.equal(r.ok, true);
+    assert.equal(r.fragment.docsExempt, 'first-line marker');
+    assert.doesNotMatch(r.fragment.body, /^[\r\n]/);
+    assert.match(r.fragment.body, /Bold text describing the fix\./);
+  });
+
+  test('CRLF-authored fragment with a FIRST-line marker: same leading-terminator fix applies', () => {
+    const src = '---\r\ntype: Fixed\r\npr: 1929\r\n---\r\n<!-- docs-exempt: first-line marker -->\r\nBold text describing the fix.\r\n';
+    const r = parseFragment(src);
+    assert.equal(r.ok, true);
+    assert.equal(r.fragment.docsExempt, 'first-line marker');
+    assert.doesNotMatch(r.fragment.body, /^[\r\n]/);
+    assert.doesNotMatch(r.fragment.body, /[\r]/);
+    // LF- and CRLF-authored variants of the same fragment must produce the
+    // identical body — the recurring CRLF bug class (#1658/#1668/#2206/
+    // #2449/#2450) means these two must never diverge.
+    const lfSrc = '---\ntype: Fixed\npr: 1929\n---\n<!-- docs-exempt: first-line marker -->\nBold text describing the fix.\n';
+    const lfResult = parseFragment(lfSrc);
+    assert.equal(r.fragment.body, lfResult.fragment.body);
+  });
+
+  test('end-to-end: FIRST-line marker fragment survives serializeChangelog → parseChangelog round-trip (#1929 pin)', () => {
+    // This is the assertion that pins the user-visible defect: a dropped
+    // bullet in GitHub release notes (scripts/changeset/github-release-notes.cjs),
+    // built by feeding the CHANGELOG.md text through parseChangelog.
+    const src = '---\ntype: Fixed\npr: 1929\n---\n<!-- docs-exempt: first-line marker -->\nBold text describing the fix.\n';
+    const r = parseFragment(src);
+    assert.equal(r.ok, true);
+
+    const { serializeChangelog, parseChangelog } = require(path.join(__dirname, '..', 'scripts', 'changeset', 'serialize.cjs'));
+    const out = serializeChangelog({
+      releaseHeader: { version: '1.0.0', date: '2026-01-01' },
+      sections: [{ type: 'Fixed', bullets: [{ pr: r.fragment.pr, body: r.fragment.body }] }],
+      priorChangelog: null,
+    });
+    const parsed = parseChangelog(out);
+    assert.equal(parsed.releases.length, 1);
+    assert.deepEqual(parsed.releases[0].sections, [
+      { type: 'Fixed', bullets: [{ body: 'Bold text describing the fix.', pr: 1929 }] },
+    ]);
   });
 
   test('marker on its own line trailing a fragment body still wins (real-marker positive case)', () => {
