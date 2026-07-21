@@ -2668,8 +2668,13 @@ describe('migration.plan()', () => {
 
       const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
       assert.ok(backupAction, 'expected backup-and-remove for the locally patched file');
-      assert.ok(backupAction.backupRelPath, 'backup path must be recorded for the user');
-      const backupPath = path.join(configDir, backupAction.backupRelPath);
+
+      // The PLAN carries backupRelPath: null — the concrete backup location is
+      // chosen during apply and recorded in the journal, so read it from there.
+      const journal = JSON.parse(fs.readFileSync(path.join(configDir, result.journalRelPath), 'utf8'));
+      const journalled = journal.actions.find((a) => a.backupRelPath);
+      assert.ok(journalled, 'apply must record the backup path in the journal for the user');
+      const backupPath = path.join(configDir, journalled.backupRelPath);
       assert.equal(
         fs.readFileSync(backupPath, 'utf8'),
         'locally patched extension\n',
