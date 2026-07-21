@@ -12391,16 +12391,17 @@ const runtimeMap = {
   '8': 'cursor',
   '9': 'hermes',
   '10': 'kimi',
-  '11': 'kilo',
-  '12': 'opencode',
-  '13': 'pi',
-  '14': 'qwen',
-  '15': 'trae',
-  '16': 'windsurf',
-  '17': 'zcode'
+  '11': 'kimi-code',
+  '12': 'kilo',
+  '13': 'opencode',
+  '14': 'pi',
+  '15': 'qwen',
+  '16': 'trae',
+  '17': 'windsurf',
+  '18': 'zcode'
 };
 const allRuntimes = ['claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex', 'copilot', 'cursor', 'hermes', 'kimi', 'kimi-code', 'kilo', 'opencode', 'pi', 'qwen', 'trae', 'windsurf', 'zcode'];
-const ALL_RUNTIMES_OPTION = '18';
+const ALL_RUNTIMES_OPTION = '19';
 
 /**
  * Build the runtime-selection prompt text shown by the interactive installer.

@@ -46,6 +46,7 @@ const GOLDEN_FRAGMENT_MAP = {
   codebuddy: "'.codebuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
+  'kimi-code': "'.kimi-code'",
   zcode:     "'.zcode'",
   pi:        "'.pi', 'agent'",
 };
