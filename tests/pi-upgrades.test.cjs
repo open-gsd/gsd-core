@@ -154,19 +154,24 @@ test('before_provider_request steers to the override model when model_profile_ov
 
 test('before_provider_request fail-opens when override is explicitly null or empty (#2460)', async () => {
   // Defensive: an explicit null/empty override entry must NOT be treated as
-  // "user opted in". The user might null out a previously-set override.
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-null-override-'));
-  try {
-    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpDir, '.planning', 'config.json'),
-      JSON.stringify({ model_profile_overrides: { pi: { sonnet: null } } }),
-    );
-    const handler = _internals.buildBeforeProviderRequestHandler({ tier: 'sonnet' });
-    const result = await handler({ payload: { model: 'k3' } }, { cwd: tmpDir });
-    assert.equal(result, undefined, 'null override → must fail-open');
-  } finally {
-    cleanup(tmpDir);
+  // "user opted in". The user might null/empty out a previously-set override.
+  // Without the empty-string guard, resolveTierEntry's falsy `if (userRaw)`
+  // would silently fall back to the built-in catalog and rewrite payload.model
+  // to claude-sonnet-5 — re-introducing the bug this PR fixes.
+  for (const emptyValue of [null, '']) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-empty-override-${emptyValue === null ? 'null' : 'empty'}-`));
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ model_profile_overrides: { pi: { sonnet: emptyValue } } }),
+      );
+      const handler = _internals.buildBeforeProviderRequestHandler({ tier: 'sonnet' });
+      const result = await handler({ payload: { model: 'k3' } }, { cwd: tmpDir });
+      assert.equal(result, undefined, `override === ${JSON.stringify(emptyValue)} → must fail-open (got ${JSON.stringify(result)})`);
+    } finally {
+      cleanup(tmpDir);
+    }
   }
 });
 

@@ -215,7 +215,13 @@ function buildBeforeProviderRequestHandler({ tier = 'sonnet' } = {}) {
       // set model_profile_overrides[runtime][tier] do we steer; otherwise we
       // return undefined and pi's chosen model flows through untouched.
       const userRaw = overrides && overrides.pi ? overrides.pi[tier] : undefined;
-      if (userRaw === undefined || userRaw === null) {
+      // `''` is treated the same as null/undefined: an explicit empty-string
+      // override is the user clearing a previously-set value, NOT opting in to
+      // steering. Without this guard, `resolveTierEntry`'s falsy `if (userRaw)`
+      // check would silently fall back to the built-in catalog and rewrite
+      // payload.model to claude-sonnet-5 — re-introducing the exact bug this
+      // handler exists to prevent.
+      if (userRaw === undefined || userRaw === null || userRaw === '') {
         return undefined; // fail-open — leave pi's model untouched
       }
 
