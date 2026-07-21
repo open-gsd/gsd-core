@@ -368,6 +368,222 @@ describe('bracket grammar: toDir rejects a non-string slug', () => {
   });
 });
 
+// ═══ m1: deterministic boundary coverage (re-review m1) ═════════════════════
+// The fast-check domain (1–999, [a-z0-9] slugs) exercises the grammar's bounds
+// only INCIDENTALLY. This section PINS them: the 2↔3-digit numeric-width
+// boundary, a leading-zero 3-digit value, abusive slug content (null byte,
+// control chars, unicode, absolute paths), whitespace-only, and very-long
+// input. Every input below is a hand-written literal (never seeded from the
+// renderer), and every expectation is the compiled lib's CURRENT behavior —
+// this closes a proof gap, not a behavior gap. Placed against the toDir slug/
+// field-validation cluster above so the absolute-path cases sit next to the
+// `../../etc` traversal test they extend.
+
+// ─── m1.1: numeric-width boundary 99/100/101 (identity grammar) ──────────────
+// pad2() passes a ≥3-digit value through un-truncated and it carries no leading
+// zero, so 99/100/101 are all canonical at the milestone/phase/subphase
+// positions: parse→render round-trips and toDir emits them byte-for-byte
+// (CANONICAL_NUMERIC_RE's `[1-9]\d{2,}` branch admits 100/101). The plan
+// position is IDENTITY-symmetric too (parse/render accept all three) but is a
+// filename-surface dimension only — toDir drops it from the dir string.
+describe('bracket grammar: numeric-width boundary 99/100/101 (review m1)', () => {
+  test('milestone width 99/100/101 round-trips through display, dir, and toDir', () => {
+    for (const n of ['99', '100', '101']) {
+      assert.deepStrictEqual(core.parsePhaseId(`[GSD.${n}] 05`), { project: 'GSD', milestone: n, phase: '05' }, n);
+      assert.strictEqual(core.renderPhaseId(core.parsePhaseId(`[GSD.${n}] 05`)), `[GSD.${n}] 05`, n);
+      assert.strictEqual(core.parsePhaseId(`GSD.${n}-05`).milestone, n, n);
+      assert.strictEqual(core.toDir(core.parsePhaseId(`[GSD.${n}] 05`), 'feat'), `GSD.${n}-05-feat`, n);
+    }
+  });
+
+  test('phase width 99/100/101 round-trips through display, dir, and toDir', () => {
+    for (const n of ['99', '100', '101']) {
+      assert.deepStrictEqual(core.parsePhaseId(`[GSD.02] ${n}`), { project: 'GSD', milestone: '02', phase: n }, n);
+      assert.strictEqual(core.renderPhaseId(core.parsePhaseId(`[GSD.02] ${n}`)), `[GSD.02] ${n}`, n);
+      assert.strictEqual(core.parsePhaseId(`GSD.02-${n}`).phase, n, n);
+      assert.strictEqual(core.toDir(core.parsePhaseId(`[GSD.02] ${n}`), 'feat'), `GSD.02-${n}-feat`, n);
+    }
+  });
+
+  test('subphase width 99/100/101 round-trips through display, dir, and toDir', () => {
+    for (const n of ['99', '100', '101']) {
+      assert.strictEqual(core.parsePhaseId(`[GSD.02] 05.${n}`).subphase, n, n);
+      assert.strictEqual(core.renderPhaseId(core.parsePhaseId(`[GSD.02] 05.${n}`)), `[GSD.02] 05.${n}`, n);
+      assert.strictEqual(core.parsePhaseId(`GSD.02-05.${n}`).subphase, n, n);
+      assert.strictEqual(core.toDir(core.parsePhaseId(`[GSD.02] 05.${n}`), 'feat'), `GSD.02-05.${n}-feat`, n);
+    }
+  });
+
+  test('plan width 99/100/101: parse/render accept all three (identity-symmetric); toDir drops the plan', () => {
+    for (const n of ['99', '100', '101']) {
+      // Identity grammar is symmetric at the plan position — plan >=100 is
+      // accepted and round-trips (the plan-position cap lives ONLY in the
+      // read-token source, pinned in m1.2 below, NOT in parsePhaseId).
+      assert.strictEqual(core.parsePhaseId(`[GSD.02] 05-${n}`).plan, n, n);
+      assert.strictEqual(core.renderPhaseId(core.parsePhaseId(`[GSD.02] 05-${n}`)), `[GSD.02] 05-${n}`, n);
+      assert.strictEqual(core.parsePhaseId(`GSD.02-05-${n}`).plan, n, n);
+      // toDir emits the dir with NO plan segment (plan is filename-surface only),
+      // so all three widths collapse to the same slug-bearing dir.
+      assert.strictEqual(core.toDir(core.parsePhaseId(`[GSD.02] 05-${n}`), 'feat'), 'GSD.02-05-feat', n);
+    }
+  });
+});
+
+// ─── m1.2: read-token width is POSITIONAL (plan capped, others admit 3+) ──────
+// BRACKET_PHASE_TOKEN_SOURCE is the PR-2 READ-tolerance source, applied after
+// the `{CODE}.` prefix is stripped, so its run is MM-PP[.SS][-LL]. milestone
+// (leading, unbounded), phase (dash-1) and subphase (dot) are delimiter-
+// disambiguated and admit the canonical `[1-9]\d{2,}` width; the slug-adjacent
+// plan (dash-2) consumes the single-owner #2232 continuation seam `\d{2}(?!\d)`,
+// so a plan >=100 is DELIBERATELY out of the token grammar. This is the landed
+// positional divergence (see the block at the foot of
+// tests/continuation-grammar-parity.test.cjs), pinned here at the 99/100/101
+// boundary — asymmetry expected, NOT symmetry with the other positions.
+describe('bracket grammar: read-token width is positional at 99/100/101 (review m1)', () => {
+  const tok = (run) => run.match(new RegExp(`^${core.BRACKET_PHASE_TOKEN_SOURCE}`))?.[0];
+
+  test('milestone / phase / subphase absorb 99, 100, and 101', () => {
+    for (const n of ['99', '100', '101']) {
+      assert.strictEqual(tok(`${n}-05`), `${n}-05`, `milestone ${n} (leading, unbounded)`);
+      assert.strictEqual(tok(`02-${n}`), `02-${n}`, `phase ${n} (dash-1, delimiter-disambiguated)`);
+      assert.strictEqual(tok(`02-05.${n}`), `02-05.${n}`, `subphase ${n} (dot, delimiter-disambiguated)`);
+    }
+  });
+
+  test('plan (dash-2, slug-adjacent) absorbs 99 but NOT 100/101 — the #2232 cap holds', () => {
+    assert.strictEqual(tok('02-05-99'), '02-05-99', 'a canonical 2-digit plan is absorbed');
+    assert.strictEqual(tok('02-05-100'), '02-05', 'plan 100 is capped out of the token run');
+    assert.strictEqual(tok('02-05-101'), '02-05', 'plan 101 is capped out of the token run');
+  });
+});
+
+// ─── m1.3: leading-zero 3-digit value (007) is non-canonical everywhere ───────
+// pad2('007') === '07' (parseInt drops the leading zeros), so the re-render /
+// re-emit can never match the input — parsePhaseId rejects '007' as not-
+// canonical at milestone/phase/subphase/plan, in BOTH the display and dir forms.
+describe('bracket grammar: leading-zero 3-digit value (007) is rejected (review m1)', () => {
+  test('display form rejects 007 in milestone / phase / subphase / plan', () => {
+    for (const s of ['[GSD.007] 05', '[GSD.02] 007', '[GSD.02] 05.007', '[GSD.02] 05-007']) {
+      assert.throws(() => core.parsePhaseId(s), /parsePhaseId: not canonical/, s);
+    }
+  });
+
+  test('dir form rejects 007 in milestone / phase / subphase / plan', () => {
+    for (const s of ['GSD.007-05', 'GSD.02-007', 'GSD.02-05.007', 'GSD.02-05-007']) {
+      assert.throws(() => core.parsePhaseId(s), /parsePhaseId: not canonical/, s);
+    }
+  });
+});
+
+// ─── m1.4: slug content abuse — null byte / control / unicode ─────────────────
+// Two layers, each pinned independently:
+//   READ (parsePhaseId): a dir trailing segment is a read-tolerant slug, DROPPED
+//   from the identity tuple. Any non-line-terminator content — null byte,
+//   control char, accented letter, emoji — is accepted and dropped (never
+//   stored, so it cannot smuggle a bad identity, and is never mis-read as a
+//   plan). A LINE TERMINATOR (\n / \r) is rejected outright because the dir
+//   regex's `.+` cannot cross it.
+//   EMIT (toDir): the allow-list sanitizer `.replace(/[^a-z0-9]+/g,'-')`
+//   collapses every non-[a-z0-9] run to a single hyphen (null / control / tab /
+//   newline / path separator alike) and drops non-ASCII bytes; content that
+//   sanitizes to nothing is rejected rather than emitting a dangling hyphen.
+describe('bracket grammar: slug content abuse — null byte / control / unicode (review m1)', () => {
+  const EMOJI = '\u{1F4A5}'; // 💥
+  const ACCENTED = 'café'; // café
+
+  test('parsePhaseId drops an abusive (non-line-terminator) trailing slug, keeping a clean tuple', () => {
+    for (const bad of ['foo\x00bar', 'foo\x07bar', 'foo\tbar', ACCENTED, EMOJI]) {
+      const id = core.parsePhaseId(`GSD.02-05-${bad}`);
+      assert.deepStrictEqual(id, { project: 'GSD', milestone: '02', phase: '05' }, JSON.stringify(bad));
+    }
+  });
+
+  test('a line terminator (\\n / \\r) in the slug position is rejected by the anchors', () => {
+    assert.throws(() => core.parsePhaseId('GSD.02-05-foo\nbar'), /not a bracket phase id/);
+    assert.throws(() => core.parsePhaseId('GSD.02-05-foo\rbar'), /not a bracket phase id/);
+  });
+
+  test('toDir sanitizes abusive slug content to a safe [a-z0-9-] token', () => {
+    const id = core.parsePhaseId('[GSD.02] 05');
+    assert.strictEqual(core.toDir(id, 'foo\x00bar'), 'GSD.02-05-foo-bar', 'null byte → hyphen');
+    assert.strictEqual(core.toDir(id, 'foo\x07bar'), 'GSD.02-05-foo-bar', 'control char → hyphen');
+    assert.strictEqual(core.toDir(id, 'a\nb'), 'GSD.02-05-a-b', 'newline → hyphen (safe on emit, unlike read)');
+    assert.strictEqual(core.toDir(id, 'a\rb'), 'GSD.02-05-a-b', 'carriage return → hyphen');
+    assert.strictEqual(core.toDir(id, ACCENTED), 'GSD.02-05-caf', 'non-ASCII dropped, trailing hyphen stripped');
+  });
+
+  test('toDir rejects a slug that sanitizes to empty (emoji-only / null-only) rather than a dangling hyphen', () => {
+    const id = core.parsePhaseId('[GSD.02] 05');
+    assert.throws(() => core.toDir(id, EMOJI), /toDir:.*slug/);
+    assert.throws(() => core.toDir(id, '\x00'), /toDir:.*slug/);
+  });
+});
+
+// ─── m1.5: absolute-path slug or project ─────────────────────────────────────
+// Sibling of the `../../etc/passwd` traversal test above (toDir slug guard) and
+// the hand-built-id field-validation block (review M1): the absolute-path
+// (leading `/`) shapes, pinned next to the traversal shapes they extend.
+describe('bracket grammar: absolute-path slug or project (review m1)', () => {
+  test('an absolute-path slug is sanitized — leading slash and separators collapse away', () => {
+    const id = core.parsePhaseId('[GSD.02] 05');
+    const dir = core.toDir(id, '/etc/passwd');
+    assert.ok(!dir.includes('/'), `dir must not contain a path separator: ${dir}`);
+    assert.strictEqual(dir, 'GSD.02-05-etc-passwd');
+  });
+
+  test('an absolute-path project on a hand-built id is rejected by PROJECT_ID_RE', () => {
+    assert.throws(() => core.toDir({ project: '/etc/passwd', milestone: '02', phase: '05' }, 'feat'), /toDir:.*project/);
+    assert.throws(() => core.toDir({ project: '/etc', milestone: '02', phase: '05' }, 'feat'), /toDir:.*project/);
+  });
+
+  test('an absolute-path string is not a bracket phase id', () => {
+    assert.throws(() => core.parsePhaseId('/etc/passwd'), /not a bracket phase id/);
+  });
+
+  test('an absolute-path slug embedded in a dir string is dropped, leaving a clean tuple (no `/` in any field)', () => {
+    const id = core.parsePhaseId('GSD.02-05-/etc/passwd');
+    assert.deepStrictEqual(id, { project: 'GSD', milestone: '02', phase: '05' });
+  });
+});
+
+// ─── m1.6: whitespace-only input ─────────────────────────────────────────────
+// (The empty string is already pinned above under the ambiguous-token block;
+// these are the non-empty all-whitespace forms.)
+describe('bracket grammar: whitespace-only input is rejected (review m1)', () => {
+  test("' ', '   ', '\\t', '\\n', and '\\t\\n' all reject as not-a-bracket-phase-id", () => {
+    for (const s of [' ', '   ', '\t', '\n', '\t\n']) {
+      assert.throws(() => core.parsePhaseId(s), /not a bracket phase id/, JSON.stringify(s));
+    }
+  });
+});
+
+// ─── m1.7: very-long input (ReDoS smoke) ─────────────────────────────────────
+// Behavioral (not timing) assertions: the grammar's regexes are linear — no
+// nested quantifier over an overlapping class — so a 10k-char input resolves
+// promptly; a catastrophic-backtracking regression would fail the run by
+// timeout rather than by assertion.
+describe('bracket grammar: very-long input handled promptly (review m1)', () => {
+  const BIG = 'a'.repeat(10000);
+
+  test('a 10k-char garbage string rejects promptly', () => {
+    assert.throws(() => core.parsePhaseId(BIG), /not a bracket phase id/);
+  });
+
+  test('a partial-then-fail prefix (open bracket + 10k digits) rejects promptly', () => {
+    assert.throws(() => core.parsePhaseId(`[GSD.${'0'.repeat(10000)}`), /not a bracket phase id/);
+  });
+
+  test('a 10k-char slug in a dir string parses (slug dropped) without hanging', () => {
+    assert.deepStrictEqual(core.parsePhaseId(`GSD.02-05-${BIG}`), { project: 'GSD', milestone: '02', phase: '05' });
+  });
+
+  test('toDir sanitizes a 10k-char slug promptly to the expected token', () => {
+    const dir = core.toDir(core.parsePhaseId('[GSD.02] 05'), BIG);
+    assert.strictEqual(dir, `GSD.02-05-${BIG}`);
+    assert.strictEqual(dir.length, 'GSD.02-05-'.length + 10000);
+  });
+});
+
 // ─── canonical token/heading sources for the downstream read path (PR-2) ─────
 describe('bracket grammar: exported canonical sources (drift-guard owner)', () => {
   test('BRACKET_PHASE_TOKEN_SOURCE matches the bracket numeric run (dot-or-dash sub-separator)', () => {
