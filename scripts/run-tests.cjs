@@ -15,9 +15,14 @@
 //   node scripts/run-tests.cjs --files-from /tmp/selected-tests.txt
 //   node scripts/run-tests.cjs --suite unit --shard 1/3   # shard 1 of 3 (#1212)
 //
-// Sharding (issue #1212): --shard <i>/<n> runs a deterministic, balanced
-// round-robin slice of the SORTED selected file list (file index k → shard
-// k % n). i is 1-based (1..n); n >= 1; n=1 is a pure no-op (all files). The
+// Sharding (issue #1212, reweighted #2472): --shard <i>/<n> runs a
+// deterministic, COST-balanced slice of the SORTED selected file list. Files
+// are partitioned by measured duration (tests/test-timings.json) using LPT —
+// the same packing the chunker uses one level down — because equal file COUNTS
+// are not equal file COST: the index-based split this replaced ran 12.4m /
+// 19.2m / 15.2m against a 20-minute job cap. With no timing data every file
+// weighs the same and the partition degenerates to the original k % n
+// round-robin. i is 1-based (1..n); n >= 1; n=1 is a pure no-op (all files). The
 // CI windows full-test lane shards across N parallel runners so per-job
 // wall-clock scales as O(total/N) and stops hitting the job time cap. Sharding
 // composes with --suite (it slices the post-filter selection) and preserves
@@ -206,7 +211,8 @@ function parseShardArg(value) {
   return { index, total };
 }
 
-// Deterministic, balanced round-robin partition of an ALREADY-SORTED file list.
+// Deterministic partition of an ALREADY-SORTED file list. Without a weigher
+// this is the original round-robin (#1212):
 // Shard `index` (1-based) receives every file whose position k in the sorted
 // list satisfies k % total === index - 1. Round-robin (not contiguous blocks)
 // spreads duration variance across shards and guarantees shard sizes differ by
@@ -702,7 +708,7 @@ function main() {
   }
 
   // Shard partitioning (#1212): when --shard i/n is given, keep only this
-  // shard's deterministic round-robin slice of the selected list. Applied
+  // shard's deterministic cost-balanced slice of the selected list. Applied
   // AFTER suite/explicit selection so it composes with --suite (each shard
   // runs i/n of the post-filter selection).
   //

@@ -292,8 +292,9 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     # The unit suite is sharded across 3 parallel runners per OS/node leg
-    # (#1212). Each shard runs a deterministic round-robin third of the sorted
-    # unit-file list via `run-tests.cjs --suite unit --shard i/3`, so per-job
+    # (#1212, cost-weighted in #2472). Each shard runs a deterministic
+    # cost-balanced third of the sorted unit-file list via
+    # `run-tests.cjs --suite unit --shard i/3`, so per-job
     # wall-clock scales as O(total/3) and stays well under the cap as the suite
     # grows — replacing the #869 timeout bump (15→20m) which only deferred the
     # cliff. The cap stays at 20m as a generous backstop; a healthy shard now
@@ -390,7 +391,7 @@ jobs:
         run: node scripts/check-npm-integrity.cjs
 
       # The heavy unit suite is split across the 3 shards — each runs a
-      # deterministic round-robin third of the sorted unit-file list. The
+      # deterministic cost-balanced third of the sorted unit-file list (#2472). The
       # union of shards 1/3 + 2/3 + 3/3 is the full unit suite, so coverage is
       # unchanged; only wall-clock per job drops to ~total/3.
       - name: Run unit tests (shard ${{ matrix.shard }}/3)
