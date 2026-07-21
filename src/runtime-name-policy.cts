@@ -333,6 +333,17 @@ const RUNTIME_FLAG_IDS = Object.freeze([
 ] as const);
 
 /**
+ * Convert a runtime id (kebab-case, e.g. 'kimi-code') to its `is<Foo>` flag
+ * name in PascalCase (e.g. 'isKimiCode'). The first letter is capitalised and
+ * every `-[a-z]` boundary is folded to its uppercase twin. Single-word ids
+ * (the prior 16: opencode, kilo, codex, …) are unaffected — only hyphenated
+ * ids like 'kimi-code' (#2454) hit the folding branch.
+ */
+function runtimeIdToFlagName(id: string): string {
+  return 'is' + id.charAt(0).toUpperCase() + id.slice(1).replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
+}
+
+/**
  * Return a frozen map of `is<Runtime>` boolean predicates for the given runtime
  * id (e.g. `flags.isOpencode`). Collapses the four duplicated `const isX =
  * runtime === 'x'` declaration blocks that lived in `bin/install.js`'s
@@ -342,7 +353,7 @@ const RUNTIME_FLAG_IDS = Object.freeze([
 export function runtimeFlags(runtime: string): Readonly<Record<string, boolean>> {
   const flags: Record<string, boolean> = {};
   for (const id of RUNTIME_FLAG_IDS) {
-    flags['is' + id.charAt(0).toUpperCase() + id.slice(1)] = runtime === id;
+    flags[runtimeIdToFlagName(id)] = runtime === id;
   }
   return Object.freeze(flags);
 }
