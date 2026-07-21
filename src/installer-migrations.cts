@@ -852,7 +852,12 @@ function applyInstallerMigrationPlan({
       const dest = path.join(configDir, entry.relPath);
       try {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.copyFileSync(entry.rollbackPath, dest);
+        // Symlink-preserving, same as the forward path: `entry.rollbackPath` is
+        // itself a link whenever the managed path was one, so a raw copy here
+        // would dereference it and write the referent's bytes back to the LIVE
+        // install path — a worse leak than the journal-tree one, since it is
+        // user-visible and at a predictable location.
+        copyPreservingSymlink(entry.rollbackPath, dest);
       } catch (rollbackError) {
         rollbackFailures.push({
           relPath: entry.relPath,
