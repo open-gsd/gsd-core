@@ -2573,3 +2573,112 @@ describe('migration.plan()', () => {
 });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Symlinked managed path: backup must never dereference (#2470 security review)
+// ---------------------------------------------------------------------------
+//
+// `fs.copyFileSync` follows symlinks. Before this hardening, a managed path
+// replaced by a link would have had the LINK TARGET's bytes copied into the
+// journal's backup tree — e.g. a `gsd.cjs` symlinked at a private key would
+// land that key's contents under gsd-migration-journal/. Nothing GSD installs
+// is ever a symlink, so the faithful snapshot is the link itself.
+
+{
+  const { describe, test } = require('node:test');
+  describe('symlinked managed path is snapshotted as a link, never dereferenced', () => {
+  const piExtensionMigration = require('../gsd-core/bin/lib/installer-migrations/006-pi-extension-cjs-to-js.cjs');
+  const SECRET = 'TOP-SECRET-PRIVATE-KEY-MATERIAL\n';
+
+  test('backup-and-remove on a symlinked managed file copies the link, not the referent', (t) => {
+    const configDir = createTempInstall();
+    const secretDir = createTempInstall();
+    try {
+      const secretPath = path.join(secretDir, 'id_rsa');
+      fs.writeFileSync(secretPath, SECRET, 'utf8');
+
+      const linkPath = path.join(configDir, 'extensions', 'gsd.cjs');
+      fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+      try {
+        fs.symlinkSync(secretPath, linkPath);
+      } catch {
+        t.skip('symlink creation unsupported on this platform/privilege');
+        return;
+      }
+
+      // Manifest records the path as managed with a hash that cannot match the
+      // referent -> classification 'managed-modified' -> backup-and-remove.
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+
+      const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+      assert.ok(backupAction, 'expected a backup-and-remove action for the modified managed file');
+
+      // The referent is untouched and still holds its content.
+      assert.ok(fs.existsSync(secretPath), 'symlink target must survive');
+      assert.equal(fs.readFileSync(secretPath, 'utf8'), SECRET, 'symlink target content must be unchanged');
+
+      // The link itself is gone from the install tree.
+      assert.equal(
+        fs.lstatSync(linkPath, { throwIfNoEntry: false }),
+        undefined,
+        'the symlink at the managed path must be removed',
+      );
+
+      // Nothing anywhere under configDir may contain the referent's bytes.
+      const leaked = [];
+      const walk = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isSymbolicLink()) continue; // a link is fine; its content is not copied
+          if (entry.isDirectory()) { walk(full); continue; }
+          let body;
+          try { body = fs.readFileSync(full, 'utf8'); } catch { continue; }
+          if (body.includes('TOP-SECRET')) leaked.push(path.relative(configDir, full));
+        }
+      };
+      walk(configDir);
+      assert.deepEqual(leaked, [], `symlink referent content leaked into: ${leaked.join(', ')}`);
+    } finally {
+      cleanup(configDir);
+      cleanup(secretDir);
+    }
+  });
+
+  test('a regular managed file is still backed up by content (no behavior change)', (t) => {
+    const configDir = createTempInstall();
+    try {
+      writeFile(configDir, 'extensions/gsd.cjs', 'locally patched extension\n');
+      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+
+      const result = runInstallerMigrations({
+        configDir,
+        runtime: 'pi',
+        scope: 'global',
+        migrations: [piExtensionMigration],
+        now: () => '2026-07-20T00:00:00.000Z',
+      });
+
+      const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+      assert.ok(backupAction, 'expected backup-and-remove for the locally patched file');
+      assert.ok(backupAction.backupRelPath, 'backup path must be recorded for the user');
+      const backupPath = path.join(configDir, backupAction.backupRelPath);
+      assert.equal(
+        fs.readFileSync(backupPath, 'utf8'),
+        'locally patched extension\n',
+        'a real file must still be backed up by content so the user can recover it',
+      );
+      assert.ok(!fs.existsSync(path.join(configDir, 'extensions', 'gsd.cjs')));
+    } finally {
+      cleanup(configDir);
+    }
+  });
+});
+}
