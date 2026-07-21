@@ -15,9 +15,14 @@
 //   node scripts/run-tests.cjs --files-from /tmp/selected-tests.txt
 //   node scripts/run-tests.cjs --suite unit --shard 1/3   # shard 1 of 3 (#1212)
 //
-// Sharding (issue #1212): --shard <i>/<n> runs a deterministic, balanced
-// round-robin slice of the SORTED selected file list (file index k → shard
-// k % n). i is 1-based (1..n); n >= 1; n=1 is a pure no-op (all files). The
+// Sharding (issue #1212, reweighted #2472): --shard <i>/<n> runs a
+// deterministic, COST-balanced slice of the SORTED selected file list. Files
+// are partitioned by measured duration (tests/test-timings.json) using LPT —
+// the same packing the chunker uses one level down — because equal file COUNTS
+// are not equal file COST: the index-based split this replaced ran 12.4m /
+// 19.2m / 15.2m against a 20-minute job cap. With no timing data every file
+// weighs the same and the partition degenerates to the original k % n
+// round-robin. i is 1-based (1..n); n >= 1; n=1 is a pure no-op (all files). The
 // CI windows full-test lane shards across N parallel runners so per-job
 // wall-clock scales as O(total/N) and stops hitting the job time cap. Sharding
 // composes with --suite (it slices the post-filter selection) and preserves
@@ -206,7 +211,8 @@ function parseShardArg(value) {
   return { index, total };
 }
 
-// Deterministic, balanced round-robin partition of an ALREADY-SORTED file list.
+// Deterministic partition of an ALREADY-SORTED file list. Without a weigher
+// this is the original round-robin (#1212):
 // Shard `index` (1-based) receives every file whose position k in the sorted
 // list satisfies k % total === index - 1. Round-robin (not contiguous blocks)
 // spreads duration variance across shards and guarantees shard sizes differ by
@@ -215,9 +221,63 @@ function parseShardArg(value) {
 // sorts the list with the same (locale-independent) comparator. `total=1`
 // returns the input unchanged (pure no-op). A shard with no files (total >
 // file count) returns [] and is a legitimate result, not an error.
-function selectShard(sortedFiles, { index, total }) {
+// `weightOf` (optional, #2472) switches the partition from equal COUNTS to
+// equal COST. Equal counts were only ever a proxy for equal duration, and on a
+// right-skewed suite the proxy fails: the real unit suite partitioned 12.4m /
+// 19.2m / 15.2m by index against a 20-minute job cap, and because assignment
+// keyed off array POSITION, inserting one test file re-indexed every file after
+// it and could tip the heaviest shard over. Weighting by measured cost fixes
+// both: LPT bounds the heaviest shard at 4/3 of optimal, and placement follows
+// a file's cost rather than its neighbours' names.
+//
+// This is the same algorithm packChunks uses one level down (#2456/#2463), so
+// both layers now share one cost model. Omitting `weightOf` keeps the legacy
+// round-robin byte-identical — callers with no timing data lose nothing.
+function selectShard(sortedFiles, { index, total }, weightOf) {
   if (total === 1) return sortedFiles;
-  return sortedFiles.filter((_, k) => k % total === index - 1);
+  if (typeof weightOf !== 'function') {
+    return sortedFiles.filter((_, k) => k % total === index - 1);
+  }
+  // A non-finite or negative weight must not poison bin arithmetic — one NaN
+  // would make every subsequent comparison false and pile the rest of the suite
+  // into bin 0. Mirrors packChunks' safeWeight for the same reason.
+  const safeWeight = (file) => {
+    const w = weightOf(file);
+    return Number.isFinite(w) && w >= 0 ? w : 0;
+  };
+  const bins = Array.from({ length: total }, () => ({ weight: 0, picks: [] }));
+  // LPT: heaviest first, each into the currently-lightest bin. Ties break on
+  // the caller's sort position, and the lightest-bin scan takes the FIRST
+  // minimum, so the partition is byte-identical across Windows/macOS/Linux —
+  // the same determinism guarantee the round-robin path carries.
+  const order = sortedFiles
+    .map((file, k) => ({ k, weight: safeWeight(file) }))
+    .sort((a, b) => b.weight - a.weight || a.k - b.k);
+  for (const entry of order) {
+    let lightest = 0;
+    for (let i = 1; i < total; i += 1) {
+      const bin = bins[i];
+      const best = bins[lightest];
+      // Weight first, then FILE COUNT. The count tiebreak is load-bearing, not
+      // cosmetic: adding a zero-weight file leaves its bin's weight unchanged,
+      // so on weight alone bin 0 stays tied-minimum forever and every
+      // zero-weight file lands on it — all-zero weights put the whole suite on
+      // shard 1 and leave the other runners idle. Zero weights are reachable
+      // via safeWeight's clamp (a NaN/negative/Infinity entry in a hand-edited
+      // or corrupted timings table) and via any genuinely 0ms measurement, so
+      // the clamp above would otherwise reproduce the exact pile-onto-bin-0
+      // failure it exists to prevent. Counting picks makes ties rotate.
+      if (bin.weight < best.weight
+        || (bin.weight === best.weight && bin.picks.length < best.picks.length)) {
+        lightest = i;
+      }
+    }
+    bins[lightest].weight += entry.weight;
+    bins[lightest].picks.push(entry.k);
+  }
+  // Restore the caller's order within the shard: downstream chunking and argv
+  // batching assume the list arrives sorted as the caller sorted it.
+  return bins[index - 1].picks.sort((a, b) => a - b).map((k) => sortedFiles[k]);
 }
 
 // Read an operator-supplied numeric env knob, falling back to the default for
@@ -275,7 +335,13 @@ function loadTestTimings(timingsPath) {
     return null;
   }
   const timings = parsed.timings;
-  if (!timings || typeof timings !== 'object') return null;
+  // Array.isArray guard: `typeof [] === 'object'`, so a hand-edit that turned
+  // the map into a list would pass a bare typeof check and be accepted as a
+  // valid table. It degrades harmlessly (no basename ever matches an array
+  // index, so every file takes medianWeight), but silently accepting a
+  // malformed table is worse than rejecting it — reject, and fall back to
+  // uniform weight the same way a missing file does.
+  if (!timings || typeof timings !== 'object' || Array.isArray(timings)) return null;
   const values = Object.values(timings).filter(
     (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
   );
@@ -648,7 +714,7 @@ function main() {
   }
 
   // Shard partitioning (#1212): when --shard i/n is given, keep only this
-  // shard's deterministic round-robin slice of the selected list. Applied
+  // shard's deterministic cost-balanced slice of the selected list. Applied
   // AFTER suite/explicit selection so it composes with --suite (each shard
   // runs i/n of the post-filter selection).
   //
@@ -663,11 +729,35 @@ function main() {
   // from a non-empty list" (total > file count — a valid no-op) from "the
   // selection was already empty before sharding" (a genuinely empty suite,
   // which must still hit the discovery hard-error below — Codex #1212 review).
+  // Loaded before sharding because BOTH layers weigh by it now (#2472): the
+  // shard partition below and the chunk packer further down share this one cost
+  // model. Advisory in both places — a missing table yields uniform weight 1,
+  // which makes the shard partition degenerate to the legacy equal-count split.
+  // Lazily memoized: BOTH layers weigh by it now (#2472) — the shard partition
+  // just below and the chunk packer further down share this one cost model —
+  // but neither should charge a readFileSync + JSON.parse to an invocation that
+  // exits before it needs one (an empty selection, or `--files` with nothing
+  // matched). Memoized so the two consumers still read the table at most once.
+  // Advisory in both places: a missing table yields uniform weight 1, under
+  // which the shard partition degenerates to the legacy equal-count split.
+  let weigherMemo = null;
+  const fileWeightOf = () => {
+    if (weigherMemo === null) {
+      const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
+      weigherMemo = makeFileWeigher(loadTestTimings(timingsPath));
+    }
+    return weigherMemo;
+  };
+
   const usingShard = parsed.shard !== null;
   let emptyBeforeShard = false;
+  // The full pre-partition input, kept for the cross-job fingerprint below.
+  // It must be the list every shard job sees, not this job's slice.
+  let shardInput = null;
   if (usingShard) {
     emptyBeforeShard = selectedNames.length === 0;
-    selectedNames = selectShard([...selectedNames].sort(), parsed.shard);
+    shardInput = [...selectedNames].sort();
+    selectedNames = selectShard(shardInput, parsed.shard, fileWeightOf());
   }
 
   const selected = selectedNames.map(f => join(testDir, f));
@@ -736,6 +826,51 @@ function main() {
       .join(' ')}`,
   );
 
+  // Shard diagnostics (#2472). File COUNT stopped being a balance signal the
+  // moment the partition started weighing by cost — two shards can now hold
+  // very different counts by design — so the count line above can no longer be
+  // eyeballed to spot a bad split. Worse, each shard job computes its partition
+  // independently on its own runner: if the inputs differ between jobs (the
+  // file list, or this table), two jobs can place the same file in different
+  // shards, or in none, and every job still looks internally consistent. That
+  // failure is silent — a test simply never runs and CI stays green.
+  //
+  // `sig` is the defense: a cheap fingerprint of the exact inputs the partition
+  // consumed. Every shard job of a given run must print the SAME sig; a
+  // mismatch across jobs is proof the runners disagreed about the input and
+  // therefore about the partition. `weighed` reports how many of this shard's
+  // files matched a real measurement — a table that silently failed to parse
+  // shows weighed=0 instead of being indistinguishable from a healthy load.
+  if (usingShard) {
+    const weigher = fileWeightOf();
+    const table = loadTestTimings(process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH);
+    const mine = selectedNames.map(f => f.split(/[\\/]/).pop());
+    const weighed = table
+      ? mine.filter(n => Object.hasOwn(table.timings, n)).length
+      : 0;
+    const myWeight = mine.reduce((sum, n) => sum + weigher(n), 0);
+    // Fingerprint the FULL pre-partition input — the file list and the weight
+    // each file was assigned — NOT this shard's slice. Every shard job of one
+    // run must print an identical sig; a mismatch is proof the runners
+    // disagreed about the input, which is the only way the union of shards can
+    // silently drop or duplicate a file. Order-independent sum of per-file
+    // (name, weight) hashes: stable across platforms, cheap for ~600 files.
+    let sig = 0;
+    for (const n of shardInput.map(f => f.split(/[\\/]/).pop())) {
+      let h = 2166136261;
+      for (let i = 0; i < n.length; i += 1) {
+        h = Math.imul(h ^ n.charCodeAt(i), 16777619);
+      }
+      sig = (sig + (h >>> 0) + Math.round(weigher(n) * 1000)) % 0xffffffff;
+    }
+    console.error(
+      `run-tests: shard=${parsed.shard.index}/${parsed.shard.total} `
+      + `files=${mine.length}/${shardInput.length} weighed=${weighed} `
+      + `weight=${myWeight.toFixed(2)} table=${table ? 'loaded' : 'absent'} `
+      + `sig=${sig.toString(16)}`,
+    );
+  }
+
   // Default concurrency: 4 on Linux/macOS, 2 on Windows.
   //
   // Windows has significantly higher per-subprocess overhead than Linux/macOS:
@@ -798,8 +933,8 @@ function main() {
   // falls back to the table's median weight and a missing table falls back to
   // uniform weight 1, so staleness degrades chunk BALANCE gracefully instead of
   // failing CI. Regenerate via `node scripts/gen-test-timings.cjs <events.jsonl>`.
-  const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
-  const fileWeight = makeFileWeigher(loadTestTimings(timingsPath));
+  // The cost table is loaded lazily above and memoized; both the shard
+  // partition and this packer consume the same weigher (#2472).
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
@@ -816,7 +951,7 @@ function main() {
 
   const FIXED_OVERHEAD = process.execPath.length + '--test'.length + concurrency.length + (forceExit ? '--test-force-exit'.length + 1 : 0) + 8;
   const chunks = packChunks(selected, {
-    weightOf: fileWeight,
+    weightOf: fileWeightOf(),
     maxWeight: MAX_FILES_PER_CHUNK,
     maxChars: MAX_CMDLINE_CHARS,
     fixedOverhead: FIXED_OVERHEAD,
