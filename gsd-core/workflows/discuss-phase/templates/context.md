@@ -53,12 +53,23 @@ Downstream agents MUST read `{padded_phase}-SPEC.md` before planning or implemen
 <decisions>
 ## Implementation Decisions
 
+[Each decision may carry an optional reversibility rating recording what undoing
+it would cost later. Write it inline as `— **Reversibility:** <rating> — <rationale>`
+where rating is `reversible` (local and cheap to undo), `costly` (undo touches
+many call sites), or `one-way` (undo needs a migration, breaks a published
+contract, or is impossible). The rationale is required whenever a rating is
+given — name the migration, the contract, or the dependent system, not "it is
+hard to change". Omit the field entirely for decisions that are plainly
+reversible; an unrated decision is treated as `reversible`. `gsd-planner` carries
+a `one-way` rating forward into a `checkpoint:decision` before the task that
+implements it. Taxonomy: `gsd-core/references/planner-reversibility.md`.]
+
 ### [Category 1 that was discussed]
-- **D-01:** [Decision or preference captured]
+- **D-01:** [Decision or preference captured] — **Reversibility:** one-way — [rationale: what undoing this would cost]
 - **D-02:** [Another decision if applicable]
 
 ### [Category 2 that was discussed]
-- **D-03:** [Decision or preference captured]
+- **D-03:** [Decision or preference captured] — **Reversibility:** costly — [rationale]
 
 ### Claude's Discretion
 [Areas where user said "you decide" — note that Claude has flexibility here]
