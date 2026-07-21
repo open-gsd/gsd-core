@@ -537,6 +537,62 @@ describe('test-full shard matrix parity (#1212)', () => {
     );
   });
 
+  // #2472: every job of a run must merge ONE base commit. Each job runs the
+  // rebase-check step independently, minutes apart across the matrix, so
+  // merging the moving branch ref lets jobs see different trees when the base
+  // advances mid-run. The sharded lane makes jobs agree on a PARTITION, and
+  // disagreement there places a file in two shards or none — silently, because
+  // each job stays internally consistent and CI stays green.
+  describe('#2472 base-commit pin', () => {
+    const { resolveBaseRefs } = require('../scripts/ci-rebase-check.cjs');
+    const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+
+    test('every rebase-check step pins CI_REBASE_BASE_SHA', () => {
+      const doc = yaml.load(fs.readFileSync(path.join(WORKFLOWS_DIR, 'test.yml'), 'utf8'));
+      const steps = Object.values(doc.jobs)
+        .flatMap(j => j.steps || [])
+        .filter(s => typeof s.run === 'string' && s.run.includes('ci-rebase-check.cjs'));
+      assert.ok(steps.length > 0, 'expected at least one rebase-check step');
+      for (const s of steps) {
+        assert.ok(
+          s.env && typeof s.env.CI_REBASE_BASE_SHA === 'string' && s.env.CI_REBASE_BASE_SHA.includes('base.sha'),
+          'each rebase-check step must pin CI_REBASE_BASE_SHA to the PR base sha; '
+          + 'an unpinned job can merge a different tree than its siblings',
+        );
+      }
+    });
+
+    test('a full 40-hex sha pins both fetch and merge to that commit', () => {
+      const r = resolveBaseRefs({ GITHUB_BASE_REF: 'next', CI_REBASE_BASE_SHA: SHA }, 'main');
+      assert.strictEqual(r.fetchRef, SHA);
+      assert.strictEqual(r.mergeRef, SHA, 'fetch and merge must target the same pinned commit');
+      assert.strictEqual(r.pinned, true);
+    });
+
+    test('no pin falls back to the branch ref (push / workflow_dispatch)', () => {
+      const r = resolveBaseRefs({ GITHUB_BASE_REF: 'next' }, 'main');
+      assert.strictEqual(r.fetchRef, 'next');
+      assert.strictEqual(r.mergeRef, 'origin/next');
+      assert.strictEqual(r.pinned, false);
+    });
+
+    // A non-sha value must never reach `git fetch` as a refspec.
+    for (const [label, value] of [
+      ['short sha', 'abc123'],
+      ['uppercase sha', 'A'.repeat(40)],
+      ['argument injection', 'next --upload-pack=evil'],
+      ['ref expression', 'next^{commit}'],
+      ['empty', ''],
+    ]) {
+      test(`rejects ${label} and falls back to the branch ref`, () => {
+        const r = resolveBaseRefs({ GITHUB_BASE_REF: 'next', CI_REBASE_BASE_SHA: value }, 'main');
+        assert.strictEqual(r.pinned, false, `"${value}" must not be accepted as a pin`);
+        assert.strictEqual(r.fetchRef, 'next');
+        assert.strictEqual(r.mergeRef, 'origin/next');
+      });
+    }
+  });
+
   test('required-tests fan-in still needs test-full and keeps the protected name', () => {
     // Hyrum's Law: branch protection requires a status check literally named
     // "Required tests". Renaming it (or dropping test-full from its needs)

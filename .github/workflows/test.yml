@@ -162,6 +162,13 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Pin every job of this run to ONE base commit (#2472). Each job runs
+          # this step independently, minutes apart across a 12-job matrix, so
+          # merging the moving branch ref lets jobs see different trees when the
+          # base advances mid-run. The sharded lane needs all jobs to agree on a
+          # partition, and disagreement there drops a test file silently while
+          # CI stays green. base.sha is fixed for the life of the run.
+          CI_REBASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/ci-rebase-check.cjs
 
       - name: Set up Node.js ${{ matrix.node-version }}
@@ -262,6 +269,13 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Pin every job of this run to ONE base commit (#2472). Each job runs
+          # this step independently, minutes apart across a 12-job matrix, so
+          # merging the moving branch ref lets jobs see different trees when the
+          # base advances mid-run. The sharded lane needs all jobs to agree on a
+          # partition, and disagreement there drops a test file silently while
+          # CI stays green. base.sha is fixed for the life of the run.
+          CI_REBASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/ci-rebase-check.cjs
       - name: Set up Node.js 22
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
@@ -373,6 +387,13 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Pin every job of this run to ONE base commit (#2472). Each job runs
+          # this step independently, minutes apart across a 12-job matrix, so
+          # merging the moving branch ref lets jobs see different trees when the
+          # base advances mid-run. The sharded lane needs all jobs to agree on a
+          # partition, and disagreement there drops a test file silently while
+          # CI stays green. base.sha is fixed for the life of the run.
+          CI_REBASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/ci-rebase-check.cjs
 
       - name: Set up Node.js ${{ matrix.node-version }}
