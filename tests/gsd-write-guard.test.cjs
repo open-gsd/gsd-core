@@ -347,7 +347,7 @@ describe('single-use sentinel exemption (.planning/.gsd-allow-shrink) — the me
   }
 
   function disarm() {
-    fs.rmSync(sentinelPath, { force: true });
+    cleanup(sentinelPath); // helpers.cleanup — carries the Windows-EBUSY retry budget
   }
 
   test('a reorganize-shaped Write PASSES under a fresh sentinel naming the target — and the sentinel is CONSUMED', () => {
