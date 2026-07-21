@@ -1220,12 +1220,14 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
               return heading + linesToInsert.join('\n') + '\n';
             },
           );
-        } else {
-          // No insert needed; the existing content already has the canonical fields.
-          // Treat as a successful no-op rewrite so the outer flow can set
-          // sessionCreated/updated based on the needs* computed earlier.
-          rewriteMatched = true;
         }
+        // No `else` branch: if linesToInsert.length === 0 the outer guard at
+        // :1144 (callerSuppliedValues && (needsStoppedAt || needsResumeFile
+        // || needsLastSession)) could not have fired, so this whole block is
+        // unreachable. Leaving `rewriteMatched = false` here is the fail-loud
+        // posture — a future change to the outer guard or needs* computation
+        // that makes this branch reachable will surface as a missing
+        // updated[] entry (silent recorded:false) rather than re-arming #2450.
       } else {
         // No session heading exists at all — append a new canonical section.
         const scaffold = [
@@ -1247,6 +1249,13 @@ function cmdStateRecordSession(cwd: string, options: StateRecordSessionOptions, 
       // but unreachable-defensive is the right posture for a silent-success
       // gate. A no-op replace here means a future line-ending or shape drift
       // between detector and writer; fail to record rather than claim success.
+      //
+      // Scope limitation (not a regression of this fix): the gate covers only
+      // the section-rewrite block. The earlier in-place stateReplaceField
+      // successes at :1081/:1083/:1089/:1101/:1108/:1114 push to `updated`
+      // unconditionally — those represent fields that DID land on disk via
+      // same-line replace (CRLF-agnostic seam), so unconditional push is
+      // correct. The class-defect防御 here is for the INSERT path only.
       if (rewriteMatched) {
         sessionCreated = true;
         if (needsLastSession) updated.push('Last session');

@@ -4827,6 +4827,8 @@ describe('T6 section-splice characterization — record-session', () => {
     'milestone: v1.0',
     'milestone_name: TestMilestone',
     'status: executing',
+    "last_updated: '2026-01-01T00:00:00.000Z'",
+    "last_activity: '2026-01-01'",
     '---',
     '',
     '# Project State',
@@ -4924,6 +4926,44 @@ describe('T6 section-splice characterization — record-session', () => {
       // Existing prose must be preserved (#1101 invariant)
       assert.ok(/Next recommended action: resume phase 2\./.test(after),
         'Session Continuity prose must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('record-session --resume-file on mixed-ending STATE.md (LF frontmatter + CRLF body): field IS written (#2450)', () => {
+    // CONTRIBUTING.md §"Parser and project-file inputs" lists "Mixed CRLF/LF
+    // newlines" as a required adversarial fixture class. Realistic when a
+    // Windows editor normalizes frontmatter bytes but preserves body text,
+    // or when tooling concatenates LF + CRLF fragments. The bug class is
+    // body-section-rewrite, so CRLF body + LF frontmatter is the worst case:
+    // the frontmatter delimiter is LF (syncStateFrontmatter parses either)
+    // but the `## Session` heading is CRLF, exercising the writer regex.
+    const STATE_MIXED_LF_FM_CRLF_BODY = [
+      '---',
+      'status: executing',
+      '---',
+      '',  // LF after frontmatter
+    ].join('\n') + [
+      '## Session',
+      '',
+      '**Last session:** 2026-01-01T00:00:00.000Z',
+      '**Stopped at:** None',
+      // Resume file absent
+      '',
+    ].join('\r\n');
+
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_MIXED_LF_FM_CRLF_BODY);
+      const result = runGsdTools(['state', 'record-session', '--resume-file', 'plan-mix.md'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(
+        /\*\*Resume file:\*\*\s*plan-mix\.md/.test(after),
+        `Resume file field must be on disk despite mixed line endings; STATE.md head:\n${after.slice(0, 500)}`,
+      );
     } finally {
       cleanup(d);
     }
