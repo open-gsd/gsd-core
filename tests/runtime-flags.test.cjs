@@ -66,10 +66,15 @@ test('runtimeFlags drift guard: covers every registry runtime except claude and 
   // NON_INSTALLABLE_RUNTIMES (#2103) is filtered out first: a runtime that is
   // never CLI-installed (e.g. vscode — Marketplace/VSIX only) has no --<rt>
   // flag by design and must not trip this guard.
+  //
+  // #2454: the flag-name → runtime-id conversion must fold PascalCase boundaries
+  // back to kebab-case (isKimiCode → kimi-code, not 'kimicode').
+  const flagToId = (flag) => flag.slice(2)
+    .replace(/[A-Z]/g, (m, i) => (i > 0 ? '-' : '') + m.toLowerCase());
   const registryNonClaude = Object.keys(registry.runtimes)
     .filter((r) => r !== 'claude' && !NON_INSTALLABLE_RUNTIMES.has(r))
     .sort();
-  const flagIds = EXPECTED_FLAGS.map((f) => f.slice(2).toLowerCase()).sort();
+  const flagIds = EXPECTED_FLAGS.map(flagToId).sort();
   const missing = registryNonClaude.filter((r) => !flagIds.includes(r));
   assert.deepEqual(missing, [], `registry runtimes missing a runtimeFlags entry: ${missing.join(', ')} — add to RUNTIME_FLAG_IDS`);
 });

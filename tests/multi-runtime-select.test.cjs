@@ -73,23 +73,23 @@ describe('multi-runtime selection parsing', () => {
   });
 
   test('single choice for kilo', () => {
-    assert.deepStrictEqual(parseRuntimeInput('11'), ['kilo']);
+    assert.deepStrictEqual(parseRuntimeInput('12'), ['kilo']);
   });
 
   test('single choice for opencode', () => {
-    assert.deepStrictEqual(parseRuntimeInput('12'), ['opencode']);
+    assert.deepStrictEqual(parseRuntimeInput('13'), ['opencode']);
   });
 
   test('single choice for pi', () => {
-    assert.deepStrictEqual(parseRuntimeInput('13'), ['pi']);
+    assert.deepStrictEqual(parseRuntimeInput('14'), ['pi']);
   });
 
   test('single choice for qwen', () => {
-    assert.deepStrictEqual(parseRuntimeInput('14'), ['qwen']);
+    assert.deepStrictEqual(parseRuntimeInput('15'), ['qwen']);
   });
 
   test('single choice for trae', () => {
-    assert.deepStrictEqual(parseRuntimeInput('15'), ['trae']);
+    assert.deepStrictEqual(parseRuntimeInput('16'), ['trae']);
   });
 
   test('single choice for windsurf', () => {
