@@ -550,7 +550,13 @@ describe('installer migration install integration', { concurrency: false }, () =
     assert.equal(fs.existsSync(path.join(codexHome, 'gsd-install-state.json')), false);
   });
 
+  // #2454 PR 1: kimi-code is registered as a runtime (descriptor + flags +
+  // capability-registry) but its install layout (Agent Skills converter +
+  // global AGENTS.md) lands in PR 2 of the sequence. Excluded from the
+  // end-to-end install contract loop until PR 2 ships the install surface.
+  const SKIP_INSTALL_CONTRACT = new Set(['kimi-code']);
   for (const runtime of SUPPORTED_RUNTIMES) {
+    if (SKIP_INSTALL_CONTRACT.has(runtime)) continue;
     test(`runs a full end-to-end install for ${runtime}`, () => {
       const targetDir = path.join(tmpRoot, `.${runtime}-full-install`);
       fs.mkdirSync(targetDir, { recursive: true });
