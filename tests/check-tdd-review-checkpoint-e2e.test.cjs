@@ -108,6 +108,17 @@ function tddPlanCrlf(phaseNum, planId) {
 }
 
 /**
+ * Mixed-endings variant: CRLF frontmatter + LF body. Realistic when a Windows
+ * editor normalizes Markdown body text but preserves frontmatter byte-for-byte,
+ * or when tooling concatenates CRLF + LF fragments. The frontmatter delimiter
+ * still must match (the bug class), and the LF body must not be confused by
+ * downstream code that splits on \n (it gets an LF-prefixed body).
+ */
+function tddPlanMixedCrlfLf(phaseNum, planId) {
+  return `---\r\ntype: tdd\r\nphase: ${phaseNum}\r\nslug: ${planId}\r\n---\n# Task: ${planId}\n`;
+}
+
+/**
  * Build a type:execute PLAN.md (non-TDD) content.
  */
 function executePlan(phaseNum, planId) {
@@ -433,6 +444,31 @@ describe('check tdd.review-checkpoint — CLI subprocess E2E with git fixtures',
       assert.strictEqual(out.block, true, 'no commits on the detected plan: block must be TRUE');
       assert.strictEqual(out.violations, 1, 'one violation expected for the detected plan');
       assert.strictEqual(out.rows.length, 1, 'the detected plan must produce a row');
+      assert.strictEqual(out.rows[0].planId, '01-01', 'planId must be 01-01');
+    } finally {
+      cleanup(tmpDir);
+    }
+  });
+
+  test('[crlf-mixed] type:tdd plan with CRLF frontmatter + LF body is still detected (#2449)', () => {
+    // Mixed-endings variant of the [crlf] test: frontmatter delimiters are CRLF
+    // (the bug class) but the body is LF (e.g. an editor that normalizes body
+    // text but preserves frontmatter bytes, or a toolchain that concatenates
+    // CRLF + LF fragments). The classifier only reads frontmatter, so the LF
+    // body must not change detection — but verify, since the original bug was
+    // a parser differential and mixed endings are the most adversarial case.
+    const { tmpDir } = createTddGitFixture({
+      planFiles: [
+        { dir: '01-phase1', filename: '01-01-PLAN.md', content: tddPlanMixedCrlfLf(1, '01-01') },
+      ],
+    });
+
+    try {
+      const result = runTools('check tdd.review-checkpoint 1 --raw', tmpDir);
+      assert.ok(result.success, `check should succeed. stderr: ${result.error}`);
+
+      const out = JSON.parse(result.output);
+      assert.strictEqual(out.tddPlans, 1, 'CRLF-frontmatter + LF-body type:tdd plan must be detected');
       assert.strictEqual(out.rows[0].planId, '01-01', 'planId must be 01-01');
     } finally {
       cleanup(tmpDir);
