@@ -215,9 +215,49 @@ function parseShardArg(value) {
 // sorts the list with the same (locale-independent) comparator. `total=1`
 // returns the input unchanged (pure no-op). A shard with no files (total >
 // file count) returns [] and is a legitimate result, not an error.
-function selectShard(sortedFiles, { index, total }) {
+// `weightOf` (optional, #2472) switches the partition from equal COUNTS to
+// equal COST. Equal counts were only ever a proxy for equal duration, and on a
+// right-skewed suite the proxy fails: the real unit suite partitioned 12.4m /
+// 19.2m / 15.2m by index against a 20-minute job cap, and because assignment
+// keyed off array POSITION, inserting one test file re-indexed every file after
+// it and could tip the heaviest shard over. Weighting by measured cost fixes
+// both: LPT bounds the heaviest shard at 4/3 of optimal, and placement follows
+// a file's cost rather than its neighbours' names.
+//
+// This is the same algorithm packChunks uses one level down (#2456/#2463), so
+// both layers now share one cost model. Omitting `weightOf` keeps the legacy
+// round-robin byte-identical — callers with no timing data lose nothing.
+function selectShard(sortedFiles, { index, total }, weightOf) {
   if (total === 1) return sortedFiles;
-  return sortedFiles.filter((_, k) => k % total === index - 1);
+  if (typeof weightOf !== 'function') {
+    return sortedFiles.filter((_, k) => k % total === index - 1);
+  }
+  // A non-finite or negative weight must not poison bin arithmetic — one NaN
+  // would make every subsequent comparison false and pile the rest of the suite
+  // into bin 0. Mirrors packChunks' safeWeight for the same reason.
+  const safeWeight = (file) => {
+    const w = weightOf(file);
+    return Number.isFinite(w) && w >= 0 ? w : 0;
+  };
+  const bins = Array.from({ length: total }, () => ({ weight: 0, picks: [] }));
+  // LPT: heaviest first, each into the currently-lightest bin. Ties break on
+  // the caller's sort position, and the lightest-bin scan takes the FIRST
+  // minimum, so the partition is byte-identical across Windows/macOS/Linux —
+  // the same determinism guarantee the round-robin path carries.
+  const order = sortedFiles
+    .map((file, k) => ({ k, weight: safeWeight(file) }))
+    .sort((a, b) => b.weight - a.weight || a.k - b.k);
+  for (const entry of order) {
+    let lightest = 0;
+    for (let i = 1; i < total; i += 1) {
+      if (bins[i].weight < bins[lightest].weight) lightest = i;
+    }
+    bins[lightest].weight += entry.weight;
+    bins[lightest].picks.push(entry.k);
+  }
+  // Restore the caller's order within the shard: downstream chunking and argv
+  // batching assume the list arrives sorted as the caller sorted it.
+  return bins[index - 1].picks.sort((a, b) => a - b).map((k) => sortedFiles[k]);
 }
 
 // Read an operator-supplied numeric env knob, falling back to the default for
@@ -663,11 +703,18 @@ function main() {
   // from a non-empty list" (total > file count — a valid no-op) from "the
   // selection was already empty before sharding" (a genuinely empty suite,
   // which must still hit the discovery hard-error below — Codex #1212 review).
+  // Loaded before sharding because BOTH layers weigh by it now (#2472): the
+  // shard partition below and the chunk packer further down share this one cost
+  // model. Advisory in both places — a missing table yields uniform weight 1,
+  // which makes the shard partition degenerate to the legacy equal-count split.
+  const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
+  const fileWeight = makeFileWeigher(loadTestTimings(timingsPath));
+
   const usingShard = parsed.shard !== null;
   let emptyBeforeShard = false;
   if (usingShard) {
     emptyBeforeShard = selectedNames.length === 0;
-    selectedNames = selectShard([...selectedNames].sort(), parsed.shard);
+    selectedNames = selectShard([...selectedNames].sort(), parsed.shard, fileWeight);
   }
 
   const selected = selectedNames.map(f => join(testDir, f));
@@ -798,8 +845,8 @@ function main() {
   // falls back to the table's median weight and a missing table falls back to
   // uniform weight 1, so staleness degrades chunk BALANCE gracefully instead of
   // failing CI. Regenerate via `node scripts/gen-test-timings.cjs <events.jsonl>`.
-  const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
-  const fileWeight = makeFileWeigher(loadTestTimings(timingsPath));
+  // `fileWeight` is built once above, before the shard partition, because both
+  // layers consume it (#2472).
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)

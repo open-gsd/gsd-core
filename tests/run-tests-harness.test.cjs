@@ -848,6 +848,169 @@ describe('selectShard round-robin partition (#1212)', () => {
     const sizes5 = [1, 2, 3, 4, 5].map(i => selectShard(four, { index: i, total: 5 }).length).sort();
     assert.deepStrictEqual(sizes5, [0, 1, 1, 1, 1]);
   });
+});
+
+// ─── #2472: weight-aware shard partition ────────────────────────────────────
+//
+// Equal file COUNTS is not equal file COST. Round-robin by array index balances
+// the former and ignores the latter, which on the real suite produced Windows
+// shard weights of 12.4m / 19.2m / 15.2m against a 20-minute job cap — a 1.23x
+// max/ideal ratio and a 5%-of-cap margin on the heaviest shard. Adding any test
+// file re-indexed the partition and tipped it over (#2472).
+//
+// Passing a weigher switches the partition to LPT (longest-processing-time
+// first), the same algorithm packChunks already uses one level down (#2456 /
+// #2463), so both layers share one cost model. Omitting the weigher keeps the
+// legacy round-robin exactly — every test above still exercises that path.
+
+describe('selectShard weight-aware partition (#2472)', () => {
+  const fc = require('fast-check');
+
+  const shardWeights = (files, total, weightOf) => {
+    const out = [];
+    for (let i = 1; i <= total; i++) {
+      out.push(selectShard(files, { index: i, total }, weightOf).reduce((a, f) => a + weightOf(f), 0));
+    }
+    return out;
+  };
+
+  // The regression: a right-skewed cost distribution (the real suite's shape —
+  // a few dominant files among many cheap ones) laid out so that filename order
+  // clusters the heavy files onto one shard.
+  const skewed = {
+    'a01.test.cjs': 30000, 'a02.test.cjs': 100, 'a03.test.cjs': 100,
+    'a04.test.cjs': 28000, 'a05.test.cjs': 100, 'a06.test.cjs': 100,
+    'a07.test.cjs': 26000, 'a08.test.cjs': 100, 'a09.test.cjs': 100,
+    'a10.test.cjs': 24000, 'a11.test.cjs': 100, 'a12.test.cjs': 100,
+  };
+  const skewedFiles = Object.keys(skewed).sort();
+  const skewedWeight = (f) => skewed[f];
+
+  test('REGRESSION: round-robin clusters heavy files; LPT does not', () => {
+    const ideal = Object.values(skewed).reduce((a, b) => a + b, 0) / 3;
+
+    // Legacy partition (no weigher) scored with the same cost function, so the
+    // two strategies are compared on identical inputs.
+    const rr = [1, 2, 3].map((i) =>
+      selectShard(skewedFiles, { index: i, total: 3 }).reduce((a, f) => a + skewedWeight(f), 0));
+    const lpt = shardWeights(skewedFiles, 3, skewedWeight);
+
+    // Every heavy file sits at an index ≡ 0 (mod 3), so round-robin hands them
+    // all to shard 1 — the exact clustering that produced the 19-minute shard.
+    assert.ok(
+      Math.max(...rr) / ideal > 1.5,
+      `round-robin should be badly imbalanced on skewed costs; got ${rr} (ideal ${ideal})`,
+    );
+    // Graham's list-scheduling bound: makespan <= average + heaviest item. This
+    // is the bound that is actually provable. The 4/3 figure quoted for LPT is
+    // relative to the OPTIMAL makespan, not to the average — and the two differ
+    // whenever item sizes force a pairing, as they do here: four items above
+    // 24000 into three bins means some bin holds two of them, so 50000 is
+    // optimal even though the average is 36267.
+    const heaviest = Math.max(...Object.values(skewed));
+    assert.ok(
+      Math.max(...lpt) <= ideal + heaviest,
+      `LPT must hold the average+max bound; got ${lpt} (bound ${ideal + heaviest})`,
+    );
+    assert.ok(
+      Math.max(...lpt) < Math.max(...rr),
+      `LPT must beat round-robin on skewed costs; lpt=${lpt} rr=${rr}`,
+    );
+  });
+
+  test('back-compat: omitting the weigher reproduces round-robin exactly', () => {
+    for (let i = 1; i <= 3; i++) {
+      assert.deepStrictEqual(
+        selectShard(skewedFiles, { index: i, total: 3 }),
+        skewedFiles.filter((_, k) => k % 3 === i - 1),
+        'the unweighted path must stay byte-identical to the legacy partition',
+      );
+    }
+  });
+
+  test('a uniform weigher degenerates to equal counts', () => {
+    const sizes = [1, 2, 3].map(
+      (i) => selectShard(skewedFiles, { index: i, total: 3 }, () => 1).length,
+    );
+    assert.ok(
+      Math.max(...sizes) - Math.min(...sizes) <= 1,
+      `equal weights must give equal counts; got ${sizes}`,
+    );
+  });
+
+  test('n=1 is still a pure no-op with a weigher', () => {
+    assert.deepStrictEqual(selectShard(skewedFiles, { index: 1, total: 1 }, skewedWeight), skewedFiles);
+  });
+
+  test('preserves the caller sort order within a weighted shard', () => {
+    const slice = selectShard(skewedFiles, { index: 1, total: 3 }, skewedWeight);
+    assert.deepStrictEqual(slice, [...slice].sort(), 'downstream chunking assumes caller order');
+  });
+
+  test('determinism: the weighted partition is stable across calls', () => {
+    const a = selectShard(skewedFiles, { index: 2, total: 3 }, skewedWeight);
+    const b = selectShard(skewedFiles, { index: 2, total: 3 }, skewedWeight);
+    assert.deepStrictEqual(a, b);
+  });
+
+  test('ties break deterministically, not by object iteration order', () => {
+    const flat = () => 5;
+    const a = selectShard(skewedFiles, { index: 1, total: 3 }, flat);
+    const b = selectShard([...skewedFiles], { index: 1, total: 3 }, flat);
+    assert.deepStrictEqual(a, b, 'equal weights must still partition identically');
+  });
+
+  // A partition is a covering contract: every file lands in exactly one shard.
+  // Getting this wrong silently DROPS tests from CI — the worst possible failure
+  // mode for a test harness — so it is property-tested rather than sampled.
+  test('property: the weighted partition is exhaustive and disjoint', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 0, max: 60000 }), { minLength: 1, maxLength: 60 }),
+        fc.integer({ min: 1, max: 8 }),
+        (weights, total) => {
+          const files = weights.map((_, i) => `p${String(i).padStart(3, '0')}.test.cjs`);
+          const w = (f) => weights[Number(f.slice(1, 4))];
+          const seen = [];
+          for (let i = 1; i <= total; i++) seen.push(...selectShard(files, { index: i, total }, w));
+          assert.strictEqual(new Set(seen).size, seen.length, 'a file appeared in two shards');
+          assert.deepStrictEqual([...seen].sort(), [...files].sort(), 'a file was dropped or invented');
+        },
+      ),
+      { numRuns: 200, seed: 24720 },
+    );
+  });
+
+  // Graham's bound for any greedy-into-lightest schedule, and the reason the
+  // shard cap stops being reachable: the heaviest shard cannot exceed the
+  // average by more than one file's cost, however the names happen to sort.
+  test('property: no shard exceeds average + heaviest file', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.integer({ min: 1, max: 60000 }), { minLength: 3, maxLength: 60 }),
+        fc.integer({ min: 2, max: 6 }),
+        (weights, total) => {
+          const files = weights.map((_, i) => `p${String(i).padStart(3, '0')}.test.cjs`);
+          const w = (f) => weights[Number(f.slice(1, 4))];
+          const sums = shardWeights(files, total, w);
+          const bound = weights.reduce((a, b) => a + b, 0) / total + Math.max(...weights);
+          assert.ok(
+            Math.max(...sums) <= bound + 1e-9,
+            `bound violated: max=${Math.max(...sums)} bound=${bound}`,
+          );
+        },
+      ),
+      { numRuns: 200, seed: 24721 },
+    );
+  });
+
+  // Deliberately NOT asserted: "weighted is never worse than round-robin".
+  // fast-check falsifies it — weights [19316,10190,1,9128,29353,20227] over 2
+  // shards give round-robin 48670 and LPT 48671. Round-robin can win by luck on
+  // a specific input; LPT's guarantee is the worst-case bound above, not
+  // universal dominance. The value for #2472 is that the bound holds for EVERY
+  // distribution, so no arrangement of filenames can produce the 1.23x cluster
+  // that round-robin allowed — which the skewed regression above pins directly.
 
   test('property: partition is complete, disjoint, and balanced for any n,N', () => {
     const fc = require('fast-check');
