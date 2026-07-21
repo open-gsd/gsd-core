@@ -74,8 +74,10 @@ describe('#2304: Kimi tool vocabulary engages the workflow guard', () => {
       cwd: repoDir,
     });
     assert.equal(r.exitCode, 2, 'Kimi Shell should reach the Bash branch and block');
-    assert.ok(
-      r.stdout.includes('WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'),
+    const output = JSON.parse(r.stdout);
+    assert.equal(
+      output.code,
+      'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN',
       'block payload should carry the force-add code'
     );
     assert.ok(
@@ -91,7 +93,7 @@ describe('#2304: Kimi tool vocabulary engages the workflow guard', () => {
       cwd: repoDir,
     });
     assert.equal(r.exitCode, 2);
-    assert.ok(r.stdout.includes('WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'));
+    assert.equal(JSON.parse(r.stdout).code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
   });
 
   test('benign Shell command passes through', () => {
@@ -111,7 +113,7 @@ describe('#2304: Kimi tool vocabulary engages the workflow guard', () => {
       cwd: repoDir,
     });
     assert.equal(r.exitCode, 2);
-    assert.ok(r.stdout.includes('WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'));
+    assert.equal(JSON.parse(r.stdout).code, 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN');
   });
 
   test('WriteFile outside .planning/ gets the workflow advisory like Write', () => {
@@ -121,8 +123,9 @@ describe('#2304: Kimi tool vocabulary engages the workflow guard', () => {
       cwd: repoDir,
     });
     assert.equal(r.exitCode, 0);
+    const output = JSON.parse(r.stdout);
     assert.ok(
-      r.stdout.includes('WORKFLOW ADVISORY'),
+      output.hookSpecificOutput?.additionalContext?.includes('WORKFLOW ADVISORY'),
       'Kimi WriteFile should reach the write branch and emit the advisory'
     );
   });
