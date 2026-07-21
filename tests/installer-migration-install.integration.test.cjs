@@ -292,9 +292,19 @@ function assertFreshInstallContract(runtime, targetDir) {
     // adversarial-review fix — hooksSurface:'none' no longer implies
     // skipSharedHooksInstall for pi, mirroring OpenCode), so hooks/ + the
     // git-cmd.js tokenizer helper ARE part of the artifact surface now.
+    // #2470: the dest filename comes from pi's descriptor, and must satisfy
+    // pi's isExtensionFile() auto-discovery filter (.ts/.js only) — otherwise
+    // the file installs but pi never loads it and /gsd never registers.
+    const piNativePlugin = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'capabilities', 'pi', 'capability.json'), 'utf8')
+    ).runtime.hostBehaviors.nativePlugin;
     assert.ok(
-      fs.existsSync(path.join(targetDir, 'extensions', 'gsd.cjs')),
-      `${runtime} should install the native extension file at extensions/gsd.cjs`
+      piNativePlugin.file.endsWith('.ts') || piNativePlugin.file.endsWith('.js'),
+      `${runtime}'s extension "${piNativePlugin.file}" must end in .ts or .js for pi to discover it (#2470)`
+    );
+    assert.ok(
+      fs.existsSync(path.join(targetDir, piNativePlugin.dir, piNativePlugin.file)),
+      `${runtime} should install the native extension file at ${piNativePlugin.dir}/${piNativePlugin.file}`
     );
     assert.ok(
       fs.existsSync(path.join(targetDir, 'hooks', 'gsd-ensure-canonical-path.js')),

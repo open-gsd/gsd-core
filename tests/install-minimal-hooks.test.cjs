@@ -775,8 +775,20 @@ describe('#1821/#2305: ZCode receives no dead hook files; Kilo/OpenCode/Claude k
   // pi (unlike Kilo/ZCode/Cursor/Cline/Trae/Copilot/Windsurf/Kimi) — pi is in
   // the OpenCode group, not the Kilo/ZCode group.
   test('pi --global install still copies hooks (spawned by the native extension) + hooks/lib/git-cmd.js + the extension itself', () => {
+    // #2470: derive the extension filename from pi's own descriptor rather than
+    // hardcoding it, and assert it satisfies pi's isExtensionFile() discovery
+    // filter (.ts/.js only) — a dest pi cannot discover installs "successfully"
+    // while /gsd never registers, which is exactly how this shipped broken.
+    const piNativePlugin = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'capabilities', 'pi', 'capability.json'), 'utf8'),
+    ).runtime.hostBehaviors.nativePlugin;
+    assert.ok(
+      piNativePlugin.file.endsWith('.ts') || piNativePlugin.file.endsWith('.js'),
+      `pi's installed extension "${piNativePlugin.file}" must end in .ts or .js — pi silently ` +
+        'skips any other suffix during extensions/ auto-discovery (#2470)',
+    );
     const { hookFiles, hooksLibExists, gitCmdExists, pluginExists } = installAndCollect('pi', {
-      pluginRelPath: path.join('extensions', 'gsd.cjs'),
+      pluginRelPath: path.join(piNativePlugin.dir, piNativePlugin.file),
     });
     const basenames = hookFiles.map((f) => path.basename(f));
     for (const expected of ['gsd-ensure-canonical-path.js', 'gsd-workflow-guard.js', 'gsd-context-monitor.js']) {
@@ -787,7 +799,10 @@ describe('#1821/#2305: ZCode receives no dead hook files; Kilo/OpenCode/Claude k
     }
     assert.ok(hooksLibExists, 'pi install must create hooks/lib/');
     assert.ok(gitCmdExists, 'pi install must copy hooks/lib/git-cmd.js (the /gsd command tokenizer)');
-    assert.ok(pluginExists, 'pi install must install extensions/gsd.cjs (the native-extension hook bridge)');
+    assert.ok(
+      pluginExists,
+      `pi install must install ${piNativePlugin.dir}/${piNativePlugin.file} (the native-extension hook bridge)`,
+    );
   });
 
   // Positive control: guards against over-exclusion breaking runtimes that
