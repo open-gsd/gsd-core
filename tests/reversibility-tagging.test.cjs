@@ -280,24 +280,28 @@ function planWith({ reversibility = null, precedingCheckpoint = false } = {}) {
   const task = [];
   if (precedingCheckpoint) {
     task.push(
-      // Checkpoint tasks still carry the common elements the validator requires
-      // of every task — see the canonical shape in tests/verify.test.cjs. The
-      // abbreviated skeleton in gsd-planner.md shows only the checkpoint-specific
-      // elements, not the full task.
+      // Per #2444, cmdVerifyPlanStructure branches on task type: a
+      // checkpoint:decision requires <name> + <resume-signal> + <decision> +
+      // <options>, and is exempt from the <action>/<verify>/<done>/<files> set
+      // that auto/tracer tasks carry. This fixture mirrors that contract
+      // exactly rather than padding it with fields checkpoints do not need.
       '<task type="checkpoint:decision" gate="blocking">',
       '  <name>Task 0: Confirm the on-disk format</name>',
-      '  <files>src/x.ts</files>',
-      '  <action>Present the format options and halt for the decision.</action>',
       '  <decision>Pick the on-disk format</decision>',
       '  <context>Later phases read this file.</context>',
+      '  <options>',
+      '    <option id="option-a">',
+      '      <name>Newline-delimited JSON</name>',
+      '      <pros>Streamable, appendable, greppable</pros>',
+      '      <cons>Larger on disk than a binary frame</cons>',
+      '    </option>',
+      '    <option id="option-b">',
+      '      <name>Length-prefixed binary</name>',
+      '      <pros>Compact, fast to seek</pros>',
+      '      <cons>Opaque to standard tooling</cons>',
+      '    </option>',
+      '  </options>',
       '  <resume-signal>Select: option-a or option-b</resume-signal>',
-      // Plain-prose <verify> (a documented accepted form), deliberately NOT the
-      // human-verification child element used elsewhere in the suite corpus:
-      // that tag name is a fake-instruction-boundary pattern in
-      // scripts/prompt-injection-scan.sh, so it trips the security gate on any
-      // changed file — including, as this comment learned, prose describing it.
-      '  <verify>Developer selected an option</verify>',
-      '  <done>Format selected and recorded</done>',
       '</task>',
       '',
     );
