@@ -96,7 +96,6 @@ describe('prevention / blameless-postmortem output (#1963, epic #1957 Phase 3B)'
       const content = fs.readFileSync(AGENT, 'utf8');
       const requiredFields = ['Date', 'Error patterns', 'Root cause', 'Fix', 'Files changed', 'Why not caught', 'Recurrence guard'];
       for (const field of requiredFields) {
-        const re = new RegExp(`\\*\\*${field}`, 'i');
         const matches = content.match(new RegExp(`\\*\\*${field}`, 'gi'));
         assert.ok(
           matches && matches.length >= 2,

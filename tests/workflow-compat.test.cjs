@@ -161,7 +161,11 @@ describe('feat-41: ship.md TDD Audit gate_status extraction', () => {
   test('#2431: step 9 (aggregate trailer) is also gated on real values existing', () => {
     // The aggregate gate_status trailer is the companion to the TDD Audit
     // section; both must be skipped together when no real gate_status exists.
-    const step9 = workflow.match(/\*\*9\.\s*Aggregate gate_status trailer[\s\S]*?(?=\*\*10\.|\z)/);
+    // `\z` is a Perl/Ruby end-of-input anchor with NO meaning in JavaScript — it
+    // matched a literal `z`, so the lazy span silently stopped at the first `z`
+    // whenever `**10.` was absent, truncating the captured step. `$` (no /m flag)
+    // is the JS end-of-input anchor.
+    const step9 = workflow.match(/\*\*9\.\s*Aggregate gate_status trailer[\s\S]*?(?=\*\*10\.|$)/);
     assert.ok(step9, 'step 9 must exist in the workflow');
     assert.match(step9[0], /step 8|at least one|real/i,
       'step 9 must reference step 8 or require at least one real gate_status value (#2431)');

@@ -2654,36 +2654,34 @@ describe('migration.plan()', () => {
 
   test('a regular managed file is still backed up by content (no behavior change)', (t) => {
     const configDir = createTempInstall();
-    try {
-      writeFile(configDir, 'extensions/gsd.cjs', 'locally patched extension\n');
-      writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
+    t.after(() => cleanup(configDir));
 
-      const result = runInstallerMigrations({
-        configDir,
-        runtime: 'pi',
-        scope: 'global',
-        migrations: [piExtensionMigration],
-        now: () => '2026-07-20T00:00:00.000Z',
-      });
+    writeFile(configDir, 'extensions/gsd.cjs', 'locally patched extension\n');
+    writeManifest(configDir, { 'extensions/gsd.cjs': sha256('the original extension\n') });
 
-      const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
-      assert.ok(backupAction, 'expected backup-and-remove for the locally patched file');
+    const result = runInstallerMigrations({
+      configDir,
+      runtime: 'pi',
+      scope: 'global',
+      migrations: [piExtensionMigration],
+      now: () => '2026-07-20T00:00:00.000Z',
+    });
 
-      // The PLAN carries backupRelPath: null — the concrete backup location is
-      // chosen during apply and recorded in the journal, so read it from there.
-      const journal = JSON.parse(fs.readFileSync(path.join(configDir, result.journalRelPath), 'utf8'));
-      const journalled = journal.actions.find((a) => a.backupRelPath);
-      assert.ok(journalled, 'apply must record the backup path in the journal for the user');
-      const backupPath = path.join(configDir, journalled.backupRelPath);
-      assert.equal(
-        fs.readFileSync(backupPath, 'utf8'),
-        'locally patched extension\n',
-        'a real file must still be backed up by content so the user can recover it',
-      );
-      assert.ok(!fs.existsSync(path.join(configDir, 'extensions', 'gsd.cjs')));
-    } finally {
-      cleanup(configDir);
-    }
+    const backupAction = result.plan.actions.find((a) => a.type === 'backup-and-remove');
+    assert.ok(backupAction, 'expected backup-and-remove for the locally patched file');
+
+    // The PLAN carries backupRelPath: null — the concrete backup location is
+    // chosen during apply and recorded in the journal, so read it from there.
+    const journal = JSON.parse(fs.readFileSync(path.join(configDir, result.journalRelPath), 'utf8'));
+    const journalled = journal.actions.find((a) => a.backupRelPath);
+    assert.ok(journalled, 'apply must record the backup path in the journal for the user');
+    const backupPath = path.join(configDir, journalled.backupRelPath);
+    assert.equal(
+      fs.readFileSync(backupPath, 'utf8'),
+      'locally patched extension\n',
+      'a real file must still be backed up by content so the user can recover it',
+    );
+    assert.ok(!fs.existsSync(path.join(configDir, 'extensions', 'gsd.cjs')));
   });
 
   // In-flight failure recovery: when a later step of the SAME apply() attempt
