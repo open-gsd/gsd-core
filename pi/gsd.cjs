@@ -9,8 +9,14 @@
  * This extension binds GSD's command surface to pi via the imperative adapter
  * path — the programmatic-CLI peer of the OpenCode worked binding.
  *
- * Installation: copy this file to ~/.pi/agent/extensions/gsd.cjs (pi loads
- * extensions via jiti from that dir). The engine is resolved from the installed
+ * Installation: copy this file to ~/.pi/agent/extensions/gsd.js — note the
+ * `.js` DEST suffix, not `.cjs`. pi auto-discovers extensions/ entries through
+ * `isExtensionFile()`, which accepts only `.ts`/`.js` and skips anything else
+ * SILENTLY (no error, no log line), so a `.cjs` dest installs fine and is then
+ * never loaded (#2470). This source file keeps its `.cjs` suffix on purpose —
+ * tests `require()` it directly and `.cjs` is unambiguous CommonJS — and pi
+ * loads the copied file via jiti, which handles CommonJS and ESM alike, so the
+ * suffix gates discovery, not parsing. The engine is resolved from the installed
  * GSD tree (walk-up like the OpenCode plugin). pi's shared hooks/ bundle
  * (hooks/*.js + hooks/lib/git-cmd.js) is installed alongside the extension —
  * capabilities/pi/capability.json does NOT set
