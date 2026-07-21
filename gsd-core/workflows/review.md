@@ -286,10 +286,19 @@ fi
 
 **Claude (separate session):**
 ```bash
+# #2483: the review prompt is self-contained — `gather_context` assembles PROJECT.md,
+# the roadmap section, every PLAN file, CONTEXT.md, RESEARCH.md and REQUIREMENTS.md
+# into it before any reviewer runs, and nothing here tells a reviewer to consult
+# CLAUDE.md. The gemini leg sees only that prompt and the codex leg runs `--ephemeral`,
+# so the claude leg was the only one additionally inheriting the invoking user's global
+# CLAUDE.md, the project CLAUDE.md and Claude Code auto-memory. Disable that injection
+# per-invocation so all three legs review the same input. Use `env`, never `export` —
+# the flag must not leak into the orchestrating session (which may itself be Claude Code
+# on the SELF_CLI="auto" path) or into any later spawn.
 if [ -n "$CLAUDE_MODEL" ] && [ "$CLAUDE_MODEL" != "null" ]; then
-  cat {run_dir}/gsd-review-prompt.md | claude --model "$CLAUDE_MODEL" $CLAUDE_EFFORT_ARGS -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
+  cat {run_dir}/gsd-review-prompt.md | env CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude --model "$CLAUDE_MODEL" $CLAUDE_EFFORT_ARGS -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
 else
-  cat {run_dir}/gsd-review-prompt.md | claude $CLAUDE_EFFORT_ARGS -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
+  cat {run_dir}/gsd-review-prompt.md | env CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 claude $CLAUDE_EFFORT_ARGS -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
 fi
 ```
 
