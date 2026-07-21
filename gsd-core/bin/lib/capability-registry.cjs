@@ -1767,17 +1767,7 @@ const capabilities = {
       "localConfigDir": ".kimi-code",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [
-          {
-            "kind": "skills",
-            "destSubpath": "skills",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null,
-            "home": ".kimi-code"
-          }
-        ],
+        "global": [],
         "local": []
       },
       "commandStyle": "slash-hyphen",
@@ -5160,17 +5150,7 @@ const runtimes = {
       "localConfigDir": ".kimi-code",
       "configFormat": "none",
       "artifactLayout": {
-        "global": [
-          {
-            "kind": "skills",
-            "destSubpath": "skills",
-            "prefix": "gsd-",
-            "nesting": "flat",
-            "recursive": false,
-            "converter": null,
-            "home": ".kimi-code"
-          }
-        ],
+        "global": [],
         "local": []
       },
       "commandStyle": "slash-hyphen",

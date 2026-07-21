@@ -26,11 +26,19 @@ const EXPECTED_FLAGS = [
 const NON_INSTALLABLE_RUNTIMES = new Set(['vscode']);
 
 test('runtimeFlags: every known non-claude runtime sets exactly its own flag true', () => {
-  const ids = EXPECTED_FLAGS.map((f) => f.slice(2).toLowerCase());
-  for (const id of ids) {
+  // Convert a flag name (camelCase, e.g. isKimiCode) to the runtime id it
+  // represents (kimi-code). Strip the 'is' prefix, then split camelCase
+  // boundaries into hyphen-separated lowercase words. The simpler
+  // slice(2).toLowerCase() worked while every runtime id was a single word;
+  // kimi-code is the first hyphenated id.
+  const flagToId = (flag) => flag.slice(2)
+    .replace(/[A-Z]/g, (m, i) => (i > 0 ? '-' : '') + m.toLowerCase());
+  const idToFlag = (id) => 'is' + id.charAt(0).toUpperCase() + id.slice(1).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  for (const flag of EXPECTED_FLAGS) {
+    const id = flagToId(flag);
     const flags = runtimeFlags(id);
     const trues = EXPECTED_FLAGS.filter((f) => flags[f] === true);
-    assert.deepStrictEqual(trues, ['is' + id.charAt(0).toUpperCase() + id.slice(1)], `runtime '${id}' must set exactly its own flag`);
+    assert.deepStrictEqual(trues, [idToFlag(id)], `runtime '${id}' must set exactly its own flag`);
   }
 });
 
