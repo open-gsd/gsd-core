@@ -275,10 +275,19 @@ function planWith({ reversibility = null, precedingCheckpoint = false } = {}) {
   const task = [];
   if (precedingCheckpoint) {
     task.push(
+      // Checkpoint tasks still carry the common elements the validator requires
+      // of every task — see the canonical shape in tests/verify.test.cjs. The
+      // abbreviated skeleton in gsd-planner.md shows only the checkpoint-specific
+      // elements, not the full task.
       '<task type="checkpoint:decision" gate="blocking">',
+      '  <name>Task 0: Confirm the on-disk format</name>',
+      '  <files>src/x.ts</files>',
+      '  <action>Present the format options and halt for the decision.</action>',
       '  <decision>Pick the on-disk format</decision>',
       '  <context>Later phases read this file.</context>',
       '  <resume-signal>Select: option-a or option-b</resume-signal>',
+      '  <verify><human>Developer selected an option</human></verify>',
+      '  <done>Format selected and recorded</done>',
       '</task>',
       '',
     );
