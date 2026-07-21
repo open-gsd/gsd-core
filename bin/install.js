@@ -12419,14 +12419,15 @@ function buildRuntimePromptText() {
   ${cyan}8${reset}) Cursor       ${dim}(~/.cursor)${reset}
   ${cyan}9${reset}) Hermes Agent ${dim}(~/.hermes)${reset}
   ${cyan}10${reset}) Kimi         ${dim}(~/.config/agents, then ~/.agents if existing)${reset}
-  ${cyan}11${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
-  ${cyan}12${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
-  ${cyan}13${reset}) pi           ${dim}(~/.pi/agent)${reset}
-  ${cyan}14${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
-  ${cyan}15${reset}) Trae         ${dim}(~/.trae)${reset}
-  ${cyan}16${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
-  ${cyan}17${reset}) ZCode        ${dim}(~/.zcode)${reset}
-  ${cyan}18${reset}) All
+  ${cyan}11${reset}) Kimi Code    ${dim}(~/.kimi-code)${reset}
+  ${cyan}12${reset}) Kilo         ${dim}(~/.config/kilo)${reset}
+  ${cyan}13${reset}) OpenCode     ${dim}(~/.config/opencode)${reset}
+  ${cyan}14${reset}) pi           ${dim}(~/.pi/agent)${reset}
+  ${cyan}15${reset}) Qwen Code    ${dim}(~/.qwen)${reset}
+  ${cyan}16${reset}) Trae         ${dim}(~/.trae)${reset}
+  ${cyan}17${reset}) Windsurf     ${dim}(~/.codeium/windsurf)${reset}
+  ${cyan}18${reset}) ZCode        ${dim}(~/.zcode)${reset}
+  ${cyan}19${reset}) All
 
   ${dim}Select multiple: 1,2,6 or 1 2 6${reset}
 `;
@@ -12437,7 +12438,7 @@ function buildRuntimePromptText() {
  * Pure function — exported so tests can verify split/dedupe/fallback behavior.
  *  - Accepts comma- and/or whitespace-separated choices
  *  - Deduplicates while preserving order
- *  - Maps option 16 ("All") to every runtime
+ *  - Maps option 19 ("All") to every runtime
  *  - Falls back to ['claude'] when nothing valid is selected
  */
 function parseRuntimeInput(answer) {
