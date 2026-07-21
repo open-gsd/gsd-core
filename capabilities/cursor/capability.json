@@ -97,7 +97,8 @@
       "hookBus": "host",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "node"
+      "runtime": "node",
+      "effortSurface": "undocumented"
     },
     "hostBehaviors": {
       "reapplyCommand": "gsd-update --reapply (mention the skill name)",

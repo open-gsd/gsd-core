@@ -78,7 +78,8 @@
       "hookBus": "host",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "node"
+      "runtime": "node",
+      "effortSurface": "argv"
     },
     "hostBehaviors": {
       "attributionSource": "settings-json-commit",

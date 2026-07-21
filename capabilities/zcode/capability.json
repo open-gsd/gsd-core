@@ -96,7 +96,8 @@
       "hookBus": "host",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "electron"
+      "runtime": "electron",
+      "effortSurface": "undocumented"
     },
     "hostBehaviors": {
       "skipSharedHooksInstall": true

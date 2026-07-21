@@ -182,7 +182,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "go"
+        "runtime": "go",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reviewerCli": true,
@@ -379,7 +380,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -509,7 +511,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "attributionSource": "settings-json-commit",
@@ -679,7 +682,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -856,7 +860,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reportCommandsDir": true
@@ -936,7 +941,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "$gsd-update --reapply",
@@ -1031,7 +1037,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -1140,7 +1147,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "gsd-update --reapply (mention the skill name)",
@@ -1490,7 +1498,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -1636,7 +1645,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -1729,7 +1739,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/skill:gsd-update --reapply",
@@ -2050,7 +2061,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -2173,7 +2185,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -2350,7 +2363,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skillPriorityFrontmatter": true,
@@ -2699,7 +2713,8 @@ const capabilities = {
         "hookBus": "engine",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -2849,7 +2864,8 @@ const capabilities = {
         "hookBus": "engine",
         "stateIO": "sandboxed-storage",
         "transport": "mcp",
-        "runtime": "sandboxed-web"
+        "runtime": "sandboxed-web",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -2928,7 +2944,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -3036,7 +3053,8 @@ const capabilities = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "electron"
+        "runtime": "electron",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true
@@ -4062,7 +4080,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "go"
+        "runtime": "go",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reviewerCli": true,
@@ -4176,7 +4195,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -4260,7 +4280,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "attributionSource": "settings-json-commit",
@@ -4342,7 +4363,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -4458,7 +4480,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reportCommandsDir": true
@@ -4538,7 +4561,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "$gsd-update --reapply",
@@ -4633,7 +4657,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -4742,7 +4767,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "gsd-update --reapply (mention the skill name)",
@@ -4849,7 +4875,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -4943,7 +4970,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -5036,7 +5064,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "python"
+        "runtime": "python",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "reapplyCommand": "/skill:gsd-update --reapply",
@@ -5133,7 +5162,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "argv"
       },
       "hostBehaviors": {
         "reapplyCommand": "/gsd-update --reapply",
@@ -5202,7 +5232,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "session-log-append",
         "transport": "native-extension",
-        "runtime": "bun"
+        "runtime": "bun",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "nativePlugin": {
@@ -5302,7 +5333,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skillPriorityFrontmatter": true,
@@ -5401,7 +5433,8 @@ const runtimes = {
         "hookBus": "engine",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "node"
+        "runtime": "node",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -5456,7 +5489,8 @@ const runtimes = {
         "hookBus": "engine",
         "stateIO": "sandboxed-storage",
         "transport": "mcp",
-        "runtime": "sandboxed-web"
+        "runtime": "sandboxed-web",
+        "effortSurface": "undocumented"
       }
     }
   },
@@ -5535,7 +5569,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "undocumented"
+        "runtime": "undocumented",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true,
@@ -5643,7 +5678,8 @@ const runtimes = {
         "hookBus": "host",
         "stateIO": "filesystem",
         "transport": "mcp",
-        "runtime": "electron"
+        "runtime": "electron",
+        "effortSurface": "undocumented"
       },
       "hostBehaviors": {
         "skipSharedHooksInstall": true

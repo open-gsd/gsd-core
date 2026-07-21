@@ -46,7 +46,8 @@
       "hookBus": "host",
       "stateIO": "session-log-append",
       "transport": "native-extension",
-      "runtime": "bun"
+      "runtime": "bun",
+      "effortSurface": "undocumented"
     },
     "hostBehaviors": {
       "nativePlugin": {

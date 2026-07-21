@@ -74,7 +74,8 @@
       "hookBus": "host",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "python"
+      "runtime": "python",
+      "effortSurface": "undocumented"
     },
     "hostBehaviors": {
       "reapplyCommand": "/skill:gsd-update --reapply",

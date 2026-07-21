@@ -80,7 +80,8 @@
       "hookBus": "engine",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "node"
+      "runtime": "node",
+      "effortSurface": "undocumented"
     },
     "hostBehaviors": {
       "skipSharedHooksInstall": true,

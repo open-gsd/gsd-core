@@ -45,7 +45,8 @@
       "hookBus": "engine",
       "stateIO": "sandboxed-storage",
       "transport": "mcp",
-      "runtime": "sandboxed-web"
+      "runtime": "sandboxed-web",
+      "effortSurface": "undocumented"
     }
   }
 }

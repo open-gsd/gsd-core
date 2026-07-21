@@ -73,7 +73,8 @@
       "hookBus": "host",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "undocumented"
+      "runtime": "undocumented",
+      "effortSurface": "undocumented"
     },
     "hostBehaviors": {
       "skipSharedHooksInstall": true,

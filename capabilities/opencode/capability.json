@@ -83,7 +83,8 @@
       "hookBus": "host",
       "stateIO": "filesystem",
       "transport": "mcp",
-      "runtime": "bun"
+      "runtime": "bun",
+      "effortSurface": "argv"
     },
     "hostBehaviors": {
       "reapplyCommand": "/gsd-update --reapply",
