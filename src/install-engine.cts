@@ -1106,9 +1106,20 @@ function _installNativePluginIfDeclared(
   if (np && np.source) {
     const pluginSrc = path.join(src, np.source);
     if (fs.existsSync(pluginSrc)) {
-      const destDir = runtimeArtifactInstallPlan.assertDestWithinConfigHome(configDir, np.dir);
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(pluginSrc, path.join(destDir, np.file));
+      // Confine the FULL dest path (dir + file), not just the dir. Previously
+      // only `np.dir` was validated and `np.file` was joined on unchecked, so a
+      // descriptor whose `file` carried `..`, an absolute path, or a NUL byte
+      // would have written outside configHome. Not reachable today — descriptors
+      // are first-party and compiled into the capability registry at build time —
+      // but `np.file` is exactly the field #2470 changes, and the guard costs
+      // nothing. For a well-formed descriptor this resolves identically to the
+      // previous mkdir(dir) + join(dir, file).
+      const destPath = runtimeArtifactInstallPlan.assertDestWithinConfigHome(
+        configDir,
+        path.join(np.dir, np.file),
+      );
+      fs.mkdirSync(path.dirname(destPath), { recursive: true });
+      fs.copyFileSync(pluginSrc, destPath);
     }
   }
 }

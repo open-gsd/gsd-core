@@ -1665,6 +1665,14 @@ test('shipped installer-migration checksums are locked to a committed baseline (
     // fix-forward migration widens the scanned surface without touching 000.
     '2026-07-17-opencode-baseline-commands-dir':
       'sha256:0f6080b5f9b75fb5adbe9664a71152e23a5336813453b0a77e4df6fd483ad38e',
+    // Migration 006 (NEW, added here per this test's own sanctioned "adding a new
+    // migration" case — not a shipped-body edit): retire pi's stale
+    // extensions/gsd.cjs. #2470 renamed the installed extension to
+    // extensions/gsd.js because pi's isExtensionFile() auto-discovery accepts
+    // only .ts/.js and silently skips everything else; without this migration the
+    // old path drops out of the manifest and uninstall can never remove it.
+    '2026-07-20-pi-extension-cjs-to-js':
+      'sha256:185fa926ae24d83cbdd95c31a9ad2cc8d123e176ad543669b3b0ed75e6ca6f4a',
   };
 
   const { DEFAULT_MIGRATIONS_DIR, migrationChecksum: computeChecksum } = require('../gsd-core/bin/lib/installer-migrations.cjs');

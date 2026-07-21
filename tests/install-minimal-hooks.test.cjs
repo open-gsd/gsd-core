@@ -678,7 +678,7 @@ describe('#1755: .sh hooks are copied and executable after install', () => {
 // hooksSurface:'none', but each has a native plugin adapter that spawns the
 // staged hooks/*.js scripts as subprocesses (OpenCode's #1914
 // plugins/gsd-core.js via OpenCode's event bus; pi's #2102 Stage 2 pi/gsd.cjs
-// → extensions/gsd.cjs via pi.on(...) bridges; Kilo's plugins/gsd-core.js,
+// → extensions/gsd.js via pi.on(...) bridges; Kilo's plugins/gsd-core.js,
 // byte-identical to OpenCode's) — so for all three, the hooks are LIVE and
 // must keep being copied. ZCode has no plugin surface at all, so its staged
 // hooks are genuinely dead: that is the case #1821's fix removes. (#1821
@@ -766,7 +766,7 @@ describe('#1821/#2305: ZCode receives no dead hook files; Kilo/OpenCode/Claude k
   });
 
   // pi ALSO declares hooksSurface:'none', but — like OpenCode — it is NOT a
-  // dead-weight case: pi's native extension (pi/gsd.cjs → extensions/gsd.cjs)
+  // dead-weight case: pi's native extension (pi/gsd.cjs → extensions/gsd.js)
   // spawns the staged hooks/*.js scripts as bounded subprocesses (session_start
   // → gsd-ensure-canonical-path.js, before_agent_start → gsd-workflow-guard.js,
   // session_before_compact → gsd-context-monitor.js — #2102 Stage 2), and its
