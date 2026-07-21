@@ -135,6 +135,7 @@ function convertClaudeCommandToKiloSkill(content: string, skillName: string): st
 const SKILLS_CONVERTER_REGISTRY: Record<string, (content: string, skillName: string) => string> = {
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,
+  convertClaudeCommandToKimiCodeSkill: runtimeArtifactConversion.convertClaudeCommandToKimiCodeSkill,
 };
 
 // ---------------------------------------------------------------------------
