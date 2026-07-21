@@ -63,6 +63,11 @@
   "kimi": [
     "kimi"
   ],
+  "kimi-code": [
+    "kimi-code",
+    "kimicode",
+    "kimi_code"
+  ],
   "codebuddy": [
     "codebuddy",
     "codebuddy-cli"

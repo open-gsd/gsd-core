@@ -158,17 +158,18 @@ describe('install.js exports multi-select runtime metadata', () => {
     '8': 'cursor',
     '9': 'hermes',
     '10': 'kimi',
-    '11': 'kilo',
-    '12': 'opencode',
-    '13': 'pi',
-    '14': 'qwen',
-    '15': 'trae',
-    '16': 'windsurf',
-    '17': 'zcode',
+    '11': 'kimi-code',
+    '12': 'kilo',
+    '13': 'opencode',
+    '14': 'pi',
+    '15': 'qwen',
+    '16': 'trae',
+    '17': 'windsurf',
+    '18': 'zcode',
   };
   const expectedRuntimes = [
     'claude', 'antigravity', 'augment', 'cline', 'codebuddy', 'codex',
-    'copilot', 'cursor', 'hermes', 'kimi', 'kilo', 'opencode', 'pi',
+    'copilot', 'cursor', 'hermes', 'kimi', 'kimi-code', 'kilo', 'opencode', 'pi',
     'qwen', 'trae', 'windsurf', 'zcode',
   ];
 
@@ -186,12 +187,16 @@ describe('install.js exports multi-select runtime metadata', () => {
       'allRuntimes has no duplicates');
   });
 
-  test('"All" shortcut (option 18) selects every runtime', () => {
-    assert.deepStrictEqual(parseRuntimeInput('18'), allRuntimes);
+  test('"All" shortcut (option 19) selects every runtime', () => {
+    assert.deepStrictEqual(parseRuntimeInput('19'), allRuntimes);
   });
 
-  test('--kimi flag selects Kimi without interactive prompt', () => {
+  test('--kimi flag selects Kimi (Python kimi-cli) without interactive prompt', () => {
     assert.deepStrictEqual(selectRuntimesFromArgs(['--kimi']), ['kimi']);
+  });
+
+  test('--kimi-code flag selects Kimi Code (Node CLI) without interactive prompt (#2454)', () => {
+    assert.deepStrictEqual(selectRuntimesFromArgs(['--kimi-code']), ['kimi-code']);
   });
 
   test('--zcode flag selects ZCode without interactive prompt', () => {
