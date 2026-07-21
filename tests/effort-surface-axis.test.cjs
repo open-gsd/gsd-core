@@ -1,4 +1,4 @@
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product (see #2481)
 // The final describe block asserts on gsd-core/workflows/review.md's text. A
 // workflow .md IS what the runtime loads — its literal command lines are the
 // deployed contract, and there is no runtime seam that executes review.md here.
