@@ -250,7 +250,21 @@ function selectShard(sortedFiles, { index, total }, weightOf) {
   for (const entry of order) {
     let lightest = 0;
     for (let i = 1; i < total; i += 1) {
-      if (bins[i].weight < bins[lightest].weight) lightest = i;
+      const bin = bins[i];
+      const best = bins[lightest];
+      // Weight first, then FILE COUNT. The count tiebreak is load-bearing, not
+      // cosmetic: adding a zero-weight file leaves its bin's weight unchanged,
+      // so on weight alone bin 0 stays tied-minimum forever and every
+      // zero-weight file lands on it — all-zero weights put the whole suite on
+      // shard 1 and leave the other runners idle. Zero weights are reachable
+      // via safeWeight's clamp (a NaN/negative/Infinity entry in a hand-edited
+      // or corrupted timings table) and via any genuinely 0ms measurement, so
+      // the clamp above would otherwise reproduce the exact pile-onto-bin-0
+      // failure it exists to prevent. Counting picks makes ties rotate.
+      if (bin.weight < best.weight
+        || (bin.weight === best.weight && bin.picks.length < best.picks.length)) {
+        lightest = i;
+      }
     }
     bins[lightest].weight += entry.weight;
     bins[lightest].picks.push(entry.k);
@@ -707,14 +721,27 @@ function main() {
   // shard partition below and the chunk packer further down share this one cost
   // model. Advisory in both places — a missing table yields uniform weight 1,
   // which makes the shard partition degenerate to the legacy equal-count split.
-  const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
-  const fileWeight = makeFileWeigher(loadTestTimings(timingsPath));
+  // Lazily memoized: BOTH layers weigh by it now (#2472) — the shard partition
+  // just below and the chunk packer further down share this one cost model —
+  // but neither should charge a readFileSync + JSON.parse to an invocation that
+  // exits before it needs one (an empty selection, or `--files` with nothing
+  // matched). Memoized so the two consumers still read the table at most once.
+  // Advisory in both places: a missing table yields uniform weight 1, under
+  // which the shard partition degenerates to the legacy equal-count split.
+  let weigherMemo = null;
+  const fileWeightOf = () => {
+    if (weigherMemo === null) {
+      const timingsPath = process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH;
+      weigherMemo = makeFileWeigher(loadTestTimings(timingsPath));
+    }
+    return weigherMemo;
+  };
 
   const usingShard = parsed.shard !== null;
   let emptyBeforeShard = false;
   if (usingShard) {
     emptyBeforeShard = selectedNames.length === 0;
-    selectedNames = selectShard([...selectedNames].sort(), parsed.shard, fileWeight);
+    selectedNames = selectShard([...selectedNames].sort(), parsed.shard, fileWeightOf());
   }
 
   const selected = selectedNames.map(f => join(testDir, f));
@@ -845,8 +872,8 @@ function main() {
   // falls back to the table's median weight and a missing table falls back to
   // uniform weight 1, so staleness degrades chunk BALANCE gracefully instead of
   // failing CI. Regenerate via `node scripts/gen-test-timings.cjs <events.jsonl>`.
-  // `fileWeight` is built once above, before the shard partition, because both
-  // layers consume it (#2472).
+  // The cost table is loaded lazily above and memoized; both the shard
+  // partition and this packer consume the same weigher (#2472).
 
   // node:test does not exit until the event loop drains. A unit test that leaks
   // an open handle (un-terminated Worker, un-killed child_process, ref'd timer)
@@ -863,7 +890,7 @@ function main() {
 
   const FIXED_OVERHEAD = process.execPath.length + '--test'.length + concurrency.length + (forceExit ? '--test-force-exit'.length + 1 : 0) + 8;
   const chunks = packChunks(selected, {
-    weightOf: fileWeight,
+    weightOf: fileWeightOf(),
     maxWeight: MAX_FILES_PER_CHUNK,
     maxChars: MAX_CMDLINE_CHARS,
     fixedOverhead: FIXED_OVERHEAD,

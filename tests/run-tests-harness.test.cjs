@@ -848,6 +848,34 @@ describe('selectShard round-robin partition (#1212)', () => {
     const sizes5 = [1, 2, 3, 4, 5].map(i => selectShard(four, { index: i, total: 5 }).length).sort();
     assert.deepStrictEqual(sizes5, [0, 1, 1, 1, 1]);
   });
+
+  test('property: partition is complete, disjoint, and balanced for any n,N', () => {
+    const fc = require('fast-check');
+    fc.assert(
+      fc.property(
+        fc.array(fc.string(), { minLength: 0, maxLength: 50 }),
+        fc.integer({ min: 1, max: 12 }),
+        (rawFiles, n) => {
+          // Caller contract: deduped + sorted list. Mirror it so the property
+          // exercises the same shape the runner feeds selectShard.
+          const list = [...new Set(rawFiles)].sort();
+          const shards = [];
+          for (let i = 1; i <= n; i++) shards.push(selectShard(list, { index: i, total: n }));
+          // completeness + disjointness
+          const flat = shards.flat();
+          assert.deepStrictEqual([...flat].sort(), [...list].sort());
+          assert.strictEqual(new Set(flat).size, list.length);
+          // balance — shard sizes differ by at most 1 (sizes is never empty
+          // because n >= 1, so there is always at least one shard).
+          const sizes = shards.map(s => s.length);
+          assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `sizes=${sizes}`);
+        },
+      ),
+      // Seed pinned so a failure is reproducible (repo convention for property
+      // tests); previously unseeded, flagged by the #2472 isolated review.
+      { numRuns: 200, seed: 12120 },
+    );
+  });
 });
 
 // ─── #2472: weight-aware shard partition ────────────────────────────────────
@@ -1012,29 +1040,43 @@ describe('selectShard weight-aware partition (#2472)', () => {
   // distribution, so no arrangement of filenames can produce the 1.23x cluster
   // that round-robin allowed — which the skewed regression above pins directly.
 
-  test('property: partition is complete, disjoint, and balanced for any n,N', () => {
-    const fc = require('fast-check');
+  // Zero-weight regression (isolated review, HIGH). Adding a zero-weight file
+  // leaves its bin's weight unchanged, so a weight-only tiebreak kept bin 0
+  // tied-minimum forever and every such file landed there: all-zero weights put
+  // the entire suite on shard 1 and left the other runners idle. Reachable via
+  // safeWeight's clamp of a NaN/negative/Infinity entry, or any genuine 0ms
+  // measurement. The file-count tiebreak is what makes ties rotate.
+  test('REGRESSION: zero weights still split evenly across shards', () => {
+    const files = Array.from({ length: 9 }, (_, i) => `z${i}.test.cjs`);
+    const sizes = [1, 2, 3].map((i) => selectShard(files, { index: i, total: 3 }, () => 0).length);
+    assert.deepStrictEqual(sizes, [3, 3, 3], `all-zero weights must not collapse onto one shard; got ${sizes}`);
+  });
+
+  test('REGRESSION: clamped NaN/negative/Infinity weights do not collapse', () => {
+    const files = ['a', 'b', 'c', 'd', 'e', 'f'].map((x) => `${x}.test.cjs`);
+    const hostile = { 'a.test.cjs': NaN, 'b.test.cjs': -5, 'c.test.cjs': Infinity };
+    const sizes = [1, 2, 3].map(
+      (i) => selectShard(files, { index: i, total: 3 }, (f) => (f in hostile ? hostile[f] : 1)).length,
+    );
+    assert.ok(
+      Math.max(...sizes) - Math.min(...sizes) <= 1,
+      `weights that clamp to 0 must still spread; got ${sizes}`,
+    );
+  });
+
+  test('property: zero weights spread evenly for any list size and shard count', () => {
     fc.assert(
       fc.property(
-        fc.array(fc.string(), { minLength: 0, maxLength: 50 }),
-        fc.integer({ min: 1, max: 12 }),
-        (rawFiles, n) => {
-          // Caller contract: deduped + sorted list. Mirror it so the property
-          // exercises the same shape the runner feeds selectShard.
-          const list = [...new Set(rawFiles)].sort();
-          const shards = [];
-          for (let i = 1; i <= n; i++) shards.push(selectShard(list, { index: i, total: n }));
-          // completeness + disjointness
-          const flat = shards.flat();
-          assert.deepStrictEqual([...flat].sort(), [...list].sort());
-          assert.strictEqual(new Set(flat).size, list.length);
-          // balance — shard sizes differ by at most 1 (sizes is never empty
-          // because n >= 1, so there is always at least one shard).
-          const sizes = shards.map(s => s.length);
+        fc.integer({ min: 1, max: 40 }),
+        fc.integer({ min: 2, max: 6 }),
+        (n, total) => {
+          const files = Array.from({ length: n }, (_, i) => `p${String(i).padStart(3, '0')}.test.cjs`);
+          const sizes = Array.from({ length: total }, (_, i) =>
+            selectShard(files, { index: i + 1, total }, () => 0).length);
           assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `sizes=${sizes}`);
         },
       ),
-      { numRuns: 200 },
+      { numRuns: 200, seed: 24723 },
     );
   });
 });
