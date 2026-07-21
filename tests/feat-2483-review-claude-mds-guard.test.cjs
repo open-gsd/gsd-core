@@ -53,8 +53,11 @@ describe('#2483 the claude reviewer leg suppresses CLAUDE.md + auto-memory injec
     // `claude --output-format text -p` would add an unguarded dispatch while a
     // narrower assertion stayed green. Instead: find every line that invokes the
     // `claude` binary with flags, and require the guard on each one.
+    // `.split(/\r?\n/)`, not `.split('\n')` — Windows git-autocrlf checkouts yield
+    // "\r\n", and a literal-"\n" split leaves a trailing "\r" on every line
+    // (local/no-crlf-fragile-split).
     const invocations = content
-      .split('\n')
+      .split(/\r?\n/)
       .filter((line) => /(?:^|[|;&(]|\s)claude\s+-{1,2}\w/.test(line));
 
     assert.equal(
