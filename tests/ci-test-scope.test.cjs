@@ -492,7 +492,7 @@ describe('test-full shard matrix parity (#1212)', () => {
     const n = distinctShards.length;
 
     // Distinct shard values must be exactly 1..n (1-based, contiguous) so the
-    // runner's round-robin selection covers every file with no gaps/overlaps.
+    // runner's cost-balanced shard selection covers every file with no gaps/overlaps.
     assert.deepStrictEqual(
       distinctShards,
       Array.from({ length: n }, (_, i) => i + 1),

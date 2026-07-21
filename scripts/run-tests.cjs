@@ -335,7 +335,13 @@ function loadTestTimings(timingsPath) {
     return null;
   }
   const timings = parsed.timings;
-  if (!timings || typeof timings !== 'object') return null;
+  // Array.isArray guard: `typeof [] === 'object'`, so a hand-edit that turned
+  // the map into a list would pass a bare typeof check and be accepted as a
+  // valid table. It degrades harmlessly (no basename ever matches an array
+  // index, so every file takes medianWeight), but silently accepting a
+  // malformed table is worse than rejecting it — reject, and fall back to
+  // uniform weight the same way a missing file does.
+  if (!timings || typeof timings !== 'object' || Array.isArray(timings)) return null;
   const values = Object.values(timings).filter(
     (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0,
   );
@@ -745,9 +751,13 @@ function main() {
 
   const usingShard = parsed.shard !== null;
   let emptyBeforeShard = false;
+  // The full pre-partition input, kept for the cross-job fingerprint below.
+  // It must be the list every shard job sees, not this job's slice.
+  let shardInput = null;
   if (usingShard) {
     emptyBeforeShard = selectedNames.length === 0;
-    selectedNames = selectShard([...selectedNames].sort(), parsed.shard, fileWeightOf());
+    shardInput = [...selectedNames].sort();
+    selectedNames = selectShard(shardInput, parsed.shard, fileWeightOf());
   }
 
   const selected = selectedNames.map(f => join(testDir, f));
@@ -815,6 +825,51 @@ function main() {
       .map(f => f.split(/[\\/]/).pop())
       .join(' ')}`,
   );
+
+  // Shard diagnostics (#2472). File COUNT stopped being a balance signal the
+  // moment the partition started weighing by cost — two shards can now hold
+  // very different counts by design — so the count line above can no longer be
+  // eyeballed to spot a bad split. Worse, each shard job computes its partition
+  // independently on its own runner: if the inputs differ between jobs (the
+  // file list, or this table), two jobs can place the same file in different
+  // shards, or in none, and every job still looks internally consistent. That
+  // failure is silent — a test simply never runs and CI stays green.
+  //
+  // `sig` is the defense: a cheap fingerprint of the exact inputs the partition
+  // consumed. Every shard job of a given run must print the SAME sig; a
+  // mismatch across jobs is proof the runners disagreed about the input and
+  // therefore about the partition. `weighed` reports how many of this shard's
+  // files matched a real measurement — a table that silently failed to parse
+  // shows weighed=0 instead of being indistinguishable from a healthy load.
+  if (usingShard) {
+    const weigher = fileWeightOf();
+    const table = loadTestTimings(process.env.RUN_TESTS_TIMINGS_FILE || DEFAULT_TIMINGS_PATH);
+    const mine = selectedNames.map(f => f.split(/[\\/]/).pop());
+    const weighed = table
+      ? mine.filter(n => Object.hasOwn(table.timings, n)).length
+      : 0;
+    const myWeight = mine.reduce((sum, n) => sum + weigher(n), 0);
+    // Fingerprint the FULL pre-partition input — the file list and the weight
+    // each file was assigned — NOT this shard's slice. Every shard job of one
+    // run must print an identical sig; a mismatch is proof the runners
+    // disagreed about the input, which is the only way the union of shards can
+    // silently drop or duplicate a file. Order-independent sum of per-file
+    // (name, weight) hashes: stable across platforms, cheap for ~600 files.
+    let sig = 0;
+    for (const n of shardInput.map(f => f.split(/[\\/]/).pop())) {
+      let h = 2166136261;
+      for (let i = 0; i < n.length; i += 1) {
+        h = Math.imul(h ^ n.charCodeAt(i), 16777619);
+      }
+      sig = (sig + (h >>> 0) + Math.round(weigher(n) * 1000)) % 0xffffffff;
+    }
+    console.error(
+      `run-tests: shard=${parsed.shard.index}/${parsed.shard.total} `
+      + `files=${mine.length}/${shardInput.length} weighed=${weighed} `
+      + `weight=${myWeight.toFixed(2)} table=${table ? 'loaded' : 'absent'} `
+      + `sig=${sig.toString(16)}`,
+    );
+  }
 
   // Default concurrency: 4 on Linux/macOS, 2 on Windows.
   //

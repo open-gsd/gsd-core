@@ -488,6 +488,54 @@ test('ambient GSD workstream vars are stripped by the runner', () => {
       assert.doesNotMatch(r.stderr, /shard-02\.test\.cjs/);
     });
 
+    // #2472 E2E: every other --shard test here uses synthetic filenames that
+    // are absent from the real tests/test-timings.json, so they all collapse to
+    // one uniform median weight — under which LPT is mathematically identical
+    // to k % n. That means none of them can tell whether main() actually
+    // threads fileWeightOf() into selectShard: a typo on that single line would
+    // pass the entire existing suite. This test injects a table via
+    // RUN_TESTS_TIMINGS_FILE with DIFFERING costs, so the weighted partition is
+    // provably distinguishable from round-robin.
+    test('--shard routes by measured cost end-to-end, not by index', (t) => {
+      seed(tmpDir, SHARD_NAMES);
+      // Heavy files sit at indices 0/3/6 — exactly the slice round-robin hands
+      // to shard 1. Cost-weighting must NOT put all three on one shard.
+      const timings = {
+        schema_version: 1, unit: 'ms', timings: Object.fromEntries(
+          SHARD_NAMES.map((n, i) => [n, i % 3 === 0 ? 30000 : 100]),
+        ),
+      };
+      const tablePath = path.join(tmpDir, 'injected-timings.json');
+      fs.writeFileSync(tablePath, JSON.stringify(timings));
+      t.after(() => { try { fs.unlinkSync(tablePath); } catch { /* best effort */ } });
+
+      const r = runHarness(tmpDir, ['--shard', '1/3'], { RUN_TESTS_TIMINGS_FILE: tablePath });
+      assert.strictEqual(r.status, 0, `stderr: ${r.stderr}`);
+      // Round-robin would give shard 1 exactly {00,03,06} — all three heavies.
+      const heavies = ['shard-00', 'shard-03', 'shard-06']
+        .filter(n => new RegExp(`${n}\\.test\\.cjs`).test(r.stderr)).length;
+      assert.ok(
+        heavies < 3,
+        `cost-weighted shard 1 must not receive all three heavy files (that is the `
+        + `round-robin split, proving the weigher was not threaded); stderr: ${r.stderr}`,
+      );
+      // And the diagnostic must show the table was actually consumed.
+      assert.match(r.stderr, /table=loaded/, 'shard diagnostics must report the injected table as loaded');
+      assert.match(r.stderr, /sig=[0-9a-f]+/, 'shard diagnostics must emit an input fingerprint');
+    });
+
+    test('shard diagnostics report an identical input fingerprint across shards', () => {
+      seed(tmpDir, SHARD_NAMES);
+      // The cross-runner divergence guard: every shard of one run computes the
+      // partition independently, so all of them must agree on the INPUT. A
+      // differing sig between shard jobs is the only observable signal that
+      // they disagreed — which is how the union could silently drop a file.
+      const sigOf = (out) => (out.match(/sig=([0-9a-f]+)/) || [])[1];
+      const sigs = [1, 2, 3].map((i) => sigOf(runHarness(tmpDir, ['--shard', `${i}/3`]).stderr));
+      assert.ok(sigs.every(Boolean), `every shard must emit a sig; got ${JSON.stringify(sigs)}`);
+      assert.strictEqual(new Set(sigs).size, 1, `all shards must fingerprint the same input; got ${sigs}`);
+    });
+
     test('--shard 2/3 selects the second round-robin slice', () => {
       seed(tmpDir, SHARD_NAMES);
       const r = runHarness(tmpDir, ['--shard', '2/3']);
