@@ -1782,7 +1782,9 @@ function applySettingsJsonHooks(settings: any, opts: ApplySettingsJsonHooksOpts)
     // Configure PreToolUse hook for catastrophic-shrink protection (#2255, fix 3 of #973)
     // Hard-blocks a whole-file Write that collapses a curated .planning/ artifact
     // (ROADMAP.md, milestone roadmaps, STATE.md) far below its on-disk size.
-    // Escape hatch: GSD_ALLOW_PLANNING_SHRINK=1 (named in the block message).
+    // Escape hatches (both named in the block message): the single-use
+    // sentinel .planning/.gsd-allow-shrink (workflow steps — a per-step env
+    // cannot reach a hook) and GSD_ALLOW_PLANNING_SHRINK=1 (interactive).
     const writeGuardCommand = isGlobal
       ? buildHookCommand(targetDir, 'gsd-write-guard.js', hookOpts)
       : localCmd('gsd-write-guard.js');
