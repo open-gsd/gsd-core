@@ -60,7 +60,7 @@ describe('multi-runtime selection parsing', () => {
 
   test('space-separated choices return multiple runtimes', () => {
     assert.deepStrictEqual(parseRuntimeInput('1 7 9'), ['claude', 'copilot', 'hermes']);
-    assert.deepStrictEqual(parseRuntimeInput('8 11'), ['cursor', 'kilo']);
+    assert.deepStrictEqual(parseRuntimeInput('8 12'), ['cursor', 'kilo']);
   });
 
   test('mixed comma and space separators work', () => {

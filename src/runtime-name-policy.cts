@@ -294,6 +294,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   codebuddy: "'.codebuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
+  'kimi-code': "'.kimi-code'",
   zcode:     "'.zcode'",
   // pi's global config home is ~/.pi/agent (configHome: dot-home-nested,
   // parent '.pi', name 'agent' — capabilities/pi/capability.json), matching
