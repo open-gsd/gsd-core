@@ -1,5 +1,5 @@
 ---
 type: Fixed
-pr: 0
+pr: 2482
 ---
 **`state record-session` no longer silently drops inserted fields on a CRLF `STATE.md`** — the section-rewrite regexes in `cmdStateRecordSession` used literal `\n` which couldn't match a CRLF STATE.md (`---\r\n`), so when a canonical session field (`Resume file` / `Stopped at` / `Last session`) was missing and had to be **inserted** via the section-rewrite path, the CRLF-tolerant detector entered the branch, the writer regex silently no-op'd, but `updated.push(...)` ran unconditionally. The command returned `{"recorded": true, "updated": ["Resume File"]}` while the field was never written to disk. With `core.autocrlf=input`, the CRLF working-tree file produced no `git diff`/`git status` change, so the bug was invisible. Both regexes now use the CRLF-tolerant `\r?\n` form (same canonical pattern already in use elsewhere), and a new defensive invariant gates `updated.push(...)` on the replace callback actually firing — so a future detector/writer drift will surface as missing `updated` entries rather than re-arming this silent-success class.
