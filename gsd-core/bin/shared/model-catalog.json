@@ -1,19 +1,6 @@
 {
-  "profiles": [
-    "quality",
-    "balanced",
-    "budget",
-    "adaptive",
-    "inherit"
-  ],
-  "phaseTypes": [
-    "planning",
-    "discuss",
-    "research",
-    "execution",
-    "verification",
-    "completion"
-  ],
+  "profiles": ["quality", "balanced", "budget", "adaptive", "inherit"],
+  "phaseTypes": ["planning", "discuss", "research", "execution", "verification", "completion"],
   "adaptiveTierMap": {
     "heavy": "opus",
     "standard": "sonnet",
@@ -21,84 +8,39 @@
   },
   "runtimeTierDefaults": {
     "claude": {
-      "opus": {
-        "model": "claude-opus-4-8"
-      },
-      "sonnet": {
-        "model": "claude-sonnet-5"
-      },
-      "haiku": {
-        "model": "claude-haiku-4-5"
-      }
+      "opus": { "model": "claude-opus-4-8" },
+      "sonnet": { "model": "claude-sonnet-5" },
+      "haiku": { "model": "claude-haiku-4-5" }
     },
     "codex": {
-      "opus": {
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "xhigh"
-      },
-      "sonnet": {
-        "model": "gpt-5.6-terra",
-        "reasoning_effort": "medium"
-      },
-      "haiku": {
-        "model": "gpt-5.6-luna",
-        "reasoning_effort": "medium"
-      }
+      "opus": { "model": "gpt-5.6-sol", "reasoning_effort": "xhigh" },
+      "sonnet": { "model": "gpt-5.6-terra", "reasoning_effort": "medium" },
+      "haiku": { "model": "gpt-5.6-luna", "reasoning_effort": "medium" }
     },
     "qwen": {
-      "opus": {
-        "model": "qwen3-max-2026-01-23"
-      },
-      "sonnet": {
-        "model": "qwen3-coder-plus"
-      },
-      "haiku": {
-        "model": "qwen3-coder-next"
-      }
+      "opus": { "model": "qwen3-max-2026-01-23" },
+      "sonnet": { "model": "qwen3-coder-plus" },
+      "haiku": { "model": "qwen3-coder-next" }
     },
     "opencode": {
-      "opus": {
-        "model": "anthropic/claude-opus-4-8"
-      },
-      "sonnet": {
-        "model": "anthropic/claude-sonnet-5"
-      },
-      "haiku": {
-        "model": "anthropic/claude-haiku-4-5"
-      }
+      "opus": { "model": "anthropic/claude-opus-4-8" },
+      "sonnet": { "model": "anthropic/claude-sonnet-5" },
+      "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "copilot": {
-      "opus": {
-        "model": "claude-opus-4-8"
-      },
-      "sonnet": {
-        "model": "claude-sonnet-5"
-      },
-      "haiku": {
-        "model": "claude-haiku-4-5"
-      }
+      "opus": { "model": "claude-opus-4-8" },
+      "sonnet": { "model": "claude-sonnet-5" },
+      "haiku": { "model": "claude-haiku-4-5" }
     },
     "hermes": {
-      "opus": {
-        "model": "anthropic/claude-opus-4-8"
-      },
-      "sonnet": {
-        "model": "anthropic/claude-sonnet-5"
-      },
-      "haiku": {
-        "model": "anthropic/claude-haiku-4-5"
-      }
+      "opus": { "model": "anthropic/claude-opus-4-8" },
+      "sonnet": { "model": "anthropic/claude-sonnet-5" },
+      "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "kilo": {
-      "opus": {
-        "model": "anthropic/claude-opus-4-8"
-      },
-      "sonnet": {
-        "model": "anthropic/claude-sonnet-5"
-      },
-      "haiku": {
-        "model": "anthropic/claude-haiku-4-5"
-      }
+      "opus": { "model": "anthropic/claude-opus-4-8" },
+      "sonnet": { "model": "anthropic/claude-sonnet-5" },
+      "haiku": { "model": "anthropic/claude-haiku-4-5" }
     },
     "cline": {
       "opus": null,
@@ -106,6 +48,11 @@
       "haiku": null
     },
     "kimi": {
+      "opus": null,
+      "sonnet": null,
+      "haiku": null
+    },
+    "kimi-code": {
       "opus": null,
       "sonnet": null,
       "haiku": null
@@ -146,463 +93,78 @@
       "haiku": null
     },
     "pi": {
-      "opus": {
-        "model": "claude-opus-4-8"
-      },
-      "sonnet": {
-        "model": "claude-sonnet-5"
-      },
-      "haiku": {
-        "model": "claude-haiku-4-5"
-      }
-    },
-    "kimi-code": {
-      "opus": null,
-      "sonnet": null,
-      "haiku": null
+      "opus": { "model": "claude-opus-4-8" },
+      "sonnet": { "model": "claude-sonnet-5" },
+      "haiku": { "model": "claude-haiku-4-5" }
     }
   },
   "providerPresets": {
     "anthropic": {
-      "opus": {
-        "low": {
-          "model": "claude-opus-4-5"
-        },
-        "medium": {
-          "model": "claude-opus-4-8"
-        },
-        "high": {
-          "model": "claude-opus-4-8"
-        }
-      },
-      "sonnet": {
-        "low": {
-          "model": "claude-haiku-4-5"
-        },
-        "medium": {
-          "model": "claude-sonnet-5"
-        },
-        "high": {
-          "model": "claude-opus-4-8"
-        }
-      },
-      "haiku": {
-        "low": {
-          "model": "claude-haiku-4-5"
-        },
-        "medium": {
-          "model": "claude-haiku-4-5"
-        },
-        "high": {
-          "model": "claude-sonnet-5"
-        }
-      }
+      "opus":   { "low": { "model": "claude-opus-4-5" }, "medium": { "model": "claude-opus-4-8" }, "high": { "model": "claude-opus-4-8" } },
+      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-5" }, "high": { "model": "claude-opus-4-8" } },
+      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-5" } }
     },
     "anthropic-fable": {
-      "opus": {
-        "low": {
-          "model": "claude-opus-4-5"
-        },
-        "medium": {
-          "model": "claude-opus-4-8"
-        },
-        "high": {
-          "model": "claude-fable-5"
-        }
-      },
-      "sonnet": {
-        "low": {
-          "model": "claude-haiku-4-5"
-        },
-        "medium": {
-          "model": "claude-sonnet-5"
-        },
-        "high": {
-          "model": "claude-fable-5"
-        }
-      },
-      "haiku": {
-        "low": {
-          "model": "claude-haiku-4-5"
-        },
-        "medium": {
-          "model": "claude-haiku-4-5"
-        },
-        "high": {
-          "model": "claude-sonnet-5"
-        }
-      }
+      "opus":   { "low": { "model": "claude-opus-4-5" }, "medium": { "model": "claude-opus-4-8" }, "high": { "model": "claude-fable-5" } },
+      "sonnet": { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-sonnet-5" }, "high": { "model": "claude-fable-5" } },
+      "haiku":  { "low": { "model": "claude-haiku-4-5" }, "medium": { "model": "claude-haiku-4-5" }, "high": { "model": "claude-sonnet-5" } }
     },
     "openai": {
-      "opus": {
-        "low": {
-          "model": "gpt-5.6-terra",
-          "reasoning_effort": "medium"
-        },
-        "medium": {
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "high"
-        },
-        "high": {
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "xhigh"
-        }
-      },
-      "sonnet": {
-        "low": {
-          "model": "gpt-5.6-luna",
-          "reasoning_effort": "low"
-        },
-        "medium": {
-          "model": "gpt-5.6-terra",
-          "reasoning_effort": "medium"
-        },
-        "high": {
-          "model": "gpt-5.6-sol",
-          "reasoning_effort": "medium"
-        }
-      },
-      "haiku": {
-        "low": {
-          "model": "gpt-5.6-luna",
-          "reasoning_effort": "minimal"
-        },
-        "medium": {
-          "model": "gpt-5.6-luna",
-          "reasoning_effort": "medium"
-        },
-        "high": {
-          "model": "gpt-5.6-terra",
-          "reasoning_effort": "medium"
-        }
-      }
+      "opus":   { "low": { "model": "gpt-5.6-terra", "reasoning_effort": "medium" }, "medium": { "model": "gpt-5.6-sol", "reasoning_effort": "high" }, "high": { "model": "gpt-5.6-sol", "reasoning_effort": "xhigh" } },
+      "sonnet": { "low": { "model": "gpt-5.6-luna", "reasoning_effort": "low" }, "medium": { "model": "gpt-5.6-terra", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.6-sol", "reasoning_effort": "medium" } },
+      "haiku":  { "low": { "model": "gpt-5.6-luna", "reasoning_effort": "minimal" }, "medium": { "model": "gpt-5.6-luna", "reasoning_effort": "medium" }, "high": { "model": "gpt-5.6-terra", "reasoning_effort": "medium" } }
     },
     "google": {
-      "opus": {
-        "low": {
-          "model": "gemini-2.5-flash-lite"
-        },
-        "medium": {
-          "model": "gemini-3-flash"
-        },
-        "high": {
-          "model": "gemini-3.1-pro-preview"
-        }
-      },
-      "sonnet": {
-        "low": {
-          "model": "gemini-2.5-flash-lite"
-        },
-        "medium": {
-          "model": "gemini-3-flash"
-        },
-        "high": {
-          "model": "gemini-3-flash"
-        }
-      },
-      "haiku": {
-        "low": {
-          "model": "gemini-2.5-flash-lite"
-        },
-        "medium": {
-          "model": "gemini-2.5-flash-lite"
-        },
-        "high": {
-          "model": "gemini-3-flash"
-        }
-      }
+      "opus":   { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3.1-pro-preview" } },
+      "sonnet": { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-3-flash" }, "high": { "model": "gemini-3-flash" } },
+      "haiku":  { "low": { "model": "gemini-2.5-flash-lite" }, "medium": { "model": "gemini-2.5-flash-lite" }, "high": { "model": "gemini-3-flash" } }
     },
     "qwen": {
-      "opus": {
-        "low": {
-          "model": "qwen3-coder-plus"
-        },
-        "medium": {
-          "model": "qwen3-max-2026-01-23"
-        },
-        "high": {
-          "model": "qwen3-max-2026-01-23"
-        }
-      },
-      "sonnet": {
-        "low": {
-          "model": "qwen3-coder-next"
-        },
-        "medium": {
-          "model": "qwen3-coder-plus"
-        },
-        "high": {
-          "model": "qwen3-max-2026-01-23"
-        }
-      },
-      "haiku": {
-        "low": {
-          "model": "qwen3-coder-next"
-        },
-        "medium": {
-          "model": "qwen3-coder-next"
-        },
-        "high": {
-          "model": "qwen3-coder-plus"
-        }
-      }
+      "opus":   { "low": { "model": "qwen3-coder-plus" }, "medium": { "model": "qwen3-max-2026-01-23" }, "high": { "model": "qwen3-max-2026-01-23" } },
+      "sonnet": { "low": { "model": "qwen3-coder-next" }, "medium": { "model": "qwen3-coder-plus" }, "high": { "model": "qwen3-max-2026-01-23" } },
+      "haiku":  { "low": { "model": "qwen3-coder-next" }, "medium": { "model": "qwen3-coder-next" }, "high": { "model": "qwen3-coder-plus" } }
     },
     "generic": {
-      "opus": {
-        "low": null,
-        "medium": null,
-        "high": null
-      },
-      "sonnet": {
-        "low": null,
-        "medium": null,
-        "high": null
-      },
-      "haiku": {
-        "low": null,
-        "medium": null,
-        "high": null
-      }
+      "opus":   { "low": null, "medium": null, "high": null },
+      "sonnet": { "low": null, "medium": null, "high": null },
+      "haiku":  { "low": null, "medium": null, "high": null }
     }
   },
   "agents": {
-    "gsd-planner": {
-      "golden": "opus",
-      "balanced": "opus",
-      "budget": "sonnet",
-      "phaseType": "planning",
-      "routingTier": "heavy"
-    },
-    "gsd-roadmapper": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "planning",
-      "routingTier": "heavy"
-    },
-    "gsd-executor": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "execution",
-      "routingTier": "standard"
-    },
-    "gsd-phase-researcher": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-project-researcher": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-research-synthesizer": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "light"
-    },
-    "gsd-debugger": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "execution",
-      "routingTier": "heavy"
-    },
-    "gsd-codebase-mapper": {
-      "golden": "sonnet",
-      "balanced": "haiku",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "light"
-    },
-    "gsd-verifier": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "standard"
-    },
-    "gsd-plan-checker": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "light"
-    },
-    "gsd-integration-checker": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "light"
-    },
-    "gsd-nyquist-auditor": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "light"
-    },
-    "gsd-pattern-mapper": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "planning",
-      "routingTier": "light"
-    },
-    "gsd-ui-researcher": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-ui-checker": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "light"
-    },
-    "gsd-ui-auditor": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "light"
-    },
-    "gsd-doc-writer": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "execution",
-      "routingTier": "standard"
-    },
-    "gsd-doc-verifier": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "light"
-    },
-    "gsd-advisor-researcher": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-ai-researcher": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-assumptions-analyzer": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "discuss",
-      "routingTier": "heavy"
-    },
-    "gsd-code-fixer": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "execution",
-      "routingTier": "standard"
-    },
-    "gsd-code-reviewer": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "verification",
-      "routingTier": "standard"
-    },
-    "gsd-debug-session-manager": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "execution",
-      "routingTier": "heavy"
-    },
-    "gsd-doc-classifier": {
-      "golden": "sonnet",
-      "balanced": "haiku",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "light"
-    },
-    "gsd-doc-synthesizer": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-domain-researcher": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "standard"
-    },
-    "gsd-eval-auditor": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "verification",
-      "routingTier": "standard"
-    },
-    "gsd-eval-planner": {
-      "golden": "opus",
-      "balanced": "opus",
-      "budget": "sonnet",
-      "phaseType": "planning",
-      "routingTier": "heavy"
-    },
-    "gsd-framework-selector": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "planning",
-      "routingTier": "heavy"
-    },
-    "gsd-intel-updater": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "light"
-    },
-    "gsd-mempalace-curator": {
-      "golden": "sonnet",
-      "balanced": "sonnet",
-      "budget": "haiku",
-      "phaseType": "research",
-      "routingTier": "light"
-    },
-    "gsd-security-auditor": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "verification",
-      "routingTier": "heavy"
-    },
-    "gsd-user-profiler": {
-      "golden": "opus",
-      "balanced": "sonnet",
-      "budget": "sonnet",
-      "phaseType": "research",
-      "routingTier": "heavy"
-    }
+    "gsd-planner":                { "golden": "opus",   "balanced": "opus",   "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
+    "gsd-roadmapper":             { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
+    "gsd-executor":               { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "execution",    "routingTier": "standard" },
+    "gsd-phase-researcher":       { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-project-researcher":     { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-research-synthesizer":   { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
+    "gsd-debugger":               { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "execution",    "routingTier": "heavy" },
+    "gsd-codebase-mapper":        { "golden": "sonnet", "balanced": "haiku",  "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
+    "gsd-verifier":               { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "standard" },
+    "gsd-plan-checker":           { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "gsd-integration-checker":    { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "gsd-nyquist-auditor":        { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "gsd-pattern-mapper":         { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "planning",     "routingTier": "light" },
+    "gsd-ui-researcher":          { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-ui-checker":             { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "gsd-ui-auditor":             { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+    "gsd-doc-writer":             { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "execution",    "routingTier": "standard" },
+    "gsd-doc-verifier":           { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "light" },
+
+    "gsd-advisor-researcher":     { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-ai-researcher":          { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-assumptions-analyzer":   { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "discuss",      "routingTier": "heavy" },
+    "gsd-code-fixer":             { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "execution",    "routingTier": "standard" },
+    "gsd-code-reviewer":          { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "verification", "routingTier": "standard" },
+    "gsd-debug-session-manager":  { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "execution",    "routingTier": "heavy" },
+    "gsd-doc-classifier":         { "golden": "sonnet", "balanced": "haiku",  "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
+    "gsd-doc-synthesizer":        { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-domain-researcher":      { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "standard" },
+    "gsd-eval-auditor":           { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "verification", "routingTier": "standard" },
+    "gsd-eval-planner":           { "golden": "opus",   "balanced": "opus",   "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
+    "gsd-framework-selector":     { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "planning",     "routingTier": "heavy" },
+    "gsd-intel-updater":          { "golden": "opus",   "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
+    "gsd-mempalace-curator":      { "golden": "sonnet", "balanced": "sonnet", "budget": "haiku",  "phaseType": "research",     "routingTier": "light" },
+    "gsd-security-auditor":       { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "verification", "routingTier": "heavy" },
+    "gsd-user-profiler":          { "golden": "opus",   "balanced": "sonnet", "budget": "sonnet", "phaseType": "research",     "routingTier": "heavy" }
   }
 }
