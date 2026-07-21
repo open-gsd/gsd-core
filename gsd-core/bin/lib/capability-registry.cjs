@@ -2360,6 +2360,104 @@ const capabilities = {
     "contributions": [],
     "gates": []
   },
+  "qoder": {
+    "id": "qoder",
+    "role": "runtime",
+    "version": "1.8.0",
+    "title": "Qoder",
+    "description": "Qoder (Alibaba) — file-based CLI: skills/commands/agents under ~/.qoder/; settings-json install surface with Claude-compatible hooks (settings.json); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".qoder",
+        "env": [
+          "QODER_CONFIG_DIR"
+        ]
+      },
+      "localConfigDir": ".qoder",
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQoderAgent"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQoderAgent"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStart",
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "FileChanged"
+      ],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node",
+        "effortSurface": "undocumented"
+      },
+      "hostBehaviors": {
+        "frontmatterDialect": "qoder",
+        "reapplyCommand": "/gsd-update --reapply"
+      }
+    }
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -5415,6 +5513,104 @@ const runtimes = {
       }
     }
   },
+  "qoder": {
+    "id": "qoder",
+    "role": "runtime",
+    "version": "1.8.0",
+    "title": "Qoder",
+    "description": "Qoder (Alibaba) — file-based CLI: skills/commands/agents under ~/.qoder/; settings-json install surface with Claude-compatible hooks (settings.json); tier-2 support.",
+    "tier": "core",
+    "requires": [],
+    "engines": {
+      "gsd": ">=1.7.0"
+    },
+    "runtime": {
+      "configHome": {
+        "kind": "dot-home",
+        "name": ".qoder",
+        "env": [
+          "QODER_CONFIG_DIR"
+        ]
+      },
+      "localConfigDir": ".qoder",
+      "configFormat": "settings-json",
+      "artifactLayout": {
+        "global": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQoderAgent"
+          }
+        ],
+        "local": [
+          {
+            "kind": "skills",
+            "destSubpath": "skills",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeCommandToQoderSkill"
+          },
+          {
+            "kind": "agents",
+            "destSubpath": "agents",
+            "prefix": "gsd-",
+            "nesting": "flat",
+            "recursive": false,
+            "converter": "convertClaudeAgentToQoderAgent"
+          }
+        ]
+      },
+      "commandStyle": "slash-hyphen",
+      "hooksSurface": "settings-json",
+      "hookEvents": "claude",
+      "sandboxTier": "none",
+      "supportTier": 2,
+      "installSurface": "settings-json",
+      "writesSharedSettings": true,
+      "permissionWriter": null,
+      "extendedHookEvents": [
+        "SubagentStart",
+        "SubagentStop",
+        "Stop",
+        "PreCompact",
+        "FileChanged"
+      ],
+      "hostIntegration": {
+        "embeddingMode": "declarative",
+        "commandSurface": "slash-file",
+        "dispatch": {
+          "namedDispatch": true,
+          "nested": true,
+          "maxDepth": "undocumented",
+          "background": true,
+          "subagentToolkit": "full",
+          "backgroundDispatch": true
+        },
+        "modelMode": "passive",
+        "hookBus": "host",
+        "stateIO": "filesystem",
+        "transport": "mcp",
+        "runtime": "node",
+        "effortSurface": "undocumented"
+      },
+      "hostBehaviors": {
+        "frontmatterDialect": "qoder",
+        "reapplyCommand": "/gsd-update --reapply"
+      }
+    }
+  },
   "qwen": {
     "id": "qwen",
     "role": "runtime",
@@ -6038,6 +6234,7 @@ const _requiresGraph = {
   ],
   "pi": [],
   "profile-pipeline": [],
+  "qoder": [],
   "qwen": [],
   "research": [],
   "schema-gate": [],
