@@ -43,7 +43,12 @@ function read(file) {
  * so a surface that dropped the real taxonomy entry could still pass.
  */
 function namesRating(text, rating) {
-  return new RegExp(`\\b${rating.replace(/[-]/g, '\\-')}\\b`).test(text);
+  // Escape every regex metacharacter, backslash included — a partial escape is
+  // js/incomplete-sanitization (CodeQL, high). `-` needs no escaping outside a
+  // character class, so the previous `-`-only replace was both incomplete and
+  // unnecessary.
+  const escaped = rating.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(text);
 }
 
 /** The fenced ```bash blocks of a workflow file, so prose cannot satisfy a
@@ -286,7 +291,12 @@ function planWith({ reversibility = null, precedingCheckpoint = false } = {}) {
       '  <decision>Pick the on-disk format</decision>',
       '  <context>Later phases read this file.</context>',
       '  <resume-signal>Select: option-a or option-b</resume-signal>',
-      '  <verify><human>Developer selected an option</human></verify>',
+      // Plain-prose <verify> (a documented accepted form), deliberately NOT the
+      // human-verification child element used elsewhere in the suite corpus:
+      // that tag name is a fake-instruction-boundary pattern in
+      // scripts/prompt-injection-scan.sh, so it trips the security gate on any
+      // changed file — including, as this comment learned, prose describing it.
+      '  <verify>Developer selected an option</verify>',
       '  <done>Format selected and recorded</done>',
       '</task>',
       '',
