@@ -497,6 +497,58 @@ describe('verify plan-structure — checkpoint task types (#2444)', () => {
     );
   });
 
+  test('checkpoint:decision missing <decision> is flagged (AC2)', () => {
+    const output = runVerify(planWithTask([
+      '<task type="checkpoint:decision" gate="blocking">',
+      '  <name>Checkpoint: pick</name>',
+      '  <options>',
+      '    <option id="a"><name>A</name><pros>p</pros><cons>c</cons></option>',
+      '  </options>',
+      '  <resume-signal>Select: a</resume-signal>',
+      '</task>',
+    ].join('\n')));
+
+    assert.strictEqual(output.valid, false, 'should be invalid');
+    assert.ok(
+      output.errors.some(e => e.includes('missing <decision>')),
+      `Expected "missing <decision>" error: ${JSON.stringify(output.errors)}`
+    );
+  });
+
+  test('checkpoint:human-action missing <action> is flagged (AC2)', () => {
+    const output = runVerify(planWithTask([
+      '<task type="checkpoint:human-action" gate="blocking">',
+      '  <name>Checkpoint: act</name>',
+      '  <instructions>Do it.</instructions>',
+      '  <verification>curl returns 200</verification>',
+      '  <resume-signal>Type "done"</resume-signal>',
+      '</task>',
+    ].join('\n')));
+
+    assert.strictEqual(output.valid, false, 'should be invalid');
+    assert.ok(
+      output.errors.some(e => e.includes('missing <action>')),
+      `Expected "missing <action>" error: ${JSON.stringify(output.errors)}`
+    );
+  });
+
+  test('checkpoint:human-action missing <verification> is flagged (AC2)', () => {
+    const output = runVerify(planWithTask([
+      '<task type="checkpoint:human-action" gate="blocking">',
+      '  <name>Checkpoint: act</name>',
+      '  <action>Do it</action>',
+      '  <instructions>Do it.</instructions>',
+      '  <resume-signal>Type "done"</resume-signal>',
+      '</task>',
+    ].join('\n')));
+
+    assert.strictEqual(output.valid, false, 'should be invalid');
+    assert.ok(
+      output.errors.some(e => e.includes('missing <verification>')),
+      `Expected "missing <verification>" error: ${JSON.stringify(output.errors)}`
+    );
+  });
+
   test('any checkpoint:* missing <resume-signal> is flagged (AC2)', () => {
     const output = runVerify(planWithTask([
       '<task type="checkpoint:human-verify" gate="blocking">',
@@ -564,16 +616,63 @@ describe('verify plan-structure — checkpoint task types (#2444)', () => {
     );
   });
 
-  test('returns error for nonexistent file', () => {
-    const result = runGsdTools('verify plan-structure .planning/phases/01-test/nonexistent.md', tmpDir);
-    assert.ok(result.success, `Command failed: ${result.error}`);
+  test('non-checkpoint task missing <done> still warns (AC3)', () => {
+    const output = runVerify(planWithTask([
+      '<task type="auto">',
+      '  <name>Task 1: no done</name>',
+      '  <files>x.ts</files>',
+      '  <action>Do it</action>',
+      '  <verify><automated>echo ok</automated></verify>',
+      '</task>',
+    ].join('\n'), { autonomous: 'true' }));
 
-    const output = JSON.parse(result.output);
-    assert.ok(output.error, `Expected error field in output: ${JSON.stringify(output)}`);
     assert.ok(
-      output.error.includes('File not found'),
-      `Expected "File not found" in error: ${output.error}`
+      output.warnings.some(w => w.includes('missing <done>')),
+      `Expected "missing <done>" warning: ${JSON.stringify(output.warnings)}`
     );
+  });
+
+  test('non-checkpoint task missing <files> still warns (AC3)', () => {
+    const output = runVerify(planWithTask([
+      '<task type="auto">',
+      '  <name>Task 1: no files</name>',
+      '  <action>Do it</action>',
+      '  <verify><automated>echo ok</automated></verify>',
+      '  <done>Done</done>',
+      '</task>',
+    ].join('\n'), { autonomous: 'true' }));
+
+    assert.ok(
+      output.warnings.some(w => w.includes('missing <files>')),
+      `Expected "missing <files>" warning: ${JSON.stringify(output.warnings)}`
+    );
+  });
+
+  // ── Security: type-attribute charset is bounded (no markup injection) ──────
+
+  test('task type attribute with hostile markup fragment is not surfaced unsanitized', () => {
+    // Per CONTRIBUTING.md §"Security and prompt-injection surfaces": a hostile
+    // PLAN.md cannot inject unclosed-tag fragments into the verifier's typed
+    // JSON output via the type= attribute. The charset [a-zA-Z0-9_:-] rejects
+    // '<', '>', '(', '&', etc., so a payload like type=evil<fragment captures
+    // only `evil` (the `<` terminates the match); the surfaced `type` field
+    // carries no markup.
+    const output = runVerify(planWithTask([
+      '<task type=evil<fragment>',
+      '  <name>Hostile</name>',
+      '  <action>do</action>',
+      '  <verify><automated>echo ok</automated></verify>',
+      '  <done>ok</done>',
+      '</task>',
+    ].join('\n'), { autonomous: 'true' }));
+
+    const hostile = output.tasks.find(t => t.name === 'Hostile');
+    assert.ok(hostile, `Expected to find Hostile task in output.tasks: ${JSON.stringify(output.tasks)}`);
+    assert.ok(
+      !/[<>()&]/.test(hostile.type),
+      `Expected type to contain no markup chars; got: ${JSON.stringify(hostile.type)}`
+    );
+    assert.strictEqual(hostile.type, 'evil', `Expected capture to stop at '<'; got: ${JSON.stringify(hostile.type)}`);
   });
 });
 

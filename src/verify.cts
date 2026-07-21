@@ -619,7 +619,7 @@ function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
     const attrs = match[1] ?? '';
     const body = match[2] ?? '';
 
-    const typeMatch = attrs.match(/\btype\s*=\s*["']?([^"'>\s]+)/i);
+    const typeMatch = attrs.match(/\btype\s*=\s*["']?([\w:-]+)/i);
     const type = typeMatch ? typeMatch[1].toLowerCase() : '';
 
     const nameArr = extractTaggedBlocks(body, 'name');
