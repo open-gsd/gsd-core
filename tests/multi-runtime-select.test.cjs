@@ -93,30 +93,34 @@ describe('multi-runtime selection parsing', () => {
   });
 
   test('single choice for windsurf', () => {
-    assert.deepStrictEqual(parseRuntimeInput('16'), ['windsurf']);
+    assert.deepStrictEqual(parseRuntimeInput('17'), ['windsurf']);
   });
 
   test('single choice for zcode', () => {
-    assert.deepStrictEqual(parseRuntimeInput('17'), ['zcode']);
+    assert.deepStrictEqual(parseRuntimeInput('18'), ['zcode']);
   });
 
   test('single choice for kimi', () => {
     assert.deepStrictEqual(parseRuntimeInput('10'), ['kimi']);
   });
 
-  test('choice 18 returns all runtimes', () => {
-    assert.deepStrictEqual(parseRuntimeInput('18'), allRuntimes);
+  test('single choice for kimi-code (#2454)', () => {
+    assert.deepStrictEqual(parseRuntimeInput('11'), ['kimi-code']);
   });
 
-  test('choice 18 returns all runtimes when mixed with separators or other tokens', () => {
-    // CR feedback: tokenized inputs that include 18 (e.g. trailing comma, or
+  test('choice 19 returns all runtimes', () => {
+    assert.deepStrictEqual(parseRuntimeInput('19'), allRuntimes);
+  });
+
+  test('choice 19 returns all runtimes when mixed with separators or other tokens', () => {
+    // CR feedback: tokenized inputs that include 19 (e.g. trailing comma, or
     // alongside other choices) must still expand to all-runtimes — previously
-    // only the bare all-runtimes option matched, so "18," or "18 1" silently installed a
+    // only the bare all-runtimes option matched, so "19," or "19 1" silently installed a
     // subset.
-    assert.deepStrictEqual(parseRuntimeInput('18,'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('18 1'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('1,18'), allRuntimes);
-    assert.deepStrictEqual(parseRuntimeInput('  18  '), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('19,'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('19 1'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('1,19'), allRuntimes);
+    assert.deepStrictEqual(parseRuntimeInput('  19  '), allRuntimes);
   });
 
   test('empty input defaults to claude', () => {
@@ -125,13 +129,13 @@ describe('multi-runtime selection parsing', () => {
   });
 
   test('invalid choices are ignored, falls back to claude if all invalid', () => {
-    assert.deepStrictEqual(parseRuntimeInput('19'), ['claude']);
+    assert.deepStrictEqual(parseRuntimeInput('20'), ['claude']);
     assert.deepStrictEqual(parseRuntimeInput('0'), ['claude']);
     assert.deepStrictEqual(parseRuntimeInput('abc'), ['claude']);
   });
 
   test('invalid choices mixed with valid are filtered out', () => {
-    assert.deepStrictEqual(parseRuntimeInput('1,19,7'), ['claude', 'copilot']);
+    assert.deepStrictEqual(parseRuntimeInput('1,20,7'), ['claude', 'copilot']);
     assert.deepStrictEqual(parseRuntimeInput('abc 3 xyz'), ['augment']);
   });
 
@@ -142,7 +146,7 @@ describe('multi-runtime selection parsing', () => {
 
   test('preserves selection order', () => {
     assert.deepStrictEqual(parseRuntimeInput('9,1,7'), ['hermes', 'claude', 'copilot']);
-    assert.deepStrictEqual(parseRuntimeInput('11,2,8'), ['kilo', 'antigravity', 'cursor']);
+    assert.deepStrictEqual(parseRuntimeInput('12,2,8'), ['kilo', 'antigravity', 'cursor']);
   });
 });
 
@@ -228,7 +232,7 @@ describe('install.js exports multi-select runtime metadata', () => {
       '--all includes pi exactly once');
   });
 
-  test('prompt lists pi (13), ZCode (17), and All (18)', () => {
+  test('prompt lists pi (14), ZCode (18), and All (19)', () => {
     const prompt = stripAnsi(buildRuntimePromptText());
     assert.ok(/\b9\)\s*Hermes Agent\b/.test(prompt),
       'prompt lists Hermes Agent as option 9');
@@ -236,16 +240,18 @@ describe('install.js exports multi-select runtime metadata', () => {
       'prompt lists Kimi as option 10');
     assert.ok(/Kimi\s+\(~\/\.config\/agents, then ~\/\.agents if existing\)/.test(prompt),
       'prompt shows the Kimi first-existing generic root policy');
-    assert.ok(/\b13\)\s*pi\b/.test(prompt),
-      'prompt lists pi as option 13');
-    assert.ok(/\b14\)\s*Qwen Code\b/.test(prompt),
-      'prompt lists Qwen Code as option 14');
-    assert.ok(/\b15\)\s*Trae\b/.test(prompt),
-      'prompt lists Trae as option 15');
-    assert.ok(/\b17\)\s*ZCode\b/.test(prompt),
-      'prompt lists ZCode as option 17');
-    assert.ok(/\b18\)\s*All\b/.test(prompt),
-      'prompt lists All as option 18');
+    assert.ok(/\b11\)\s*Kimi Code\b/.test(prompt),
+      'prompt lists Kimi Code as option 11 (#2454)');
+    assert.ok(/\b14\)\s*pi\b/.test(prompt),
+      'prompt lists pi as option 14');
+    assert.ok(/\b15\)\s*Qwen Code\b/.test(prompt),
+      'prompt lists Qwen Code as option 15');
+    assert.ok(/\b16\)\s*Trae\b/.test(prompt),
+      'prompt lists Trae as option 16');
+    assert.ok(/\b18\)\s*ZCode\b/.test(prompt),
+      'prompt lists ZCode as option 18');
+    assert.ok(/\b19\)\s*All\b/.test(prompt),
+      'prompt lists All as option 19');
   });
 
   test('prompt does not list Gemini (removed #1928)', () => {
