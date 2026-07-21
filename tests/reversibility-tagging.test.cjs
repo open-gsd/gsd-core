@@ -398,8 +398,12 @@ describe('#1951 cmdVerifyPlanStructure accepts <reversibility> (additive)', () =
 // so. It warns rather than errors: <reversibility> stays additive and the plan
 // stays valid.
 
+// Each verifyPlan() spawns gsd-tools, which is the dominant cost of this file
+// (measured 5.6s, the 18x-under-median entry that motivated adding it to
+// tests/test-timings.json). Assertions are grouped per distinct plan shape so
+// the suite spawns once per shape rather than once per assertion.
 describe('#1951 ungated one-way rating is flagged', () => {
-  test('one-way with NO preceding checkpoint:decision warns', (t) => {
+  test('one-way with NO preceding checkpoint:decision warns, and stays valid', (t) => {
     const tmp = createTempProject();
     t.after(() => cleanup(tmp));
 
@@ -408,13 +412,6 @@ describe('#1951 ungated one-way rating is flagged', () => {
       (out.warnings || []).some((w) => /one-way/.test(w) && /checkpoint:decision/.test(w)),
       `an ungated one-way rating must warn; got warnings: ${JSON.stringify(out.warnings)}`,
     );
-  });
-
-  test('the warning does not invalidate the plan (stays additive)', (t) => {
-    const tmp = createTempProject();
-    t.after(() => cleanup(tmp));
-
-    const out = verifyPlan(tmp, planWith({ reversibility: 'one-way', precedingCheckpoint: false }));
     assert.strictEqual(
       out.valid, true,
       `an ungated one-way rating must warn, never error; errors: ${JSON.stringify(out.errors)}`,
@@ -432,18 +429,12 @@ describe('#1951 ungated one-way rating is flagged', () => {
     );
   });
 
-  test('reversible and costly are never flagged as ungated', (t) => {
-    const tmp = createTempProject();
-    t.after(() => cleanup(tmp));
-
-    for (const rating of ['reversible', 'costly']) {
-      const out = verifyPlan(tmp, planWith({ reversibility: rating, precedingCheckpoint: false }));
-      assert.ok(
-        !(out.warnings || []).some((w) => /one-way/.test(w)),
-        `rating="${rating}" must never trigger the one-way gate warning`,
-      );
-    }
-  });
+  // `reversible` and `costly` are covered by the additive suite above: those
+  // ratings run there with precedingCheckpoint=false (ungated) and assert no
+  // /reversibilit/ warning at all. The gate warning's text contains both
+  // "reversibility" and "one-way", so that assertion strictly subsumes a
+  // separate never-flagged-as-ungated check — which would only re-spawn
+  // gsd-tools twice to prove the same thing.
 });
 
 // ─── Parity: one taxonomy, not two ──────────────────────────────────────────

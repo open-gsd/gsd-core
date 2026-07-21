@@ -6,7 +6,7 @@
     "test-events-linux-node22.jsonl",
     "test-events-linux-node24.jsonl"
   ],
-  "file_count": 637,
+  "file_count": 638,
   "timings": {
     "active-workstream-store.test.cjs": 102,
     "active-workstream-store.unit.test.cjs": 332,
@@ -510,6 +510,7 @@
     "research-store.property.test.cjs": 326,
     "research-store.test.cjs": 405,
     "resolution.test.cjs": 37,
+    "reversibility-tagging.test.cjs": 5595,
     "review-default-reviewers-config.test.cjs": 6391,
     "review-default-reviewers-resolution.test.cjs": 81,
     "review-default-reviewers-workflow.test.cjs": 128,
