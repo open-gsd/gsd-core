@@ -206,6 +206,8 @@ Every task has four required fields:
 
 **<precondition>** (optional, one prose line): a runnable/checkable fact the task assumes that plan ordering does not guarantee — external setup (`user_setup`), a prior-phase artifact, or an env var. The executor asserts it before running the task and halts on unmet. Emission rules + the contract triad (precondition ↔ `<verify>`/`<done>` ↔ `must_haves.truths`): @~/.claude/gsd-core/references/planner-preconditions.md.
 
+**<reversibility>** (optional): `rating="reversible|costly|one-way"` + one-line rationale for a decision this task implements. `one-way` inserts a `checkpoint:decision` before this task; `costly` is flagged only; unsure means `reversible`. Rules: @~/.claude/gsd-core/references/planner-reversibility.md
+
 See @~/.claude/gsd-core/references/planner-guidance.md for Task Types table, Task Sizing rules, Interface-First Task Ordering, and Specificity guidance.
 
 ## TDD Detection
@@ -537,15 +539,9 @@ Do NOT use for: Deploying (use CLI), creating webhooks (use API), creating datab
 
 When Claude tries CLI/API and gets auth error → creates checkpoint → user authenticates → Claude retries. Auth gates are created dynamically, NOT pre-planned.
 
-## Writing Guidelines
+## Writing Guidelines, Anti-Patterns, and Extended Examples
 
-**DO:** Automate everything before checkpoint, be specific ("Visit https://myapp.vercel.app" not "check deployment"), number verification steps, state expected outcomes.
-
-**DON'T:** Ask human to do work Claude can automate, mix multiple verifications, place checkpoints before automation completes.
-
-## Anti-Patterns and Extended Examples
-
-For checkpoint anti-patterns, specificity comparison tables, context section anti-patterns, and scope reduction patterns:
+For checkpoint writing guidelines (DO/DON'T), anti-patterns, specificity comparison tables, context section anti-patterns, and scope reduction patterns:
 @~/.claude/gsd-core/references/planner-antipatterns.md
 
 </checkpoints>

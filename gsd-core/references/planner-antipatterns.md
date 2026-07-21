@@ -5,6 +5,12 @@
 
 ## Checkpoint Anti-Patterns
 
+### Writing guidelines
+
+**DO:** Automate everything before checkpoint, be specific ("Visit https://myapp.vercel.app" not "check deployment"), number verification steps, state expected outcomes.
+
+**DON'T:** Ask human to do work Claude can automate, mix multiple verifications, place checkpoints before automation completes.
+
 ### Bad — Asking human to automate
 
 ```xml

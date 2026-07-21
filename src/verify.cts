@@ -766,6 +766,25 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
     errors.push('Has checkpoint tasks but autonomous is not false');
   }
 
+  // #1951: a decision rated one-way is supposed to be confirmed before it is
+  // walked through. Warn (never error — <reversibility> stays additive) when a
+  // one-way rating has no checkpoint:decision anywhere ahead of it in the plan,
+  // which is the planner emitting the rating but skipping the gate.
+  const decisionCheckpointOffsets: number[] = [];
+  for (const m of content.matchAll(/<task\s+type=["']?checkpoint:decision/g)) {
+    if (m.index !== undefined) decisionCheckpointOffsets.push(m.index);
+  }
+  for (const m of content.matchAll(/<reversibility\s[^>]*rating=["']?one-way/g)) {
+    const at = m.index;
+    if (at === undefined) continue;
+    if (!decisionCheckpointOffsets.some((offset) => offset < at)) {
+      warnings.push(
+        'Task rated <reversibility rating="one-way"> has no preceding checkpoint:decision — '
+          + 'a one-way door must be confirmed before the agent walks through it',
+      );
+    }
+  }
+
   const echoScan = scanNegativeGrepCommentEcho(content);
   errors.push(...echoScan.errors);
   warnings.push(...echoScan.warnings);

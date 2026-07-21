@@ -160,7 +160,7 @@ References source files the executor needs to read. Includes project-level plann
 
 ### `<tasks>`
 
-Contains one or more `<task>` elements. Every task element must carry `<name>`, `<files>`, `<read_first>`, `<action>`, `<verify>`, `<acceptance_criteria>`, and `<done>` for `type="auto"` and `type="tracer"` tasks. An optional `<precondition>` element (see [Preconditions](#preconditions)) may sit between `<name>` and `<files>`.
+Contains one or more `<task>` elements. Every task element must carry `<name>`, `<files>`, `<read_first>`, `<action>`, `<verify>`, `<acceptance_criteria>`, and `<done>` for `type="auto"` and `type="tracer"` tasks. Optional `<precondition>` (see [Preconditions](#preconditions)) and `<reversibility>` (see [Reversibility](#reversibility)) elements may sit between `<name>` and `<files>`.
 
 ---
 
@@ -188,6 +188,38 @@ Contains one or more `<task>` elements. Every task element must carry `<name>`, 
 3. **Environment variable / runtime configuration** — a tool, API, or script the task invokes requires an env var or runtime config that exists *now*, not at plan time.
 
 Full emission rules, anti-patterns ("the system is ready" is not checkable; do not use `<precondition>` for intra-plan sequencing — that is what `depends_on` is for), and the contract triad mapping: see `gsd-core/references/planner-preconditions.md`.
+
+---
+
+## Reversibility
+
+`<reversibility>` is an **optional** element on `<task>` (issue #1951, *The Pragmatic Programmer* Topic 15 — "Reversibility"). It records how costly the decision the task implements would be to undo, so a one-way-door choice gets a human beat before the agent walks through it. The `rating` attribute carries the classification; the body carries a one-line rationale.
+
+```xml
+<task type="auto">
+  <name>Define the on-disk event log format</name>
+  <reversibility rating="one-way">Phases 4-6 read this file; changing the
+  format after they land requires a migration for every existing project.</reversibility>
+  <files>src/event-log.cts</files>
+  <action>…</action>
+  <verify><automated>npm run test:unit -- event-log</automated></verify>
+  <done>Format documented and written by the writer under test</done>
+</task>
+```
+
+| Rating | Meaning | Effect on the plan |
+|---|---|---|
+| `reversible` | Undo is local and cheap. | None. This is the default when no rating is given. |
+| `costly` | Undo touches many call sites or needs a coordinated change. | Flagged in the plan so the reader sees the weight. Never blocks. |
+| `one-way` | Undo requires a migration, breaks a published contract, or is impossible. | The planner inserts a `checkpoint:decision` immediately **before** the dependent task. |
+
+**Optional and back-compat:** a plan that omits `<reversibility>` on every task behaves exactly as today — no flag, no checkpoint. Plans that include it pass `verify plan-structure` unchanged; the structural validator checks for the presence of required tags and does not reject unknown optional tags.
+
+**Autonomy:** inserting a `checkpoint:decision` means the plan contains a checkpoint, so its frontmatter must set `autonomous: false`.
+
+**Override:** `/gsd:plan-phase --no-reversibility-gates` (`REVERSIBILITY_GATES=false`) suppresses checkpoint insertion for intentionally-unattended runs. Ratings are still recorded and `costly` items are still flagged — the override changes what stops the run, not what the plan remembers.
+
+Full taxonomy, emission rules, and anti-patterns (chiefly: rating everything `one-way` produces checkpoint fatigue; prefer *removing* irreversibility over gating it): see `gsd-core/references/planner-reversibility.md`.
 
 ---
 

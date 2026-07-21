@@ -105,7 +105,7 @@ Usage: `/gsd:discuss-phase 2`
 Usage: `/gsd:discuss-phase 2 --batch`
 Usage: `/gsd:discuss-phase 2 --batch=3`
 
-**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp] [--no-tracer]`**
+**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp] [--no-tracer] [--no-reversibility-gates]`**
 Create detailed execution plan for a specific phase.
 
 - `--skip-research` — bypass the research subagent
@@ -118,6 +118,7 @@ Create detailed execution plan for a specific phase.
 - `--tdd` — plan in test-driven order (tests before code)
 - `--mvp` — MVP enrichment (user story + Walking Skeleton) on top of the default tracer-first ordering (see also `/gsd:mvp-phase`)
 - `--no-tracer` — opt out of the default tracer-first slice and plan horizontal layers (legacy default)
+- `--no-reversibility-gates` — suppress the `checkpoint:decision` a `one-way`-door decision normally earns, for intentionally-unattended runs (ratings are still recorded)
 
 - Generates `.planning/phases/XX-phase-name/XX-YY-PLAN.md`
 - Breaks phase into concrete, actionable tasks

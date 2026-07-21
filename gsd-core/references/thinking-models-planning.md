@@ -30,7 +30,9 @@ Identify the single hardest constraint in this phase -- the one thing that, if i
 
 **Counters:** Over-analyzing cheap decisions, under-analyzing costly ones.
 
-For each significant decision in this plan, classify as REVERSIBLE (can change later with low cost) or IRREVERSIBLE (changing later requires migration, breaking changes, or significant rework). Spend analysis time proportional to irreversibility. For irreversible decisions, document the rationale in the plan.
+For each significant decision in this plan, ask what undoing it would cost three phases from now, and rate it `reversible` (local and cheap to change), `costly` (undo touches many call sites or needs a coordinated change), or `one-way` (undo requires a migration, breaks a published contract, or is impossible). Spend analysis time proportional to the rating. Record the rating and a one-line rationale on the task that implements the decision, via `<reversibility>`; a `one-way` rating also earns a `checkpoint:decision` before that task. When unsure, rate it `reversible` — rating everything `one-way` is checkpoint fatigue, not diligence.
+
+This is the reasoning step that produces the rating. The taxonomy itself, the emission rules, and the anti-patterns live in @~/.claude/gsd-core/references/planner-reversibility.md — do not maintain a second classification here.
 
 ## 5. Curse of Knowledge Counter
 
