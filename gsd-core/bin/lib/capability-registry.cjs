@@ -1774,8 +1774,7 @@ const capabilities = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToKimiCodeSkill",
-            "home": ".kimi-code"
+            "converter": "convertClaudeCommandToKimiCodeSkill"
           }
         ],
         "local": []
@@ -5167,8 +5166,7 @@ const runtimes = {
             "prefix": "gsd-",
             "nesting": "flat",
             "recursive": false,
-            "converter": "convertClaudeCommandToKimiCodeSkill",
-            "home": ".kimi-code"
+            "converter": "convertClaudeCommandToKimiCodeSkill"
           }
         ],
         "local": []
