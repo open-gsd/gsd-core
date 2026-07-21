@@ -33,10 +33,27 @@
 // Floor: files under FLOOR_LINES are exempt, so a 10 → 2 line stub never
 // trips the ratio check.
 //
-// Escape hatch: GSD_ALLOW_PLANNING_SHRINK=1 — named in the block message —
-// for legitimate milestone resets and large deletions. A guard whose bypass
-// is undocumented gets bypassed with the blunt instrument instead, with
-// every other guard disabled at the same time.
+// Escape hatches — both named in the block message; a guard whose bypass is
+// undocumented gets bypassed with the blunt instrument instead, with every
+// other guard disabled at the same time:
+//   - GSD_ALLOW_PLANNING_SHRINK=1 (env) — for a human running interactively,
+//     where the variable can actually reach the hook's environment.
+//   - .planning/.gsd-allow-shrink (single-use sentinel file) — for workflow
+//     steps. A PreToolUse hook inherits the RUNTIME's environment, so a
+//     per-step env prefix can never reach it (#2255 round 5 M1); the sentinel
+//     is a transport that code consults, not prose an agent obeys. The step
+//     writes the target's path into the sentinel; at the block point the
+//     guard checks it is fresh (15 min) and names the pending target, then
+//     CONSUMES it and allows that one write. Path-bound + single-use +
+//     freshness is what keeps it from becoming a standing unlock left on disk.
+//
+// Known design limits (out of #2255's scope by review, disclosed here):
+//   - Stateless per-write: sequential shrinks (292→120→50) each clear the 40%
+//     floor against CURRENT disk state, so cumulative erosion is invisible.
+//   - The curated match is lexical on the resolved path: a Write to a
+//     non-curated path that symlinks into a curated file is not matched.
+// Both are low-relevance against the stated threat model (a confused agent,
+// not an adversary).
 //
 // Triggers on: Write tool calls
 // Action: BLOCK (decision: 'block', exit 2) on catastrophic shrink of a curated file
@@ -78,6 +95,70 @@ function countLines(text) {
 function isOverrideSet() {
   const v = process.env.GSD_ALLOW_PLANNING_SHRINK;
   return typeof v === 'string' && v !== '' && v !== '0' && v.toLowerCase() !== 'false';
+}
+
+// Single-use sentinel (see header). Consulted ONLY at the shrink-block point —
+// a write that would pass anyway never burns the token, so first-shrink-wins
+// for the write the workflow armed it for.
+const SENTINEL_NAME = '.gsd-allow-shrink';
+const SENTINEL_REL = '.planning/' + SENTINEL_NAME;
+const SENTINEL_TTL_MS = 15 * 60 * 1000;
+
+function consumeSentinelFor(filePath, normalized) {
+  try {
+    // The curated match guarantees the target lives under a .planning/ dir;
+    // normalized is filePath with separators flipped, so offsets line up.
+    const m = normalized.match(/^(.*\/\.planning)\//i);
+    if (!m) return false;
+    const planningDir = filePath.slice(0, m[1].length);
+    const sentinelPath = path.join(planningDir, SENTINEL_NAME);
+    let st;
+    try {
+      st = fs.statSync(sentinelPath);
+    } catch {
+      return false; // not armed
+    }
+    if (Date.now() - st.mtimeMs > SENTINEL_TTL_MS) {
+      // A stale token is a leftover, not an authorization — housekeep it.
+      try { fs.unlinkSync(sentinelPath); } catch { /* best-effort */ }
+      return false;
+    }
+    const token = fs.readFileSync(sentinelPath, 'utf8').split('\n')[0].trim();
+    if (!token) return false;
+    // Path-bound: the token names exactly one file, resolved against the
+    // .planning/ dir's parent (repo root) — same case-insensitive stance as
+    // the curated match itself.
+    const namedNorm = path.resolve(path.join(planningDir, '..'), token).replace(/\\/g, '/').toLowerCase();
+    if (namedNorm !== normalized.toLowerCase()) {
+      return false; // armed for a different file — leave it for that write
+    }
+    // Consume BEFORE allowing: even if the Write then fails, the safe
+    // direction is a spent token, never a lingering one.
+    fs.unlinkSync(sentinelPath);
+    return true;
+  } catch {
+    // Any sentinel-machinery error means "not exempt" — the guard's normal
+    // (blocking) flow proceeds; the hatch may never fail a guard open.
+    return false;
+  }
+}
+
+// m2 (round 5): the block emission must itself be exception-safe. An EPIPE
+// from writeSync inside the outer try would land in the fail-OPEN catch —
+// the one outcome the fail-closed branches exist to prevent. The decision
+// stands regardless of whether the payload could be delivered.
+function emitBlock(output) {
+  try {
+    // writeSync: pipe writes via process.stdout/stderr are async on Windows
+    // and process.exit() does not flush them — a truncated block payload is
+    // a guard that silently half-fired.
+    fs.writeSync(1, JSON.stringify(output));
+    // Kimi feeds stderr (not stdout) back to the model on exit 2.
+    fs.writeSync(2, output.reason);
+  } catch {
+    // Emission failed; the block still stands.
+  }
+  process.exit(2);
 }
 
 // #2304: Kimi's native hook bus delivers Kimi's tool vocabulary in the payload
@@ -161,10 +242,11 @@ process.stdin.on('end', () => {
       if (err && err.code === 'ENOENT') {
         process.exit(0); // does not exist — new-file Write, nothing to clobber
       }
-      const output = {
+      emitBlock({
         decision: 'block',
         readError: err && err.code ? String(err.code) : 'UNKNOWN',
         overrideEnvVar: 'GSD_ALLOW_PLANNING_SHRINK',
+        overrideSentinel: SENTINEL_REL,
         reason:
           `Write guard: could not read '${filePath}' to compare against the pending ` +
           `Write (${err && err.code ? err.code : 'unknown read error'}). ` +
@@ -172,14 +254,7 @@ process.stdin.on('end', () => {
           `fails closed rather than risk a blind overwrite. Retry once the file is ` +
           `readable, or — if this overwrite is intentional — re-run with the ` +
           `environment variable GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
-      };
-      // writeSync: pipe writes via process.stdout/stderr are async on Windows
-      // and process.exit() does not flush them — a truncated block payload is
-      // a guard that silently half-fired.
-      fs.writeSync(1, JSON.stringify(output));
-      // Kimi feeds stderr (not stdout) back to the model on exit 2.
-      fs.writeSync(2, output.reason);
-      process.exit(2);
+      });
     }
 
     const oldLines = countLines(onDisk);
@@ -193,15 +268,23 @@ process.stdin.on('end', () => {
       process.exit(0); // shrink (if any) is within tolerance
     }
 
+    // The mechanical hatch for workflow steps (see header): consulted only
+    // here, at the block point, so a within-tolerance write never burns it.
+    if (consumeSentinelFor(filePath, normalized)) {
+      process.exit(0); // armed for exactly this file, fresh, now consumed
+    }
+
     const pct = Math.round((newLines / oldLines) * 100);
-    // Typed fields (oldLines/newLines/overrideEnvVar) ride alongside the
-    // free-form reason so consumers — including this repo's tests — never
-    // have to regex the prose (CONTRIBUTING.md: no raw text matching).
-    const output = {
+    // Typed fields (oldLines/newLines/overrideEnvVar/overrideSentinel) ride
+    // alongside the free-form reason so consumers — including this repo's
+    // tests — never have to regex the prose (CONTRIBUTING.md: no raw text
+    // matching).
+    emitBlock({
       decision: 'block',
       oldLines,
       newLines,
       overrideEnvVar: 'GSD_ALLOW_PLANNING_SHRINK',
+      overrideSentinel: SENTINEL_REL,
       reason:
         `Write guard: this Write would shrink '${filePath}' from ${oldLines} lines to ` +
         `${newLines} (${pct}% of current). '${path.basename(filePath)}' is a curated planning ` +
@@ -209,15 +292,11 @@ process.stdin.on('end', () => {
         `from a partial read of the file and would destroy the sections outside that window ` +
         `(#973: a planner collapsed ROADMAP.md 292 → 16 lines this way). To fix: use Edit for ` +
         `a scoped change, or Read the full file and include every section in the Write. If ` +
-        `this shrink is intentional (milestone reset, large deletion), re-run with the ` +
-        `environment variable GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
-    };
-
-    // writeSync — same Windows flush rationale as the read-error branch above.
-    fs.writeSync(1, JSON.stringify(output));
-    // Kimi feeds stderr (not stdout) back to the model on exit 2.
-    fs.writeSync(2, output.reason);
-    process.exit(2);
+        `this shrink is intentional (milestone reset, large deletion), write the target's ` +
+        `path into '${SENTINEL_REL}' (single-use, consumed by the next allowed shrink of that ` +
+        `file) or — interactively — re-run with the environment variable ` +
+        `GSD_ALLOW_PLANNING_SHRINK=1 to bypass this guard once.`,
+    });
   } catch {
     // Silent fail — never block valid tool calls due to hook errors
     process.exit(0);

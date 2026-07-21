@@ -329,17 +329,86 @@ describe('#2304: Kimi tool vocabulary engages the write guard', () => {
   });
 });
 
+describe('single-use sentinel exemption (.planning/.gsd-allow-shrink) — the mechanical hatch the workflow uses', () => {
+  // #2255 round 5 M1: a per-step env prefix cannot reach a PreToolUse hook
+  // (the hook inherits the RUNTIME's environment), so the workflow's hatch is
+  // a sentinel FILE the guard itself consults: the step writes the target's
+  // path into .planning/.gsd-allow-shrink, and the guard consumes it (single
+  // use) to allow exactly one otherwise-blocked shrink of exactly that file.
+  const sentinelName = '.gsd-allow-shrink';
+  let sentinelPath;
+
+  before(() => {
+    sentinelPath = path.join(planningDir, sentinelName);
+  });
+
+  function armSentinel(target = '.planning/ROADMAP.md') {
+    fs.writeFileSync(sentinelPath, target + '\n');
+  }
+
+  function disarm() {
+    fs.rmSync(sentinelPath, { force: true });
+  }
+
+  test('a reorganize-shaped Write PASSES under a fresh sentinel naming the target — and the sentinel is CONSUMED', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    armSentinel();
+    const r = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
+    assert.equal(r.status, 0,
+      `fresh sentinel naming the target must exempt the shrink. Got ${r.status}; stdout: ${r.stdout}`);
+    assert.equal(fs.existsSync(sentinelPath), false,
+      'the sentinel must be consumed by the allow — single-use, never a standing unlock');
+
+    // Single-use for real: the identical payload immediately after is blocked.
+    const again = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
+    assert.equal(again.status, 2, 'the sentinel is spent — the identical second Write must block');
+  });
+
+  test('a STALE sentinel does not exempt', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    armSentinel();
+    const old = (Date.now() - 16 * 60 * 1000) / 1000; // past the 15-minute freshness window
+    fs.utimesSync(sentinelPath, old, old);
+    const r = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
+    assert.equal(r.status, 2, 'a stale sentinel is a leftover, not an authorization');
+    disarm();
+  });
+
+  test('a sentinel naming a DIFFERENT file neither exempts nor is consumed', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    armSentinel('.planning/STATE.md');
+    const r = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
+    assert.equal(r.status, 2, 'the sentinel is path-bound — a token for STATE.md must not exempt ROADMAP.md');
+    assert.equal(fs.existsSync(sentinelPath), true,
+      'a mismatched sentinel must survive — it still authorizes the write it was armed for');
+    disarm();
+  });
+
+  test('the block output names the sentinel via a typed field (consumers never regex the prose)', () => {
+    fs.writeFileSync(roadmapPath, lines(292));
+    const r = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
+    assert.equal(r.status, 2);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.overrideSentinel, `.planning/${sentinelName}`,
+      'blocked callers are told the mechanical hatch by typed field, same contract as overrideEnvVar');
+  });
+});
+
 describe('guard <-> complete-milestone workflow binding (the escape hatch is WIRED, not just present)', () => {
-  // #2255 review Blocker 1: the one first-party legitimate milestone reset —
-  // complete-milestone's reorganize step — must actually set the escape hatch,
-  // or the guard hard-blocks the tree's own workflow mid-step. The env var
-  // name is taken from the guard's typed output, so a rename on EITHER side
-  // fails here instead of silently unwiring the hatch.
+  // #2255 review Blocker 1 (reopened round 5 as M1): the one first-party
+  // legitimate milestone reset — complete-milestone's reorganize step — must
+  // route through a hatch the guard MECHANICALLY honors, on the tool the
+  // guard actually watches. Round 3's fix routed around Write via Bash+tee
+  // with an env prefix nothing reads; this binding asserts the opposite: the
+  // step arms the sentinel the guard consumes, keeps Write as the sanctioned
+  // path, and no longer smuggles the rewrite through a shell pipe. The
+  // sentinel name is taken from the guard's typed output, so a rename on
+  // EITHER side fails here instead of silently unwiring the hatch.
   const workflowPath = path.join(
     __dirname, '..', 'gsd-core', 'workflows', 'complete-milestone.md'
   );
 
-  test('the reorganize step sets the exact override the guard honors', () => {
+  test('the reorganize step arms the exact sentinel the guard consumes, and keeps Write as the path', () => {
     const src = fs.readFileSync(workflowPath, 'utf8');
     const stepStart = src.indexOf('<step name="reorganize_roadmap_and_delete_originals">');
     assert.notEqual(stepStart, -1,
@@ -347,16 +416,24 @@ describe('guard <-> complete-milestone workflow binding (the escape hatch is WIR
     const step = src.slice(stepStart, src.indexOf('</step>', stepStart));
 
     fs.writeFileSync(roadmapPath, lines(292));
-    const blocked = runHook(writePayload(roadmapPath, lines(16)));
+    const blocked = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
     assert.equal(blocked.status, 2, 'baseline: the reorganize-shaped Write must block without the hatch');
-    const envVar = JSON.parse(blocked.stdout).overrideEnvVar;
+    const sentinel = JSON.parse(blocked.stdout).overrideSentinel;
+    assert.ok(sentinel, 'the guard must publish its sentinel path as a typed field');
 
-    assert.ok(step.includes(`${envVar}=1`),
-      `complete-milestone.md's reorganize step no longer sets ${envVar}=1 — ` +
-      'its whole-file ROADMAP.md rewrite would be hard-blocked by gsd-write-guard (#2255 Blocker 1)');
+    assert.ok(step.includes(sentinel),
+      `complete-milestone.md's reorganize step no longer arms ${sentinel} — ` +
+      'its whole-file ROADMAP.md rewrite would be hard-blocked by gsd-write-guard (#2255 M1)');
 
-    const allowed = runHook(writePayload(roadmapPath, lines(16)), { [envVar]: '1' });
+    assert.ok(!/GSD_ALLOW_PLANNING_SHRINK=1\s+tee/.test(step) && !/\btee\s+\.planning\/ROADMAP\.md/.test(step),
+      'the reorganize step must not route the rewrite around Write via a shell pipe — ' +
+      'that is the prose-level protection M1 exists to eliminate');
+
+    // The real failure round 5 named: agent follows the step, arms the
+    // sentinel, then calls Write — this exact sequence must pass.
+    fs.writeFileSync(path.join(planningDir, '.gsd-allow-shrink'), '.planning/ROADMAP.md\n');
+    const allowed = runHook(writePayload(roadmapPath, lines(16), { cwd: projectDir }));
     assert.equal(allowed.status, 0,
-      'the identical catastrophic payload must pass under the env the workflow step sets');
+      'the identical catastrophic payload must pass under the sentinel the workflow step arms');
   });
 });

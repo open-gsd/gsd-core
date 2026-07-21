@@ -493,13 +493,15 @@ If `$BACKLOG_SECTION` is empty, there is no Backlog section — skip silently.
 
 **Reorganize ROADMAP.md** — overwrite in place (do NOT delete first) with milestone groupings.
 
-This rewrite is an *intentional* catastrophic shrink: phase detail was just archived to `milestones/v[X.Y]-ROADMAP.md`, and a multi-hundred-line ROADMAP.md collapses to a compact grouped summary. The `gsd-write-guard` PreToolUse hook (#2255) hard-blocks exactly that shape on curated `.planning/` files — this step is the legitimate milestone reset its `GSD_ALLOW_PLANNING_SHRINK` escape hatch exists for. A hook inherits the runtime's environment, not a per-step one, so do NOT perform this rewrite with a bare `Write` tool call (it will be blocked). Compose the full new ROADMAP.md content (template below), then write it through a shell command with the escape hatch set on the command itself:
+This rewrite is an *intentional* catastrophic shrink: phase detail was just archived to `milestones/v[X.Y]-ROADMAP.md`, and a multi-hundred-line ROADMAP.md collapses to a compact grouped summary. The `gsd-write-guard` PreToolUse hook (#2255) hard-blocks exactly that shape on curated `.planning/` files — this step is the legitimate milestone reset its escape hatch exists for. A hook inherits the *runtime's* environment, so no per-step env var can reach it; the hatch is a **single-use sentinel file the guard itself consumes**. Arm it, then write:
+
+1. Arm the sentinel (single-use; the guard checks it is fresh — within 15 minutes — and names exactly this file, then consumes it):
 
 ```bash
-GSD_ALLOW_PLANNING_SHRINK=1 tee .planning/ROADMAP.md > /dev/null <<'ROADMAP_EOF'
-[the composed milestone-grouped ROADMAP.md content]
-ROADMAP_EOF
+printf '.planning/ROADMAP.md\n' > .planning/.gsd-allow-shrink
 ```
+
+2. Compose the full new ROADMAP.md content (template below) and overwrite `.planning/ROADMAP.md` with the **Write tool** — the normal path. The guard allows this one shrink and deletes the sentinel. If the Write is blocked anyway, the sentinel was stale or consumed — re-run the `printf` and retry the Write.
 
 Template for the composed content:
 
