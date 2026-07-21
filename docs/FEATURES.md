@@ -309,6 +309,7 @@
 - REQ-PLAN-07: System MUST prompt user to run `/gsd-ui-phase` if frontend phase detected and no UI-SPEC.md exists (UI safety gate)
 - REQ-PLAN-08: System MUST include Nyquist validation mapping when `workflow.nyquist_validation` is enabled
 - REQ-PLAN-09: System MUST verify all phase requirements are covered by at least one plan before planning completes (requirements coverage gate)
+- REQ-PLAN-10: System MUST support an optional `<reversibility rating="reversible|costly|one-way">` element recording how costly a decision would be to undo, and MUST insert a `checkpoint:decision` before the task implementing a `one-way` decision unless `--no-reversibility-gates` is set (`costly` is flagged without blocking; `reversible` and unrated flow normally)
 
 **Produces:**
 | Artifact | Description |

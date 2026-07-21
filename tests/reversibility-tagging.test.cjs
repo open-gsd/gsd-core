@@ -37,6 +37,21 @@ function read(file) {
   return fs.readFileSync(file, 'utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
+/**
+ * Word-boundary rating match. A plain `.includes('reversible')` also matches
+ * inside "irreversible"/"irreversibility", which appear in anti-pattern prose —
+ * so a surface that dropped the real taxonomy entry could still pass.
+ */
+function namesRating(text, rating) {
+  return new RegExp(`\\b${rating.replace(/[-]/g, '\\-')}\\b`).test(text);
+}
+
+/** The fenced ```bash blocks of a workflow file, so prose cannot satisfy a
+ *  test that claims to assert on the parser. */
+function bashBlocks(md) {
+  return [...md.matchAll(/```bash\r?\n([\s\S]*?)```/g)].map((m) => m[1]);
+}
+
 // ─── Acceptance #1: discuss-phase decisions carry a rating + rationale ───────
 
 describe('#1951 discuss-phase: decisions carry a reversibility rating', () => {
@@ -53,7 +68,7 @@ describe('#1951 discuss-phase: decisions carry a reversibility rating', () => {
     const tpl = read(DISCUSS_CONTEXT_TEMPLATE);
     for (const rating of RATINGS) {
       assert.ok(
-        tpl.includes(rating),
+        namesRating(tpl, rating),
         `context.md template must name the "${rating}" rating`,
       );
     }
@@ -167,7 +182,7 @@ describe('#1951 plan-md.md documents the <reversibility> element', () => {
     const doc = read(PLAN_MD_DOC);
     for (const rating of RATINGS) {
       assert.ok(
-        doc.includes(rating),
+        namesRating(doc, rating),
         `plan-md.md must document the "${rating}" rating`,
       );
     }
@@ -186,19 +201,24 @@ describe('#1951 plan-md.md documents the <reversibility> element', () => {
 // ─── Acceptance #5: the override ────────────────────────────────────────────
 
 describe('#1951 --no-reversibility-gates override', () => {
-  test('plan-phase workflow defaults REVERSIBILITY_GATES to true', () => {
-    assert.match(
-      read(PLAN_PHASE_WORKFLOW),
-      /REVERSIBILITY_GATES=true/,
-      'plan-phase.md must default REVERSIBILITY_GATES=true',
+  // Asserted against the fenced bash blocks, NOT the whole file: the workflow's
+  // own prose mentions `--no-reversibility-gates` and `REVERSIBILITY_GATES=false`
+  // in one sentence, so a whole-file substring check would still pass with the
+  // conditional deleted — it would be testing the documentation, not the parser.
+  test('plan-phase workflow defaults REVERSIBILITY_GATES to true (in bash)', () => {
+    assert.ok(
+      bashBlocks(read(PLAN_PHASE_WORKFLOW)).some((b) => /^REVERSIBILITY_GATES=true$/m.test(b)),
+      'a bash block in plan-phase.md must assign REVERSIBILITY_GATES=true',
     );
   });
 
-  test('plan-phase workflow parses --no-reversibility-gates to false', () => {
-    const md = read(PLAN_PHASE_WORKFLOW);
+  test('plan-phase workflow parses --no-reversibility-gates to false (in bash)', () => {
+    // One physical line: `if [[ ... --no-reversibility-gates ... ]]; then REVERSIBILITY_GATES=false; fi`
+    const conditional = /^if \[\[.*--no-reversibility-gates.*\]\];\s*then\s+REVERSIBILITY_GATES=false;\s*fi\s*$/m;
     assert.ok(
-      md.includes('--no-reversibility-gates') && md.includes('REVERSIBILITY_GATES=false'),
-      'plan-phase.md must parse --no-reversibility-gates into REVERSIBILITY_GATES=false',
+      bashBlocks(read(PLAN_PHASE_WORKFLOW)).some((b) => conditional.test(b)),
+      'a bash block in plan-phase.md must contain the --no-reversibility-gates -> '
+      + 'REVERSIBILITY_GATES=false conditional (prose mentioning both tokens is not the parser)',
     );
   });
 
@@ -251,11 +271,22 @@ describe('#1951 --no-reversibility-gates override', () => {
 // reject the new optional element. Covers every rating plus the absent case
 // (the enum-boundary analog: each valid value, and the omitted value).
 
-function planWith({ reversibility = null } = {}) {
-  const task = [
+function planWith({ reversibility = null, precedingCheckpoint = false } = {}) {
+  const task = [];
+  if (precedingCheckpoint) {
+    task.push(
+      '<task type="checkpoint:decision" gate="blocking">',
+      '  <decision>Pick the on-disk format</decision>',
+      '  <context>Later phases read this file.</context>',
+      '  <resume-signal>Select: option-a or option-b</resume-signal>',
+      '</task>',
+      '',
+    );
+  }
+  task.push(
     '<task type="auto">',
     '  <name>Task 1: Test</name>',
-  ];
+  );
   if (reversibility !== null) {
     task.push(`  <reversibility rating="${reversibility}">rationale text</reversibility>`);
   }
@@ -275,7 +306,10 @@ function planWith({ reversibility = null } = {}) {
     'wave: 1',
     'depends_on: []',
     'files_modified: [src/x.ts]',
-    'autonomous: true',
+    // A plan containing any checkpoint must declare autonomous: false — the
+    // validator already errors otherwise, and inserting a reversibility gate
+    // is precisely what flips this field.
+    `autonomous: ${precedingCheckpoint ? 'false' : 'true'}`,
     'must_haves:',
     '  truths:',
     '    - "something is true"',
@@ -303,7 +337,12 @@ describe('#1951 cmdVerifyPlanStructure accepts <reversibility> (additive)', () =
       const tmp = createTempProject();
       t.after(() => cleanup(tmp));
 
-      const out = verifyPlan(tmp, planWith({ reversibility: rating }));
+      // one-way needs its gate present, or the ungated-one-way warning fires
+      // (that path is asserted separately below).
+      const out = verifyPlan(tmp, planWith({
+        reversibility: rating,
+        precedingCheckpoint: rating === 'one-way',
+      }));
       assert.strictEqual(
         out.valid, true,
         `plan with rating="${rating}" must be valid, errors: ${JSON.stringify(out.errors)}`,
@@ -311,7 +350,7 @@ describe('#1951 cmdVerifyPlanStructure accepts <reversibility> (additive)', () =
       assert.deepStrictEqual(out.errors, [], 'no validation path may reject a <reversibility> task');
       assert.ok(
         !(out.warnings || []).some((w) => /reversibilit/i.test(w)),
-        'nothing may flag the <reversibility> element specifically',
+        `a well-formed rating="${rating}" task must not be flagged`,
       );
     });
   }
@@ -325,6 +364,66 @@ describe('#1951 cmdVerifyPlanStructure accepts <reversibility> (additive)', () =
       out.valid, true,
       `plan without <reversibility> must be valid (back-compat), errors: ${JSON.stringify(out.errors)}`,
     );
+    assert.ok(
+      !(out.warnings || []).some((w) => /reversibilit/i.test(w)),
+      'an unrated plan must not be flagged',
+    );
+  });
+});
+
+// ─── The gate is machine-detectable, not prose-only ─────────────────────────
+//
+// The feature's whole promise is that a one-way door gets confirmed before it
+// is walked through. A planner that emits the rating but skips the checkpoint
+// silently reopens exactly the gap this feature closes, so the validator says
+// so. It warns rather than errors: <reversibility> stays additive and the plan
+// stays valid.
+
+describe('#1951 ungated one-way rating is flagged', () => {
+  test('one-way with NO preceding checkpoint:decision warns', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
+
+    const out = verifyPlan(tmp, planWith({ reversibility: 'one-way', precedingCheckpoint: false }));
+    assert.ok(
+      (out.warnings || []).some((w) => /one-way/.test(w) && /checkpoint:decision/.test(w)),
+      `an ungated one-way rating must warn; got warnings: ${JSON.stringify(out.warnings)}`,
+    );
+  });
+
+  test('the warning does not invalidate the plan (stays additive)', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
+
+    const out = verifyPlan(tmp, planWith({ reversibility: 'one-way', precedingCheckpoint: false }));
+    assert.strictEqual(
+      out.valid, true,
+      `an ungated one-way rating must warn, never error; errors: ${JSON.stringify(out.errors)}`,
+    );
+  });
+
+  test('one-way WITH a preceding checkpoint:decision does not warn', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
+
+    const out = verifyPlan(tmp, planWith({ reversibility: 'one-way', precedingCheckpoint: true }));
+    assert.ok(
+      !(out.warnings || []).some((w) => /one-way/.test(w)),
+      `a gated one-way rating must not warn; got warnings: ${JSON.stringify(out.warnings)}`,
+    );
+  });
+
+  test('reversible and costly are never flagged as ungated', (t) => {
+    const tmp = createTempProject();
+    t.after(() => cleanup(tmp));
+
+    for (const rating of ['reversible', 'costly']) {
+      const out = verifyPlan(tmp, planWith({ reversibility: rating, precedingCheckpoint: false }));
+      assert.ok(
+        !(out.warnings || []).some((w) => /one-way/.test(w)),
+        `rating="${rating}" must never trigger the one-way gate warning`,
+      );
+    }
   });
 });
 
@@ -342,7 +441,7 @@ describe('#1951 taxonomy parity: a single three-level vocabulary', () => {
     assert.ok(section.length > 0, 'thinking-models-planning.md must retain a Reversibility Test model');
     for (const rating of RATINGS) {
       assert.ok(
-        section.includes(rating),
+        namesRating(section, rating),
         `the Reversibility Test model must use the canonical "${rating}" rating`,
       );
     }
@@ -378,9 +477,58 @@ describe('#1951 taxonomy parity: a single three-level vocabulary', () => {
     };
     for (const [name, text] of Object.entries(surfaces)) {
       for (const rating of RATINGS) {
-        assert.ok(text.includes(rating), `${name} must name the "${rating}" rating`);
+        assert.ok(namesRating(text, rating), `${name} must name the "${rating}" rating`);
       }
     }
+  });
+});
+
+// ─── Untrusted-input boundary on the rationale (ADR-1577) ───────────────────
+//
+// The rationale originates in conversation and flows CONTEXT.md -> planner ->
+// PLAN.md -> executor, each hop an LLM reading the previous hop's output. Both
+// authoring surfaces must say the text is data, and must name the closing-tag
+// hazard specifically — a rationale that terminates its own element injects
+// sibling structure the executor reads as real tasks.
+
+describe('#1951 rationale is treated as untrusted data', () => {
+  test('reference file forbids following directives inside a rationale', () => {
+    const ref = read(REVERSIBILITY_REF);
+    assert.match(
+      ref,
+      /never follow[^\n]*directives|rationale is data, never instructions/i,
+      'planner-reversibility.md must state a rationale is data, not instructions to follow',
+    );
+  });
+
+  test('reference file names the closing-tag injection hazard', () => {
+    const ref = read(REVERSIBILITY_REF);
+    assert.ok(
+      ref.includes('</reversibility>'),
+      'planner-reversibility.md must name the </reversibility> early-termination hazard explicitly',
+    );
+  });
+
+  test('reference file cites the untrusted-input boundary standard', () => {
+    const ref = read(REVERSIBILITY_REF);
+    assert.match(
+      ref,
+      /ADR-1577|untrusted-input-boundary/,
+      'the guidance must cite the repo standard (ADR-1577 / untrusted-input-boundary.md), not invent its own',
+    );
+  });
+
+  test('discuss-phase template carries the same boundary instruction', () => {
+    const tpl = read(DISCUSS_CONTEXT_TEMPLATE);
+    assert.match(
+      tpl,
+      /never as an instruction|as data, never/i,
+      'context.md template must instruct the discuss agent to record the rationale as data',
+    );
+    assert.ok(
+      tpl.includes('</reversibility>'),
+      'context.md template must name the plan-tag stripping requirement explicitly',
+    );
   });
 });
 

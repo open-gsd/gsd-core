@@ -131,15 +131,11 @@ fi
 # Tracer-first is the default; --no-tracer opts back into the legacy horizontal-layer shape.
 TRACER_MODE=true
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--no-tracer([[:space:]]|$) ]]; then TRACER_MODE=false; fi
-# Reversibility gates are on by default; --no-reversibility-gates suppresses
-# checkpoint insertion for intentionally-unattended runs (ratings still recorded).
 REVERSIBILITY_GATES=true
 if [[ "$ARGUMENTS" =~ (^|[[:space:]])--no-reversibility-gates([[:space:]]|$) ]]; then REVERSIBILITY_GATES=false; fi
 ```
 
-**Tracer-first resolution.** `TRACER_MODE` defaults to `true` — every plan LEADS with one `type="tracer"` end-to-end slice, then expansion tasks. `--no-tracer` sets `TRACER_MODE=false` to restore the legacy horizontal-layer default. Unlike `MVP_MODE`, tracer-first is not a persisted per-phase mode — it is the baseline decomposition discipline, so there is no roadmap/config chain to consult.
-
-**Reversibility-gate resolution.** `REVERSIBILITY_GATES` defaults to `true` — a decision rated `one-way` earns a `checkpoint:decision` before the task that implements it. `--no-reversibility-gates` sets `REVERSIBILITY_GATES=false` for runs the developer intends to leave unattended; ratings are still recorded on tasks and `costly` items are still flagged, so the signal survives even when nothing stops the run. Like tracer-first, this is not a persisted per-phase mode — there is no roadmap/config chain to consult.
+**Baseline-discipline flags.** `TRACER_MODE` and `REVERSIBILITY_GATES` default to `true`; neither is persisted per-phase nor read from config.
 
 Defer the `phase.mvp-mode` query until `PHASE` is finalized (after explicit argument parsing/fallback phase detection + validation). The verb returns `true|false`; full result also exposes `source` (`cli_flag` | `roadmap` | `config` | `none`) for diagnostics. Mode is **all-or-nothing per phase** (PRD decision Q1).
 
@@ -788,8 +784,8 @@ Historical findings already incorporated, explicitly deferred/rejected in PLAN.m
 
 {For each active entry in `PLAN_PRE_HOOKS_JSON` where `kind == "contribution"` and `into == "planner"` (in array order): inject the entry's `fragment.inline` verbatim here. This delivers all planner-targeted contributions — including tdd's `<tdd_mode_active>` block (type:tdd heuristics), schema-gate's schema-push detection guidance (if active at plan:pre), and security's threat-model guidance. For the security contribution, also surface the resolved `configValues`: `security_asvs_level` (ASVS enforcement level) and `security_block_on` (severity threshold) so the planner uses the configured values when generating `<threat_model>` blocks. If no active planner contributions exist, omit this block entirely.}
 
-**TRACER_MODE:** ${TRACER_MODE} (when true — the default — the plan LEADS with one `type="tracer"` end-to-end slice touching every layer, then expansion tasks; when false (`--no-tracer`), decompose into horizontal layers.)
-**REVERSIBILITY_GATES:** ${REVERSIBILITY_GATES} (when true — the default — a decision rated `one-way` gets a `checkpoint:decision` inserted before the task implementing it, and the plan sets `autonomous: false`; when false (`--no-reversibility-gates`), insert no checkpoint but still emit `<reversibility>` ratings and flag `costly` items. Taxonomy: `~/.claude/gsd-core/references/planner-reversibility.md`.)
+**TRACER_MODE:** ${TRACER_MODE} (false = horizontal layers instead of a leading `type="tracer"` slice; see `planner-mvp-mode.md`.)
+**REVERSIBILITY_GATES:** ${REVERSIBILITY_GATES} (false = rate but do not gate; see `planner-reversibility.md`.)
 **MVP_MODE:** ${MVP_MODE} (when true, follow vertical-slice rules from `~/.claude/gsd-core/references/planner-mvp-mode.md`; when false, ignore MVP guidance entirely.)
 **WALKING_SKELETON:** ${WALKING_SKELETON} (when true, the first deliverable must be a Walking Skeleton — Read the template at `~/.claude/gsd-core/references/skeleton-template.md` and produce SKELETON.md alongside PLAN.md.)
 **Granularity:** {granularity}
