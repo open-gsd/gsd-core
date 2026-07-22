@@ -1,5 +1,0 @@
----
-type: Fixed
-pr: 1818
----
-**`gsd-tools state json` no longer reports conflated progress for an unversioned milestone (#1761)** — the ADR-1769 Phase 7 fix (#1794) taught `state sync` to leave Progress untouched when a milestone version is asserted but the ROADMAP has no versioned heading for it, but the `state json` **read** path still rebuilt progress via `buildStateFrontmatter`, whose phase-heading count fell back to the whole document and summed sibling milestones. `state json` therefore reported a conflated `total_phases` (e.g. 8 = 4+4 across two milestones) plus a derived `percent`, contradicting the sync guard on the very same project. The read path now mirrors the sync guard: when the asserted milestone cannot be bounded to a versioned ROADMAP heading, `total_phases` falls back to the on-disk phase-dir count and `percent` is omitted. Bounded milestones (versioned ROADMAP, or no milestone asserted) are unchanged; the signal rides on the existing `_diskScanCache` so `extractCurrentMilestone`'s return contract and its other callers are untouched.
