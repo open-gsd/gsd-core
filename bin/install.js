@@ -658,6 +658,62 @@ function selectRuntimesFromArgs(runtimeArgs) {
 // Runtime selection - can be set by flags or interactive prompt
 let selectedRuntimes = selectRuntimesFromArgs(args);
 
+// #2505 Phase 5: Kimi variant disambiguation (#2513). Kimi CLI (Python, ~/.kimi/)
+// and Kimi Code (Node, ~/.kimi-code/) are two distinct Moonshot products that
+// share the "kimi" brand. Probe for each product's config.toml and warn when
+// the selected runtime doesn't match the detected install — catches the common
+// "ran --kimi --global but actually on Kimi Code" mistake that produced inert
+// YAMLs and empty agent-skills before the Phase 1 descriptor split.
+function disambiguateKimiVariant(runtimes) {
+  const home = os.homedir();
+  const hasKimiCli = fs.existsSync(path.join(home, '.kimi', 'config.toml'));
+  const hasKimiCode = fs.existsSync(path.join(home, '.kimi-code', 'config.toml'));
+  const notices = [];
+  if (runtimes.includes('kimi') && hasKimiCode && !hasKimiCli) {
+    notices.push({
+      kind: 'wrong-variant',
+      selected: 'kimi',
+      detected: 'kimi-code',
+      message: `Detected ~/.kimi-code/config.toml (Kimi Code, Node CLI) but not ~/.kimi/config.toml (Kimi CLI, Python). You selected --kimi but appear to be on Kimi Code. Re-run with --kimi-code for a working install. (Kimi CLI = Python kimi-cli with named subagents; Kimi Code = Node CLI with coder/explore/plan built-ins only.)`,
+    });
+  }
+  if (runtimes.includes('kimi-code') && hasKimiCli && !hasKimiCode) {
+    notices.push({
+      kind: 'wrong-variant',
+      selected: 'kimi-code',
+      detected: 'kimi',
+      message: `Detected ~/.kimi/config.toml (Kimi CLI, Python) but not ~/.kimi-code/config.toml (Kimi Code, Node CLI). You selected --kimi-code but appear to be on Kimi CLI. Re-run with --kimi for a working install.`,
+    });
+  }
+  // Distinct-entry descriptions when either Kimi variant is selected.
+  if (runtimes.includes('kimi')) {
+    notices.push({
+      kind: 'description',
+      runtime: 'kimi',
+      message: 'Kimi CLI (Python kimi-cli): named subagents via YAML, config at ~/.kimi/, hooks via ~/.kimi/config.toml [[hooks]].',
+    });
+  }
+  if (runtimes.includes('kimi-code')) {
+    notices.push({
+      kind: 'description',
+      runtime: 'kimi-code',
+      message: 'Kimi Code (Node CLI): three built-in subagents (coder/explore/plan), Agent Skills at ~/.kimi-code/skills/, config at ~/.kimi-code/.',
+    });
+  }
+  return notices;
+}
+
+if (selectedRuntimes.includes('kimi') || selectedRuntimes.includes('kimi-code')) {
+  const kimiNotices = disambiguateKimiVariant(selectedRuntimes);
+  for (const notice of kimiNotices) {
+    if (notice.kind === 'wrong-variant') {
+      console.error(`${yellow}⚠ Kimi variant mismatch (${notice.selected} → ${notice.detected}).${reset} ${notice.message}`);
+    } else if (notice.kind === 'description') {
+      console.log(`${dim}  ${notice.runtime}: ${notice.message}${reset}`);
+    }
+  }
+}
+
 // #1928: Google sunset Gemini CLI on 2026-06-18; Antigravity CLI is its
 // official successor. `--gemini` is no longer a valid runtime selector —
 // selectRuntimesFromArgs above no longer recognizes it, so it never lands in
