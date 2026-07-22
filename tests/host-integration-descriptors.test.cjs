@@ -38,7 +38,7 @@ const DISPATCH_KEYS = ['namedDispatch', 'nested', 'maxDepth', 'background', 'sub
 const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
-// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, pi, qwen, trae (10)
+// programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, kimi-code, opencode, pi, qwen, trae (11)
 // declarative-cli:  antigravity, augment, codebuddy, codex, copilot, windsurf, zcode (7)
 // ide: vscode (1) — #2103, the first installed ide-profile host.
 const EXPECTED_PROFILES = {
@@ -48,6 +48,7 @@ const EXPECTED_PROFILES = {
   hermes:      'programmatic-cli',
   kilo:        'programmatic-cli',
   kimi:        'programmatic-cli',
+  'kimi-code': 'programmatic-cli',
   opencode:    'programmatic-cli',
   pi:          'programmatic-cli',
   qwen:        'programmatic-cli',
@@ -285,6 +286,10 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     // true → dispatch.background/backgroundDispatch both true → NOT
     // force-flattened (mirrors the #2087 OpenCode precedent below).
     kimi:        false,
+    // #2454: Kimi Code (Node CLI) — same background-dispatch model as Python
+    // kimi-cli per Kimi Code docs (dispatch.background/backgroundDispatch both
+    // true) → NOT force-flattened.
+    'kimi-code': false,
     // #2087: OpenCode background subagents (v1.15 param, v1.17 default-on) →
     // dispatch.background/backgroundDispatch true → NOT force-flattened.
     opencode:    false,

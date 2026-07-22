@@ -46,6 +46,7 @@ const GOLDEN_FRAGMENT_MAP = {
   codebuddy: "'.codebuddy'",
   cline:     "'.cline'",
   kimi:      "'.config', 'agents'",
+  'kimi-code': "'.kimi-code'",
   zcode:     "'.zcode'",
   pi:        "'.pi', 'agent'",
 };
@@ -56,7 +57,7 @@ const GOLDEN_FRAGMENT_MAP = {
 // all — getGlobalConfigHomeFragment is never invoked for it (no install surface).
 const SPECIAL_CASED = new Set(['claude', 'antigravity', 'vscode']);
 
-test('getGlobalConfigHomeFragment: golden map matches for all 13 table runtimes', () => {
+test('getGlobalConfigHomeFragment: golden map matches for all 14 table runtimes', () => {
   for (const [id, expected] of Object.entries(GOLDEN_FRAGMENT_MAP)) {
     const actual = getGlobalConfigHomeFragment(id);
     assert.strictEqual(
