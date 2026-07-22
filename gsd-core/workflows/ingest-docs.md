@@ -188,6 +188,10 @@ Collect the one-line confirmations from each classifier. If any classifier error
 
 Spawn `gsd-doc-synthesizer` once (runs in a subagent — no output until it returns, ~1–5 min; expected, not a freeze):
 
+<!-- #2508 runtime-aware-dispatch -->
+
+> **Runtime-aware dispatch (#2508 Phase 4).** Before any `Agent(subagent_type="gsd-*")` call below, resolve the type for the current runtime: `RESOLVED=$(gsd_run query resolve-dispatch-type --requested <name> --raw 2>/dev/null || echo <name>)`, then use `$RESOLVED`. On named-dispatch runtimes (Claude/OpenCode/…) this is the `gsd-*` name unchanged; on built-in-only runtimes (kimi-code) it maps to `coder`/`explore`/`plan` by role. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
+
 ```
 Agent({
   subagent_type: "gsd-doc-synthesizer",

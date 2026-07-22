@@ -473,6 +473,10 @@ Read the `activeHooks` array directly from `SHIP_POST_HOOKS_JSON` in-context (do
   ◆ Spawning ship:post capability agent... (runs in a subagent — no output until it returns, ~1–2 min; expected, not a freeze)
   ```
 
+<!-- #2508 runtime-aware-dispatch -->
+
+> **Runtime-aware dispatch (#2508 Phase 4).** Before any `Agent(subagent_type="gsd-*")` call below, resolve the type for the current runtime: `RESOLVED=$(gsd_run query resolve-dispatch-type --requested <name> --raw 2>/dev/null || echo <name>)`, then use `$RESOLVED`. On named-dispatch runtimes (Claude/OpenCode/…) this is the `gsd-*` name unchanged; on built-in-only runtimes (kimi-code) it maps to `coder`/`explore`/`plan` by role. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
+
   `Agent(subagent_type=ref.agent, prompt="Ship-time capability hook for phase ${PHASE_NUMBER}. Phase dir: ${PHASE_DIR}. Consume: ${consumed_files}. Follow your agent instructions.", model="{balanced_model}")`
 - If `ref.skill` is set, dispatch with `Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER} --auto ${GSD_WS}")` (prepend `gsd-` to `ref.skill`).
 

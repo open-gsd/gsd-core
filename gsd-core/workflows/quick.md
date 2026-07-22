@@ -445,6 +445,10 @@ This is a quick task, not a full phase. Research should be concise and targeted:
 Do NOT produce a full domain survey. Target 1-2 pages of actionable findings.
 </focus>
 
+<!-- #2508 runtime-aware-dispatch -->
+
+> **Runtime-aware dispatch (#2508 Phase 4).** Before any `Agent(subagent_type="gsd-*")` call below, resolve the type for the current runtime: `RESOLVED=$(gsd_run query resolve-dispatch-type --requested <name> --raw 2>/dev/null || echo <name>)`, then use `$RESOLVED`. On named-dispatch runtimes (Claude/OpenCode/…) this is the `gsd-*` name unchanged; on built-in-only runtimes (kimi-code) it maps to `coder`/`explore`/`plan` by role. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
+
 <output>
 Write research to: ${QUICK_DIR}/${quick_id}-RESEARCH.md
 Use standard research format but keep it lean — skip sections that don't apply.
