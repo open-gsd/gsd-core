@@ -193,7 +193,26 @@ Your final response MUST include a machine-readable line of exactly this form:
 Where <N> is the integer count of HIGH-severity concerns that REMAIN UNRESOLVED in this cycle's findings.
 Where <M> is the integer count of actionable MEDIUM/LOW concerns that REMAIN UNRESOLVED because the latest PLAN.md files do not yet incorporate them or explicitly defer/reject them.
 
-Counting rules:
+Consensus gate (#2398 — apply BEFORE the counting rules below):
+  This gate only changes anything when 2+ reviewers ran this cycle (built-in slugs and/or
+  `review.reviewer_instances` combined — see `references/reviewer-instances.md`). With a single
+  reviewer, skip this gate entirely — that reviewer's HIGHs always count under the counting rules
+  below, unchanged from prior behavior.
+
+  With 2+ reviewers, a HIGH raised by only ONE reviewer counts toward current_high ONLY if EITHER:
+    - The source-grounding pass independently confirms it against real project source (a verified
+      file:line citation, not the reviewer's own assertion), OR
+    - It is raised independently by 2+ reviewers (i.e., it appears in the REVIEWS.md Consensus
+      Summary's "Agreed Concerns").
+  A HIGH raised by exactly one reviewer that is NEITHER source-grounded NOR corroborated by
+  another reviewer does NOT count toward current_high. Still list it under "## Current HIGH
+  Concerns" for visibility, tagged "(single-reviewer, unconfirmed)".
+
+  Why: when `reviewer_instances` runs several same-adapter models of uneven reliability, any one
+  model's uncorroborated, unverifiable HIGH can otherwise force a replan cycle on a fabrication —
+  this gate keeps that reviewer's voice visible without letting it unilaterally drive the loop.
+
+Counting rules (apply AFTER the consensus gate above):
   INCLUDE in the count:
     - Newly raised HIGHs in this cycle
     - PARTIALLY RESOLVED HIGHs: concern acknowledged and a mitigation is in progress, but not yet verified/completed

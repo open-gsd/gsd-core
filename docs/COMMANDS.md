@@ -266,6 +266,8 @@ Cross-AI plan convergence loop — replan with review feedback until no HIGH con
 
 **Exit behavior:** Loop exits when both `current_high` and `current_actionable` hit zero. Stall detection warns when the total unresolved review count is not decreasing across cycles. Escalation gate asks the user to proceed or review manually when `--max-cycles` is hit with HIGH or actionable non-HIGH concerns still open.
 
+**Consensus gate (2+ reviewers only):** When `review.reviewer_instances` runs multiple reviewer identities in the same cycle, a HIGH raised by only one reviewer counts toward `current_high` only if it is independently source-grounded (verified `file:line` citation) or corroborated by another reviewer's independent finding (REVIEWS.md's Consensus Summary "Agreed Concerns"). Uncorroborated single-reviewer HIGHs still appear under "Current HIGH Concerns", tagged `(single-reviewer, unconfirmed)`, but do not force another replan cycle on their own. With a single reviewer configured, this gate is a no-op — behavior is unchanged.
+
 ```bash
 /gsd-plan-review-convergence 3                    # Default reviewers, 3 cycles
 /gsd-plan-review-convergence 3 --codex            # Codex-only review
