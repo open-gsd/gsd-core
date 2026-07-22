@@ -4,6 +4,19 @@
 - **Date:** 2026-05-17
 - **Issue:** #3660
 - **Implementation:** #3663 (Phase 1), feat/3663-runtime-artifact-layout-module-phase-1-m
+- **Subsumed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (GSD as an Embeddable Orchestration Engine) — read it first; see the amendment below
+
+## Amendment (2026-07-16): subsumed by ADR-1239 (EoS)
+
+[ADR-1239](1239-gsd-embeddable-orchestration-engine.md) — **GSD as an Embeddable Orchestration Engine** (EoS), Accepted — subsumes this ADR as an adapter: per-runtime artifact placement becomes one negotiated surface of the Host-Integration Interface rather than the outermost seam at which GSD meets a host.
+
+**This ADR is not superseded and its status is unchanged.** The artifact-layout seam is live and load-bearing; it is now a *component* of the EoS frame.
+
+**Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
+
+Recorded because ADR-1239 declared this subsumption while this file recorded nothing.
+
+## Context
 
 The **Runtime Surface Module** (`gsd-core/bin/lib/surface.cjs`, introduced by ADR-0011 Phase 2) re-materializes a resolved Skill Surface profile to disk via `applySurface`. It currently hardcodes two artifact kinds (`commands`, `agents`) and re-derives their source directories via `_findInstallSource` / `_findAgentsSource` walk-up heuristics. The install and uninstall pipelines in `bin/install.js` each encode the same per-runtime artifact layout independently across ~14 install sites and ~6 uninstall sites. Bug #3659 surfaced the resulting drift: `applySurface` omits the `skills` kind for runtimes whose canonical layout is `skills/gsd-<stem>/SKILL.md`, so `gsd-surface profile <name>` leaves ~67 skill directories on disk under the install-time profile's footprint when the resolved profile should have pruned them — roughly 2.7k tokens per session on a measured workstation.
 

@@ -11,7 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempDir, createTempProject, cleanup } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 
 function writePassedVerification(tmpDir, phaseDirName, paddedPhase) {
@@ -867,6 +867,44 @@ describe('cmdStateLoad (state load)', () => {
 
     assert.ok(result.output.includes('state_exists=true'), 'raw output should include state_exists=true');
     assert.ok(result.output.includes('config_exists=true'), 'raw output should include config_exists=true');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2376: cmdStateLoad's *_dir/*_path fields must resolve regardless of the
+// calling process's own cwd, not just the orchestrator's — debug.md has no
+// init.* call of its own and reads debug_dir from `state load` to build
+// debug_file_path for its gsd-debug-session-manager spawns instead of
+// hardcoding '.planning/debug/{slug}.md'. See tests/init.test.cjs's matching
+// '#2376 — init.* path fields resolve...' describe block for the established
+// pattern (spawn gsd-tools with its OS-level process cwd pointed at an
+// unrelated decoy directory while passing the real project root via --cwd).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#2376 — state load emits absolute debug_dir regardless of process cwd', () => {
+  let projectDir;
+  let decoyDir;
+
+  beforeEach(() => {
+    projectDir = createFixture();
+    decoyDir = createTempDir('gsd-2376-decoy-');
+  });
+
+  afterEach(() => {
+    cleanup(projectDir);
+    cleanup(decoyDir);
+  });
+
+  test('state load emits absolute debug_dir field that resolves from a different process cwd (previously absent)', () => {
+    fs.mkdirSync(path.join(projectDir, '.planning', 'debug'), { recursive: true });
+
+    const result = runGsdTools(['state', 'load', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok('debug_dir' in output, 'cmdStateLoad must now emit debug_dir (#2376)');
+    assert.ok(path.isAbsolute(output.debug_dir), `debug_dir must be absolute, got: "${output.debug_dir}"`);
+    assert.ok(fs.existsSync(output.debug_dir), `debug_dir must resolve to the real directory: "${output.debug_dir}"`);
   });
 });
 
@@ -4764,6 +4802,168 @@ describe('T6 section-splice characterization — record-session', () => {
       assert.strictEqual(output.recorded, true, 'recorded must be true');
       const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
       assert.ok(after.includes('**Resume file:** plan-3.md'), 'Resume file field must be updated to plan-3.md');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  // ─── #2450: CRLF STATE.md must not silently drop inserted session fields ─────
+  //
+  // Bug class: cmdStateRecordSession's section-rewrite regex used literal \n
+  // for the `## Session` and `## Session Continuity` heading boundaries, which
+  // cannot match a CRLF STATE.md (---\r\n style). The detector regex (using
+  // /^## Session[ \t]*$/im) WAS CRLF-tolerant ($ under /m treats \r as a line
+  // terminator), so the bug fired when a canonical session field was missing
+  // and had to be INSERTED via the section-rewrite path: the detector entered
+  // the branch, the writer regex silently no-op'd, but `updated.push('Resume File')`
+  // ran unconditionally → reported as updated but never written to disk.
+  //
+  // With core.autocrlf=input, the CRLF working-tree file produces no git diff,
+  // so the contributor cannot tell their STATE.md was misclassified.
+
+  const STATE_CRLF_SESSION_MISSING_RESUME = [
+    '---',
+    "gsd_state_version: '1.0'",
+    'milestone: v1.0',
+    'milestone_name: TestMilestone',
+    'status: executing',
+    "last_updated: '2026-01-01T00:00:00.000Z'",
+    "last_activity: '2026-01-01'",
+    '---',
+    '',
+    '# Project State',
+    '',
+    '## Session',
+    '',
+    '**Last session:** 2026-01-01T00:00:00.000Z',
+    '**Stopped at:** None',
+    // Resume file absent — forces the section-rewrite insert path (the buggy block)
+    '',
+  ].join('\r\n');
+
+  test('record-session --resume-file on CRLF STATE.md with field absent: field IS written (#2450)', () => {
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_CRLF_SESSION_MISSING_RESUME);
+      const result = runGsdTools(['state', 'record-session', '--resume-file', 'plan-3.md'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const output = JSON.parse(result.output);
+
+      // Bug discriminator: command reported recorded:true + 'Resume File' in
+      // updated, but the field was never written to disk. The disk assertion
+      // below is what fails pre-fix and passes post-fix.
+      assert.ok(Array.isArray(output.updated) && output.updated.includes('Resume File'),
+        `updated must include 'Resume File': ${JSON.stringify(output.updated)}`);
+
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(
+        /\*\*Resume file:\*\*\s*plan-3\.md/.test(after),
+        `Resume file field must be on disk after the call; STATE.md head:\n${after.slice(0, 500)}`,
+      );
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('record-session --stopped-at on CRLF STATE.md with field absent: field IS written (#2450)', () => {
+    // Same bug class, different field. The bug fires whenever a canonical
+    // session field must be INSERTED (vs. same-line replaced) on a CRLF STATE.md.
+    const STATE_CRLF_SESSION_MISSING_STOPPED = [
+      '---',
+      'status: executing',
+      '---',
+      '',
+      '## Session',
+      '',
+      '**Last session:** 2026-01-01T00:00:00.000Z',
+      // Stopped at absent — forces the section-rewrite insert path
+      '**Resume file:** None',
+      '',
+    ].join('\r\n');
+
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_CRLF_SESSION_MISSING_STOPPED);
+      const result = runGsdTools(['state', 'record-session', '--stopped-at', '14.3'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(
+        /\*\*Stopped at:\*\*\s*14\.3/.test(after),
+        `Stopped at field must be on disk; STATE.md head:\n${after.slice(0, 500)}`,
+      );
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('record-session --resume-file on CRLF STATE.md with Session Continuity heading: field IS inserted (#2450)', () => {
+    // Same bug class, different heading: `## Session Continuity` is the
+    // bootstrap-template shape. The rewrite regex at the second bug site used
+    // the same literal-\n pattern.
+    const STATE_CRLF_CONTINUITY = [
+      '---',
+      'status: executing',
+      '---',
+      '',
+      '## Session Continuity',
+      '',
+      'Next recommended action: resume phase 2.',
+      '',
+    ].join('\r\n');
+
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_CRLF_CONTINUITY);
+      const result = runGsdTools(['state', 'record-session', '--resume-file', 'plan-9.md'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(
+        /\*\*Resume file:\*\*\s*plan-9\.md/.test(after),
+        `Resume file field must be inserted under Session Continuity; STATE.md head:\n${after.slice(0, 500)}`,
+      );
+      // Existing prose must be preserved (#1101 invariant)
+      assert.ok(/Next recommended action: resume phase 2\./.test(after),
+        'Session Continuity prose must be preserved');
+    } finally {
+      cleanup(d);
+    }
+  });
+
+  test('record-session --resume-file on mixed-ending STATE.md (LF frontmatter + CRLF body): field IS written (#2450)', () => {
+    // CONTRIBUTING.md §"Parser and project-file inputs" lists "Mixed CRLF/LF
+    // newlines" as a required adversarial fixture class. Realistic when a
+    // Windows editor normalizes frontmatter bytes but preserves body text,
+    // or when tooling concatenates LF + CRLF fragments. The bug class is
+    // body-section-rewrite, so CRLF body + LF frontmatter is the worst case:
+    // the frontmatter delimiter is LF (syncStateFrontmatter parses either)
+    // but the `## Session` heading is CRLF, exercising the writer regex.
+    const STATE_MIXED_LF_FM_CRLF_BODY = [
+      '---',
+      'status: executing',
+      '---',
+      '',  // LF after frontmatter
+    ].join('\n') + [
+      '## Session',
+      '',
+      '**Last session:** 2026-01-01T00:00:00.000Z',
+      '**Stopped at:** None',
+      // Resume file absent
+      '',
+    ].join('\r\n');
+
+    const d = createTempProject();
+    try {
+      fs.writeFileSync(path.join(d, '.planning', 'STATE.md'), STATE_MIXED_LF_FM_CRLF_BODY);
+      const result = runGsdTools(['state', 'record-session', '--resume-file', 'plan-mix.md'], d);
+      assert.ok(result.success, `Command failed: ${result.error}`);
+
+      const after = fs.readFileSync(path.join(d, '.planning', 'STATE.md'), 'utf-8');
+      assert.ok(
+        /\*\*Resume file:\*\*\s*plan-mix\.md/.test(after),
+        `Resume file field must be on disk despite mixed line endings; STATE.md head:\n${after.slice(0, 500)}`,
+      );
     } finally {
       cleanup(d);
     }
@@ -10619,6 +10819,44 @@ describe('bug #1514 — extractRetiredPhaseNumbers property: returns exactly the
         },
       ),
     );
+  });
+});
+
+// ─── #2440: total_plans excluded from progress ratchet (per-counter) ──────────
+//
+// Pre-fix: shouldPreserveExistingProgress included total_plans in the ratchet.
+// Fix: total_plans joins total_phases as always-derived (both move in both
+// directions). Only completed_phases and completed_plans keep ratchet behaviour.
+
+describe('bug #2440 — shouldPreserveExistingProgress does not ratchet total_plans', () => {
+  const { shouldPreserveExistingProgress } = require('../gsd-core/bin/lib/state-document.cjs');
+
+  test('existing total_plans:50 > derived:64 → returns false (upward correction)', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 49 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 64, completed_plans: 49 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false,
+      'total_plans upward correction must NOT trigger ratchet');
+  });
+
+  test('existing total_plans:50 > derived:30 → returns false (downward correction)', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 30 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 30, completed_plans: 30 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false,
+      'total_plans downward correction must NOT trigger ratchet');
+  });
+
+  test('boundary: existing total_plans == derived → false', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 50 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 50, completed_plans: 50 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), false,
+      'total_plans equality must NOT trigger ratchet');
+  });
+
+  test('completed_plans:5 > derived:2 → true (ratchet still active for completed_plans)', () => {
+    const existing = { total_phases: 2, completed_phases: 1, total_plans: 6, completed_plans: 5 };
+    const derived  = { total_phases: 2, completed_phases: 1, total_plans: 6, completed_plans: 2 };
+    assert.equal(shouldPreserveExistingProgress(existing, derived), true,
+      'completed_plans ratchet must still work');
   });
 });
   });

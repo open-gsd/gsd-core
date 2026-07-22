@@ -35,7 +35,12 @@ function makeProject({ state, roadmap = false, git = false, verifyFail = false }
     fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), state);
   }
   if (roadmap) {
-    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    // `roadmap === true` writes a minimal empty roadmap (no Progress table —
+    // the legacy test default). A string is written verbatim so tests can
+    // supply a real Progress table for the #2427 roadmap-derived completion
+    // check.
+    const content = typeof roadmap === 'string' ? roadmap : '# Roadmap\n';
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), content);
   }
   if (git) {
     execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
@@ -426,5 +431,121 @@ describe('smart-entry: CLI dispatch (gsd-tools smart-entry)', () => {
     assert.ok(!out.startsWith('{'), 'human mode is not JSON');
     assert.match(out, /No project yet/);
     assert.match(out, /Recommended:/);
+  });
+});
+
+// ─── #2427: roadmap-grounded completion + tightened status regex ─────────────
+//
+// Pre-fix bug: isComplete compared global current_phase against stale
+// milestone-scoped total_phases (written once at milestone-switch time) and
+// matched any "shipped"/"done" substring in the status line — so a project
+// mid-milestone with current_phase=7 > stale total_phases=4 AND a per-phase
+// "Phase X shipped" status was falsely classified as "complete". The fix
+// grounds completion in ROADMAP.md's Progress table (global, authoritative)
+// and tightens the regex to require milestone-level language.
+
+describe('#2427 — roadmap-grounded completion + tightened status regex', () => {
+  afterEach(removeAll);
+
+  /**
+   * Build a ROADMAP.md with a `## Progress` table of N rows, M of which are
+   * `Complete` and the rest `In Progress`. Matches the column-name-driven
+   * Progress table shape deriveProgressFromRoadmap scans.
+   */
+  function roadmapWithProgress(total, completed) {
+    const rows = [];
+    for (let i = 1; i <= total; i++) {
+      const status = i <= completed ? 'Complete' : 'In Progress';
+      const phase = String(i).padStart(2, '0');
+      rows.push(`| ${phase} | 0/1 | ${status} | ${status === 'Complete' ? '2026-01-01' : ''} |`);
+    }
+    return [
+      '# Roadmap',
+      '',
+      '## Milestone v1.0',
+      '',
+      '## Progress',
+      '',
+      '| Phase | Plans Complete | Status | Completed |',
+      '|-------|---------------|--------|-----------|',
+      ...rows,
+    ].join('\n') + '\n';
+  }
+
+  test('mid-milestone with stale total_phases + unchecked roadmap phases is NOT complete', () => {
+    // The core bug: STATE.md says current_phase=7 >= total_phases=4 (stale,
+    // from a milestone switch when only 4 phases existed). Status contains
+    // "shipped" from a per-phase message. ROADMAP has 7 phases, only 4 done.
+    // MUST classify as something OTHER than "complete".
+    const dir = track(makeProject({
+      state: state({ status: 'Phase 7 shipped — PR #42', total_phases: 4, current_phase: 7 }),
+      roadmap: roadmapWithProgress(7, 4),
+    }));
+    const result = classifyProject(dir);
+    assert.notEqual(result.situation, 'complete',
+      `mid-milestone (7 phases, 4 done) must NOT be "complete" even with stale total_phases=4 + current_phase=7. Got: ${result.situation}`);
+  });
+
+  test('all roadmap phases complete classifies as complete even with stale cached total_phases', () => {
+    // ROADMAP says all 5 phases are done. STATE.md has stale total_phases=3
+    // (from an earlier milestone switch). The roadmap-derived check should
+    // win and classify as complete. Status uses ADR-2207's actual terminal
+    // written form "<version> milestone complete" (state-transition.cts:1303).
+    const dir = track(makeProject({
+      state: state({ status: 'v1.0 milestone complete', total_phases: 3, current_phase: 5 }),
+      roadmap: roadmapWithProgress(5, 5),
+    }));
+    const result = classifyProject(dir);
+    assert.equal(result.situation, 'complete',
+      `all roadmap phases complete must classify as "complete" regardless of stale cached total_phases. Got: ${result.situation}`);
+  });
+
+  test('per-phase "shipped" status alone does NOT satisfy the completion regex', () => {
+    // The pre-fix regex matched "shipped" as a standalone alternation branch.
+    // Tightened regex requires milestone-level language. With some phases
+    // unchecked AND status="shipped", must NOT be complete.
+    const dir = track(makeProject({
+      state: state({ status: 'shipped', total_phases: 5, current_phase: 5 }),
+      roadmap: roadmapWithProgress(5, 3),
+    }));
+    const result = classifyProject(dir);
+    assert.notEqual(result.situation, 'complete',
+      `status "shipped" alone (per-phase language) must NOT satisfy completion when roadmap has unchecked phases. Got: ${result.situation}`);
+  });
+
+  test('per-phase "done" status alone does NOT satisfy the completion regex', () => {
+    // Same as above but with "done" — the other over-broad branch the pre-fix
+    // regex matched.
+    const dir = track(makeProject({
+      state: state({ status: 'done', total_phases: 5, current_phase: 5 }),
+      roadmap: roadmapWithProgress(5, 3),
+    }));
+    const result = classifyProject(dir);
+    assert.notEqual(result.situation, 'complete',
+      `status "done" alone must NOT satisfy completion when roadmap has unchecked phases. Got: ${result.situation}`);
+  });
+
+  test('legacy fallback: empty roadmap still classifies via STATE.md comparison', () => {
+    // When ROADMAP.md has no Progress table (fresh project, non-standard
+    // layout), isComplete falls back to the legacy current_phase >= total_phases
+    // check. This preserves backward compat for projects that haven't adopted
+    // the Progress-table convention.
+    const dir = track(makeProject({
+      state: state({ status: 'complete', total_phases: 5, current_phase: 5 }),
+      roadmap: true, // empty roadmap — no Progress table
+    }));
+    const result = classifyProject(dir);
+    assert.equal(result.situation, 'complete',
+      `legacy fallback (no roadmap Progress table) must still classify complete via STATE.md. Got: ${result.situation}`);
+  });
+
+  test('legacy fallback: empty roadmap with current_phase < total_phases is NOT complete', () => {
+    const dir = track(makeProject({
+      state: state({ status: 'complete', total_phases: 5, current_phase: 3 }),
+      roadmap: true,
+    }));
+    const result = classifyProject(dir);
+    assert.notEqual(result.situation, 'complete',
+      `legacy fallback must still reject completion when current_phase < total_phases. Got: ${result.situation}`);
   });
 });

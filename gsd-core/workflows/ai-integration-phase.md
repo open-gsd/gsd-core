@@ -25,7 +25,9 @@ INIT=$(gsd_run query init.plan-phase "$PHASE")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Parse JSON for: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `has_context`, `has_research`, `commit_docs`.
+Parse JSON for: `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `has_context`, `has_research`, `commit_docs`, `response_language`.
+
+**If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
 **File paths:** `state_path`, `roadmap_path`, `requirements_path`, `context_path`.
 
@@ -52,7 +54,7 @@ Exit workflow.
 
 ## 2. Parse and Validate Phase
 
-Extract phase number from $ARGUMENTS. If not provided, detect next unplanned phase.
+Extract phase number from $ARGUMENTS. If not provided, this orchestrator (not `gsd-tools.cjs`) detects the next unplanned phase: run `gsd_run query roadmap.analyze` and read its `next_phase` field (the first phase whose `disk_status` is `no_directory`, `empty`, `discussed`, or `researched` — i.e. not yet planned). `query roadmap.get-phase` below hard-requires an explicit `${PHASE}` and does not auto-detect.
 
 ```bash
 PHASE_INFO=$(gsd_run query roadmap.get-phase "${PHASE}")

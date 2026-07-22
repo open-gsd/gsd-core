@@ -474,7 +474,7 @@ npm run dev &
 DEV_SERVER_PID=$!
 
 # Wait for ready (max 30s) — uses fetch() for cross-platform compatibility
-timeout 30 bash -c 'until node -e "fetch(\"http://localhost:3000\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))" 2>/dev/null; do sleep 1; done'
+gsd_run run-with-timeout 30 -- bash -c 'until node -e "fetch(\"http://localhost:3000\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))" 2>/dev/null; do sleep 1; done'
 ```
 
 **Port conflicts:** Kill stale process (`lsof -ti:3000 | xargs kill`) or use alternate port (`--port 3001`).

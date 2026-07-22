@@ -152,6 +152,35 @@ Every attempt uses `tier_models[default_tier]` regardless of outcome — useful 
 
 `dynamic_routing` is **disabled by default**. Omitting the block or setting `enabled: false` preserves static resolution.
 
+### Keep going when a provider throttles you
+
+The tier ladder above escalates within one provider. When the provider itself is the thing
+that ran out of quota, a heavier tier on the same account is still throttled. Add
+`provider_escalation` — an ordered list of fallback model IDs — to keep the phase moving
+instead of stopping for a manual restart:
+
+```json
+{
+  "dynamic_routing": {
+    "enabled": true,
+    "tier_models": { "light": "haiku", "standard": "sonnet", "heavy": "opus" },
+    "provider_escalation": ["gpt-5", "nvidia/llama-3.3"],
+    "max_escalations": 2
+  }
+}
+```
+
+When an executor dies on a rate limit, GSD classifies the error body, switches to the next
+model in the list, logs the swap (`sonnet → gpt-5`), and waits out any `Retry-After` the
+provider sent. The walk is capped at `min(max_escalations, provider_escalation.length)`.
+Once the list is spent, GSD names every model it tried and hands you the normal recovery
+prompt — it never silently retries the exhausted one.
+
+This is most useful on providers without a guaranteed SLA (Nvidia NIM, OpenRouter, and
+other third-party OpenCode models), where a throttle mid-phase is routine. It only fires on
+quota / rate-limit failures; other failures keep the tier ladder. Leaving
+`provider_escalation` unset preserves the manual wait-for-reset behaviour exactly.
+
 ---
 
 ## Using GSD on non-Anthropic runtimes

@@ -1,9 +1,24 @@
 # Existing Code Onboarding Module owns deterministic repo-state detection and onboarding route selection
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-07-06); see "Ratification" below
 - **Date:** 2026-07-06
 - **Issue:** #1990
 - **Implementation:** PR #1994
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive after independent re-verification of the evidence below; the Status field sat at Proposed for 11 days after the decision shipped.
+
+**Evidence the decision shipped:**
+
+- Issue #1990 ("Add /gsd:onboard for existing-codebase setup") is CLOSED, stateReason COMPLETED, closed 2026-07-07T04:23:56Z; PR #1994 ("feat(#1990): add brownfield onboarding workflow") is MERGED into `next` at 2026-07-07T04:23:55Z with body `Closes #1990`.
+- `src/onboard-projection.cts` (15,248 bytes) and its compiled `gsd-core/bin/lib/onboard-projection.cjs` are both present on disk, implementing the projection this ADR describes.
+- `src/init.cts:56` imports the projection as `onboardProjection`, and `src/init-command-router.cts:75` wires the `onboard:` route that consumes it — confirming the Init Command Module integration (the ADR's literal handler name "initOnboard" is not itself a grep-matched symbol; the consumption is the router entry plus the destructured import).
+- `gsd-core/workflows/onboard.md`, `commands/gsd/onboard.md`, and `skills/gsd-onboard/SKILL.md` all exist on disk, matching the "What stays OUTSIDE this Module" boundary.
+- `tests/onboard-command.test.cjs` (25,129 bytes) contains named tests covering the load-bearing gate order — `routes planning artifacts without PROJECT.md to partial planning`, `fast mode routes incomplete planning to partial-planning before the complete-map gate (regression #1990: fast map gate misroute)` — vendor exclusion (`ignores generated and vendor directories when detecting existing code`), and package-manifest brownfield detection (`treats package manifests as brownfield even without source files`).
+- Six commits tagged `#1990` landed the ADR, the projection module, and doc/index updates: `3c7d722ed`, `e8fb05e96`, `d0b8eacd3`, `1171499f3`, `bc751a64e`, `192764f0c`.
+
+**Governance state:** Owning issue #1990 — CLOSED, stateReason COMPLETED, closed 2026-07-07T04:23:56Z.
 
 ## Context
 

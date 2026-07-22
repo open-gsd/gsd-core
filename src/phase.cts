@@ -131,6 +131,20 @@ function updateTraceabilityCell(
   return { ok: true, value: before + result.value + after };
 }
 
+/**
+ * Extract the MAJOR version segment from a version-ish string: "v1", "v1.3",
+ * "V1.0", and "1.0" all yield "1"; "v2" yields "2". Used (#2334 BLOCKER fix)
+ * to compare a `## v<N> ...` REQUIREMENTS.md heading against the current
+ * milestone's version at MAJOR-version granularity only — "v1" heading vs
+ * milestone "v1.3" is the SAME major version and must not be treated as a
+ * version mismatch. Returns null when `raw` has no leading digit run (not a
+ * version-shaped string), which the caller treats as "cannot resolve".
+ */
+function extractMajorVersion(raw: string): string | null {
+  const m = raw.trim().match(/^v?(\d+)/i);
+  return m ? m[1] : null;
+}
+
 function describeNonCanonicalPlans(dirFiles: string[], matchedFiles: string[]): string | null {
   const matched = new Set(matchedFiles);
   const offenders = dirFiles.filter((f) => looksLikePlanFile(f) && !matched.has(f));
@@ -154,8 +168,16 @@ function extractCanonicalPlanId(filename: string): string {
   // or a single-digit-plus-letter id ("3A"); a *bare* single digit is a slug word,
   // so "46-6-rs-…" is not paired into a "46-6" id while "3A-01" stays intact.
   const tokenRe = /^(?:\d{2,}[A-Z]?|\d[A-Z])(?:\.\d+)*$/i;
+  // #2232: the PAIRED plan component is a zero-padded continuation segment
+  // (exactly 2 digits), so a ≥3-digit slug word (a year) is not paired into a
+  // bogus "14-2026" id. The leading phase component keeps tokenRe's unbounded
+  // \d{2,} — phase numbers ≥100 are legitimate; only continuations are capped.
+  const planTokenRe = new RegExp(
+    `^(?:${phaseIdMod.PHASE_CONTINUATION_SEGMENT_SOURCE}[A-Z]?|\\d[A-Z])(?:\\.\\d+)*$`,
+    'i',
+  );
   const phaseIdx = parts.findIndex((p) => tokenRe.test(p));
-  if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && tokenRe.test(parts[phaseIdx + 1])) {
+  if (phaseIdx >= 0 && phaseIdx + 1 < parts.length && planTokenRe.test(parts[phaseIdx + 1])) {
     return `${parts[phaseIdx]}-${parts[phaseIdx + 1]}`;
   }
   return base;
@@ -737,6 +759,32 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   output(result, raw);
 }
 
+// #2390 — phase.add title-shape heuristic. A description at or under this many
+// characters, and with no sentence-ending punctuation followed by more text,
+// reads as a short Title. Anything longer or multi-sentence reads as a Goal,
+// not a Title. phase.add still writes the phase verbatim (it never mangles
+// ROADMAP.md), but when the description looks goal-shaped the JSON result
+// gains a `warning` key naming the gap, so the caller — or the orchestrating
+// add-phase workflow — can split title vs. goal instead of the whole paragraph
+// landing silently in the `### Phase N:` header.
+const PHASE_ADD_TITLE_MAX_LEN = 80;
+const PHASE_ADD_MULTI_SENTENCE_RE = /[.!?]['")\]]?\s+\S/;
+
+function describeGoalShapedTitle(description: string): string | null {
+  const trimmed = description.trim();
+  const tooLong = trimmed.length > PHASE_ADD_TITLE_MAX_LEN;
+  const multiSentence = PHASE_ADD_MULTI_SENTENCE_RE.test(trimmed);
+  if (!tooLong && !multiSentence) return null;
+  const reasons = [
+    tooLong ? `${trimmed.length} chars (over the ${PHASE_ADD_TITLE_MAX_LEN}-char title threshold)` : null,
+    multiSentence ? 'multiple sentences' : null,
+  ].filter(Boolean).join(', ');
+  return (
+    `description looks goal-shaped, not title-shaped (${reasons}). It was written verbatim ` +
+    `as the phase title; consider a short title with the detail moved to **Goal:**.`
+  );
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -836,7 +884,9 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     return { newPhaseId: _newPhaseId, dirName: _dirName };
   });
 
-  const result = {
+  const titleWarning = describeGoalShapedTitle(description);
+
+  const result: Record<string, unknown> = {
     phase_number: typeof newPhaseId === 'number' ? newPhaseId : String(newPhaseId),
     padded:
       typeof newPhaseId === 'number' ? String(newPhaseId).padStart(2, '0') : String(newPhaseId),
@@ -847,8 +897,9 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     ),
     naming_mode: config.phase_naming,
   };
+  if (titleWarning) result['warning'] = titleWarning;
 
-  output(result, raw, result.padded);
+  output(result, raw, result['padded']);
 }
 
 function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): void {
@@ -1911,14 +1962,45 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const originalReqContent = fs.readFileSync(reqPath, 'utf-8');
           let reqContent = originalReqContent;
 
+          // #2316: `citedReqIds` — the REQ-IDs ROADMAP's own **Requirements:**
+          // line for this phase actually cites — is hoisted out of the
+          // `if (reqMatch)` block (previously scoped only inside it) so the
+          // ghost-ID cross-check below (~#2316-1) can consult it. `TBD` is the
+          // literal placeholder `phase.add`/`-batch`/`-insert` seed
+          // (`**Requirements**: TBD`, src/phase.cts:833,920,1078) — never a
+          // real REQ-ID, so it is filtered out wherever a cited-ID list feeds
+          // a warning (#2316-7 boundary).
+          const isPlaceholderReqId = (id: string): boolean => id.toUpperCase() === 'TBD';
+          let citedReqIds: string[] = [];
+          // #2316-1: Traceability-row writes that matched NO row (ghost or
+          // otherwise) — the `if (reqUpdate.ok)` below previously had no
+          // `else`, discarding this fact silently instead of surfacing it.
+          const traceabilityWriteMisses: string[] = [];
+
           if (reqMatch) {
-            const reqIds = reqMatch[1]
+            // #2334 HIGH 3: filter the tokenized capture to the REQ-ID SHAPE —
+            // the SAME shape bodyReqIds (`\*\*([A-Z][A-Z0-9]*-\d+)\*\*`, below)
+            // and tableReqIds (`([A-Z][A-Z0-9]*-\d+)`, below) already require —
+            // so the ghost-ID / unregistered comparisons stay shape-symmetric.
+            // Without this, `[^\n]+` split on `[,\s]+` turned EVERY word after
+            // the ID list into a "cited REQ-ID": the shipped
+            // `templates/roadmap.md:32` line
+            // `**Requirements**: [REQ-01, REQ-02]  <!-- brackets optional, ... -->`
+            // warned to register `<!--`, `brackets`, `optional`, `-->`, etc., and
+            // `**Requirements:** None` warned to register the literal word
+            // `None`. This subsumes the `TBD` placeholder special-case (`TBD`
+            // does not match the REQ-ID shape either); `isPlaceholderReqId` is
+            // kept below as a defensive no-op for any caller that still hands
+            // it a raw token.
+            const REQ_ID_SHAPE_RE = /^[A-Z][A-Z0-9]*-\d+$/i;
+            citedReqIds = reqMatch[1]
               .replace(/[\[\]]/g, '')
               .split(/[,\s]+/)
               .map((r) => r.trim())
-              .filter(Boolean);
+              .filter(Boolean)
+              .filter((r) => REQ_ID_SHAPE_RE.test(r));
 
-            for (const reqId of reqIds) {
+            for (const reqId of citedReqIds) {
               const reqEscaped = escapeRegex(reqId);
               reqContent = reqContent.replace(
                 new RegExp(`(-\\s*\\[)[ ](\\]\\s*\\*\\*${reqEscaped}\\*\\*)`, 'gi'),
@@ -1943,14 +2025,19 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               // updateTableCell call both probes and writes.
               const reqUpdate = updateTraceabilityCell(reqContent, reqRowMatch, 'Status', (current) =>
                 /^(?:pending|in progress)$/i.test(current.trim()) ? ' Complete ' : current);
-              if (reqUpdate.ok) reqContent = reqUpdate.value;
+              if (reqUpdate.ok) {
+                reqContent = reqUpdate.value;
+              } else if (!isPlaceholderReqId(reqId)) {
+                traceabilityWriteMisses.push(reqId);
+              }
             }
           }
 
           // #1159 (Defect B): collect requirement IDs only from ACTIVE sections.
           // Requirements under headings whose text contains "deferred", "backlog",
-          // "future", or "v2" (case-insensitive) are explicitly out of current scope
-          // and must not be flagged as missing from the Traceability table.
+          // "future", or an OFF-milestone `v<N>` (case-insensitive) are explicitly
+          // out of current scope and must not be flagged as missing from the
+          // Traceability table.
           //
           // Strategy: walk lines, track heading depth, and toggle a "deferred" flag
           // when a heading matching the pattern is encountered.  A sub-heading (higher
@@ -1958,7 +2045,47 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // opens a same-or-shallower heading that does NOT match the pattern.
           // Lines inside fenced code blocks (``` or ~~~) are treated as content, not
           // headings, to avoid false deferred-section detection from code examples.
-          const DEFERRED_HEADING_RE = /\b(?:deferred|backlog|future|v\d+)\b/i;
+          //
+          // #2334 BLOCKER fix (regresses closed bug #1159 against GSD's OWN
+          // shipped template): #2316-4a dropped the bare `v\d+` alternative
+          // entirely to stop it over-matching an ACTIVE heading like "## v1
+          // Requirements" — but the shipped `templates/requirements.md:35`
+          // scaffold ships `## v2 Requirements` / "Deferred to future release"
+          // as its ONLY deferred marker, and `v\d+` was the ONLY alternative
+          // that ever matched a bare version heading (the deferred-ness lives
+          // in body prose, not the heading text). Dropping it regressed #1159
+          // for every project scaffolded from the shipped template.
+          //
+          // Fix: make the `v<N>` alternative MILESTONE-AWARE instead of
+          // deleting it. A `## v<N> ...` heading is deferred ONLY when `<N>`
+          // (MAJOR version only — "v1" vs milestone "v1.3" is the SAME major
+          // version) does not match the CURRENT milestone's major version,
+          // resolved via `stateExtractField` against STATE.md's `milestone:`
+          // frontmatter field (the same seam `getMilestoneInfo`/state.cts's
+          // frontmatter builder already use — no bespoke frontmatter parsing).
+          // "## v1 Requirements" while the milestone is v1.x is the ACTIVE
+          // milestone's own section (#2316's original ask) and must NOT be
+          // swallowed; "## v2 Requirements" while the milestone is v1.x is a
+          // genuinely future milestone (#1159's ask, and the literal shipped-
+          // template shape) and MUST stay suppressed. `deferred`/`backlog`/
+          // `future` are unaffected by milestone resolution — a genuinely
+          // deferred heading always spells one of those words too (see
+          // #2316-5 regression guard: "## Deferred v2 Requirements", "##
+          // Future Backlog", "## Deferred", "## Backlog", "## Future").
+          //
+          // Fail-safe: when the milestone version cannot be resolved at all
+          // (no STATE.md, or no `milestone:` field), fall back to the OLD
+          // pre-#2316-4a behavior and treat every `v\d+` heading as deferred.
+          // A false "deferred" here only ever SUPPRESSES a warning — strictly
+          // safer than spamming a warning on every v\d+-headed scaffold when
+          // we cannot tell whether it names the active milestone.
+          const DEFERRED_KEYWORD_RE = /\b(?:deferred|backlog|future)\b/i;
+          const HEADING_VERSION_RE = /\bv(\d+)(?:\.\d+)*\b/i;
+          const stateRawForMilestone = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : null;
+          const currentMilestoneRaw = stateRawForMilestone
+            ? stateExtractField(stateRawForMilestone, 'milestone')
+            : null;
+          const currentMilestoneMajor = currentMilestoneRaw ? extractMajorVersion(currentMilestoneRaw) : null;
           const bodyReqIds: string[] = [];
           // deferredDepth: the heading level that opened the current deferred block,
           // or 0 when we are in an active section.
@@ -1982,10 +2109,19 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
               }
               // Heading at same level or shallower than current deferred opener,
               // or no active deferred block yet.
-              if (DEFERRED_HEADING_RE.test(text)) {
+              if (DEFERRED_KEYWORD_RE.test(text)) {
                 deferredDepth = depth; // enter a deferred block
               } else {
-                deferredDepth = 0; // back in an active section
+                const versionMatch = text.match(HEADING_VERSION_RE);
+                if (versionMatch) {
+                  const headingMajor = versionMatch[1];
+                  deferredDepth =
+                    currentMilestoneMajor === null || headingMajor !== currentMilestoneMajor
+                      ? depth // unresolved milestone (fail-safe) or off-milestone version -> deferred
+                      : 0; // same major version as the current milestone -> active
+                } else {
+                  deferredDepth = 0; // back in an active section
+                }
               }
               continue;
             }
@@ -2023,8 +2159,79 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             );
           }
 
+          // #2316-1: ghost REQ-IDs — cited by ROADMAP's own **Requirements:**
+          // line for this phase, but registered NOWHERE in REQUIREMENTS.md
+          // (neither its body nor its Traceability table). The `unregistered`
+          // check above only ever compares REQUIREMENTS.md's own body against
+          // its own Traceability table; it never consults `citedReqIds`, so an
+          // ID that ROADMAP cites but REQUIREMENTS.md never defines at all was
+          // previously invisible to every guard. `TBD` (the phase.add/-batch/
+          // -insert placeholder) is excluded — see #2316-7 boundary.
+          //
+          // #2334 HIGH 2: classify "ghost" by PROBING THE ACTUAL WRITE
+          // SURFACES this same function just wrote to (:1947 checkbox,
+          // :1967 Traceability row) — case-insensitively — mirroring
+          // milestone.cts's `notFound`/`hasRow`/`doneCheckbox` classification
+          // (src/milestone.cts:117-141,209-215), instead of set-differencing
+          // `bodyReqIds` (deferred-filtered, case-sensitive, bold-only) and
+          // `tableReqIds` (case-sensitive) against `citedReqIds`. Those two
+          // indexes can disagree with the writes: an ID under a `##
+          // Deferred` heading gets its checkbox ticked by the write loop
+          // above but is deliberately EXCLUDED from `bodyReqIds` by the
+          // deferred-heading filter (#1159), so the old set-diff reported it
+          // as an unregistered ghost in the SAME response that just ticked
+          // its checkbox; a case-mismatched citation (`known-01` vs
+          // `**KNOWN-01**`) lands its write via the writes' case-insensitive
+          // regexes but failed the old set-diff's case-SENSITIVE
+          // `Array.includes`/`Set.has`. An ID whose checkbox OR Traceability
+          // row actually matched is registered — not a ghost — regardless of
+          // which section (deferred or not) it lives under.
+          const reqIsRegisteredAnywhere = (id: string): boolean => {
+            const reqEscaped = escapeRegex(id);
+            // Surface 1 — checkbox, EITHER state (`[ ]` or `[x]`), case-
+            // insensitive: existence check, not the write's space-only match.
+            if (new RegExp(`-\\s*\\[[ xX]\\]\\s*\\*\\*${reqEscaped}\\*\\*`, 'i').test(reqContent)) {
+              return true;
+            }
+            // Surface 2 — Traceability row exists at all (any Status value),
+            // via the SAME no-op-probe-through-updateTraceabilityCell
+            // technique milestone.cts's `hasRow` uses (:210-214): a case-
+            // insensitive first-cell match, regardless of current Status.
+            const rowProbeMatch = (row: Record<string, string>): boolean =>
+              (Object.values(row)[0] ?? '').trim().toLowerCase() === id.toLowerCase();
+            return updateTraceabilityCell(reqContent, rowProbeMatch, 'Status', (current) => current).ok;
+          };
+          const ghostReqIds = citedReqIds.filter(
+            (id) => !isPlaceholderReqId(id) && !reqIsRegisteredAnywhere(id),
+          );
+          if (ghostReqIds.length > 0) {
+            warnings.push(
+              `ROADMAP Phase ${phaseNum} cites REQ-ID(s) not registered anywhere in REQUIREMENTS.md (neither body nor Traceability table): ${ghostReqIds.join(', ')} — add them to REQUIREMENTS.md or correct the ROADMAP citation`,
+            );
+          }
+
+          // #2316-1 cont.: a cited ID whose Traceability-row write matched no
+          // row for a reason OTHER than being a ghost (e.g. a malformed table)
+          // still deserves a warning instead of a silent discard — but skip
+          // IDs already reported above as ghosts to avoid a duplicate message
+          // for the same root cause.
+          const traceabilityWriteFailures = traceabilityWriteMisses.filter(
+            (id) => !ghostReqIds.includes(id),
+          );
+          if (traceabilityWriteFailures.length > 0) {
+            warnings.push(
+              `REQUIREMENTS.md: Traceability row write skipped for REQ-ID(s) cited by ROADMAP (no matching row found): ${traceabilityWriteFailures.join(', ')}`,
+            );
+          }
+
           writes.push({ filePath: reqPath, before: originalReqContent, after: reqContent });
-          requirementsUpdated = true;
+          // #2316-3: `requirements_updated` must reflect whether REQUIREMENTS.md
+          // content actually CHANGED, not merely that the file existed in the
+          // transaction — mirrors the `writes.push({filePath,before,after})`
+          // diff-tracking pattern used for the ROADMAP write above. A phase
+          // whose citations match nothing (ghost REQ-IDs only) must report
+          // `false`, not a bare "the file was present" `true`.
+          requirementsUpdated = reqContent !== originalReqContent;
         }
       }
 

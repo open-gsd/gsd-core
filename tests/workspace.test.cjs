@@ -214,6 +214,51 @@ describe('init remove-workspace', () => {
     assert.strictEqual(data.strategy, 'clone');
     assert.strictEqual(data.has_dirty_repos, false);
   });
+
+  // #2402: cmdInitRemoveWorkspace didn't route through withProjectRoot, so
+  // remove-workspace.md never received response_language (nor project_root/
+  // agents_installed). Mirrors the established `init manager` response_language
+  // coverage pattern (tests/init-manager.test.cjs).
+  describe('response_language wiring (#2402)', () => {
+    function writeWorkspace(base, name) {
+      const ws = path.join(base, 'gsd-workspaces', name);
+      fs.mkdirSync(ws, { recursive: true });
+      fs.writeFileSync(path.join(ws, 'WORKSPACE.md'), [
+        `# Workspace: ${name}`,
+        '',
+        'Created: 2026-03-20',
+        'Strategy: clone',
+        '',
+        '## Member Repos',
+        '',
+        '| Repo | Source | Branch | Strategy |',
+        '|------|--------|--------|----------|',
+      ].join('\n'));
+    }
+
+    test('output includes response_language when configured', () => {
+      writeWorkspace(tmpDir, 'test-ws');
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ response_language: 'Japanese' })
+      );
+
+      const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+      assert.ok(result.success, `init failed: ${result.error}`);
+      const data = JSON.parse(result.output);
+      assert.strictEqual(data.response_language, 'Japanese');
+    });
+
+    test('output omits response_language when not configured', () => {
+      writeWorkspace(tmpDir, 'test-ws');
+
+      const result = runGsdTools('init remove-workspace test-ws', tmpDir, { HOME: tmpDir });
+      assert.ok(result.success, `init failed: ${result.error}`);
+      const data = JSON.parse(result.output);
+      assert.strictEqual(data.response_language, undefined);
+    });
+  });
 });
 
 // ─── Integration: worktree creation and removal ─────────────────────────────

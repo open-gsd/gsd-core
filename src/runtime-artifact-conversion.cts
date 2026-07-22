@@ -954,7 +954,13 @@ function convertClaudeCommandToCursorSkill(content, skillName) {
   const shortDescription = description.length > 180 ? `${description.slice(0, 177)}...` : description;
   const adapter = getCursorSkillAdapterHeader(skillName);
 
-  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\n---\n\n${adapter}\n\n${body.trimStart()}`;
+  // #2341: mark user-invocable:false so the skill is NOT shown in Cursor's '/'
+  // menu (it defaults to true). Cursor also writes a commands/ surface (#785),
+  // and surfacing both duplicated every /gsd-* entry. This mirrors the #789
+  // CodeBuddy de-dup: the commands/ surface is the sole '/' entry point; skills
+  // stay model-invocable background knowledge. (user-invocable:false hides from
+  // '/' while keeping model invocation — distinct from disable-model-invocation.)
+  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(shortDescription)}\nuser-invocable: false\n---\n\n${adapter}\n\n${body.trimStart()}`;
 }
 
 /**

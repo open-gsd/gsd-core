@@ -166,11 +166,11 @@ Strategy: worktree
 | コマンド: new-workspace | `commands/gsd/new-workspace.md` |
 | コマンド: list-workspaces | `commands/gsd/list-workspaces.md` |
 | コマンド: remove-workspace | `commands/gsd/remove-workspace.md` |
-| ワークフロー: new-workspace | `get-shit-done/workflows/new-workspace.md` |
-| ワークフロー: list-workspaces | `get-shit-done/workflows/list-workspaces.md` |
-| ワークフロー: remove-workspace | `get-shit-done/workflows/remove-workspace.md` |
-| Init 関数 | `get-shit-done/bin/lib/init.cjs`（`cmdInitNewWorkspace`、`cmdInitListWorkspaces`、`cmdInitRemoveWorkspace` を追加） |
-| ルーティング | `get-shit-done/bin/gsd-tools.cjs`（init switch にケースを追加） |
+| ワークフロー: new-workspace | `gsd-core/workflows/new-workspace.md` |
+| ワークフロー: list-workspaces | `gsd-core/workflows/list-workspaces.md` |
+| ワークフロー: remove-workspace | `gsd-core/workflows/remove-workspace.md` |
+| Init 関数 | `gsd-core/bin/lib/init.cjs`（`cmdInitNewWorkspace`、`cmdInitListWorkspaces`、`cmdInitRemoveWorkspace` を追加） |
+| ルーティング | `gsd-core/bin/gsd-tools.cjs`（init switch にケースを追加） |
 | テスト | `tests/workspace.test.cjs` |
 
 ## 設計上の決定

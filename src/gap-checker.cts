@@ -334,7 +334,16 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
     const mismatchMsg = '## Post-Planning Gap Analysis\n\nextracted 0 of N — possible format mismatch in CONTEXT.md decisions block.\n';
     // If there are also requirement items, include them in the return with the
     // mismatch summary appended, so the caller still sees requirement coverage.
-    if (items.length > 0) {
+    // #2334 HIGH 1: gate on `ghostReqIds.length > 0` too — identical defect to
+    // the one fixed at #2316-6b (~34 lines below, at the `items.length === 0`
+    // early return): a phase whose EVERY cited REQ-ID is unregistered has
+    // `items.length === 0` (all its requirement items were filtered out at
+    // ~line 297) but still has real ghost rows to report. Without this guard,
+    // a single malformed `<decisions>` line in CONTEXT.md made an all-ghost
+    // phase's ghost rows silently vanish (this could-not-parse branch fell
+    // through to the bare `mismatchMsg`-only return below, dropping ghost
+    // rows that the general path further down correctly surfaces).
+    if (items.length > 0 || ghostReqIds.length > 0) {
       const rows = sortRows([
         ...detectCoverage(items, planText),
         ...ghostReqIds.map(id => ({ source: 'REQUIREMENTS.md', item: id, status: 'Missing from REQUIREMENTS.md' })),
@@ -362,7 +371,13 @@ function runGapAnalysis(cwd: string, phaseDir: string, options: RunGapAnalysisOp
   }
 
   // #1365: if no items at all, surface a clean no-check message.
-  if (items.length === 0) {
+  // #2316-6b: this must NOT fire when `ghostReqIds` is non-empty — a phase
+  // whose EVERY cited REQ-ID is unregistered has `items.length === 0` (all
+  // its requirement items were filtered out at ~line 297) but still has real
+  // ghost rows to report below. Without this guard, an all-orphan phase
+  // reported LESS than a partially-orphan one (which falls through to the
+  // general path further down and correctly surfaces its ghost rows).
+  if (items.length === 0 && ghostReqIds.length === 0) {
     return {
       enabled: true,
       rows: [],

@@ -66,7 +66,7 @@ The orchestrator provides user decisions in `<user_decisions>` tags from `/gsd:d
 **Self-check before returning:** For each plan, verify:
 - [ ] Every locked decision (D-01, D-02, etc.) has a task implementing it
 - [ ] Task actions reference the decision ID they implement (e.g., "per D-03")
-      (The decision-coverage gate `check.decision-coverage-plan` reads D-NN citations from `<objective>`, `<tasks>`, `<task>`, and `<action>` tag bodies, as well as markdown headings and front-matter `must_haves`/`truths`/`objective` keys — citing D-NN in any of these locations counts toward coverage.)
+      (The decision-coverage gate `check.decision-coverage-plan` reads D-NN citations from `<objective>`, `<tasks>`, `<task>`, `<action>`, `<read_first>`, `<behavior>`, `<verify>`, `<acceptance_criteria>`, and `<done>` tag bodies, as well as `## must_haves`/`truths`/`tasks`/`objective` markdown headings and front-matter `must_haves`/`truths`/`objective` keys — citing D-NN in any of these locations counts toward coverage.)
 - [ ] No task implements a deferred idea
 - [ ] Discretion areas are handled reasonably
 
@@ -193,22 +193,20 @@ Every task has four required fields:
 **Grep gate hygiene:** `grep -c` counts comments, so header prose can be self-invalidating. Use `grep -v '^#' | grep -c token`. Bare `== 0` gates on unfiltered files are forbidden.
 
 <comment_text_discipline>
-**Comment-text discipline (HARD GATE, #429):** A literal an acceptance criterion negative-greps for (`grep -c 'LIT' file == 0`) must NOT appear verbatim in any `<action>` body — JSDoc samples, head-comment references, or "what NOT to do" snippets echo into the written file and trip the executor's commit-time gate. `validate_plan` (`verify.plan-structure`) fails plan creation on violation. Rephrase the literal by concept, or — when it must legitimately appear — add an allowlist marker on its own line:
-
-`<!-- planner-discipline-allow: LIT -->`
-
-Full rules + worked examples: @gsd-core/references/planner-antipatterns.md ("Comment-Text Discipline").
+**Comment-text discipline (HARD GATE, #429):** A literal an acceptance criterion negative-greps for must NOT appear verbatim in any `<action>` body. Full rules + `<!-- planner-discipline-allow: LIT -->` allowlist + worked examples: @gsd-core/references/planner-antipatterns.md ("Comment-Text Discipline").
 </comment_text_discipline>
 
 <region_scoped_negative_gate>
-**Region-scoped negative gates (WARN, #968):** Region-scope a file-wide negative grep when a sibling task needs that construct elsewhere in the same file; `validate_plan` WARNS. See: @gsd-core/references/planner-antipatterns.md ("Region-Scoped Negative Gates").
-
-**Verify-gate hygiene (#1478/#1479):** See @gsd-core/references/planner-antipatterns.md.
+**Region-scoped negative gates (WARN, #968)** and **Verify-gate hygiene (#1478/#1479):** @gsd-core/references/planner-antipatterns.md.
 </region_scoped_negative_gate>
 
 **<done>:** Acceptance criteria - measurable state of completion.
 - Good: "Valid credentials return 200 + JWT cookie, invalid credentials return 401"
 - Bad: "Authentication is complete"
+
+**<precondition>** (optional, one prose line): a runnable/checkable fact the task assumes that plan ordering does not guarantee — external setup (`user_setup`), a prior-phase artifact, or an env var. The executor asserts it before running the task and halts on unmet. Emission rules + the contract triad (precondition ↔ `<verify>`/`<done>` ↔ `must_haves.truths`): @~/.claude/gsd-core/references/planner-preconditions.md.
+
+**<reversibility>** (optional): `rating="reversible|costly|one-way"` + one-line rationale for a decision this task implements. `one-way` inserts a `checkpoint:decision` before this task; `costly` is flagged only; unsure means `reversible`. Rules: @~/.claude/gsd-core/references/planner-reversibility.md
 
 See @~/.claude/gsd-core/references/planner-guidance.md for Task Types table, Task Sizing rules, Interface-First Task Ordering, and Specificity guidance.
 
@@ -250,34 +248,33 @@ Exceptions where `tdd="true"` is not needed: `type="checkpoint:*"` tasks, config
 
 `workflow.human_verify_mode=end-of-phase`: no `checkpoint:human-verify`; use `<verify><human-check>`.
 
-## MVP Mode Detection
+## Tracer-First Decomposition (default)
 
-**When `MVP_MODE` is enabled (passed by the plan-phase orchestrator):** Decompose tasks as **vertical feature slices**, not horizontal layers. Required reading: Read `~/.claude/gsd-core/references/planner-mvp-mode.md` for the vertical-slice rules (lazy — only on MVP runs).
+**Every phase plan LEADS with one `type="tracer"` task** — the thinnest path that touches every layer the phase will modify, wired end-to-end, carrying a real runnable `<verify>`. The remaining `<tasks>` are horizontal *expansion* tasks that build out from the proven slice. This is the default for **every** phase; it is not gated behind a flag. Required reading for the full vertical-slice rules and anti-patterns: Read `~/.claude/gsd-core/references/planner-mvp-mode.md`.
 
-**Core rule:** After each task completes, a real user can do something they could not do after the previous task. If a task only "lays foundation," it is horizontal disguised as vertical — restructure.
+**Why tracer-first:** proving the architecture end-to-end on the agent's best early-context tokens catches an architectural dead-end after one commit instead of after ten already-committed layers.
 
-**Plan structure under MVP_MODE:**
+**A tracer is production-quality, not a prototype.** It carries the same `<verify>` and validation as any `auto` task and becomes part of the skeleton of the final system — you write it for keeps. Stubs are allowed ONLY where they can later be filled without an architectural change: functionality gaps are acceptable, architectural gaps are not. (Glossary: `tracer bullet` vs `prototype` in `CONTEXT.md` — GSD ships tracers, never prototypes.)
 
-1. Frame the phase goal as a user story at the top of `PLAN.md`. The user story is sourced from the `**Goal:**` line in ROADMAP.md (set by `mvp-phase`). Emit it with bolded keywords:
+**Tracer task shape:**
 
-   ```
-   ## Phase Goal
+```xml
+<task type="tracer">
+  <name>End-to-end "[capability]" — one path only</name>
+  <files>[one file per layer the phase touches]</files>
+  <action>Wire ONE entry point through every layer to the far end of the stack. No other call sites, no batching. Real error handling on the single path.</action>
+  <verify>[a real, runnable END-TO-END check of the one path — not a per-layer unit test]</verify>
+  <done>The single happy path works end-to-end and is committed.</done>
+</task>
+```
 
-   **As a** [user role], **I want to** [capability], **so that** [outcome].
-   ```
+**Core rule (expansion tasks):** after each task a real user can do something they could not before. A task that only "lays foundation" is horizontal disguised as vertical — restructure.
 
-   Format rules (Read `~/.claude/gsd-core/references/user-story-template.md`):
-   - All three slots required. If the ROADMAP `**Goal:**` line is not in user-story format, surface the discrepancy and ask the user to run `/gsd mvp-phase ${PHASE}` first — do not invent a story.
-   - Bold the three keywords (`**As a**`, `**I want to**`, `**so that**`) when emitting to PLAN.md. The ROADMAP form does not use bolded keywords; the PLAN form does.
-2. First task: failing end-to-end test for the happy path.
-3. Second task: thinnest UI → API → DB slice that makes the test pass (stubs allowed for non-critical branches).
-4. Third+ tasks: replace stubs with real implementations, add validation, error states, polish.
+**`--no-tracer` (`TRACER_MODE=false`):** opt out of tracer-first and decompose into horizontal layers (the legacy default). Use only when the architecture is already proven and a thin slice would add no information. Do not mix a tracer-first plan with horizontal-layer tasks — one shape per phase.
 
-**Mode is all-or-nothing per phase** (PRD decision Q1). Do not produce a plan that mixes vertical-slice tasks with horizontal layer tasks within the same phase.
+**MVP enrichment (`MVP_MODE=true`):** layered on top of the tracer-first ordering above (MVP no longer *turns on* vertical slices — that is now the default). It adds: (1) frame the phase goal as a user story at the top of `PLAN.md`, sourced from the ROADMAP `**Goal:**` line, bolding `**As a**` / `**I want to**` / `**so that**` (Read `~/.claude/gsd-core/references/user-story-template.md`; if the Goal line is not in user-story format, surface it and ask the user to run `/gsd mvp-phase ${PHASE}` first — do not invent a story); and (2) **Walking Skeleton mode** (`WALKING_SKELETON=true`, Phase 1 of a new project) — emit `SKELETON.md` from `~/.claude/gsd-core/references/skeleton-template.md` alongside `PLAN.md`. The Walking Skeleton is the Phase-1 special case of the tracer, recording architectural decisions (framework, DB, auth, deployment, layout) later phases build on.
 
-**Walking Skeleton mode** (`WALKING_SKELETON=true`, set by orchestrator for Phase 1 + new project under `--mvp`): The first deliverable is a Walking Skeleton — the thinnest possible end-to-end stack. In addition to `PLAN.md`, produce `SKELETON.md` using the template at `~/.claude/gsd-core/references/skeleton-template.md` (Read it now). `SKELETON.md` records architectural decisions (framework, DB, auth, deployment, directory layout) that subsequent phases will build on without renegotiating.
-
-**Compatibility with TDD detection:** When both `MVP_MODE=true` and `workflow.tdd_mode=true`, every behavior-adding task uses `tdd="true"` and a `<behavior>` block, AND the task ordering follows the vertical-slice structure above. The first task is always a failing end-to-end test.
+**TDD composition (`workflow.tdd_mode=true`):** the leading tracer task is `type="tracer"` and starts red — its first move is a failing end-to-end test for the happy path — and every behavior-adding expansion task uses `tdd="true"` with a `<behavior>` block.
 
 See @~/.claude/gsd-core/references/planner-guidance.md for User Setup Detection protocol (external service indicators, env vars, dashboard config).
 
@@ -542,15 +539,9 @@ Do NOT use for: Deploying (use CLI), creating webhooks (use API), creating datab
 
 When Claude tries CLI/API and gets auth error → creates checkpoint → user authenticates → Claude retries. Auth gates are created dynamically, NOT pre-planned.
 
-## Writing Guidelines
+## Writing Guidelines, Anti-Patterns, and Extended Examples
 
-**DO:** Automate everything before checkpoint, be specific ("Visit https://myapp.vercel.app" not "check deployment"), number verification steps, state expected outcomes.
-
-**DON'T:** Ask human to do work Claude can automate, mix multiple verifications, place checkpoints before automation completes.
-
-## Anti-Patterns and Extended Examples
-
-For checkpoint anti-patterns, specificity comparison tables, context section anti-patterns, and scope reduction patterns:
+For checkpoint writing guidelines (DO/DON'T), anti-patterns, specificity comparison tables, context section anti-patterns, and scope reduction patterns:
 @~/.claude/gsd-core/references/planner-antipatterns.md
 
 </checkpoints>
@@ -767,6 +758,8 @@ At decision points during plan creation, apply structured reasoning:
 @~/.claude/gsd-core/references/thinking-models-planning.md
 
 Decompose phase into tasks. **Think dependencies first, not sequence.**
+
+**Lead with the tracer.** Unless `TRACER_MODE=false` (`--no-tracer`), the FIRST task is a `type="tracer"` slice (see **Tracer-First Decomposition**) wiring one path through every layer the phase touches, end-to-end, with a real `<verify>`; the remaining tasks expand out from that proven slice.
 
 For each task:
 1. What does it NEED? (files, types, APIs that must exist)

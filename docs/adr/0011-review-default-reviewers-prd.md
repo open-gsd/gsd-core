@@ -1,11 +1,11 @@
 # PRD — `review.default_reviewers` config key for `/gsd-review` reviewer selection
 
-- **Status:** Draft
+- **Status:** Legacy — frozen historical record; not a pattern to follow (see the note below)
 - **Date:** 2026-05-13
 - **Issue:** `#3079`
-- **Related ADR:** `0011-review-default-reviewers.md`
+- **Related ADR:** [`0011-review-default-reviewers.md`](0011-review-default-reviewers.md)
 
-> This PRD is filed alongside its ADR under `docs/adr/` for co-location. The repo does not yet have a `docs/prd/` directory; if maintainers prefer one, this file can move there with the `0011-` prefix preserved.
+> **Note (2026-07-16).** This PRD's original note said "the repo does not yet have a `docs/prd/` directory; if maintainers prefer one, this file can move there." That directory **now exists**, and [`docs/prd/README.md`](../prd/README.md) records this file's disposition: it *"predates this directory and is preserved as immutable historical record. It is not a pattern to follow. New PRDs live here."* It is therefore kept in place, and its status is `Legacy` — the decision is frozen for provenance, not superseded by a specific successor. New PRDs go in `docs/prd/`.
 
 ## TL;DR
 

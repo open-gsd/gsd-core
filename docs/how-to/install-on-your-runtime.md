@@ -121,7 +121,7 @@ This path is **additive** and changes nothing about the Claude Code plugin insta
 npx @opengsd/gsd-core@latest --opencode --global
 ```
 
-The installer writes four surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `command/`, file-based subagents in `agents/`, on-demand skills in `skills/<name>/SKILL.md`, and a native plugin in `plugins/gsd-core.js`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
+The installer writes four surfaces under `~/.config/opencode/` (XDG) or `~/.opencode/`: flat slash commands in `commands/` (plural — the directory OpenCode discovers slash commands from, #2329), file-based subagents in `agents/`, on-demand skills in `skills/<name>/SKILL.md`, and a native plugin in `plugins/gsd-core.js`. It converts agent frontmatter to OpenCode's schema — removing the `tools:` field and converting colour values to hex — and emits each skill with spec-compliant frontmatter (`name` matching the skill directory plus a `description`). Skills are loaded on demand via OpenCode's native skill tool; commands remain invokable as `/gsd-*`. See [Installing without Node.js — OpenCode transformations](#opencode--required-transformations) if you need to understand what changes.
 
 **GSD safety hooks on OpenCode.** OpenCode does not register lifecycle hooks the way Claude Code does (its `hooksSurface` is `none`), so GSD's prompt-injection guard, read-before-edit guard, injection scanner, and context monitor would otherwise be inert. The bundled plugin (`plugins/gsd-core.js`) closes that gap: OpenCode auto-discovers `plugins/*.{ts,js}` files under its config directory at startup and the adapter bridges OpenCode's event bus (`tool.execute.before`/`after`, `session.created`, `file.edited`) onto GSD's existing hook scripts, spawning them as subprocesses. No `opencode.json` entry is needed — the plugin is loaded by directory auto-discovery (the config `plugin` array is for npm packages only). A blocking hook aborts the tool call; an advisory hook surfaces its message without blocking.
 
@@ -155,7 +155,7 @@ KILO_CONFIG_DIR=~/.config/kilo-alt npx @opengsd/gsd-core@latest --kilo --global
 npx @opengsd/gsd-core@latest --codex --global
 ```
 
-Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written with per-agent TOML entries in `config.toml`. Restart Codex (or run `codex --reload`) after install.
+Skills land in `~/.codex/skills/gsd-*/SKILL.md`. Agents are written as standalone `~/.codex/agents/gsd-*.toml` files, which Codex auto-discovers — that is the sole registration source for each role; `config.toml` only carries the shared `[agents]` dispatch-tuning scalar (`max_depth`), not a per-role table (#2406). Restart Codex (or run `codex --reload`) after install.
 
 **Minimum supported version:** Codex CLI 0.130.0. Earlier versions had additional skill-root scanning that can produce duplicate listings.
 
@@ -276,7 +276,7 @@ COPILOT_CONFIG_DIR=~/.copilot-alt npx @opengsd/gsd-core@latest --copilot --globa
 npx @opengsd/gsd-core@latest --cursor --global
 ```
 
-Skills land in `~/.cursor/`. GSD installs skills, agents, and rule references.
+Artifacts land in `~/.cursor/`. GSD installs slash commands (`~/.cursor/commands/gsd-*.md`), skills (`~/.cursor/skills/gsd-*/SKILL.md`), agents, and rule references. Each GSD action appears once in Cursor's `/` menu: the command surface is the single `/` entry point, and the skills are installed with `user-invocable: false` so they stay model-invocable background knowledge without duplicating the `/` entries.
 
 **Override the install directory:**
 
@@ -469,7 +469,9 @@ npx @opengsd/gsd-core@latest --pi --global
 
 [pi](https://pi.dev) is a bun-runtime programmatic CLI whose extensions implement pi's own `ExtensionAPI` (`registerCommand`/`registerTool`/`registerProvider`/`pi.on`) rather than a settings-file or slash-markdown surface. GSD ships a single native-extension file:
 
-- **Extension** → `~/.pi/agent/extensions/gsd.cjs` (global) or `.pi/extensions/gsd.cjs` (local)
+- **Extension** → `~/.pi/agent/extensions/gsd.js` (global) or `.pi/extensions/gsd.js` (local)
+
+The `.js` suffix is load-bearing: pi auto-discovers extensions by scanning that directory and keeping only names ending in `.ts` or `.js`, and it skips anything else **silently** — no error, no log line. GSD shipped the file as `gsd.cjs` through 1.7.0, which pi therefore never loaded, so `/gsd` never appeared ([#2470](https://github.com/open-gsd/gsd-core/issues/2470)). Upgrading removes the stale `gsd.cjs`; if you had added a manual `extensions` entry in `~/.pi/agent/settings.json` as a workaround, you can drop it.
 
 The extension registers a `/gsd` command and a `gsd_invoke` tool that dispatch GSD commands via a bounded subprocess call to `gsd-core/bin/gsd-tools.cjs` (no fully-populated in-process command-routing hub exists — see the matrix's Stage 2 note). This is a **plugin-only install**: pi has no shared-settings hook surface (`hooksSurface: none`) and, unlike Claude/OpenCode/Kilo, no host-read markdown surface at all — pi's `/gsd` command is registered programmatically by the extension, not discovered from files, so GSD installs the extension plus its universal `gsd-core/` engine payload and the shared `hooks/`/`hooks/lib/` bundle (spawned by the extension itself, not by any config-file hook bus), and does **not** write any `commands/`, `agents/`, or `skills/` directory for pi. The extension bridges GSD's `session_start`/`before_agent_start`/`session_before_compact`/`tool_call` lifecycle events to those staged `hooks/` scripts as bounded, fail-open subprocesses, and steers pi's active model (`modelMode: active`) to a tier-resolved bare anthropic id via `pi.on('before_provider_request', ...)`. See the [`## pi`](host-integration-capability-matrix.md#pi) section of the host-integration capability matrix for the negotiated axes and citations.
 

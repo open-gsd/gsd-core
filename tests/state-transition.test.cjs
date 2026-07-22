@@ -1254,6 +1254,7 @@ describe('ADR-1769 #1796: applyStatePreservation — table-driven post-sync cons
   };
 
   test('progress: restores curated block when table=preserve-always and transition is not re-deriving (!resync)', () => {
+    // Default behavior: wholesale curated restore. #3242 Bug A protection.
     const curated = { progress: { total_phases: 4, completed_phases: 3, percent: 75 } };
     const r = applyStatePreservation({
       preFm: curated,
@@ -1264,6 +1265,42 @@ describe('ADR-1769 #1796: applyStatePreservation — table-driven post-sync cons
     });
     assert.deepEqual(r.postFm.progress, { total_phases: 4, completed_phases: 3, percent: 75 });
     assert.equal(r.mutated, true);
+  });
+
+  test('#2440: deriveProgressKeys=true — total_plans takes derived value under !resync', () => {
+    // The cmdStatePlannedPhase caller opts in via deriveProgressKeys. total_plans
+    // and total_phases take the derived (post-sync) value; completed_plans and
+    // completed_phases keep curated protection.
+    const curated = { progress: { total_plans: 50, completed_plans: 50, total_phases: 2, completed_phases: 1, percent: 100 } };
+    const r = applyStatePreservation({
+      preFm: curated,
+      preFmSnapshot: curated,
+      postFm: { progress: { total_plans: 64, completed_plans: 49, total_phases: 2, completed_phases: 1, percent: 77 } },
+      resync: false,
+      deriveProgressKeys: true,
+      ...untouched,
+    });
+    assert.equal(r.postFm.progress.total_plans, 64,
+      'total_plans must take derived value (64) when deriveProgressKeys=true (#2440)');
+    assert.equal(r.postFm.progress.completed_plans, 50,
+      'completed_plans must keep curated value (50 > 49 triggers ratchet)');
+    assert.equal(r.postFm.progress.total_phases, 2,
+      'total_phases takes derived value (same as curated here — identity)');
+    assert.equal(r.mutated, true);
+  });
+
+  test('#2440 boundary: deriveProgressKeys=true, total_plans derived == curated → identity', () => {
+    const curated = { progress: { total_plans: 64, completed_plans: 49 } };
+    const r = applyStatePreservation({
+      preFm: curated,
+      preFmSnapshot: curated,
+      postFm: { progress: { total_plans: 64, completed_plans: 49, percent: 77 } },
+      resync: false,
+      deriveProgressKeys: true,
+      ...untouched,
+    });
+    assert.equal(r.postFm.progress.total_plans, 64,
+      'total_plans equality → derived value (identity)');
   });
 
   test('progress: NOT restored when transition re-derives from disk (resync=true) — sync/advancePlan/completePhase path', () => {

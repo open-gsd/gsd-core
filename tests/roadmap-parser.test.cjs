@@ -552,6 +552,32 @@ describe('roadmap-parser: getMilestonePhaseFilter', () => {
     assert.strictEqual(filter('02-01-alpha'), true, '02-01-alpha matches Phase 2-01');
   });
 
+  test('year-leading slug word after a phase number is not wrongly excluded (#2232)', () => {
+    // Same hyphenated-mode collision as #2043 but with a ≥3-digit slug word:
+    // phase 14's roadmap name "2026 Photos & Performance" slugifies to a dir
+    // starting with a year ("14-2026-photos-…"). The ≥2-digit continuation
+    // gate over-collected the year into the phase token ("14-2026"), which
+    // never matched the roadmap's "14", so the dir was wrongly excluded.
+    writeState(tmpDir, { milestone: 'v1.0' });
+    writeRoadmap(tmpDir, [
+      '## v1.0: Current',
+      '### Phase 2-01: Alpha',
+      '**Goal:** first alpha phase',
+      '',
+      '### Phase 14: 2026 Photos & Performance',
+      '**Goal:** ship the photos and performance work',
+    ].join('\n'));
+
+    const filter = getMilestonePhaseFilter(tmpDir);
+    assert.strictEqual(
+      filter('14-2026-photos-performance'),
+      true,
+      '14-2026-photos-performance (phase 14, year-leading slug) must match Phase 14',
+    );
+    // Legit milestone-prefixed dir still matches as before.
+    assert.strictEqual(filter('02-01-alpha'), true, '02-01-alpha matches Phase 2-01');
+  });
+
   test('versionOverride uses specified version slice', () => {
     writeRoadmap(tmpDir, [
       '## v1.0: Old',
@@ -998,7 +1024,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup, absPlanningPath } = require('./helpers.cjs');
 
 // ---------------------------------------------------------------------------
 // Shared fixture content
@@ -1035,7 +1061,12 @@ const ROADMAP_CONTENT = `# Roadmap: Example
 // ---------------------------------------------------------------------------
 
 function createBareProject() {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-'));
+  // #2376 macOS fix: realpath the fixture root so absolute path-field
+  // assertions (absPlanningPath comparisons below) match the code's
+  // process.cwd()-anchored output — macOS's tmpdir is a symlink
+  // (/var/... -> /private/var/...) that a spawned child resolves via
+  // realpath but a bare mkdtempSync() does not. No-op on Linux (no symlink).
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-')));
   fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
   return tmpDir;
 }
@@ -1069,7 +1100,7 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
     assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}, expected_phase_dir=${out.expected_phase_dir}`);
     assert.strictEqual(out.phase_name, 'Feature', `phase_name should be 'Feature'; got '${out.phase_name}'`);
     assert.strictEqual(out.padded_phase, '02', `padded_phase should be '02'; got '${out.padded_phase}'`);
-    assert.strictEqual(out.expected_phase_dir, '.planning/phases/02-feature', `expected_phase_dir should be '.planning/phases/02-feature'; got '${out.expected_phase_dir}'`);
+    assert.strictEqual(out.expected_phase_dir, absPlanningPath(dir, 'phases', '02-feature'), `expected_phase_dir should be '${absPlanningPath(dir, 'phases', '02-feature')}'; got '${out.expected_phase_dir}'`);
   });
 
   // -------------------------------------------------------------------------
@@ -1162,7 +1193,8 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
   // Test 5: three-milestone roadmap, current = latest (v1.2)
   // -------------------------------------------------------------------------
   test('init phase-op resolves the latest milestone phase in a 3-milestone roadmap', () => {
-    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t5-'));
+    // #2376 macOS fix: see createBareProject() above.
+    const localDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t5-')));
     try {
       const planning = path.join(localDir, '.planning');
       fs.mkdirSync(planning, { recursive: true });
@@ -1186,7 +1218,7 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
       assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}`);
       assert.strictEqual(out.phase_name, 'Polish', `phase_name should be 'Polish'; got '${out.phase_name}'`);
       assert.strictEqual(out.padded_phase, '03', `padded_phase should be '03'; got '${out.padded_phase}'`);
-      assert.strictEqual(out.expected_phase_dir, '.planning/phases/03-polish', `expected_phase_dir should be '.planning/phases/03-polish'; got '${out.expected_phase_dir}'`);
+      assert.strictEqual(out.expected_phase_dir, absPlanningPath(localDir, 'phases', '03-polish'), `expected_phase_dir should be '${absPlanningPath(localDir, 'phases', '03-polish')}'; got '${out.expected_phase_dir}'`);
     } finally {
       cleanup(localDir);
     }
@@ -1197,7 +1229,8 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
   // cross-pollinate into the active milestone's Phase Details lookup (#730)
   // -------------------------------------------------------------------------
   test('init phase-op anchors Phase Details to the selected sub-milestone, not a closed same-prefix sibling', () => {
-    const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t6-'));
+    // #2376 macOS fix: see createBareProject() above.
+    const localDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-test-730-t6-')));
     try {
       const planning = path.join(localDir, '.planning');
       fs.mkdirSync(planning, { recursive: true });
@@ -1250,7 +1283,7 @@ describe('bug #730 — milestone (Phase Details) section scope resolution', () =
       const out = JSON.parse(r.output);
       assert.strictEqual(out.phase_found, true, `phase_found should be true; got phase_found=${out.phase_found}, output=${JSON.stringify(out)}`);
       assert.strictEqual(out.phase_name, 'Beta', `phase_name should be 'Beta' (v3.0-B section), not '${out.phase_name}' (would indicate v3.0-A cross-pollination)`);
-      assert.strictEqual(out.expected_phase_dir, '.planning/phases/02-beta', `expected_phase_dir should be '.planning/phases/02-beta'; got '${out.expected_phase_dir}'`);
+      assert.strictEqual(out.expected_phase_dir, absPlanningPath(localDir, 'phases', '02-beta'), `expected_phase_dir should be '${absPlanningPath(localDir, 'phases', '02-beta')}'; got '${out.expected_phase_dir}'`);
     } finally {
       cleanup(localDir);
     }
@@ -1501,13 +1534,16 @@ Last activity: TBD
     const md = fs.readFileSync(path.join(tmpDir, '.planning', 'STATE.md'), 'utf-8');
     assert.match(md, /Total Plans in Phase:\s*3/, 'per-phase Total Plans in Phase should be updated to 3');
 
-    // ...but the curated milestone-wide progress block is preserved verbatim.
-    assert.deepEqual(readProgress(), {
-      total_plans: 99,
-      completed_plans: 88,
-      total_phases: 7,
-      completed_phases: 5,
-    }, 'curated milestone progress.* must survive a planned-phase write');
+    // #2440: total_plans now takes the derived value (it must correct in both
+    // directions). It must NOT be the stale curated 99 — that was the bug.
+    // completed_plans and completed_phases keep curated protection (#500/#3242).
+    const progress = readProgress();
+    assert.notEqual(progress.total_plans, 99,
+      'total_plans must NOT be the stale curated 99 — it should correct to the derived value (#2440)');
+    assert.strictEqual(progress.completed_plans, 88,
+      'completed_plans must stay curated (88) — #3242/#500 protection still in force');
+    assert.strictEqual(progress.completed_phases, 5,
+      'completed_phases must stay curated (5) — #3242/#500 protection still in force');
   });
 });
   });
@@ -1845,6 +1881,164 @@ describe('scanPhasePlans — call-site parity on mixed fixture', () => {
     assert.strictEqual(result.summaryCount, 2, 'helper: 1 flat + 1 nested');
     assert.strictEqual(result.completed, false, '2 summaries < 3 plans');
     assert.strictEqual(result.hasNestedPlans, true, 'plans/ dir exists with plans');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2349: plan-level supersession. A plan whose frontmatter declares
+// `status: superseded` was deliberately reassigned / never executed and can
+// never gain a matching SUMMARY. Like a retired phase (#1514, one level up) it
+// must be excluded from BOTH the plan and summary counts, so the phase can still
+// read 100% complete instead of being pinned below it forever. A plan WITHOUT
+// the marker must be counted exactly as before (no over-exclusion).
+// ---------------------------------------------------------------------------
+
+describe('scanPhasePlans — superseded plans (#2349)', () => {
+  const SUPERSEDED_FM =
+    '---\nphase: "1"\nplan: "6"\ntype: implementation\nstatus: superseded\n---\n\n# Superseded plan\n';
+
+  function writePlan(dir, name, body) {
+    fs.writeFileSync(path.join(dir, name), body);
+  }
+
+  test('a plan marked status: superseded is excluded from planCount and planFiles', () => {
+    const dir = phaseDir();
+    touch(dir, '01-01-PLAN.md', '01-01-SUMMARY.md');
+    writePlan(dir, '01-06-PLAN.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'superseded plan not counted in planCount');
+    assert.strictEqual(result.summaryCount, 1, 'summaryCount honest at 1');
+    assert.strictEqual(result.completed, true, 'phase completes despite the summary-less superseded plan');
+    assert.ok(!result.planFiles.includes('01-06-PLAN.md'), 'superseded plan absent from planFiles');
+    assert.ok(result.planFiles.includes('01-01-PLAN.md'), 'live plan still present');
+  });
+
+  test('reported case: 13 plans, 2 superseded, 11 summaries → 11/11 completed', () => {
+    const dir = phaseDir();
+    // 11 executed plans, each with its matching summary
+    for (let i = 1; i <= 11; i++) {
+      const n = String(i).padStart(2, '0');
+      touch(dir, `05-${n}-PLAN.md`, `05-${n}-SUMMARY.md`);
+    }
+    // 2 superseded plans, no summaries (work reassigned to later plans)
+    writePlan(dir, '05-12-PLAN.md', SUPERSEDED_FM);
+    writePlan(dir, '05-13-PLAN.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 11, 'denominator excludes the 2 superseded plans');
+    assert.strictEqual(result.summaryCount, 11, 'numerator honest at 11');
+    assert.strictEqual(result.completed, true, 'phase reads complete — no longer pinned below 100%');
+  });
+
+  test('boundary: a live unsummarized plan still blocks completion (limit+1)', () => {
+    const dir = phaseDir();
+    touch(dir, '02-01-PLAN.md', '02-01-SUMMARY.md');
+    touch(dir, '02-02-PLAN.md'); // live plan, no summary → must still block
+    writePlan(dir, '02-09-PLAN.md', SUPERSEDED_FM); // superseded, excluded
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'only the superseded plan is excluded');
+    assert.strictEqual(result.summaryCount, 1);
+    assert.strictEqual(result.completed, false, 'a live unsummarized plan still blocks completion');
+  });
+
+  test('no over-exclusion: a plan without the marker (or with a non-superseded status) is counted', () => {
+    const dir = phaseDir();
+    touch(dir, '03-01-PLAN.md'); // empty file, no frontmatter at all
+    writePlan(dir, '03-02-PLAN.md', '---\nphase: "3"\nplan: "2"\nstatus: complete\n---\n\n# done\n');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'only status: superseded is excluded; other/absent statuses count');
+    assert.ok(result.planFiles.includes('03-01-PLAN.md'));
+    assert.ok(result.planFiles.includes('03-02-PLAN.md'));
+  });
+
+  test('superseded marker is case-insensitive and whitespace-tolerant', () => {
+    const dir = phaseDir();
+    touch(dir, '04-01-PLAN.md', '04-01-SUMMARY.md');
+    writePlan(dir, '04-07-PLAN.md', '---\nphase: "4"\nplan: "7"\nstatus:   Superseded  \n---\n\n# x\n');
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'Superseded (mixed-case, padded) still excluded');
+    assert.strictEqual(result.completed, true);
+  });
+
+  test('nested layout: a superseded nested plan is excluded too', () => {
+    const dir = phaseDir();
+    const plansDir = path.join(dir, 'plans');
+    fs.mkdirSync(plansDir);
+    touch(plansDir, 'PLAN-01-setup.md', 'SUMMARY-01-setup.md');
+    writePlan(plansDir, 'PLAN-02-dropped.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'nested superseded plan excluded');
+    assert.strictEqual(result.summaryCount, 1);
+    assert.strictEqual(result.completed, true);
+    assert.ok(!result.planFiles.includes('plans/PLAN-02-dropped.md'));
+  });
+
+  test('fail-safe: an unreadable plan path (a directory named *-PLAN.md) is counted, not treated as superseded', () => {
+    const dir = phaseDir();
+    touch(dir, '06-01-PLAN.md', '06-01-SUMMARY.md');
+    // A *directory* whose name matches a plan file: readdir lists it, but reading
+    // it as a file throws EISDIR on every platform (root-independent, leak-safe).
+    // The read-failure path must fail safe to "not superseded" (counted) — never
+    // silently drop a plan whose frontmatter simply could not be read.
+    fs.mkdirSync(path.join(dir, '06-02-PLAN.md'));
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 2, 'unreadable plan still counted (fail-safe, not excluded)');
+    assert.strictEqual(result.completed, false, 'the unreadable plan has no summary → still blocks');
+  });
+
+  test('all plans superseded → phase reads complete, not pinned below 100% (0 >= 0)', () => {
+    const dir = phaseDir();
+    // Every plan in the phase was reassigned elsewhere: nothing left to execute.
+    writePlan(dir, '08-01-PLAN.md', SUPERSEDED_FM);
+    writePlan(dir, '08-02-PLAN.md', SUPERSEDED_FM);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 0, 'all plans excluded');
+    assert.strictEqual(result.summaryCount, 0);
+    assert.strictEqual(result.completed, true, 'a fully-superseded phase has no remaining work → complete');
+  });
+
+  test('a genuinely empty phase (no plans authored) still reads NOT complete', () => {
+    // Regression guard for the all-superseded fix: the completion guard keys off
+    // whether any plans existed on disk, so a phase with zero plans is unaffected.
+    const result = scanPhasePlans(phaseDir());
+    assert.strictEqual(result.planCount, 0);
+    assert.strictEqual(result.completed, false, 'no plans authored → not complete (unchanged)');
+  });
+
+  test('a superseded marker is detected even when the plan body is very large', () => {
+    // Frontmatter sits at byte 0; the scan reads only a bounded prefix, so a large
+    // body must neither hide the marker nor force reading the whole file.
+    const dir = phaseDir();
+    touch(dir, '09-01-PLAN.md', '09-01-SUMMARY.md');
+    const bigBody = 'x'.repeat(200 * 1024); // 200 KB body, well past the read cap
+    writePlan(dir, '09-09-PLAN.md', `---\nphase: "9"\nplan: "9"\nstatus: superseded\n---\n\n${bigBody}\n`);
+    const result = scanPhasePlans(dir);
+    assert.strictEqual(result.planCount, 1, 'superseded plan with a large body still excluded');
+    assert.strictEqual(result.completed, true);
+  });
+
+  test('property: K superseded plans never change the completed verdict of N summarized plans', () => {
+    const fc = require('fast-check');
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 8 }), fc.integer({ min: 0, max: 5 }), (n, k) => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-plan-scan-prop-'));
+        try {
+          for (let i = 1; i <= n; i++) {
+            const idx = String(i).padStart(2, '0');
+            fs.writeFileSync(path.join(dir, `07-${idx}-PLAN.md`), '');
+            fs.writeFileSync(path.join(dir, `07-${idx}-SUMMARY.md`), '');
+          }
+          for (let j = 1; j <= k; j++) {
+            fs.writeFileSync(path.join(dir, `07-${String(50 + j)}-PLAN.md`), SUPERSEDED_FM);
+          }
+          const result = scanPhasePlans(dir);
+          assert.strictEqual(result.planCount, n, 'planCount ignores the K superseded plans');
+          assert.strictEqual(result.completed, true, 'N fully-summarized plans stay complete regardless of K');
+        } finally {
+          cleanup(dir);
+        }
+      }),
+      { numRuns: 40 },
+    );
   });
 });
   });

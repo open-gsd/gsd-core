@@ -1,9 +1,9 @@
 {
   "id": "opencode",
   "role": "runtime",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "title": "OpenCode",
-  "description": "OpenCode — XDG-based config dir; flat command/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
+  "description": "OpenCode — XDG-based config dir; flat commands/ + skills artifact layout; settings-json config format; no lifecycle hook registration; tier-2 support.",
   "tier": "core",
   "requires": [],
   "engines": {
@@ -25,7 +25,7 @@
       "global": [
         {
           "kind": "commands",
-          "destSubpath": "command",
+          "destSubpath": "commands",
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
@@ -43,7 +43,7 @@
       "local": [
         {
           "kind": "commands",
-          "destSubpath": "command",
+          "destSubpath": "commands",
           "prefix": "gsd-",
           "nesting": "flat",
           "recursive": false,
@@ -88,7 +88,7 @@
     "hostBehaviors": {
       "reapplyCommand": "/gsd-update --reapply",
       "attributionConfigResolver": "opencode",
-      "flatCommandDir": "command",
+      "flatCommandDir": "commands",
       "combinedFamilyInstall": true,
       "frontmatterDialect": "opencode",
       "nativePlugin": {

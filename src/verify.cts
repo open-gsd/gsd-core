@@ -28,6 +28,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { isCanonicalPlanningFile } from './artifacts.cjs';
 import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
+import { VALID_PROFILES, VALID_TIERS, VALID_PHASE_TYPES } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
 const { checkAgentsInstalled } = agentInstallCheck;
@@ -39,7 +40,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE, extractPhaseToken, comparePhaseNum } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -49,6 +50,9 @@ const { getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone } = ro
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 const { inspectWorktreeHealth } = worktreeSafetyMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- commands.cjs is an export= CommonJS module
+import commandsMod = require('./commands.cjs');
+const { determinePhaseStatus } = commandsMod;
 
 const { planningDir, planningRoot } = planningWorkspace;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
@@ -553,6 +557,162 @@ function scanFileWideNegativeGateConflict(content: string): { warnings: string[]
   return { warnings, valid: true as const };
 }
 
+// ─── Plan-task structure validation (#2444) ──────────────────────────────────
+
+/**
+ * Per-task structural information extracted from a PLAN.md `<tasks>` block.
+ * Captures the task's `type` attribute (so `checkpoint:*` tasks validate
+ * against their type-specific canonical field set per
+ * `gsd-core/references/checkpoints.md`) plus presence flags for every tag the
+ * validator cares about. Pure data — no I/O.
+ */
+interface PlanTaskInfo {
+  name: string;
+  /** Lowercased `type` attribute value, or '' when the opening tag has no type. */
+  type: string;
+  hasName: boolean;
+  // auto-task fields
+  hasFiles: boolean;
+  hasAction: boolean;
+  hasVerify: boolean;
+  hasDone: boolean;
+  // checkpoint:human-verify fields
+  hasWhatBuilt: boolean;
+  hasHowToVerify: boolean;
+  // checkpoint:decision fields
+  hasDecision: boolean;
+  hasOptions: boolean;
+  // checkpoint:human-action fields
+  hasInstructions: boolean;
+  hasVerification: boolean;
+  // cross-checkpoint common
+  hasResumeSignal: boolean;
+}
+
+/**
+ * Single pass over `<task ...>…</task>` blocks. The body pattern is
+ * ReDoS-safe stop-at-next-open (mirrors `taggedBlockPattern` in
+ * markdown-sectionizer.cts): bounded attributes (`[^>]{0,1000}`) and a body
+ * boundary that terminates at the NEXT `<task[\s>]` opening, so a document
+ * full of unclosed `<task>` openings scans linearly. Captures both the
+ * attribute string (group 1, so the `type=` selector is not lost the way it is
+ * with `extractTaggedBlocks`) and the body (group 2).
+ */
+const PLAN_TASK_BLOCK_RE = /<task(\s[^>]{0,1000})?>((?:(?!<task[\s>])[\s\S])*?)<\/task>/g;
+
+/**
+ * Extract one `PlanTaskInfo` per `<task …>…</task>` block in `content`.
+ *
+ * Why a dedicated regex instead of `extractTaggedBlocks('task', true)`:
+ * `extractTaggedBlocks` discards the opening tag, so the task's `type=`
+ * attribute (which selects the validation branch) is lost. This helper
+ * captures both the attribute string and the body in one pass, then reuses
+ * `extractTaggedBlocks` on the body for sub-element extraction.
+ */
+function extractPlanTaskInfos(content: string): PlanTaskInfo[] {
+  const infos: PlanTaskInfo[] = [];
+  if (typeof content !== 'string' || content.length === 0) return infos;
+
+  PLAN_TASK_BLOCK_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = PLAN_TASK_BLOCK_RE.exec(content)) !== null) {
+    const attrs = match[1] ?? '';
+    const body = match[2] ?? '';
+
+    const typeMatch = attrs.match(/\btype\s*=\s*["']?([\w:-]+)/i);
+    const type = typeMatch ? typeMatch[1].toLowerCase() : '';
+
+    const nameArr = extractTaggedBlocks(body, 'name');
+    const hasName = nameArr.length > 0;
+    const name = hasName ? nameArr[0].trim() : '';
+
+    infos.push({
+      name,
+      type,
+      hasName,
+      hasFiles: /<files>/.test(body),
+      hasAction: /<action>/.test(body),
+      hasVerify: /<verify>/.test(body),
+      hasDone: /<done>/.test(body),
+      hasWhatBuilt: /<what-built>/.test(body),
+      hasHowToVerify: /<how-to-verify>/.test(body),
+      hasDecision: /<decision>/.test(body),
+      hasOptions: /<options>/.test(body),
+      hasInstructions: /<instructions>/.test(body),
+      hasVerification: /<verification>/.test(body),
+      hasResumeSignal: /<resume-signal>/.test(body),
+    });
+
+    // Guard against zero-length matches looping forever.
+    if (match.index === PLAN_TASK_BLOCK_RE.lastIndex) {
+      PLAN_TASK_BLOCK_RE.lastIndex++;
+    }
+  }
+  return infos;
+}
+
+function isCheckpointType(type: string): boolean {
+  return type.startsWith('checkpoint:');
+}
+
+/**
+ * Validate one plan task's structure against its type-specific canonical field
+ * set (per `gsd-core/references/checkpoints.md`):
+ *   - `checkpoint:human-verify` requires `<what-built>` / `<how-to-verify>` /
+ *      `<resume-signal>` (the "checkpoint triple").
+ *   - `checkpoint:decision` requires `<decision>` / `<options>` /
+ *      `<resume-signal>`.
+ *   - `checkpoint:human-action` requires `<action>` / `<instructions>` /
+ *      `<verification>` / `<resume-signal>`.
+ *   - Unknown `checkpoint:*` subtypes require only the universal
+ *      `<resume-signal>` (forward-compat — newer checkpoint types registered
+ *      in the reference don't need a verifier change to pass structure
+ *      validation).
+ *   - All other types (`auto`, `tracer`, `manual`, bare `<task>`, …) keep the
+ *      historical `<action>` / `<verify>` / `<done>` / `<files>` requirements.
+ */
+function validatePlanTaskStructure(task: PlanTaskInfo): { errors: string[]; warnings: string[] } {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const taskName = task.hasName ? task.name : 'unnamed';
+
+  if (!task.hasName) {
+    errors.push('Task missing <name> element');
+  }
+
+  if (isCheckpointType(task.type)) {
+    if (!task.hasResumeSignal) {
+      errors.push(`Task '${taskName}' missing <resume-signal>`);
+    }
+    switch (task.type) {
+      case 'checkpoint:human-verify':
+        if (!task.hasWhatBuilt) errors.push(`Task '${taskName}' missing <what-built>`);
+        if (!task.hasHowToVerify) errors.push(`Task '${taskName}' missing <how-to-verify>`);
+        break;
+      case 'checkpoint:decision':
+        if (!task.hasDecision) errors.push(`Task '${taskName}' missing <decision>`);
+        if (!task.hasOptions) errors.push(`Task '${taskName}' missing <options>`);
+        break;
+      case 'checkpoint:human-action':
+        if (!task.hasAction) errors.push(`Task '${taskName}' missing <action>`);
+        if (!task.hasInstructions) errors.push(`Task '${taskName}' missing <instructions>`);
+        if (!task.hasVerification) errors.push(`Task '${taskName}' missing <verification>`);
+        break;
+      default:
+        // Unknown checkpoint:* subtype: <resume-signal> is the only universal
+        // requirement (forward-compat).
+        break;
+    }
+  } else {
+    if (!task.hasAction) errors.push(`Task '${taskName}' missing <action>`);
+    if (!task.hasVerify) warnings.push(`Task '${taskName}' missing <verify>`);
+    if (!task.hasDone) warnings.push(`Task '${taskName}' missing <done>`);
+    if (!task.hasFiles) warnings.push(`Task '${taskName}' missing <files>`);
+  }
+
+  return { errors, warnings };
+}
+
 function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): void {
   if (!filePath) {
     error('file path required');
@@ -573,22 +733,20 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
     if (fm[field] === undefined) errors.push(`Missing required frontmatter field: ${field}`);
   }
 
+  const extractedTasks = extractPlanTaskInfos(content);
   const tasks: Record<string, unknown>[] = [];
-  for (const taskContent of extractTaggedBlocks(content, 'task', true)) {
-    const nameArr = extractTaggedBlocks(taskContent, 'name');
-    const taskName = nameArr.length ? nameArr[0].trim() : 'unnamed';
-    const hasFiles = /<files>/.test(taskContent);
-    const hasAction = /<action>/.test(taskContent);
-    const hasVerify = /<verify>/.test(taskContent);
-    const hasDone = /<done>/.test(taskContent);
-
-    if (nameArr.length === 0) errors.push('Task missing <name> element');
-    if (!hasAction) errors.push(`Task '${taskName}' missing <action>`);
-    if (!hasVerify) warnings.push(`Task '${taskName}' missing <verify>`);
-    if (!hasDone) warnings.push(`Task '${taskName}' missing <done>`);
-    if (!hasFiles) warnings.push(`Task '${taskName}' missing <files>`);
-
-    tasks.push({ name: taskName, hasFiles, hasAction, hasVerify, hasDone });
+  for (const task of extractedTasks) {
+    const verdict = validatePlanTaskStructure(task);
+    errors.push(...verdict.errors);
+    warnings.push(...verdict.warnings);
+    tasks.push({
+      name: task.hasName ? task.name : 'unnamed',
+      type: task.type,
+      hasFiles: task.hasFiles,
+      hasAction: task.hasAction,
+      hasVerify: task.hasVerify,
+      hasDone: task.hasDone,
+    });
   }
 
   if (tasks.length === 0) warnings.push('No <task> elements found');
@@ -606,6 +764,25 @@ function cmdVerifyPlanStructure(cwd: string, filePath: string, raw: boolean): vo
   // eslint-disable-next-line @typescript-eslint/no-base-to-string -- FrontmatterValue comparison
   if (hasCheckpoints && fm['autonomous'] !== 'false' && String(fm['autonomous']) !== 'false') {
     errors.push('Has checkpoint tasks but autonomous is not false');
+  }
+
+  // #1951: a decision rated one-way is supposed to be confirmed before it is
+  // walked through. Warn (never error — <reversibility> stays additive) when a
+  // one-way rating has no checkpoint:decision anywhere ahead of it in the plan,
+  // which is the planner emitting the rating but skipping the gate.
+  const decisionCheckpointOffsets: number[] = [];
+  for (const m of content.matchAll(/<task\s+type=["']?checkpoint:decision/g)) {
+    if (m.index !== undefined) decisionCheckpointOffsets.push(m.index);
+  }
+  for (const m of content.matchAll(/<reversibility\s[^>]*rating=["']?one-way/g)) {
+    const at = m.index;
+    if (at === undefined) continue;
+    if (!decisionCheckpointOffsets.some((offset) => offset < at)) {
+      warnings.push(
+        'Task rated <reversibility rating="one-way"> has no preceding checkpoint:decision — '
+          + 'a one-way door must be confirmed before the agent walks through it',
+      );
+    }
   }
 
   const echoScan = scanNegativeGrepCommentEcho(content);
@@ -1354,13 +1531,39 @@ function cmdValidateHealth(
     try {
       const rawCfg = fs.readFileSync(configPath, 'utf-8');
       const parsed = JSON.parse(rawCfg) as Record<string, unknown>;
-      const validProfiles = ['quality', 'balanced', 'budget', 'inherit'];
-      if (parsed['model_profile'] && !validProfiles.includes(parsed['model_profile'] as string)) {
+      if (parsed['model_profile'] && !VALID_PROFILES.includes(parsed['model_profile'] as string)) {
         addIssue(
           'warning',
           'W004',
           `config.json: invalid model_profile "${parsed['model_profile'] as string}"`,
-          `Valid values: ${validProfiles.join(', ')}`,
+          `Valid values: ${VALID_PROFILES.join(', ')}`,
+        );
+      }
+      const configModels = parsed['models'];
+      if (configModels && typeof configModels === 'object' && !Array.isArray(configModels)) {
+        for (const [phaseType, tierValue] of Object.entries(configModels as Record<string, unknown>)) {
+          if (!VALID_PHASE_TYPES.has(phaseType)) {
+            addIssue(
+              'warning',
+              'W022',
+              `config.json: models has an unknown phase type "${phaseType}" which will be ignored`,
+              `Valid phase types: ${[...VALID_PHASE_TYPES].join(', ')}`,
+            );
+          } else if (typeof tierValue !== 'string' || !VALID_TIERS.has(tierValue)) {
+            addIssue(
+              'warning',
+              'W022',
+              `config.json: models.${phaseType} has an invalid tier value ${JSON.stringify(tierValue)} which will be ignored`,
+              `Valid tiers: ${[...VALID_TIERS].join(', ')}`,
+            );
+          }
+        }
+      } else if (configModels !== undefined && configModels !== null) {
+        addIssue(
+          'warning',
+          'W022',
+          `config.json: models is set to ${JSON.stringify(configModels)}, but must be an object mapping phase types to tiers — this value will be ignored`,
+          `Set models to an object like {"planning": "sonnet"}, or remove the key to use profile defaults`,
         );
       }
     } catch (err) {
@@ -1429,6 +1632,52 @@ function cmdValidateHealth(
         'W005',
         `Phase directory "${e.name}" doesn't follow NN-name format`,
         'Rename to match pattern (e.g., 01-setup)',
+      );
+    }
+  }
+
+  // W023 (#2408): detect two or more real on-disk phase directories that
+  // normalize to the same phase key (e.g. `05-real/` + `05-real-stray/`).
+  // The collision silently breaks /gsd-stats status accuracy (now folded by
+  // precedence — see commands.cts foldPhaseStatus) and forces an operator
+  // decision. Wording is neutral — never guesses which directory is "real".
+  {
+    const groups = new Map<string, string[]>();
+    for (const e of phaseDirEntries) {
+      // extractPhaseToken never returns empty — for unparseable dir names it
+      // falls back to the dir name itself. Two distinct unparseable names
+      // therefore normalize to distinct keys and cannot false-positive here;
+      // only dirs whose tokens collapse to the same key (e.g. `05-real` and
+      // `05-real-stray` → token `05`) produce a collision group.
+      const token = extractPhaseToken(e.name);
+      const key = normalizePhaseName(token);
+      const list = groups.get(key);
+      if (list) list.push(e.name);
+      else groups.set(key, [e.name]);
+    }
+    for (const [key, dirs] of groups) {
+      if (dirs.length < 2) continue;
+      // Compute each dir's status independently so the warning is informative.
+      // Sort by phase id for stable output regardless of readdir order; tie-
+      // break on the dir name itself so two dirs sharing the same phase token
+      // (the collision case itself) still sort deterministically (V8's stable
+      // sort would otherwise fall back to non-portable fs.readdirSync order).
+      const described = dirs
+        .slice()
+        .sort((a, b) => comparePhaseNum(a, b) || String(a).localeCompare(String(b)))
+        .map((d) => {
+          const files = phaseDirFiles.get(d) || [];
+          const plans = files.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md').length;
+          const summaries = files.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md').length;
+          const status = determinePhaseStatus(plans, summaries, path.join(phasesDir, d), 'Not Started');
+          return `${d} (${status})`;
+        })
+        .join(', ');
+      addIssue(
+        'warning',
+        'W023',
+        `Phase directories collide on normalized key "${key}": ${described}`,
+        'Inspect each directory; rename or remove the duplicate so only one directory maps to this phase key',
       );
     }
   }

@@ -48,7 +48,9 @@ AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
 AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
 ```
 
-Parse JSON for: `planner_model`, `checker_model`, `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `has_verification`, `uat_path`.
+Parse JSON for: `planner_model`, `checker_model`, `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `has_verification`, `uat_path`, `state_path`, `roadmap_path`, `response_language`.
+
+**If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
 ```bash
 # MVP mode detection via the centralized phase.mvp-mode resolver.
@@ -244,6 +246,8 @@ Focus on USER-OBSERVABLE outcomes, not implementation details.
 For each deliverable, create a test:
 - name: Brief test name
 - expected: What the user should see/experience (specific, observable)
+
+**If `response_language` is set, write the `name` and `expected` text in `{response_language}`** — the examples below are illustrative templates only, not literal output to copy.
 
 Examples:
 - Accomplishment: "Added comment threading with infinite nesting"
@@ -749,8 +753,8 @@ Agent(
 
 <files_to_read>
 - {phase_dir}/{phase_num}-UAT.md (UAT with diagnoses)
-- .planning/STATE.md (Project State)
-- .planning/ROADMAP.md (Roadmap)
+- {state_path} (Project State)
+- {roadmap_path} (Roadmap)
 </files_to_read>
 
 ${AGENT_SKILLS_PLANNER}

@@ -48,7 +48,9 @@ INIT=$(gsd_run query init.execute-phase "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `config_path`.
+Extract from init JSON: `executor_model`, `commit_docs`, `sub_repos`, `phase_dir`, `phase_number`, `plans`, `summaries`, `incomplete_plans`, `state_path`, `config_path`, `response_language`.
+
+**If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
 If `.planning/` missing: error.
 </step>
@@ -189,6 +191,7 @@ Deviations are normal — handle via rules below.
 3. Per task:
    - **MANDATORY read_first gate:** If the task has a `<read_first>` field, you MUST read every listed file BEFORE making any edits. This is not optional. Do not skip files because you "already know" what's in them — read them. The read_first files establish ground truth for the task.
    - `type="auto"`: if `tdd="true"` → TDD execution. Implement with deviation rules + auth gates. Verify done criteria. Commit (see task_commit). Track hash for Summary.
+   - `type="tracer"`: execute like `type="auto"` (production-quality, real `<verify>`, commit), then run the tracer feedback gate BEFORE any expansion task — an early integration checkpoint. Auto mode active (`AUTO_CHAIN` or `AUTO_CFG`): re-run the tracer `<verify>`; on failure HALT and surface (deviation) — do NOT start expansion tasks. Interactive: STOP → return a `checkpoint:human-verify` for the tracer via checkpoint_protocol before expansion.
    - `type="checkpoint:*"`: STOP → checkpoint_protocol → wait for user → continue only after confirmation.
    - **HARD GATE — acceptance_criteria verification:** After completing each task, if it has `<acceptance_criteria>`, you MUST run a verification loop before proceeding:
      1. For each criterion: execute the grep, file check, or CLI command that proves it passes
@@ -469,13 +472,21 @@ Counts PLAN vs SUMMARY files on disk. Updates progress table row with correct co
 </step>
 
 <step name="update_requirements">
-Mark completed requirements from the PLAN.md frontmatter `requirements:` field:
+Mark completed requirements from the PLAN.md frontmatter `requirements:` field.
+
+Extract requirement IDs from the plan's frontmatter (e.g., `requirements: [AUTH-01, AUTH-02]`) into `REQ_IDS`. If no requirements field, skip this step.
+
+**Shared-ID gate (#2388):** a requirement ID declared by more than one plan in this phase must not read `Complete` until every plan declaring it has finished (produced a `*-SUMMARY.md`) — otherwise the first plan to finish flips it `Complete` while its sibling plans are still running, before phase verification ever gets a chance to catch a real gap. Compute the ready subset first, then mark only those:
 
 ```bash
-gsd_run query requirements.mark-complete ${REQ_IDS}
+READY=$(gsd_run query requirements.ready-ids "${PLAN_PATH}" ${REQ_IDS} --raw)
+READY_IDS=$(printf '%s' "$READY" | jq -r '.ready[]' 2>/dev/null | tr '\n' ' ')
+if [ -n "$(printf '%s' "$READY_IDS" | tr -d '[:space:]')" ]; then
+  gsd_run query requirements.mark-complete ${READY_IDS}
+fi
 ```
 
-Extract requirement IDs from the plan's frontmatter (e.g., `requirements: [AUTH-01, AUTH-02]`). If no requirements field, skip.
+`requirements.ready-ids` is read-only: it scans sibling `*-PLAN.md` files in this plan's phase directory and blocks an ID only when a sibling ALSO declares it and that sibling has no `*-SUMMARY.md` yet. An ID no sibling declares is always ready (single-plan requirements mark immediately, no added latency). A blocked ID is re-evaluated the next time any plan in this phase finishes its own `update_requirements` step, and becomes ready once the LAST declaring plan's SUMMARY exists.
 </step>
 
 <step name="git_commit_metadata">

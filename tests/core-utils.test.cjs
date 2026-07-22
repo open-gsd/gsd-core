@@ -548,6 +548,20 @@ describe('extractCanonicalPlanId', () => {
     assert.strictEqual(coreUtils.extractCanonicalPlanId('01-02-PLAN.md'), '01-02');
     assert.strictEqual(coreUtils.extractCanonicalPlanId('3A-01-feature-PLAN.md'), '3A-01');
   });
+
+  test('does not pair a ≥3-digit slug word as a plan component (#2232)', () => {
+    // A year-leading slug word ("14-2026-photos-…") is not a plan component —
+    // must not collapse to the bogus "14-2026".
+    assert.notStrictEqual(
+      coreUtils.extractCanonicalPlanId('14-2026-photos-performance-SUMMARY.md'),
+      '14-2026',
+    );
+    assert.notStrictEqual(coreUtils.extractCanonicalPlanId('05-100-slug-PLAN.md'), '05-100');
+    // The LEADING phase component stays unbounded (\d{2,}) — only the paired
+    // continuation is width-capped, so phase ≥100 plan files still pair.
+    assert.strictEqual(coreUtils.extractCanonicalPlanId('100-01-extra-slug-PLAN.md'), '100-01');
+    assert.strictEqual(coreUtils.extractCanonicalPlanId('01-02-PLAN.md'), '01-02');
+  });
 });
 
 // ─── countMatchedSummaries (#1988) ───────────────────────────────────────────

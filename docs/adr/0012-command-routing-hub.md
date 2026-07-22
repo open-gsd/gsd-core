@@ -1,6 +1,6 @@
 # CommandRoutingHub as single dispatch seam for CJS command families
 
-- **Status:** Superseded by ADR-0174 (2026-05-23); originally Accepted (2026-05-20)
+- **Status:** Superseded by [ADR-0174](0174-retire-gsd-sdk-package-boundary.md) (2026-05-23); originally Accepted (2026-05-20)
 - **Date:** 2026-05-20
 
 ## Context

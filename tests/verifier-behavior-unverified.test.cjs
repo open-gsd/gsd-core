@@ -180,11 +180,11 @@ describe('bug #3321: gsd-verifier runs probes instead of trusting SUMMARY claims
     assert.deepEqual(contract.executionSteps, [
       'Build the `PROBES` list from explicit PLAN declarations first; include conventional `scripts/*/tests/probe-*.sh` when the phase is a migration/tooling phase or the success criteria mention probes.',
       'For every documented probe path, if the file is missing or unreadable, mark `MISSING_PROBE` and set `status: gaps_found`. Do not require the executable bit because probes run through `bash "$probe"`.',
-      'Run each probe from the built `PROBES` list (declared + conventional) from the repository root:',
+      'Run each probe from the built `PROBES` list from the repository root:',
       'Exit code 0 is PASS. Any non-zero exit is FAILED and must include stdout/stderr evidence in VERIFICATION.md.',
       'Do not substitute executor narration, SUMMARY.md PASS-marker counts, or a different dry-run driver command for the probe result.',
     ]);
-    assert.equal(contract.executionCommand, 'for probe in "${PROBES[@]}"; do\n  timeout 30s bash "$probe"\ndone');
+    assert.equal(contract.executionCommand, 'for probe in "${PROBES[@]}"; do\n  gsd_run run-with-timeout 30 -- bash "$probe"\ndone');
     assert.deepEqual(contract.statusRows, [{
       probe: 'scripts/.../probe-name.sh',
       command: 'bash "$probe"',

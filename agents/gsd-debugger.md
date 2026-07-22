@@ -253,6 +253,10 @@ reasoning_checkpoint:
   falsification_test: "[what specific observation would prove this hypothesis wrong]"
   fix_rationale: "[why the proposed fix addresses the root cause — not just the symptom]"
   blind_spots: "[what you haven't tested that could invalidate this hypothesis]"
+  candidate_causes:
+    - "[cause in category: code|config|environment|data]"
+    - "[cause in a DIFFERENT category — single-category is not a branch]"
+  and_gate: "[could this failure require >1 contributing condition simultaneously? yes/no + why — see RCA branching]"
 ```
 
 **Check before proceeding:**
@@ -260,8 +264,9 @@ reasoning_checkpoint:
 - Is the confirming evidence direct observation, not inference?
 - Does the fix address the root cause or a symptom?
 - Have you documented your blind spots honestly?
+- **Did you branch across ≥2 categories and answer the AND-gate?** (Single-cause is fine when the AND-gate is no — but you must have checked.)
 
-If you cannot fill all five fields with specific, concrete answers — you do not have a confirmed root cause yet. Return to investigation_loop.
+If you cannot fill all seven fields with specific, concrete answers — you do not have a confirmed root cause yet. Return to investigation_loop.
 
 ## Minimal Reproduction
 
@@ -274,6 +279,7 @@ If you cannot fill all five fields with specific, concrete answers — you do no
 3. Test: Does it still reproduce? YES = keep removed. NO = put back.
 4. Repeat until bare minimum
 5. Bug is now obvious in stripped-down code
+6. **Shrinking (input-space bugs)** — when the bug triggers on a class of inputs, wrap it in a property (fast-check for JS/TS, Hypothesis for Python) and let the shrinker auto-minimize the counterexample; store the **minimized** input as the regression seed. See `gsd-core/references/debugger-repro-hardening.md`.
 
 **Example:**
 ```jsx
@@ -443,18 +449,21 @@ MISMATCH: Checker looks in wrong directory → hooks "not found" → reported as
 
 **The discipline:** Never assume a constructed path is correct. Resolve it to its actual value and verify the other side agrees. When two systems share a resource (file, directory, key), trace the full path in both.
 
-## Technique Selection
+## Technique Selection (routed by bug class)
 
-| Situation | Technique |
-|-----------|-----------|
-| Large codebase, many files | Binary search |
-| Confused about what's happening | Rubber duck, Observability first |
-| Complex system, many interactions | Minimal reproduction |
-| Know the desired output | Working backwards |
-| Used to work, now doesn't | Differential debugging, Git bisect |
-| Many possible causes | Comment out everything, Binary search |
-| Paths, URLs, keys constructed from variables | Follow the indirection |
-| Always | Observability first (before making changes) |
+Classify the failure first (Phase 1.75), then route by class — not by ad-hoc
+situation:
+
+@~/.claude/gsd-core/references/debugger-bug-taxonomy.md
+
+| bug_class | Route to | Revoke if already run |
+|---|---|---|
+| Bohrbug | deterministic reproduction → SBFL (Phase 1.25) → git bisect → binary search | — |
+| Heisenbug / Mandelbug | record-replay (`rr`) → stability-stress → statistical sampling | SBFL — Phase 1.25 runs before classification; if it ran, mark its Evidence entry revoked (flaky spectrum poisons the ranking) |
+| Concurrency | atomicity / order / deadlock checklist (see reference) FIRST | — |
+| General (any class) | Binary search, Working backwards, Differential, Delta debugging, Comment-out-everything, Follow-the-indirection, Rubber duck, Observability first (always, before changes) | — |
+
+The class rows pick the first move; the General lane holds situation-cued techniques that apply to any class. When the situation table and the class route disagree, the class route wins.
 
 ## Combining Techniques
 
@@ -589,6 +598,13 @@ function processUserData(user) {
 
 // 5. Test is now regression protection forever
 ```
+
+**Harden the regression test (so the Phase 1A mutation guardrail bites):**
+
+@~/.claude/gsd-core/references/debugger-repro-hardening.md
+
+- **Classify the oracle** before writing the assertion — `specified` / `derived` (contract/model) / `metamorphic` / `implicit` (crash, weakest). Record it under `Resolution.oracle_type`. Never default to implicit silently.
+- **Add boundary neighbors** around the fixed defect's equivalence class — off-by-one (N±1), min/max (0/length), empty/singleton — the single reported value misses the adjacent off-by-one.
 
 ## Verification Checklist
 
@@ -788,9 +804,11 @@ Each resolved session appends one entry:
 ## {slug} — {one-line description}
 - **Date:** {ISO date}
 - **Error patterns:** {comma-separated keywords extracted from symptoms.errors and symptoms.actual}
-- **Root cause:** {from Resolution.root_cause}
+- **Root cause(s):** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate fired}
 - **Fix:** {from Resolution.fix}
 - **Files changed:** {from Resolution.files_changed}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify/build) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {the concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / type refinement / config-default change / KB pattern}
 ---
 ```
 
@@ -804,9 +822,11 @@ At the **end of `archive_session`**, after the session file is moved to `resolve
 
 ## Matching Logic
 
-Matching is keyword overlap, not semantic similarity. Extract nouns and error substrings from `Symptoms.errors` and `Symptoms.actual`. Scan each knowledge base entry's `Error patterns` field for overlapping tokens (case-insensitive, 2+ word overlap = candidate match).
+**Semantic-first, keyword-fallback.** Query MemPalace with the current symptoms and surface the top-k meaning-similar prior resolutions — this catches same-root-cause/different-wording cases keyword overlap misses. Fall back to keyword overlap on `knowledge-base.md` when MemPalace is absent. See:
 
-**Important:** A match is a **hypothesis candidate**, not a confirmed diagnosis. Surface it in Current Focus and test it first — but do not skip other hypotheses or assume correctness.
+@~/.claude/gsd-core/references/debugger-semantic-recall.md
+
+**Important:** A match is a **hypothesis candidate**, not a confirmed diagnosis — surface it in Current Focus and test it first; do not skip other hypotheses or assume correctness.
 
 </knowledge_base_protocol>
 
@@ -966,12 +986,10 @@ At investigation decision points, apply structured reasoning:
 **Autonomous investigation. Update file continuously.**
 
 **Phase 0: Check knowledge base**
-- If `.planning/debug/knowledge-base.md` exists, read it
-- Extract keywords from `Symptoms.errors` and `Symptoms.actual` (nouns, error substrings, identifiers)
-- Scan knowledge base entries for 2+ keyword overlap (case-insensitive)
+- Query MemPalace semantically with the current symptoms (top-k meaning-similar prior resolutions); fall back to reading `.planning/debug/knowledge-base.md` and keyword overlap when MemPalace is absent
 - If match found:
   - Note in Current Focus: `known_pattern_candidate: "{matched slug} — {description}"`
-  - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}.`
+  - Add to Evidence: `found: Knowledge base match on [{keywords}] → Root cause was: {root_cause}. Fix was: {fix}. Why not caught: {why_not_caught}. Recurrence guard: {recurrence_guard}.` (the last two are absent on old entries — that's fine; consume them when present)
   - Test this hypothesis FIRST in Phase 2 — but treat it as one hypothesis, not a certainty
 - If no match: proceed normally
 
@@ -983,14 +1001,32 @@ At investigation decision points, apply structured reasoning:
 - Run app/tests to observe behavior
 - APPEND to Evidence after each finding
 
+**Phase 1.25: Spectrum-based fault localization (optional, coverage-gated)**
+- When a runnable test suite with per-test coverage exists (≥1 failing AND ≥1 passing test), compute an Ochiai suspiciousness ranking and seed the top-N into Evidence before forming hypotheses — narrows the search space deterministically before LLM reasoning:
+
+@~/.claude/gsd-core/references/debugger-sbfl.md
+
+- Skip with a logged note when there is no test suite, no failing tests, or no per-test coverage; investigation proceeds unchanged
+
 **Phase 1.5: Check common bug patterns**
 - Read @~/.claude/gsd-core/references/common-bug-patterns.md
 - Match symptoms to pattern categories using the Symptom-to-Category Quick Map
 - Any matching patterns become hypothesis candidates for Phase 2
 - If no patterns match, proceed to open-ended hypothesis formation
 
+**Phase 1.75: Classify the failure**
+- Assign a `bug_class` — Bohrbug (deterministic) / Heisenbug-Mandelbug (transient, non-deterministic) / Concurrency — and record it in Current Focus. The class routes which investigation technique to use:
+
+@~/.claude/gsd-core/references/debugger-bug-taxonomy.md
+
+- Bohrbug → reproduction + SBFL + bisect; Heisenbug/Mandelbug → record-replay/stability (skip SBFL — flaky spectra poison it); Concurrency → the atomicity/order/deadlock checklist first
+
 **Phase 2: Form hypothesis**
 - Based on evidence AND common pattern matches, form SPECIFIC, FALSIFIABLE hypothesis
+- **Branch, don't chain** — at hypothesis formation (so it's done before the Phase 4 commit), enumerate candidate causes across ≥2 Ishikawa categories (code / config / environment / data) and answer the AND-gate check; `root_cause` may hold a set when the AND-gate fires:
+
+@~/.claude/gsd-core/references/debugger-rca-branching.md
+
 - Update Current Focus with hypothesis, test, expecting, next_action
 
 **Phase 3: Test hypothesis**
@@ -1043,7 +1079,7 @@ Return structured diagnosis:
 
 **Debug Session:** .planning/debug/{slug}.md
 
-**Root Cause:** {from Resolution.root_cause}
+**Root Cause:** {from Resolution.root_cause — one cause, or a '; '-joined list when the AND-gate identified multiple contributing causes}
 
 **Evidence Summary:**
 - {key finding 1}
@@ -1083,7 +1119,7 @@ Update status to "fixing".
 
 **0. Structured Reasoning Checkpoint (MANDATORY)**
 - Write the `reasoning_checkpoint` block to Current Focus (see Structured Reasoning Checkpoint in investigation_techniques)
-- Verify all five fields can be filled with specific, concrete answers
+- Verify every field can be filled with specific, concrete answers — including the RCA `candidate_causes` (≥2 categories) and `and_gate` fields
 - If any field is vague or empty: return to investigation_loop — root cause is not confirmed
 
 **1. Implement minimal fix**
@@ -1091,11 +1127,15 @@ Update status to "fixing".
 - Make SMALLEST change that addresses root cause
 - Update Resolution.fix and Resolution.files_changed
 
-**2. Verify**
+**2. Verify (Fix-Acceptance Guardrail)**
 - Update status to "verifying"
-- Test against original Symptoms
-- If verification FAILS: status -> "investigating", return to investigation_loop
-- If verification PASSES: Update Resolution.verification, proceed to request_human_verification
+- Run the multi-signal guardrail before accepting the fix:
+
+@~/.claude/gsd-core/references/debugger-fix-acceptance.md
+
+- Record every signal's result under `Resolution.verification` (per-signal schema in the reference)
+- If ANY applicable signal fails (and no documented technical-debt escape applies): return `## FIX REJECTED BY GUARDRAIL` (see structured_returns) — do NOT request human verification
+- If all applicable signals pass: set `guardrail_verdict: accepted`, proceed to request_human_verification
 </step>
 
 <step name="request_human_verification">
@@ -1174,9 +1214,13 @@ Then commit planning docs via CLI (respects `commit_docs` config automatically):
 gsd_run query commit "docs: resolve debug {slug}" --files .planning/debug/resolved/{slug}.md
 ```
 
-**Append to knowledge base:**
+**Append to knowledge base (with the Prevention block):**
 
-Read `.planning/debug/resolved/{slug}.md` to extract final `Resolution` values. Then append to `.planning/debug/knowledge-base.md` (create file with header if it doesn't exist):
+Read `.planning/debug/resolved/{slug}.md` to extract final `Resolution` values. Then produce the **Prevention block** — a blameless postmortem (branching 5-Whys per RCA, "why wasn't this caught?", and a concrete recurrence guard):
+
+@~/.claude/gsd-core/references/debugger-prevention.md
+
+Then append to `.planning/debug/knowledge-base.md` (create file with header if it doesn't exist):
 
 If creating for the first time, write this header first:
 ```markdown
@@ -1193,9 +1237,11 @@ Then append the entry:
 ## {slug} — {one-line description of the bug}
 - **Date:** {ISO date}
 - **Error patterns:** {comma-separated keywords from Symptoms.errors + Symptoms.actual}
-- **Root cause:** {Resolution.root_cause}
+- **Root cause(s):** {Resolution.root_cause — joined as '; ' when multiple contributing causes were confirmed}
 - **Fix:** {Resolution.fix}
 - **Files changed:** {Resolution.files_changed joined as comma list}
+- **Why not caught:** {which existing gate (test/typecheck/lint/review/verify/build) should have caught it — or "no gate existed for this class"}
+- **Recurrence guard:** {concrete artifact preventing this class from returning — regression test (path:name) / assertion / lint rule / KB pattern / type refinement / config-default change}
 ---
 
 ```
@@ -1204,6 +1250,8 @@ Commit the knowledge base update alongside the resolved session:
 ```bash
 gsd_run query commit "docs: update debug knowledge base with {slug}" --files .planning/debug/knowledge-base.md
 ```
+
+**Index into MemPalace (when available)** per the semantic-recall reference — the Resolution summary (not raw symptoms), redacted — so a future Phase-0 query surfaces it by meaning. Skip with a logged note when MemPalace is absent or the KB write failed; `knowledge-base.md` is the durable fallback.
 
 Report completion and offer next steps.
 </step>
@@ -1298,7 +1346,7 @@ Orchestrator presents checkpoint to user, gets response, spawns fresh continuati
 
 **Debug Session:** .planning/debug/{slug}.md
 
-**Root Cause:** {specific cause with evidence}
+**Root Cause:** {specific cause with evidence — one cause, or a '; '-joined list when the AND-gate identified multiple contributing causes}
 
 **Evidence Summary:**
 - {key finding 1}
@@ -1333,6 +1381,16 @@ Orchestrator presents checkpoint to user, gets response, spawns fresh continuati
 ```
 
 Only return this after human verification confirms the fix.
+
+## FIX REJECTED BY GUARDRAIL
+
+Returned when a fix-acceptance guardrail signal fails (see `@~/.claude/gsd-core/references/debugger-fix-acceptance.md`). Do **not** mark the session resolved.
+
+**Debug Session:** .planning/debug/{slug}.md
+**Failing signal:** {signal 1–5 name}
+**Evidence:** {why the signal failed — e.g. "mutant at fix site survived", "deletion-only diff with no RCA justification", "bug did not return on revert"}
+
+The session-manager continuation surfaces this and offers revise / accept-as-debt / abandon.
 
 ## INVESTIGATION INCONCLUSIVE
 

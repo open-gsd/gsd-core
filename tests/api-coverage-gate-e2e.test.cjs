@@ -22,6 +22,10 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const { cleanup } = require('./helpers.cjs');
+// In-process seam for the fail-closed read-injection tests at the bottom of this
+// file (#2365 review): readPhaseScope is the pure phase-scope reader behind the
+// gate. Those tests monkeypatch fs rather than drive a subprocess.
+const { readPhaseScope } = require('../gsd-core/bin/lib/check-command-router.cjs');
 
 const TOOLS_PATH = path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs');
 
@@ -239,6 +243,49 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     assert.strictEqual(j.counts.surface, 1);
   });
 
+  // ── #2365: detector false positives must not block, and a phase may declare
+  // "no external API integration" instead of fabricating a matrix row.
+  test('#2365 phase naming a first-party route path → does NOT block', () => {
+    fresh();
+    writePlan(
+      phaseDir,
+      '01-PLAN.md',
+      '# Plan\nRun integration tests for src/app/api/profile/route.test.ts.'
+    );
+    const r = runGate(tmpDir, phaseDir);
+    assert.ok(r.success, `gate should succeed. stderr: ${r.error}`);
+    const j = JSON.parse(r.output);
+    assert.strictEqual(j.block, false, 'a first-party route path is not an external API');
+    assert.strictEqual(j.detected, false);
+  });
+
+  test('#2365 COVERAGE.md declaring no external API integration → passes the gate', () => {
+    fresh();
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nRender the export page.');
+    writeCoverage(phaseDir, 'No external API integration: UI-only phase, no third-party surface.\n');
+    const r = runGate(tmpDir, phaseDir);
+    assert.ok(r.success, `gate should succeed. stderr: ${r.error}`);
+    const j = JSON.parse(r.output);
+    assert.strictEqual(j.block, false, 'a reasoned no-integration declaration satisfies the gate');
+    assert.strictEqual(j.coverage_present, true);
+    assert.strictEqual(j.none_declared, true);
+    assert.strictEqual(j.detected, false, 'a non-API plan shows no overridden signals');
+  });
+
+  test('#2365 declaration overriding live detection passes but SURFACES the contradiction', () => {
+    fresh();
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API for payments.');
+    writeCoverage(phaseDir, 'No external API integration: detector over-fired; this phase is UI-only.\n');
+    const r = runGate(tmpDir, phaseDir);
+    assert.ok(r.success, `gate should succeed. stderr: ${r.error}`);
+    const j = JSON.parse(r.output);
+    assert.strictEqual(j.block, false, 'the declaration is the human overrule — it must win');
+    assert.strictEqual(j.none_declared, true);
+    assert.strictEqual(j.detected, true, 'the contradiction must be visible, not silent');
+    assert.ok(Array.isArray(j.signals) && j.signals.length > 0);
+    assert.ok(/overrid/i.test(j.message), `message should surface the override: ${j.message}`);
+  });
+
   // ── Security (#1562 security review S1/S2): the phase arg is taken only as a
   // token resolved under .planning/phases/. Traversal / unresolvable args must
   // NOT read files outside the phase dir, and — since the phases tree exists —
@@ -269,5 +316,71 @@ describe('api-coverage.verify-pre — seal contract (#1562 acceptance #1,#2,#4,#
     } finally {
       cleanup(noPhases);
     }
+  });
+});
+
+// ─── Fail-closed phase-scope read failures (in-process, #2365 review) ──────────
+// These exercise readPhaseScope directly and inject the read failure by
+// monkeypatching fs (restored in finally) rather than chmod 0o000 — chmod does
+// not fault under root and is the pattern this repo's IO-failure convention
+// avoids. Deterministic and platform-independent, so no root/win32 skip needed.
+describe('readPhaseScope — fail-closed on a real read failure (#2365 review)', () => {
+  let tmpDir;
+  afterEach(() => { if (tmpDir) { cleanup(tmpDir); tmpDir = null; } });
+
+  // Run `fn` with `fs[method]` throwing `code` for any path matching `pat`,
+  // delegating to the real implementation otherwise; always restored.
+  function withFsThrow(method, pat, code, fn) {
+    const orig = fs[method];
+    fs[method] = (p, ...rest) => {
+      if (typeof p === 'string' && pat.test(p)) {
+        const err = new Error(`${code}: injected read failure`);
+        err.code = code;
+        throw err;
+      }
+      return orig(p, ...rest);
+    };
+    try { return fn(); } finally { fs[method] = orig; }
+  }
+
+  test('an EXISTING plan file that cannot be read → readError set (not silent-empty)', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const phaseDir = makePhaseDir(tmpDir, '01-pay');
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nRefactor the UI.');
+    writePlan(phaseDir, '02-PLAN.md', '# Plan\nIntegrate the Stripe API.');
+    const res = withFsThrow('readFileSync', /02-PLAN\.md$/, 'EACCES', () =>
+      readPhaseScope(tmpDir, phaseDir, '01'));
+    assert.ok(res.readError, 'a real plan read failure must set readError, not read as empty scope');
+    assert.match(res.readError, /could not read/i);
+  });
+
+  test('a phase directory that cannot be enumerated → readError set', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const phaseDir = makePhaseDir(tmpDir, '01-pay');
+    writePlan(phaseDir, '01-PLAN.md', '# Plan\nIntegrate the Stripe API.');
+    const res = withFsThrow('readdirSync', new RegExp(phaseDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), 'EACCES', () =>
+      readPhaseScope(tmpDir, phaseDir, '01'));
+    assert.ok(res.readError, 'an unreadable phase directory must set readError, not read as empty');
+  });
+
+  test('roadmap fallback that cannot be read → readError set', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const phaseDir = makePhaseDir(tmpDir, '01-pay'); // no plans → roadmap fallback
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 01: Pay\n\nIntegrate the Stripe API.\n',
+      'utf8'
+    );
+    const res = withFsThrow('readFileSync', /ROADMAP\.md$/, 'EACCES', () =>
+      readPhaseScope(tmpDir, phaseDir, '01'));
+    assert.ok(res.readError, 'an unreadable roadmap fallback must set readError, not read as absent');
+  });
+
+  test('a MISSING phase dir / roadmap is legitimate absence (ENOENT) → readError null', () => {
+    tmpDir = makeProject({ api_coverage_gate: true });
+    const missing = path.join(tmpDir, '.planning', 'phases', '99-does-not-exist');
+    const res = readPhaseScope(tmpDir, missing, '99');
+    assert.strictEqual(res.readError, null, 'ENOENT is absence, not a read failure — must not block');
+    assert.strictEqual(res.text, '');
   });
 });

@@ -33,7 +33,11 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { OPTIONAL_PROJECT_CODE_PREFIX_SOURCE, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
+const {
+  OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  PHASE_NUMBER_TOKEN_SOURCE,
+  PHASE_CONTINUATION_SEGMENT_SOURCE,
+} = phaseIdMod;
 
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
 // Matches legacy numeric dirs (01-setup), milestone-prefixed dirs (02-01-setup),
@@ -44,25 +48,31 @@ export const phaseDirNameRe = new RegExp(
 );
 // Extracts the full phase token from a directory name, including milestone-prefixed
 // multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup".
-// #2043: a *continuation* sub-phase segment must be zero-padded (≥2 digits), so a
+// #2043: a *continuation* sub-phase segment must be zero-padded, so a
 // single-digit slug word after a phase number (e.g. "46-6-rs-…", slug "6 Rs …") is
-// NOT absorbed — it captures "46", not "46-6". The first component stays "\d+"
+// NOT absorbed — it captures "46", not "46-6". #2232: the continuation width is
+// exactly 2 (PHASE_CONTINUATION_SEGMENT_SOURCE), so a ≥3-digit slug word (a year:
+// "14-2026-photos-…") is not absorbed either — it captures "14", not "14-2026".
+// The first component stays "\d+"
 // (with the "[A-Z]?" suffix) so single-digit letter-suffixed phase ids ("1A") and
 // milestone-prefixed single-digit sub-phases ("M1-2" → prefix "M1-" stripped, then
 // "2") still match. The trailing boundary "(?:-|$)" (was "(?:-[a-z]|$)") lets a slug
 // that starts with a digit terminate the token.
 export const PHASE_TOKEN_FROM_DIR_RE = new RegExp(
-  `^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(\\d+(?:-\\d{2,})*[A-Z]?(?:\\.\\d+)*)(?:-|$)`,
+  `^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(\\d+(?:-${PHASE_CONTINUATION_SEGMENT_SOURCE})*[A-Z]?(?:\\.\\d+)*)(?:-|$)`,
   'i',
 );
 export const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
 
 // ── Issue #26: I001 canonicalization ────────────────────────────────────────
 export function canonicalPlanStem(stem: string): string {
-  // #2043: the plan component (after the phase number) must be zero-padded
-  // (≥2 digits), so a digit-leading slug word (e.g. "46-6-rs-…") is not mistaken
-  // for a "46-6" phase/plan pair.
-  const m = stem.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE}-\\d{2,})`, 'i'));
+  // #2043: the plan component (after the phase number) must be zero-padded,
+  // so a digit-leading slug word (e.g. "46-6-rs-…") is not mistaken
+  // for a "46-6" phase/plan pair. #2232: exactly 2 digits, so a year-leading
+  // slug ("14-2026-photos-…") is not mistaken for a "14-2026" pair either.
+  const m = stem.match(
+    new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE}-${PHASE_CONTINUATION_SEGMENT_SOURCE})`, 'i'),
+  );
   return m ? m[1] : stem;
 }
 

@@ -91,6 +91,47 @@ describe('docs-init command', () => {
   });
 });
 
+// ─── response_language wiring (#2402) ─────────────────────────────────────────
+//
+// cmdDocsInit predates withProjectRoot (init.cts) and never picked up
+// response_language, so docs-update's orchestrator-owned prompts silently
+// stayed English even with response_language configured. Mirrors the
+// established `init manager` response_language coverage pattern
+// (tests/init-manager.test.cjs).
+
+describe('docs-init response_language wiring (#2402)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('output includes response_language when configured', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ response_language: 'Japanese' })
+    );
+
+    const result = runGsdTools(['docs-init'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const data = JSON.parse(result.output);
+    assert.strictEqual(data.response_language, 'Japanese');
+  });
+
+  test('output omits response_language when not configured', () => {
+    const result = runGsdTools(['docs-init'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const data = JSON.parse(result.output);
+    assert.strictEqual(data.response_language, undefined);
+  });
+});
+
 // ─── project type detection ───────────────────────────────────────────────────
 
 describe('project type detection', () => {

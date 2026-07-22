@@ -144,6 +144,10 @@ At execution decision points, apply structured reasoning:
 
 For each task:
 
+0. **Precondition check (before any other task work):** If the task carries a `<precondition>` element, evaluate that single prose line first — it names a runnable/checkable fact the task assumes (env var set, prior-phase artifact present, server responding to `/health`, `user_setup` step done). Verify with **read-only checks only** — file existence, env var presence (no value output), idempotent `GET /health`-style pings. Do NOT run commands with side effects (writes, network POSTs, secret emission) as the check; if a side-effecting check seems required, halt and surface via checkpoint instead.
+   - **Met OR absent:** continue with no visible change to execution flow. The precondition is a no-op for the rest of the task loop.
+   - **Unmet:** STOP — return a `checkpoint:human-verify` (use `checkpoint_return_format`) with `**Blocked by:** Precondition not met: <precondition text>`. Do NOT partial-commit the task. Unmet preconditions are NEVER auto-approved, even under `AUTO_CFG=true` — a missing prerequisite is not a verification step a human can rubber-stamp; it is a fact the executor cannot establish on its own. The human either satisfies the precondition (sets the env var, completes the `user_setup` step, regenerates the artifact) or reruns `/gsd:plan-phase` to restructure.
+
 1. **If `type="auto"`:**
    - Check for `tdd="true"` → follow TDD execution flow
    - Execute task, apply deviation rules as needed
@@ -152,11 +156,17 @@ For each task:
    - Commit (see task_commit_protocol)
    - Track completion + commit hash for Summary
 
-2. **If `type="checkpoint:*"`:**
+2. **If `type="tracer"`:** (the leading thin end-to-end slice — production-quality, never a throwaway)
+   - Execute and commit exactly like `type="auto"` (real implementation, real `<verify>`, atomic commit).
+   - **Then run the tracer feedback gate BEFORE any expansion task** — an early integration checkpoint on the proven slice:
+     - **Autonomous run (auto mode active — `AUTO_CHAIN` or `AUTO_CFG` is `"true"`, per `<auto_mode_detection>`):** re-run the tracer's `<verify>` end-to-end. If it **fails**, HALT and surface it (deviation Rule 1) — do NOT proceed to expansion tasks. Pouring more layers onto a broken foundation is exactly the failure this gate prevents. If it passes, log `⚡ Tracer verified end-to-end — expanding` and continue.
+     - **Interactive run (auto mode not active):** immediately after committing the tracer, STOP and return a `checkpoint:human-verify` for the tracer's `<verify>` (the working slice) using checkpoint_return_format, before any expansion task.
+
+3. **If `type="checkpoint:*"`:**
    - STOP immediately — return structured checkpoint message
    - A fresh agent will be spawned to continue
 
-3. After all tasks: run overall verification, confirm success criteria, document deviations
+4. After all tasks: run overall verification, confirm success criteria, document deviations
 </step>
 
 </execution_flow>
@@ -309,6 +319,8 @@ For full automation-first patterns, server lifecycle, CLI handling:
 **See @~/.claude/gsd-core/references/checkpoints.md**
 
 **Quick reference:** Users NEVER run CLI commands. Users ONLY visit URLs, click UI, evaluate visuals, provide secrets. Claude does all automation.
+
+**Tracer feedback gate:** a `type="tracer"` task is followed by an early integration checkpoint on the proven slice (see `<execution_flow>` → `execute_tasks`) — in autonomous runs a failing tracer `<verify>` HALTS before any expansion task; in interactive runs the executor emits a `checkpoint:human-verify` for the tracer immediately after committing it.
 
 ---
 
@@ -659,6 +671,21 @@ Or: "None - plan executed exactly as written."
 - Components with no data source wired (props always receiving empty/mock data)
 
 If any stubs exist, add a `## Known Stubs` section to the SUMMARY listing each stub with its file, line, and reason. These are tracked for the verifier to catch. Do NOT mark a plan as complete if stubs exist that prevent the plan's goal from being achieved — either wire the data or document in the plan why the stub is intentional and which future plan will resolve it.
+
+**Broken-windows ledger (issue #1950).** For each stub, skipped test, or unrun `<verify>` recorded above, ALSO append it to the cross-phase defect register at `.planning/WINDOWS.md`. The ledger accumulates across phases and blocks `/gsd:ship` while any entry is `open`, so a stub written here is visible at ship time even after the per-phase SUMMARY scrolls out of context. Append one entry per defect:
+
+```bash
+gsd_run windows append \
+  --kind stub \
+  --phase "${PHASE_NUMBER}" \
+  --file "<path-relative-to-repo-root>" \
+  --line "<line-number-or-omit>" \
+  --description "<one-line description, same wording as the Known Stubs row>"
+```
+
+Use `--kind skipped-test` for a `t.skip(...)` / `test.todo(...)` you left behind, `--kind unrun-verify` for a `<verify>` you could not run, or `--kind deviation` for a documented plan deviation. The full kind vocabulary: `stub | todo | fixme | skipped-test | lint-warning | unmet-truth | unrun-verify | deviation`.
+
+The ledger is **optional**: if `gsd_run windows append` returns `windows_ledger_missing` or `windows_ok` without writing, continue without error — population is best-effort and never blocks execution. Recording here is what makes the defect visible to the ship gate later; forgetting to record is the failure mode this ledger exists to prevent.
 
 **Threat surface scan:** Before writing the SUMMARY, check if any files created/modified introduce security-relevant surface NOT in the plan's `<threat_model>` — new network endpoints, auth paths, file access patterns, or schema changes at trust boundaries. If found, add:
 

@@ -144,7 +144,7 @@ describe('Antigravity reviewer repo grounding in /gsd-review (#2176)', () => {
       .replace(/\}; then$/, '}')
       // Convert the native path to POSIX form so it survives bash on Windows
       // runners (Git Bash accepts D:/... but eats backslashes).
-      .replaceAll('/tmp/gsd-review-antigravity-{phase}.md', toPosixPath(out));
+      .replaceAll('{run_dir}/gsd-review-antigravity.md', toPosixPath(out));
     const runDetect = (content) => {
       fs.writeFileSync(out, content);
       try {

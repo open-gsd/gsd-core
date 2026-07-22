@@ -247,7 +247,19 @@ fi
 
 **Post-processing (all tiers):**
 
-1. **Apply exclusions (per D-03):** Remove paths matching planning artifacts
+1. **Expand tilde paths:** SUMMARY.md `key-files` entries may record a `~/...`-prefixed path (e.g. `~/.claude/gsd-core/workflows/verify-phase.md`). Bash only tilde-expands a literal `~` written in source text, never one arriving as the value of an already-expanded variable, so every later `[ -f "$file" ]` check must see a real, expanded path or it misclassifies the file as deleted.
+```bash
+EXPANDED_FILES=()
+for file in "${REVIEW_FILES[@]}"; do
+  case "$file" in
+    "~/"*) file="${HOME}${file#\~}" ;;
+  esac
+  EXPANDED_FILES+=("$file")
+done
+REVIEW_FILES=("${EXPANDED_FILES[@]}")
+```
+
+2. **Apply exclusions (per D-03):** Remove paths matching planning artifacts
 ```bash
 FILTERED_FILES=()
 for file in "${REVIEW_FILES[@]}"; do
@@ -265,7 +277,7 @@ done
 REVIEW_FILES=("${FILTERED_FILES[@]}")
 ```
 
-2. **Filter deleted files:** Remove paths that don't exist on disk
+3. **Filter deleted files:** Remove paths that don't exist on disk
 ```bash
 EXISTING_FILES=()
 DELETED_COUNT=0
@@ -283,7 +295,7 @@ if [ $DELETED_COUNT -gt 0 ]; then
 fi
 ```
 
-3. **Deduplicate:** Remove duplicate paths (portable — bash 3.2+ compatible, handles spaces in paths)
+4. **Deduplicate:** Remove duplicate paths (portable — bash 3.2+ compatible, handles spaces in paths)
 ```bash
 DEDUPED=()
 while IFS= read -r line; do
@@ -292,7 +304,7 @@ done < <(printf '%s\n' "${REVIEW_FILES[@]}" | sort -u)
 REVIEW_FILES=("${DEDUPED[@]}")
 ```
 
-4. **Sort:** Alphabetical sort for reproducible agent input (already sorted by sort -u above)
+5. **Sort:** Alphabetical sort for reproducible agent input (already sorted by sort -u above)
 
 **Log final scope and warn if large:**
 ```bash
@@ -386,7 +398,7 @@ if [ \"$FALLOW_SCOPE\" = \"phase\" ]; then
   fi
 fi
 
-timeout 120 \"$FALLOW_BIN\" audit --format json --quiet --max-crap \"$FALLOW_MAX_CRAP\" \"${FALLOW_SCOPE_ARGS[@]+\"${FALLOW_SCOPE_ARGS[@]}\"}\" > \"${FALLOW_JSON_PATH}.tmp\" 2>\"$FALLOW_STDERR_TMP\"
+gsd_run run-with-timeout 120 -- \"$FALLOW_BIN\" audit --format json --quiet --max-crap \"$FALLOW_MAX_CRAP\" \"${FALLOW_SCOPE_ARGS[@]+\"${FALLOW_SCOPE_ARGS[@]}\"}\" > \"${FALLOW_JSON_PATH}.tmp\" 2>\"$FALLOW_STDERR_TMP\"
 FALLOW_EXIT=$?
 
 # fallow exits 0 (clean) or 1 (issues found) — BOTH are successful runs that produce a

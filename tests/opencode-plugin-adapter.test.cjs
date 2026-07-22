@@ -15,7 +15,9 @@
  *
  * Cross-platform note: filesystem-failure paths are not exercised here; the
  * adapter's own error handling swallows spawn failures by design (a broken hook
- * must never break a tool call), which the "missing hook" case covers.
+ * must never break a tool call). A MISSING hook script likewise never breaks
+ * the tool call, but since #2305 it warns loudly (once per hook file) — a
+ * silently-absent guard script was exactly how every Kilo guard no-opped.
  */
 
 const { test } = require('node:test');
@@ -279,15 +281,36 @@ test('tool.execute.after: Read content rewriting maps ~/.claude/gsd-core paths',
   );
 });
 
-test('missing hook script is a silent allow (never breaks the tool call)', async (t) => {
-  // No hook stubs written at all → every runHook finds no file → silent allow.
+test('missing hook script warns loudly but still allows (never breaks the tool call, #2305)', async (t) => {
+  // No hook stubs written at all → every runHook finds no file → allow, but
+  // each absent guard script must be warned about (once per hook file): a
+  // silently-missing guard is how #2305 no-opped every Kilo guard.
   const { mod } = buildInstalledLayout(t, {});
+  const warnings = [];
+  const realConsoleError = console.error;
+  t.after(() => { console.error = realConsoleError; });
+  console.error = (...args) => { warnings.push(args.join(' ')); };
   const handlers = await mod.server({ directory: process.cwd() });
   await assert.doesNotReject(() =>
     handlers['tool.execute.before'](
       { tool: 'edit' },
       { args: { filePath: '/proj/a.md', old_string: 'a', new_string: 'b' } },
     ),
+  );
+  const missingWarnings = warnings.filter((w) => w.includes('hook script missing'));
+  assert.ok(missingWarnings.length > 0, 'a missing guard script must be warned about');
+  // Warn-once: driving a second identical tool call must not re-warn.
+  const warnedOnce = missingWarnings.length;
+  await assert.doesNotReject(() =>
+    handlers['tool.execute.before'](
+      { tool: 'edit' },
+      { args: { filePath: '/proj/a.md', old_string: 'a', new_string: 'b' } },
+    ),
+  );
+  assert.equal(
+    warnings.filter((w) => w.includes('hook script missing')).length,
+    warnedOnce,
+    'the missing-hook warning fires once per hook file, not once per tool call',
   );
 });
 

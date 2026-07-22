@@ -160,7 +160,8 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
 | `dynamic_routing.enabled` | boolean | `true`, `false` | `false` | Master switch for [dynamic routing with failure-tier escalation](#dynamic-routing-with-failure-tier-escalation-dynamic_routing--added-in-v140). When `true`, agents resolve to `tier_models[default_tier]` and escalate one tier up on orchestrator-detected soft failure. Added in v1.40 ([#3024](https://github.com/open-gsd/gsd-core/pull/3031)) |
 | `dynamic_routing.tier_models.<tier>` | enum | `opus`, `sonnet`, `haiku` | (none) | Tier alias for `light`, `standard`, or `heavy`. Used when `dynamic_routing.enabled: true`. Added in v1.40 |
 | `dynamic_routing.escalate_on_failure` | boolean | `true`, `false` | `true` | When `false`, escalation is disabled even if `enabled: true` — every attempt uses the default tier. Added in v1.40 |
-| `dynamic_routing.max_escalations` | integer | `0`, `1`, `2`, … | `1` | Hard cap on retries per agent invocation. Beyond the cap the resolver returns the cap-tier model. Added in v1.40 |
+| `dynamic_routing.max_escalations` | integer | `0`, `1`, `2`, … | `1` | Hard cap on retries per agent invocation. Beyond the cap the resolver returns the cap-tier model. Also caps `provider_escalation`. Added in v1.40 |
+| `dynamic_routing.provider_escalation` | string[] | ordered model IDs | (none) | Opt-in fallback providers tried when a run dies on a quota / rate limit — see [provider escalation](#provider-escalation-on-quota-exceeded--added-in-v143). Added in v1.43 ([#2296](https://github.com/open-gsd/gsd-core/issues/2296)) |
 | `project_code` | string | any short string | (none) | Prefix for phase directory names (e.g., `"ABC"` produces `ABC-01-setup/`). Added in v1.31 |
 | `phase_id_convention` | enum | `"milestone-prefixed"`, `null` | `null` | Phase ID naming convention. `null` = legacy numeric IDs (`Phase 1`, `Phase 2`). `"milestone-prefixed"` = globally unique IDs that encode the enclosing milestone (`Phase 1-01`, `Phase 1-02`). Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate an existing ROADMAP.md. |
 | `response_language` | string | language code | (none) | Language for agent responses (e.g., `"pt"`, `"ko"`, `"ja"`). Propagates to all spawned agents for cross-phase language consistency. Added in v1.32 |
@@ -453,6 +454,7 @@ If `.planning/` is in `.gitignore`, `commit_docs` is automatically `false` regar
 | `statusline.show_last_command` | boolean | `false` | Append `last: /<cmd>` suffix to the statusline showing the most recently invoked slash command. Opt-in; reads the active session transcript to extract the latest `<command-name>` tag (closes #2538) |
 | `statusline.context_position` | string | `"end"` | Position of the context-window meter. `"end"` (default) renders at line tail; `"front"` renders immediately after the model name so the meter stays visible in narrow terminals. Closes #2937 |
 | `statusline.show_context_tokens` | boolean | `false` | Append the absolute token count (e.g. `(156k)`) after the context meter's percentage. Sums input, cache-creation, cache-read, and output tokens from the hook payload — a broader basis than the meter's percentage (which excludes output tokens), so the two figures can diverge slightly. Opt-in; the meter is unchanged when the flag is absent |
+| `statusline.state_format` | string | `"full"` | Format of the GSD-state segment. `"full"` (default) is the existing rendering with milestone name and progress bar. `"compact"` renders `<version> · P<phase>/<total> · <status>` (e.g. `v1.12 · P7/12 · executing`) — drops the milestone name and bar, and collapses narrative statuses to the canonical keyword set from `normalizeStateStatus()` (`paused` — the canonical stuck state — renders uppercase as `PAUSED`) |
 | `statusline.show_git` | boolean | `false` | Append a git segment after the directory: current branch plus compact work-state markers (`+staged` `~unstaged` `?untracked` `↑ahead` `↓behind`, or `✓` when clean and in sync). One `git status --porcelain=v2` call per render; the segment is absent outside a git repo or when git is unavailable |
 
 The prompt injection guard hook (`gsd-prompt-guard.js`) is always active and cannot be disabled — it's a security feature, not a workflow toggle.
@@ -926,7 +928,9 @@ plans and shipped code (issue #2492).
 existing requirements coverage gate, before plans are committed. For each
 trackable decision in `<decisions>`, it checks that the decision id
 (`D-NN`) or its text appears in at least one plan's `must_haves`,
-`truths`, or body. A miss surfaces the missing decision by id and refuses
+`truths`, or `objective` (front-matter), a `## must_haves`/`truths`/`tasks`/`objective`
+heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>`
+tag body. A miss surfaces the missing decision by id and refuses
 to mark the phase planned.
 
 **Verify-phase validation gate (NON-BLOCKING).** Runs alongside the other
@@ -1239,7 +1243,40 @@ The `dynamic_routing` block is **disabled by default** — `enabled: false` (or 
 | `dynamic_routing.tier_models.standard` | enum | (none) | Tier alias for standard. Typically `sonnet`. |
 | `dynamic_routing.tier_models.heavy` | enum | (none) | Tier alias for heavy. Typically `opus`. |
 | `dynamic_routing.escalate_on_failure` | boolean | `true` | When false, escalation is disabled (every attempt uses the default tier). |
-| `dynamic_routing.max_escalations` | integer | `1` | Hard cap on retries per agent invocation. Prevents runaway loops. |
+| `dynamic_routing.max_escalations` | integer | `1` | Hard cap on retries per agent invocation. Prevents runaway loops. Also caps the provider ladder below. |
+| `dynamic_routing.provider_escalation` | string[] | (none) | Ordered fallback model IDs tried when a run dies on a provider **quota / rate limit**. Added in v1.43 ([#2296](https://github.com/open-gsd/gsd-core/issues/2296)) |
+
+#### Provider escalation on quota-exceeded — added in v1.43
+
+The tier ladder above escalates *within one provider*. That does not help when the
+provider itself is what ran out: a heavier tier on the same throttled account is still
+throttled. `provider_escalation` is a separate, opt-in ladder for exactly that case.
+
+```json
+{
+  "dynamic_routing": {
+    "enabled": true,
+    "tier_models": { "light": "haiku", "standard": "sonnet", "heavy": "opus" },
+    "provider_escalation": ["gpt-5", "nvidia/llama-3.3"],
+    "max_escalations": 2
+  }
+}
+```
+
+When an executor dies and `gsd-tools agent classify-failure` classifies the error body as
+`quota-exceeded`, `execute-phase` re-resolves the model from this list instead of waiting
+for a quota reset, logs the switch (`sonnet → gpt-5`), and honors any `Retry-After` the
+provider sent. The ladder is capped at `min(max_escalations, provider_escalation.length)`;
+once spent, GSD reports every model it tried and falls back to the manual recovery prompt
+rather than silently retrying the last one.
+
+- **Opt-in.** With no `provider_escalation` configured, quota failures keep today's manual
+  wait-for-reset prompt exactly as before.
+- **Quota only.** Other failure classes (`classify-handoff-bug`, `unknown-failure`) never
+  consult this ladder — they keep the tier ladder.
+- **`escalate_on_failure: false`** disables this ladder too.
+- Entries are opaque model IDs passed to the runtime. Blank and non-string entries are
+  dropped; the surviving order is preserved.
 
 #### When to use which
 
@@ -1578,6 +1615,7 @@ Use `provider: "generic"` (or `"custom"`) for OpenRouter, LiteLLM, local gateway
 | `GSD_AUDIT_ARGS` | Set to `1` to include command args in audit/error events (omitted by default) |
 | `GSD_PROJECT` | Override project root for multi-project workspace support (v1.32) |
 | `GSD_SKIP_SCHEMA_CHECK` | Skip schema drift detection during execute-phase (v1.31) |
+| `GSD_ALLOW_SYMLINKED_DEST` | Set to `1` (or `true`) to permit install/update when `CLAUDE_CONFIG_DIR` (or any artifact-kind child like `skills/`, `hooks/`) is an **intentional, user-owned symlink** pointing outside the install root. v1.7.x write-confinement (ADR-1239 Phase B) refuses such layouts by default to prevent untrusted `destSubpath` traversal. Opt in only if you manage configHome via symlinked external dirs, multi-account config layouts (`~/.claude-personal`, `~/.claude-team`), or dotfiles-managed configHome (nix-darwin, etc.). Two refusals remain load-bearing even with opt-in: path-traversal in `destSubpath` (`../../etc`-style), and a symlink whose resolved target equals the install root itself (would let the prune pass wipe it). |
 | `WSL_DISTRO_NAME` | Detected by installer for WSL path handling |
 
 ---

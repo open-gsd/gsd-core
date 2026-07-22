@@ -1,9 +1,30 @@
 # ADR-1244 — Capability Ecosystem: third-party authoring, versioned manifests, and URL import/upgrade/remove
 
-- **Status:** Proposed
+- **Status:** Accepted — ratified 2026-07-17 (originally Proposed 2026-06-14); see "Ratification" below
 - **Date:** 2026-06-14
 
 > **Relationship to other ADRs.** This ADR **amends and extends ADR-857 Decisions 7 and 8** — it does not reverse them. ADR-857 D7 deferred third-party code-loading "to its own ADR"; D8 deferred third-party CLI support "to an external loader + trust/validation gate, no rework because runtimes are already descriptors." This *is* that ADR, and it *delivers* that gate. It builds on **ADR-894** (capability declaration format), **ADR-1016** (runtime capability descriptor), and **ADR-58** (InstallPlan seam). Tracked by [#1244](https://github.com/open-gsd/gsd-core/issues/1244). Target release: **1.6.0**.
+
+---
+
+## Ratification (2026-07-17): Proposed → Accepted
+
+Ratified by explicit maintainer directive; the Status field sat at Proposed for 33 days after the owning issue and all six phase sub-issues had already closed as shipped.
+
+**Evidence the decision shipped:**
+
+- Issue #1244 and all six phase sub-issues (#1430–#1435, Phase 1 through Phase 6) are CLOSED / `stateReason: COMPLETED`.
+- **D1** (versioned manifest): `capabilities/*/capability.json` carry `version` + `engines` (confirmed in `ai-integration`, `antigravity`, `claude-orchestration`).
+- **D2** (runtime overlay): `src/capability-loader.cts:486` exports `loadRegistry({ includeInstalled })`.
+- **D3** (source resolver): `src/capability-source.cts:1080` exports `resolveCapabilitySource`, backed by the four adapters `resolveLocal` (861), `resolveGit` (892), `resolveNpm` (944), `resolveTarball` (1017).
+- **D4** (ledger): `src/capability-ledger.cts` (42.4K) exists with `tests/capability-ledger.test.cjs` (111.0K) covering it.
+- **D5** (trust model): `src/capability-trust.cts` and `src/capability-consent.cts` exist; `strictKnownRegistries` is threaded through `src/capability-lifecycle.cts` at lines 171, 881, 956, and 1079, each backed by `tests/capability-trust.test.cjs` and `tests/capability-consent.test.cjs`.
+- **D6** (upgrade/compat): `src/capability-lifecycle.cts:1078` implements `upgradeCapability` under the documented atomic stage-then-swap (comment header at line 1056); `compatVersions` downgrade handling is present at lines 126, 920, and 1111.
+- **D9** (capability matrix): `docs/reference/capability-matrix.md` (9.4K) exists and is generated from the registry.
+
+Governance: owning issue #1244, `stateReason: COMPLETED`, closed 2026-07-07.
+
+**Known gaps at ratification:** the D8 cross-reference promised back into ADR-857 ("D7 and D8... extended by ADR-1244") was never written — `docs/adr/857-capability-system.md` has no mention of ADR-1244. And epic #1900 (ADR-1244 edge hardening: MCP arg/cwd confinement, tarball/registry SSRF denylist, duplicated injection patterns) remains OPEN with all three of its filed children (#1901, #1902, #1903) closed `NOT_PLANNED` — the epic's own text scopes this as post-ship hardening on an already fail-closed pipeline, not a reversal of any D1–D9 decision, but the hardening itself is not yet scheduled.
 
 ---
 

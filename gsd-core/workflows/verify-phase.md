@@ -269,7 +269,7 @@ inspecting static artifacts.
 
 ```bash
 # Resolve test command: project config > Makefile > language sniff
-TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" 2>/dev/null || true)
+TEST_CMD=$(gsd_run query config-get workflow.test_command --default "" --raw 2>/dev/null || true)
 if [ -z "$TEST_CMD" ]; then
   if [ -f "Makefile" ] && grep -q "^test:" Makefile; then
     TEST_CMD="make test"
@@ -291,7 +291,7 @@ fi
 # Run all tests (timeout: 5 min). #1857: normalize to one-shot so watch mode exits.
 TEST_CMD=$(gsd_run query normalize-test-command "$TEST_CMD" --cwd . 2>/dev/null || echo "$TEST_CMD")
 TEST_EXIT=0
-timeout 300 bash -c "$TEST_CMD" 2>&1
+gsd_run run-with-timeout 300 -- bash -c "$TEST_CMD" 2>&1
 TEST_EXIT=$?
 if [ "${TEST_EXIT}" -eq 0 ]; then
   echo "✓ Test suite passed"

@@ -13,13 +13,41 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { cleanup, createTempDir, runNpm, isolatedNpmEnv } = require('./helpers.cjs');
-const { SMOKE, runSmoke } = require('../scripts/release-tarball-smoke.cjs');
+const { SMOKE, runSmoke, CHILD_TIMEOUT_MS } = require('../scripts/release-tarball-smoke.cjs');
 
 const smokeMsg = (label, result) =>
   `${label}: code=${result.code} details=${JSON.stringify(result.details)}`;
 
 const PKG_PATH = path.join(__dirname, '..', 'package.json');
 const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf-8'));
+
+// ─── runSmoke install timeout must clear a slow-host cold install (#2335) ────
+// Regression: runSmoke()'s internal `npm install -g` used CHILD_TIMEOUT_MS,
+// which was 120 s on non-Windows while before()'s pack+install used 600 s. A
+// cold-cache install of the 1499-file tarball takes 3–6 min on a slow bench, so
+// the per-test installs (B/C/D/E) fired SIGTERM at 120 s and returned a spurious
+// INSTALL_FAILED (`spawnSync npm ETIMEDOUT`, empty stdout/stderr) on cartographer
+// while passing on faster holodeck — a host-dependent false failure, not a flake.
+// The ceiling is now a single exported constant shared by both surfaces; this
+// pins it at/above the documented 600 s slow-host floor on EVERY platform, so a
+// reintroduced 120 s (or a Windows-only 600 s) fails here instead of on a bench.
+describe('release-tarball-smoke: install timeout ceiling', () => {
+  test('CHILD_TIMEOUT_MS clears the 600 s slow-host cold-install floor', () => {
+    assert.ok(
+      Number.isInteger(CHILD_TIMEOUT_MS) && CHILD_TIMEOUT_MS >= 600_000,
+      `CHILD_TIMEOUT_MS must be >= 600000ms for cartographer-class hosts; got ${CHILD_TIMEOUT_MS}`,
+    );
+  });
+
+  test('the ceiling is platform-uniform — no host slower than the CI matrix is left under-provisioned', () => {
+    // The slow-host reality (cold disk, constrained CPU) is not OS-specific, so
+    // the constant must not be gated behind `process.platform`. A single numeric
+    // constant satisfies this by construction; this guards against a future
+    // reintroduction of a per-platform ternary that under-provisions Linux/macOS.
+    assert.equal(typeof CHILD_TIMEOUT_MS, 'number');
+    assert.ok(CHILD_TIMEOUT_MS >= 600_000);
+  });
+});
 
 describe('release-tarball-smoke', () => {
   // Shared fixture state: pack the tarball once, install it once, reuse for all tests.
@@ -38,9 +66,11 @@ describe('release-tarball-smoke', () => {
     // npm pack + npm install -g on a large tarball (1499 files, ~10 MB) can take
     // 3–6 minutes on slow Docker hosts (cold disk, constrained CPU). The runNpm
     // default timeout of 180 s is sufficient on fast machines but insufficient on
-    // cartographer-class hosts. 600 s (10 min) gives a safe ceiling without
-    // masking genuine hangs.
-    const SLOW_HOST_TIMEOUT = 600_000;
+    // cartographer-class hosts. Share the smoke script's CHILD_TIMEOUT_MS ceiling
+    // so before() (pack+install) and runSmoke()'s per-test installs cannot diverge
+    // — divergence was the #2335-run defect: before() had 600 s, runSmoke had 120 s
+    // on Linux, so the per-test installs alone timed out on cartographer.
+    const SLOW_HOST_TIMEOUT = CHILD_TIMEOUT_MS;
 
     const packOutput = runNpm(
       ['pack', '--pack-destination', packDir],

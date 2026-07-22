@@ -60,6 +60,8 @@ New here? Follow [Your first project](docs/tutorials/your-first-project.md) for 
 
 ## Documentation
 
+**What's new in 1.7.0** → [docs/whats-new-1.7.0.md](docs/whats-new-1.7.0.md)
+
 **Tutorials** — learning by doing:
 - [Your first project](docs/tutorials/your-first-project.md)
 - [Onboarding an existing codebase](docs/tutorials/onboarding-an-existing-codebase.md)

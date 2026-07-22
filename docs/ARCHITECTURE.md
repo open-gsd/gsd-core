@@ -305,6 +305,8 @@ See [`docs/INVENTORY.md`](INVENTORY.md#hooks) for the authoritative hook roster.
 
 CJS command family routers dispatch through `CommandRoutingHub`. The hub owns the no-throw pure-result contract (`hub.dispatch()` catches internal exceptions and returns `{ ok: false, kind, ...typedPayload }`) and the closed runtime error taxonomy (`UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`). Router adapters remain thin CLI translators — they build the hub, call `dispatch`, then map the Result to `output()`/`error()` calls. The runtime is single-path (no dual-runtime mode selection). See `docs/adr/0174-retire-gsd-sdk-package-boundary.md`.
 
+> **Planned (ADR-2346 / epic #2345):** the `runCommand` 73-case switch is being dissolved into a two-layer dispatch — families via the `commandFamilies` registry (ADR-959 mechanism, completed) and single-purpose leaf verbs via a table filling the prepared `_dispatchNonFamily` seam — collapsing `runCommand` to a ~15-line dispatcher. Behavior-preserving; tracked phase-by-phase under epic #2345. The current-state description above holds until each phase lands.
+
 ### Capability Command Dispatch (`gsd-core/bin/gsd-tools.cjs`, ADR-1244 D7)
 
 Command families declared by capabilities (`commands: [{ family, module, router }]`) are dispatched from the registry rather than a hardcoded switch. The `runCommand` default arm tries, in order:
@@ -832,10 +834,10 @@ The migration-specific ownership and source snapshots live in
 | Runtime | Global root | Local root | Invocation surface | Agent surface | Config and hooks |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude` | `./.claude` | Global `skills/gsd-*/SKILL.md` (flat, #924); local `commands/gsd/*.md` | `agents/gsd-*.md` | `settings.json` hook and statusLine entries |
-| OpenCode | `~/.config/opencode` | `./.opencode` | `command/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
+| OpenCode | `~/.config/opencode` | `./.opencode` | `commands/gsd-*.md` | `agents/gsd-*.md` | `opencode.json` or `opencode.jsonc`; no GSD hooks |
 | Kilo | `~/.config/kilo` | `./.kilo` | `command/gsd-*.md` | `agents/gsd-*.md` | `kilo.json` or `kilo.jsonc`; no GSD hooks |
 | Kimi CLI | First-existing generic root: `~/.config/agents` recommended, then `~/.agents` when `~/.agents/skills` exists and `~/.config/agents/skills` does not | Deferred and guarded | `skills/gsd-*/SKILL.md` (flat) invoked as `/skill:gsd-*` | `agents/gsd.yaml`, `agents/gsd.md`, and `agents/subagents/gsd-*` YAML/prompt pairs | Explicit `kimi --agent-file <configRoot>/agents/gsd.yaml`; no GSD hooks or statusline |
-| Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` (flat) | `agents/` source markdown plus per-agent TOML | `config.toml` `[agents.gsd-*]`, `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
+| Codex | `~/.codex` | `./.codex` | `skills/gsd-*/SKILL.md` (flat) | `agents/` source markdown plus per-agent TOML (Codex auto-discovers each `agents/gsd-*.toml`; this is the sole canonical role registration, #2406) | `config.toml` bare `[agents]` dispatch-tuning scalar (`max_depth`, no per-role `[agents.gsd-*]` tables), `[features].hooks` (canonical; legacy alias `codex_hooks` is recognized and migrated forward on reinstall, #3566), and hook tables |
 | GitHub Copilot | `~/.copilot` | `./.github` | `skills/gsd-*/SKILL.md` (flat), `copilot-instructions.md`, and `AGENTS.md` (repo root, local) | `.agent.md` files | Self-contained `sessionStart` hook (`hooks/gsd-session.json`, inline `command` type); no statusline |
 | Antigravity | auto-detected: `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`, or `~/.gemini/antigravity-cli` | `./.agent` | `skills/gsd-*/SKILL.md` (flat, #1614) | `agents/gsd-*.md` | Gemini-style `settings.json` hook entries when installed by GSD |
 | Cursor | `~/.cursor` | `./.cursor` | `skills/gsd-*/SKILL.md` (flat) | `agents/gsd-*.md` | Rule references under `rules/`; `hooks.json` with sessionStart context injection and postToolUse STATE.md monitor (#777) |

@@ -323,7 +323,7 @@ npm run dev &
 DEV_SERVER_PID=$!
 
 # 等待就绪（最多 30s）
-timeout 30 bash -c 'until curl -s localhost:3000 > /dev/null 2>&1; do sleep 1; done'
+gsd_run run-with-timeout 30 -- bash -c 'until curl -s localhost:3000 > /dev/null 2>&1; do sleep 1; done'
 ```
 
 **端口冲突：** 终止陈旧进程（`lsof -ti:3000 | xargs kill`）或使用备用端口（`--port 3001`）。

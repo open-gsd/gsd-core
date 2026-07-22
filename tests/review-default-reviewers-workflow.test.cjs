@@ -216,7 +216,7 @@ describe('bug #687 → #2073: agy print mode bounded by --print-timeout PAIRED w
     const c = read();
     assert.doesNotMatch(c, /agy[^\n]*-p "\$\(cat/,
       'review.md must not feed agy the prompt inline via "$(cat …)" — a large review prompt overflows the exec arg list (rc 126)');
-    assert.match(c, /Read the file at \/tmp\/gsd-review-prompt-/,
+    assert.match(c, /Read the file at \{run_dir\}\/gsd-review-prompt\.md/,
       'review.md should pass agy a file-reference prompt (mirrors the Cursor block)');
   });
 
@@ -228,7 +228,7 @@ describe('bug #687 → #2073: agy print mode bounded by --print-timeout PAIRED w
   test('discards partial output on non-zero exit so the fallback fires (#687)', () => {
     const c = read();
     assert.match(c, /_AGY_RC.*-ne 0/, 'review.md must check the agy exit code');
-    assert.match(c, /: > \/tmp\/gsd-review-antigravity-/,
+    assert.match(c, /: > \{run_dir\}\/gsd-review-antigravity\.md/,
       'review.md must truncate the output file when agy timed out / failed');
   });
 
@@ -323,7 +323,7 @@ describe('enh-773: automated codex exec invocations include --ephemeral and --da
       );
     }
     assert.ok(
-      /\[ ! -s \/tmp\/gsd-review-codex-\{phase\}\.md \]/.test(workflow),
+      /\[ ! -s \{run_dir\}\/gsd-review-codex\.md \]/.test(workflow),
       'review.md must guard against an empty codex review output and surface the failure'
     );
   });
@@ -369,8 +369,8 @@ describe('#1698 regression: codex review is captured via --output-last-message, 
   test('every codex exec invocation captures the review via -o <FILE>', () => {
     for (const line of codexExecLines) {
       assert.ok(
-        /\s-o\s+\/tmp\/gsd-review-codex-\{phase\}\.md\b/.test(line),
-        `codex exec invocation must capture the review via -o /tmp/gsd-review-codex-{phase}.md:\n  ${line.trim()}`
+        /\s-o\s+\{run_dir\}\/gsd-review-codex\.md\b/.test(line),
+        `codex exec invocation must capture the review via -o {run_dir}/gsd-review-codex.md:\n  ${line.trim()}`
       );
     }
   });
@@ -378,7 +378,7 @@ describe('#1698 regression: codex review is captured via --output-last-message, 
   test('no codex exec invocation redirects stdout into the review file', () => {
     for (const line of codexExecLines) {
       assert.ok(
-        !/>\s*\/tmp\/gsd-review-codex-\{phase\}\.md\b/.test(line),
+        !/>\s*\{run_dir\}\/gsd-review-codex\.md\b/.test(line),
         `codex exec must not redirect stdout into the review file (teardown noise pollutes it); use -o + >/dev/null:\n  ${line.trim()}`
       );
       assert.ok(
@@ -428,7 +428,7 @@ function openCodeBlock() {
 describe('bug #1936: OpenCode reviewer must not silently yield an empty review', () => {
   test('captures opencode stderr to a sidecar, never /dev/null', () => {
     const block = openCodeBlock();
-    assert.match(block, /opencode run [^\n]*2>\/tmp\/gsd-review-opencode-\{phase\}\.err/,
+    assert.match(block, /opencode run [^\n]*2>\{run_dir\}\/gsd-review-opencode\.err/,
       'the opencode invocation must send stderr to a .err sidecar so failures are diagnosable');
     assert.doesNotMatch(block, /opencode run [^\n]*2>\/dev\/null/,
       'the opencode invocation must not discard stderr to /dev/null (#1936)');
@@ -450,7 +450,7 @@ describe('bug #1936: OpenCode reviewer must not silently yield an empty review',
     assert.match(block, /OPENCODE_REVIEW=\$\(jq/, 'must capture the extraction into a variable');
     assert.match(block, /\[ -n "\$OPENCODE_REVIEW" \]/,
       'must branch on the content of $OPENCODE_REVIEW, not on the size of the .md file');
-    assert.doesNotMatch(block, /\[ ! -s \/tmp\/gsd-review-opencode-\{phase\}\.md \]/,
+    assert.doesNotMatch(block, /\[ ! -s \{run_dir\}\/gsd-review-opencode\.md \]/,
       'must not gate the stub on `[ ! -s ...opencode...md ]` (a lone newline defeats it)');
   });
 
@@ -459,14 +459,14 @@ describe('bug #1936: OpenCode reviewer must not silently yield an empty review',
     assert.match(block, /#1936/, 'the empty-output stub must reference the issue');
     assert.match(block, /step_finish[\s\S]*\.part\.reason[\s\S]*\.part\.tokens\.output/,
       'the stub must surface the stop reason and output-token count from the final step_finish');
-    assert.match(block, /cat \/tmp\/gsd-review-opencode-\{phase\}\.err/,
+    assert.match(block, /cat \{run_dir\}\/gsd-review-opencode\.err/,
       'the stub must append the captured stderr');
   });
 
   test('does not regress the Codex reviewer block (still captures stderr to .err)', () => {
     // #1936 changes only the OpenCode block; the Codex block's existing
     // stderr-to-sidecar contract must remain intact.
-    assert.match(read(), /codex exec [^\n]*2>\/tmp\/gsd-review-codex-\{phase\}\.err/,
+    assert.match(read(), /codex exec [^\n]*2>\{run_dir\}\/gsd-review-codex\.err/,
       'the Codex reviewer block must be left unchanged');
   });
 });

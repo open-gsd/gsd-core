@@ -209,6 +209,55 @@ npm run ci:test-scope -- --files "commands/gsd/plan-phase.md"
 node scripts/ci-test-scope.cjs --base origin/next --head HEAD
 ```
 
+## Chunk packing and the test timing table
+
+`scripts/run-tests.cjs` does not hand the whole selected file list to one
+`node --test` process. It packs the files into **chunks**, each spawned
+separately, because Windows caps a command line at 32,767 characters and because
+each chunk gets its own 600s timeout (`RUN_TESTS_CHUNK_TIMEOUT_MS`) and a fresh
+process, which bounds memory pressure.
+
+How files are distributed across those chunks decides whether the slowest chunk
+sits near that timeout while the others idle. The packer weights each file by its
+**measured duration**, read from `tests/test-timings.json`, and places files with
+LPT (longest-processing-time-first: heaviest file first, each into the currently
+lightest chunk). Before #2456 the weight was guessed from the filename, which
+mis-ranked files badly enough that the slowest chunk ran ~3.9x the lightest.
+
+### Reference
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `RUN_TESTS_MAX_FILES_PER_CHUNK` | `60` | Per-chunk weight budget. Weights are normalized so an **average-cost** file weighs 1, so this still reads as "about 60 average files". |
+| `RUN_TESTS_MAX_CMDLINE_CHARS` | `28000` | argv ceiling per chunk, with headroom under the Windows 32,767 limit. |
+| `RUN_TESTS_TIMINGS_FILE` | `tests/test-timings.json` | Path to the timing table. Tests override it to inject a synthetic cost profile. |
+| `RUN_TESTS_CHUNK_TIMEOUT_MS` | `600000` | Per-chunk timeout. |
+
+The timing table is **advisory and deliberately un-gated**. There is no `--check`
+mode and no CI lint that fails on staleness, because timing data legitimately
+varies run to run. A file missing from the table falls back to the table's median
+weight, and a missing or unparseable table falls back to uniform weight — so
+drift costs chunk *balance*, never a red build. A count-based floor additionally
+guarantees the packer never produces fewer chunks than plain count-based packing
+would, so a badly stale table cannot collapse the suite into a few fat chunks.
+
+### How-to: regenerate the timing table
+
+Regenerate when the suite's cost profile has visibly drifted — after adding or
+removing expensive tests, not on a schedule. The input is a `node:test` reporter
+event stream from a `gsd-test` run:
+
+```bash
+node scripts/gen-test-timings.cjs \
+  ~/.local/state/gsd-test/runs/<run-id>/test-events-linux-node22.jsonl \
+  ~/.local/state/gsd-test/runs/<run-id>/test-events-linux-node24.jsonl
+```
+
+Pass every lane you have. A file's recorded time is the **max** across the
+supplied streams, not the mean: the packer exists to keep the *slowest* lane's
+slowest chunk away from the timeout, so the conservative bound is the right one.
+Keys are sorted so a regeneration diff shows only the files whose cost moved.
+
 ## Best practices for forward-compat (Node 24/26)
 
 - Use `process.execPath` when spawning Node in tests so each matrix lane exercises the lane's Node version.

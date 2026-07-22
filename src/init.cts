@@ -398,7 +398,11 @@ function cmdInitExecutePhase(
     verifier_enabled: config.verifier,
 
     phase_found: !!phaseInfo,
-    phase_dir: phaseInfo?.['directory'] || null,
+    // #2376: absolute (anchored on cwd/project_root), not orchestrator-cwd-relative —
+    // a spawned subagent's own cwd may differ from the orchestrator's.
+    phase_dir: phaseInfo?.['directory']
+      ? toPosixPath(path.join(cwd, phaseInfo['directory'] as string))
+      : null,
     phase_number: phaseInfo?.['phase_number'] || null,
     phase_name: phaseInfo?.['phase_name'] || null,
     phase_slug: phaseInfo?.['phase_slug'] || null,
@@ -432,15 +436,13 @@ function cmdInitExecutePhase(
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     config_exists: fs.existsSync(path.join(planningDir(cwd), 'config.json')),
-    state_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'STATE.md')),
-    ),
-    roadmap_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md')),
-    ),
-    config_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'config.json')),
-    ),
+    // #2376: emit absolute paths — see comment above on phase_dir.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
+    // #2376: execute-phase.md's verify_phase_goal step reads this instead of
+    // hardcoding '.planning/REQUIREMENTS.md' into the gsd-verifier spawn prompt.
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
   };
 
   if (options['validate']) {
@@ -525,9 +527,8 @@ function cmdInitPlanPhase(
     if (slug) {
       const prefix = rawProjectCodePlan ? `${rawProjectCodePlan}-` : '';
       const dirName = `${prefix}${paddedNum}-${slug}`;
-      expectedPhaseDirPlan = toPosixPath(
-        path.relative(cwd, path.join(planningPaths(cwd).phases, dirName)),
-      );
+      // #2376: absolute — see comment on phase_dir below.
+      expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
     }
   }
 
@@ -554,7 +555,10 @@ function cmdInitPlanPhase(
     mode: config.mode || 'interactive',
 
     phase_found: !!phaseInfo,
-    phase_dir: phaseDirPlan,
+    // #2376: absolute (anchored on cwd/project_root) — path.join(cwd, phaseDirPlan)
+    // handed to a spawned subagent must resolve regardless of that subagent's own cwd.
+    // phaseDirPlan itself stays relative — phase_status below still joins it against cwd.
+    phase_dir: phaseDirPlan ? toPosixPath(path.join(cwd, phaseDirPlan)) : null,
     expected_phase_dir: expectedPhaseDirPlan,
     phase_number: phaseNumberPlan,
     phase_name: phaseNamePlan,
@@ -580,15 +584,10 @@ function cmdInitPlanPhase(
     planning_exists: fs.existsSync(planningDir(cwd)),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
 
-    state_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'STATE.md')),
-    ),
-    roadmap_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md')),
-    ),
-    requirements_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'REQUIREMENTS.md')),
-    ),
+    // #2376: absolute — see comment on phase_dir above.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
 
     patterns_path: null,
   };
@@ -599,45 +598,35 @@ function cmdInitPlanPhase(
       const files = fs.readdirSync(phaseDirFull);
       const contextFile = findContextMdIn(phaseDirFull);
       if (contextFile) {
-        result['context_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, contextFile),
-        );
+        result['context_path'] = toPosixPath(path.join(phaseDirFull, contextFile));
       }
       const researchFile = files.find(
         (f) => f.endsWith('-RESEARCH.md') || f === 'RESEARCH.md',
       );
       if (researchFile) {
-        result['research_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, researchFile),
-        );
+        result['research_path'] = toPosixPath(path.join(phaseDirFull, researchFile));
       }
       const verificationFile = files.find(
         (f) => f.endsWith('-VERIFICATION.md') || f === 'VERIFICATION.md',
       );
       if (verificationFile) {
-        result['verification_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, verificationFile),
-        );
+        result['verification_path'] = toPosixPath(path.join(phaseDirFull, verificationFile));
       }
       const uatFile = files.find((f) => f.endsWith('-UAT.md') || f === 'UAT.md');
       if (uatFile) {
-        result['uat_path'] = toPosixPath(path.join(phaseInfo['directory'] as string, uatFile));
+        result['uat_path'] = toPosixPath(path.join(phaseDirFull, uatFile));
       }
       const reviewsFile = files.find(
         (f) => f.endsWith('-REVIEWS.md') || f === 'REVIEWS.md',
       );
       if (reviewsFile) {
-        result['reviews_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, reviewsFile),
-        );
+        result['reviews_path'] = toPosixPath(path.join(phaseDirFull, reviewsFile));
       }
       const patternsFile = files.find(
         (f) => f.endsWith('-PATTERNS.md') || f === 'PATTERNS.md',
       );
       if (patternsFile) {
-        result['patterns_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, patternsFile),
-        );
+        result['patterns_path'] = toPosixPath(path.join(phaseDirFull, patternsFile));
       }
     } catch {
       /* intentionally empty */
@@ -714,7 +703,14 @@ function cmdInitNewProject(cwd: string, raw: boolean): void {
     firecrawl_available: hasFirecrawl,
     exa_search_available: hasExaSearch,
 
-    project_path: '.planning/PROJECT.md',
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    // #2376: new-project.md's research-synthesizer/roadmapper spawn prompts
+    // read these instead of hardcoding '.planning/...' literals.
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
+    research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
   };
 
   output(withProjectRoot(cwd, result), raw);
@@ -754,16 +750,10 @@ function cmdInitNewMilestone(cwd: string, raw: boolean): void {
     latest_completed_milestone: latestCompleted?.version || null,
     latest_completed_milestone_name: latestCompleted?.name || null,
     phase_dir_count: phaseDirCount,
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
     phase_archive_path: latestCompleted
       ? toPosixPath(
-          path.relative(
-            cwd,
-            path.join(
-              planningRoot(cwd),
-              'milestones',
-              `${latestCompleted.version}-phases`,
-            ),
-          ),
+          path.join(planningRoot(cwd), 'milestones', `${latestCompleted.version}-phases`),
         )
       : null,
 
@@ -771,13 +761,15 @@ function cmdInitNewMilestone(cwd: string, raw: boolean): void {
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
 
-    project_path: '.planning/PROJECT.md',
-    roadmap_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md')),
-    ),
-    state_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'STATE.md')),
-    ),
+    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    // #2376: new-milestone.md's research-synthesizer/roadmapper spawn prompts
+    // read these instead of hardcoding '.planning/...' literals.
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
+    config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
+    research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
+    milestones_path: toPosixPath(path.join(planningDir(cwd), 'MILESTONES.md')),
   };
 
   output(withProjectRoot(cwd, result), raw);
@@ -824,8 +816,11 @@ function cmdInitQuick(cwd: string, description: string | undefined, raw: boolean
     date: realClock.localToday(),
     timestamp: realClock.nowIso(),
 
-    quick_dir: '.planning/quick',
-    task_dir: slug ? `.planning/quick/${quickId}-${slug}` : null,
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    quick_dir: toPosixPath(path.join(planningDir(cwd), 'quick')),
+    task_dir: slug
+      ? toPosixPath(path.join(planningDir(cwd), 'quick', `${quickId}-${slug}`))
+      : null,
 
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     planning_exists: fs.existsSync(planningRoot(cwd)),
@@ -840,7 +835,18 @@ function cmdInitIngestDocs(cwd: string, raw: boolean): void {
     project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),
     planning_exists: fs.existsSync(planningRoot(cwd)),
     ...getInitGitState(cwd),
-    project_path: '.planning/PROJECT.md',
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase. The
+    // classify_parallel/synthesize/route_new_mode spawns in ingest-docs.md
+    // (gsd-doc-classifier, gsd-doc-synthesizer, gsd-roadmapper) previously
+    // hardcoded bare '.planning/intel/...', '.planning/PROJECT.md', etc.
+    // literals into their Agent(prompt=...) blocks; those now interpolate
+    // these fields instead.
+    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    intel_dir: toPosixPath(path.join(planningDir(cwd), 'intel')),
+    conflicts_path: toPosixPath(path.join(planningDir(cwd), 'INGEST-CONFLICTS.md')),
     commit_docs: config.commit_docs,
   };
   output(withProjectRoot(cwd, result), raw);
@@ -880,13 +886,10 @@ function cmdInitResume(cwd: string, raw: boolean): void {
     project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),
     planning_exists: fs.existsSync(planningRoot(cwd)),
 
-    state_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'STATE.md')),
-    ),
-    roadmap_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md')),
-    ),
-    project_path: '.planning/PROJECT.md',
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
 
     has_interrupted_agent: !!interruptedAgentId,
     interrupted_agent_id: interruptedAgentId,
@@ -959,9 +962,16 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
     commit_docs: config.commit_docs,
 
     phase_found: !!phaseInfo,
-    phase_dir: phaseDir,
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase. phaseDir
+    // itself stays relative — evaluateUatPassed above still joins it against cwd.
+    phase_dir: phaseDir ? toPosixPath(path.join(cwd, phaseDir)) : null,
     phase_number: phaseInfo?.['phase_number'] || null,
     phase_name: phaseInfo?.['phase_name'] || null,
+
+    // #2376: verify-work.md's plan_gap_closure step reads these instead of
+    // hardcoding '.planning/STATE.md' / '.planning/ROADMAP.md' literals.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
 
     has_verification: phaseInfo?.['has_verification'] || false,
     phase_completion: {
@@ -1050,9 +1060,8 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
     if (slug) {
       const prefix = rawProjectCode ? `${rawProjectCode}-` : '';
       const dirName = `${prefix}${paddedNum}-${slug}`;
-      expectedPhaseDir = toPosixPath(
-        path.relative(cwd, path.join(planningPaths(cwd).phases, dirName)),
-      );
+      // #2376: absolute — see comment on phase_dir below.
+      expectedPhaseDir = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
     }
   }
 
@@ -1072,7 +1081,8 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
         : config.exa_search,
 
     phase_found: !!phaseInfo,
-    phase_dir: phaseDir,
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    phase_dir: phaseDir ? toPosixPath(path.join(cwd, phaseDir)) : null,
     expected_phase_dir: expectedPhaseDir,
     phase_number: phaseNumber,
     phase_name: phaseName,
@@ -1089,15 +1099,10 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     planning_exists: fs.existsSync(planningDir(cwd)),
 
-    state_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'STATE.md')),
-    ),
-    roadmap_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md')),
-    ),
-    requirements_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'REQUIREMENTS.md')),
-    ),
+    // #2376: absolute — see comment on phase_dir above.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
   };
 
   if (phaseInfo?.['directory']) {
@@ -1106,39 +1111,29 @@ function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
       const files = fs.readdirSync(phaseDirFull);
       const contextFile = findContextMdIn(phaseDirFull);
       if (contextFile) {
-        result['context_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, contextFile),
-        );
+        result['context_path'] = toPosixPath(path.join(phaseDirFull, contextFile));
       }
       const researchFile = files.find(
         (f) => f.endsWith('-RESEARCH.md') || f === 'RESEARCH.md',
       );
       if (researchFile) {
-        result['research_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, researchFile),
-        );
+        result['research_path'] = toPosixPath(path.join(phaseDirFull, researchFile));
       }
       const verificationFile = files.find(
         (f) => f.endsWith('-VERIFICATION.md') || f === 'VERIFICATION.md',
       );
       if (verificationFile) {
-        result['verification_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, verificationFile),
-        );
+        result['verification_path'] = toPosixPath(path.join(phaseDirFull, verificationFile));
       }
       const uatFile = files.find((f) => f.endsWith('-UAT.md') || f === 'UAT.md');
       if (uatFile) {
-        result['uat_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, uatFile),
-        );
+        result['uat_path'] = toPosixPath(path.join(phaseDirFull, uatFile));
       }
       const reviewsFile = files.find(
         (f) => f.endsWith('-REVIEWS.md') || f === 'REVIEWS.md',
       );
       if (reviewsFile) {
-        result['reviews_path'] = toPosixPath(
-          path.join(phaseInfo['directory'] as string, reviewsFile),
-        );
+        result['reviews_path'] = toPosixPath(path.join(phaseDirFull, reviewsFile));
       }
     } catch {
       /* intentionally empty */
@@ -1164,6 +1159,9 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
         const createdMatch = content.match(/^created:\s*(.+)$/m);
         const titleMatch = content.match(/^title:\s*(.+)$/m);
         const areaMatch = content.match(/^area:\s*(.+)$/m);
+        // #2337: kept in parity with cmdListTodos — surface severity when
+        // present, omit the key entirely for todos with no severity line.
+        const severityMatch = content.match(/^severity:\s*(.+)$/m);
         const todoArea = areaMatch ? areaMatch[1].trim() : 'general';
 
         if (area && todoArea !== area) continue;
@@ -1174,12 +1172,9 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
           created: createdMatch ? createdMatch[1].trim() : 'unknown',
           title: titleMatch ? titleMatch[1].trim() : 'Untitled',
           area: todoArea,
-          path: toPosixPath(
-            path.relative(
-              cwd,
-              path.join(planningDir(cwd), 'todos', 'pending', file),
-            ),
-          ),
+          // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+          path: toPosixPath(path.join(planningDir(cwd), 'todos', 'pending', file)),
+          ...(severityMatch ? { severity: severityMatch[1].trim() } : {}),
         });
       } catch {
         /* intentionally empty */
@@ -1199,12 +1194,9 @@ function cmdInitTodos(cwd: string, area: string | undefined, raw: boolean): void
     todos,
     area_filter: area || null,
 
-    pending_dir: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'todos', 'pending')),
-    ),
-    completed_dir: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'todos', 'completed')),
-    ),
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    pending_dir: toPosixPath(path.join(planningDir(cwd), 'todos', 'pending')),
+    completed_dir: toPosixPath(path.join(planningDir(cwd), 'todos', 'completed')),
 
     planning_exists: fs.existsSync(planningDir(cwd)),
     todos_dir_exists: fs.existsSync(path.join(planningDir(cwd), 'todos')),
@@ -1342,7 +1334,8 @@ function cmdInitMapCodebase(cwd: string, raw: boolean): void {
     date: realClock.localToday(),
     timestamp: realClock.nowIso(),
 
-    codebase_dir: '.planning/codebase',
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    codebase_dir: toPosixPath(path.join(planningRoot(cwd), 'codebase')),
 
     existing_maps: existingMaps,
     has_maps: existingMaps.length > 0,
@@ -1825,7 +1818,10 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
       const phaseInfo: Record<string, unknown> = {
         number: phaseNumber,
         name: phaseName,
-        directory: phaseDirRel,
+        // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+        // phaseDirRel itself stays relative — buildPhaseCompletionProjection
+        // above still joins it against cwd.
+        directory: toPosixPath(path.join(cwd, phaseDirRel)),
         status,
         plan_count: plans.length,
         summary_count: summaries.length,
@@ -1914,16 +1910,11 @@ function cmdInitProgress(cwd: string, raw: boolean): void {
     project_exists: pathExistsInternal(cwd, '.planning/PROJECT.md'),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
-    state_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'STATE.md')),
-    ),
-    roadmap_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'ROADMAP.md')),
-    ),
-    project_path: '.planning/PROJECT.md',
-    config_path: toPosixPath(
-      path.relative(cwd, path.join(planningDir(cwd), 'config.json')),
-    ),
+    // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
+    state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
+    roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
   };
 
   output(withProjectRoot(cwd, result), raw);
@@ -2101,7 +2092,9 @@ function cmdInitRemoveWorkspace(cwd: string, name: string | undefined, raw: bool
     has_dirty_repos: dirtyRepos.length > 0,
   };
 
-  output(result, raw);
+  // #2402: sibling init commands route through withProjectRoot so response_language
+  // (and project_root/agents_installed) reach the workflow; this one didn't.
+  output(withProjectRoot(cwd, result), raw);
 }
 
 function buildAgentSkillsBlock(

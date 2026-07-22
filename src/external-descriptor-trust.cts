@@ -22,9 +22,21 @@
 import path from 'node:path';
 
 /**
- * Pure path-containment check (cross-platform). `target` is confined to `root`
- * iff resolving it relative to `root` yields a path equal to or under `root`.
+ * Pure LEXICAL path-containment check (cross-platform). `target` is confined
+ * to `root` iff resolving it relative to `root` (via `path.resolve` — string
+ * manipulation, no filesystem access) yields a path equal to or under `root`.
  * Absolute paths outside `root` and `..`-escapes return false.
+ *
+ * NOT a realpath check: this function never calls `fs.realpathSync` and does
+ * not detect a symlink along `target` (or an existing path component of
+ * `root`) that would redirect the LEXICALLY-confined path to a physically
+ * different, unconfined location on disk. A caller relying on this for a
+ * write-confinement guarantee against a symlink-planting attacker must pair
+ * it with a symlink check (or refuse to follow symlinks at write time) — see
+ * capability-source.cts's install adapters (:491,577,675), which is what
+ * currently keeps every caller of this function's callers symlink-safe: they
+ * reject symlinks upstream, before a target ever reaches a lexical-only check
+ * like this one.
  */
 export function isPathConfined(target: string, root: string): boolean {
   if (typeof target !== 'string' || typeof root !== 'string' || target.length === 0 || root.length === 0) {

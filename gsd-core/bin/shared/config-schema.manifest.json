@@ -72,6 +72,7 @@
     "statusline.show_last_command",
     "statusline.context_position",
     "statusline.show_context_tokens",
+    "statusline.state_format",
     "statusline.show_git",
     "workflow.max_discuss_passes",
     "features.thinking_partner",
@@ -148,8 +149,8 @@
     },
     {
       "topLevel": "dynamic_routing",
-      "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|tier_models\\.(light|standard|heavy))$",
-      "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|tier_models.<light|standard|heavy>>"
+      "source": "^dynamic_routing\\.(enabled|escalate_on_failure|max_escalations|provider_escalation|tier_models\\.(light|standard|heavy))$",
+      "description": "dynamic_routing.<enabled|escalate_on_failure|max_escalations|provider_escalation|tier_models.<light|standard|heavy>>"
     },
     {
       "topLevel": "model_overrides",

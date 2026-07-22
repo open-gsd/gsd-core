@@ -74,6 +74,7 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 - [The capability trust model](explanation/capability-trust-model.md) — why third-party capabilities are gated by consent + integrity + reversibility, not a sandbox
 - [How overlay capabilities compose](explanation/capability-overlay-model.md) — why first-party always wins and how the loader resolves precedence, conflicts, and fail-open load-failure warnings
 - [Architecture](ARCHITECTURE.md) — system architecture, agent model, and data flow
+- [The Embeddable Orchestration System](explanation/embeddable-orchestration-system.md) — one public, versioned contract for embedding GSD across many hosts
 - [Discuss modes](workflow-discuss-mode.md) — assumptions mode vs interview mode for `/gsd-discuss-phase`
 - [Context monitoring](context-monitor.md) — context window monitoring hook architecture
 - [Issue-driven orchestration](issue-driven-orchestration.md) — recipe for driving GSD from a tracker issue using existing primitives
@@ -82,5 +83,6 @@ Language versions: [English](README.md) · [Português (pt-BR)](pt-BR/README.md)
 
 ## Related
 
+- [What's new in 1.7.0](whats-new-1.7.0.md) — curated highlights of the 1.7.0 release
 - [Root README](../README.md) — landing page, quickstart, and documentation overview
 - [Changelog](../CHANGELOG.md) — release history

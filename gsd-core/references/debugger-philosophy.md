@@ -50,6 +50,7 @@ When debugging, return to foundational truths:
 | **Anchoring** | First explanation becomes your anchor | Generate 3+ independent hypotheses before investigating any |
 | **Availability** | Recent bugs → assume similar cause | Treat each bug as novel until evidence suggests otherwise |
 | **Sunk Cost** | Spent 2 hours on one path, keep going despite evidence | Every 30 min: "If I started fresh, is this still the path I'd take?" |
+| **Single-cause (5-Whys) bias** | A linear "why → why → why" chain stops at ONE cause; multi-cause failures recur via the unaddressed second cause | Branch across ≥2 Ishikawa categories and answer the AND-gate before committing `root_cause` (see `debugger-rca-branching.md`) |
 
 ## Systematic Investigation Disciplines
 

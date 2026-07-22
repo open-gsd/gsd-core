@@ -157,6 +157,115 @@ export function stripFencedCode(content: string): StripFencedResult {
   return { text: kept.join('\n'), unterminatedFence: openFence !== null };
 }
 
+// ─── stripInlineCode ──────────────────────────────────────────────────────────
+
+/**
+ * Remove CommonMark inline code spans (§6.1) from prose, line by line.
+ *
+ * A span opens with a run of N backticks and closes at the next run of EXACTLY
+ * N backticks on the same line (a longer or shorter run is span content, per
+ * CommonMark). The whole span — delimiters and content — is replaced by a
+ * single space so the surrounding words do not join. A run with no matching
+ * closer is literal text and is kept. Spans never cross line boundaries here:
+ * multi-line code in planning prose is fenced-block territory
+ * (`stripFencedCode`).
+ *
+ * Companion to `stripFencedCode` for term-matching callers (#2365): strip
+ * fenced blocks first, then inline spans, so a trigger term inside backticks
+ * is code, not prose evidence.
+ */
+export function stripInlineCode(content: string): string {
+  if (typeof content !== 'string' || content.length === 0) return '';
+  return content.split('\n').map(stripInlineCodeLine).join('\n');
+}
+
+/** An inline code span located by `scanInlineCodeSpans`: [start, end) covers
+ *  the WHOLE span including both backtick delimiters; `content` is the inner
+ *  text between them. */
+export interface InlineCodeSpan {
+  start: number;
+  end: number;
+  content: string;
+}
+
+/**
+ * Locate every inline code span in `content`, per line (offsets are into the
+ * full string; spans never cross a `\n`). Callers that need the span CONTENT
+ * (e.g. api-coverage's dependency-evidence scan, #2365) use this; callers that
+ * just want spans gone use `stripInlineCode`.
+ */
+export function scanInlineCodeSpans(content: string): InlineCodeSpan[] {
+  if (typeof content !== 'string' || content.length === 0) return [];
+  const out: InlineCodeSpan[] = [];
+  let lineStart = 0;
+  for (const line of content.split('\n')) {
+    for (const s of scanSpansInLine(line)) {
+      out.push({ start: lineStart + s.start, end: lineStart + s.end, content: s.content });
+    }
+    lineStart += line.length + 1;
+  }
+  return out;
+}
+
+function scanSpansInLine(line: string): InlineCodeSpan[] {
+  const spans: InlineCodeSpan[] = [];
+  if (line.indexOf('`') === -1) return spans;
+  // Collect the maximal backtick RUNS once, then match openers to closers using
+  // a per-length forward cursor. A naive "search the rest of the line for the
+  // closer" loop is O(n²) on a line of many unmatched increasing-length runs
+  // (#2365 review 9); precomputing runs makes the whole scan linear while
+  // preserving CommonMark semantics (closer = next run of EXACTLY the same len).
+  const runs: Array<[number, number]> = [];
+  for (let i = 0; i < line.length; ) {
+    if (line[i] === '`') {
+      let n = 1;
+      while (i + n < line.length && line[i + n] === '`') n++;
+      runs.push([i, n]);
+      i += n;
+    } else {
+      i++;
+    }
+  }
+  const runsByLen = new Map<number, number[]>();
+  for (let k = 0; k < runs.length; k++) {
+    const len = runs[k][1];
+    const arr = runsByLen.get(len);
+    if (arr) arr.push(k);
+    else runsByLen.set(len, [k]);
+  }
+  const cursorByLen = new Map<number, number>();
+  let k = 0;
+  while (k < runs.length) {
+    const [openPos, n] = runs[k];
+    const candidates = runsByLen.get(n)!; // n came from this map, always present
+    let ci = cursorByLen.get(n) ?? 0;
+    while (ci < candidates.length && candidates[ci] <= k) ci++;
+    if (ci < candidates.length) {
+      const closeK = candidates[ci];
+      const closePos = runs[closeK][0];
+      spans.push({ start: openPos, end: closePos + n, content: line.slice(openPos + n, closePos) });
+      cursorByLen.set(n, ci + 1);
+      k = closeK + 1; // resume after the closer — runs inside the span are code
+    } else {
+      cursorByLen.set(n, ci);
+      k++; // unmatched run → literal text, next run is a fresh opener
+    }
+  }
+  return spans;
+}
+
+function stripInlineCodeLine(line: string): string {
+  const spans = scanSpansInLine(line);
+  if (spans.length === 0) return line;
+  let out = '';
+  let prev = 0;
+  for (const s of spans) {
+    out += line.slice(prev, s.start) + ' ';
+    prev = s.end;
+  }
+  return out + line.slice(prev);
+}
+
 // ─── extractFencedBlock ───────────────────────────────────────────────────────
 
 /** A fenced code block located by `scanFencedBlocks`: line-index span + info string. */

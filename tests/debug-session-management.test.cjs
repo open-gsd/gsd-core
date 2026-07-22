@@ -187,8 +187,52 @@ describe('debug skill dispatch and sub-orchestrator (#2148, #2151)', () => {
   });
 
   test('debug.md delegates to gsd-debug-session-manager', () => {
-    const content = fs.readFileSync(path.join(process.cwd(), 'gsd-core/workflows/debug.md'), 'utf8');
+    const content = fs.readFileSync(path.join(process.cwd(), 'gsd-core', 'workflows', 'debug.md'), 'utf8');
     assert.ok(content.includes('gsd-debug-session-manager'),
       'debug.md does not delegate to session manager');
+  });
+
+  test('DEBUG.md reasoning_checkpoint field-count claim matches gsd-debugger.md YAML keys (parity)', () => {
+    // Parallel-surface drift guard (DEFECT.GENERATIVE-FIX): the field-count
+    // claim in the DEBUG.md section_rules prose must equal the number of keys
+    // enumerated in the gsd-debugger.md reasoning_checkpoint YAML block.
+    // CRLF-safe regex/split per DEFECT.WINDOWS-TEST-PORTABILITY. Accepts either
+    // digit ("7-field") or word ("seven-field") count form.
+    const NUMWORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const debugContent = fs.readFileSync(path.join(process.cwd(), 'gsd-core', 'templates', 'DEBUG.md'), 'utf8');
+    const agentContent = fs.readFileSync(path.join(process.cwd(), 'agents', 'gsd-debugger.md'), 'utf8');
+    const debugMatch = debugContent.match(/reasoning_checkpoint[^.\r\n]*?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)-field structured reasoning record/i);
+    assert.ok(debugMatch, 'DEBUG.md must state a "N-field structured reasoning record" claim for reasoning_checkpoint');
+    const claimedCount = /^\d+$/.test(debugMatch[1]) ? parseInt(debugMatch[1], 10) : NUMWORDS[debugMatch[1].toLowerCase()];
+    assert.ok(typeof claimedCount === 'number', `unrecognized field-count token: ${debugMatch[1]}`);
+    const yamlBlock = agentContent.match(/reasoning_checkpoint:\s*\r?\n([\s\S]*?)```/);
+    assert.ok(yamlBlock, 'gsd-debugger.md must define a fenced reasoning_checkpoint YAML block');
+    const keys = new Set();
+    for (const line of yamlBlock[1].split(/\r?\n/)) {
+      // Match 2-space-indented YAML keys (with OR without an inline value —
+      // array-valued keys like confirming_evidence: have no trailing space).
+      const m = line.match(/^ {2}([a-z_]+):/);
+      if (m) keys.add(m[1]);
+    }
+    assert.strictEqual(
+      keys.size,
+      claimedCount,
+      `parity drift: DEBUG.md claims ${claimedCount}-field but gsd-debugger.md enumerates ${keys.size} keys (${[...keys].join(', ')}). Update BOTH surfaces together.`
+    );
+  });
+
+  // #2376: debug_file_path handed to the spawned gsd-debug-session-manager
+  // must resolve regardless of that subagent's own cwd, which may differ
+  // from the orchestrator's — debug.md must reference the absolute
+  // {debug_dir} field from `state load`, not a bare .planning/debug/...
+  // literal, in both the `continue` and new-session Agent() spawns.
+  test('debug.md session_params reference {debug_dir}/{slug}.md, not bare .planning/debug/... literals (#2376)', () => {
+    const content = fs.readFileSync(path.join(process.cwd(), 'gsd-core/workflows/debug.md'), 'utf8');
+    assert.ok(content.includes('debug_file_path: {debug_dir}/{SLUG}.md'),
+      'debug.md continue-subcommand spawn must reference {debug_dir}/{SLUG}.md, not a bare .planning/debug/{SLUG}.md literal');
+    assert.ok(content.includes('debug_file_path: {debug_dir}/{slug}.md'),
+      'debug.md new-session spawn must reference {debug_dir}/{slug}.md, not a bare .planning/debug/{slug}.md literal');
+    assert.ok(!content.includes('debug_file_path: .planning/debug/'),
+      'debug.md session_params must not hardcode .planning/debug/... as debug_file_path (#2376)');
   });
 });

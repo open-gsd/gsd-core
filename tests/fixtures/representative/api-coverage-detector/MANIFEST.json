@@ -1,0 +1,27 @@
+{
+  "gate": "api-coverage.verify-pre",
+  "sourceIssue": "#2365",
+  "note": "#2365 is fixed (this PR). The three fixtures below no longer carry a currentBuggyOutput — per the tripwire contract in representative-corpus.test.cjs, the fixer flips the assertion to expectedDetected once the bug is gone. The detector is now fail-closed and same-clause; all four fixtures return detected:false for the right reason.",
+  "fixtures": [
+    {
+      "file": "nextjs-route-path.txt",
+      "expectedDetected": false,
+      "note": "First-party Next.js route path. Fixed: path-shaped tokens are masked before matching, so 'api' inside a route path is no longer read as prose. (Was: the noun-boundary class treated '/' as a word boundary — the highest-blast-radius false positive, since any Next.js project names a route file.)"
+    },
+    {
+      "file": "unrelated-verb-noun.txt",
+      "expectedDetected": false,
+      "note": "'wiring' and 'endpoint' co-occur on one line in unrelated clauses. Fixed: the verb and noun must share one clause, so co-occurrence across clause boundaries no longer fires. (Was: the verb/noun regexes were exec'd independently over the whole line with no proximity or grammatical relation.)"
+    },
+    {
+      "file": "threat-model-prose.txt",
+      "expectedDetected": false,
+      "note": "Threat-model table cell describing a LOCAL interface. Fixed: the <Service> API surface rule rejects locality/protocol descriptors and compound modifiers ('Resolver-only API'), so ordinary English before 'API' no longer reads as a service name. (Was: any capitalized word before API/SDK/REST/GraphQL matched, and a stopword denylist could not enumerate every such word.)"
+    },
+    {
+      "file": "non-integration-assertion.txt",
+      "expectedDetected": false,
+      "note": "This line explicitly ASSERTS non-integration ('no new command/dependency') and is still read as an integration signal in the real $gsd-verify-work occurrence this was drawn from — but in isolation it already returned detected:false before #2365 (the multi-signal real occurrence needed the OTHER lines' signals to trip the gate). Included for corpus completeness."
+    }
+  ]
+}

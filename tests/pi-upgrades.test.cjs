@@ -170,3 +170,53 @@ test('pi axes negotiate modelMode:"active" (the active-model steering axis)', ()
   const result = negotiateHostCapabilities(PI_AXES);
   assert.equal(result.effective.modelMode, 'active');
 });
+
+// -- native-extension auto-discovery contract (#2470) -------------------------
+//
+// pi auto-discovers extensions by scanning <agentDir>/extensions/ and keeping
+// only names its `isExtensionFile()` predicate accepts:
+//
+//   function isExtensionFile(name) {
+//     return name.endsWith(".ts") || name.endsWith(".js");
+//   }
+//
+// (@earendil-works/pi-coding-agent, packages/coding-agent/src/core/extensions/
+// loader.ts — verified upstream 2026-07-20.) A dest filename outside that set
+// is skipped SILENTLY: no /gsd command, no error, no log line. pi loads the
+// accepted file through jiti, which handles CommonJS and ESM alike, so the
+// extension's module format is irrelevant to discovery — only the suffix is.
+//
+// These assertions deliberately encode pi's PREDICATE rather than the literal
+// filename, so they keep protecting the contract if the extension is ever
+// renamed again, and they state the reason the rename mattered.
+
+/** pi's upstream discovery predicate, mirrored verbatim. */
+function piIsExtensionFile(name) {
+  return name.endsWith('.ts') || name.endsWith('.js');
+}
+
+test('pi capability declares a native-extension dest filename pi will auto-discover (#2470)', () => {
+  const np = PI_CAP.runtime.hostBehaviors.nativePlugin;
+  assert.ok(np && np.file, 'pi must declare hostBehaviors.nativePlugin.file');
+  assert.ok(
+    piIsExtensionFile(np.file),
+    `pi's installed extension "${np.file}" must end in .ts or .js — pi's isExtensionFile() ` +
+      'auto-discovery filter silently skips every other suffix, so /gsd never registers (#2470)',
+  );
+});
+
+test('pi native-extension source stays CommonJS-explicit while the dest satisfies pi (#2470)', () => {
+  const np = PI_CAP.runtime.hostBehaviors.nativePlugin;
+  // The in-repo source keeps its .cjs suffix on purpose: tests require() it
+  // directly and .cjs is unambiguous CommonJS regardless of any future
+  // package.json "type" flip. Only the INSTALLED name must satisfy pi, and
+  // jiti parses the copied file by content, not by suffix.
+  assert.ok(
+    np.source.endsWith('.cjs'),
+    `pi's in-repo extension source should stay .cjs (explicit CommonJS), got "${np.source}"`,
+  );
+  assert.ok(
+    fs.existsSync(path.join(__dirname, '..', np.source)),
+    `pi's declared nativePlugin.source "${np.source}" must exist in the repo`,
+  );
+});

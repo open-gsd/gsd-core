@@ -562,14 +562,14 @@ claude --dangerously-skip-permissions
 
 ### プログラマティック CLI（`gsd-tools query` vs `gsd-tools.cjs`）
 
-自動化には、登録済みサブコマンドを使用する **`gsd-tools query`** を推奨します（[CLI-TOOLS.md — SDK とプログラマティックアクセス](CLI-TOOLS.md#sdk-and-programmatic-access) と QUERY-HANDLERS.md を参照）。レガシーの `node $HOME/.claude/get-shit-done/bin/gsd-tools.cjs` CLI は引き続きサポートされています。
+自動化には、登録済みサブコマンドを使用する **`gsd-tools query`** を推奨します（[CLI-TOOLS.md — SDK とプログラマティックアクセス](CLI-TOOLS.md#sdk-and-programmatic-access) と QUERY-HANDLERS.md を参照）。レガシーの `node $HOME/.claude/gsd-core/bin/gsd-tools.cjs` CLI は引き続きサポートされています。
 
 ### STATE.md の同期ずれ
 
 ```bash
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state validate          # Detect drift
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync --verify     # Preview changes
-node "$HOME/.claude/get-shit-done/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state validate          # Detect drift
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync --verify     # Preview changes
+node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" state sync              # Reconstruct STATE.md
 ```
 
 ### 「Spawning...」の後にコマンドがフリーズしているように見える
@@ -667,7 +667,7 @@ budget プロファイルに切り替えてください: `/gsd-config --profile 
 
 サーバーを無効にすると、以降のすべてのターンからそのスキーマが削除されます。MCP のトリミングは `model_profile` の調整と**複合効果があります** — 両方のレバーは相加的であり、MCP の節約はオーケストレーターが生成するすべてのサブエージェントにわたってすぐに現れます。
 
-完全な監査、ハーネスリファレンス、`model_profile` との組み合わせに関するノートは、バンドルされた `context-budget.md` リファレンスの [MCP ツールスキーマコスト](../../get-shit-done/references/context-budget.md#mcp-tool-schema-cost-harness-concern) を参照してください。
+完全な監査、ハーネスリファレンス、`model_profile` との組み合わせに関するノートは、バンドルされた `context-budget.md` リファレンスの [MCP ツールスキーマコスト](../../gsd-core/references/context-budget.md#mcp-tool-schema-cost-harness-concern) を参照してください。
 
 ### 非 Claude ランタイムの使用（Codex、OpenCode、Gemini CLI、Kilo）
 

@@ -10,10 +10,11 @@
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
+const { writeState } = require('./fixtures/index.cjs');
 
 describe('phases clear command', () => {
   let tmpDir;
@@ -243,6 +244,229 @@ describe('phases clear: uncommitted-changes guard (#1447)', () => {
   });
 });
 
+// ─── #2288: --archive-version override ──────────────────────────────────────
+
+describe('phases clear: archive-version override (#2288)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('override wins over live milestone state (new-milestone switches STATE before phases.clear)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v2.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v2.0\n---\n\n# State\n');
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm --archive-version v1.0', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.strictEqual(output.cleared, 1, 'should report 1 directory cleared');
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'phase history should archive under the OLD (override) version'
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v2.0-phases')),
+      'phase history must NOT be misfiled under the live-read NEW version'
+    );
+  });
+
+  test('no override falls back to live milestone version (no behavior change)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v2.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v2.0\n---\n\n# State\n');
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v2.0-phases', '01-foundation')),
+      'without an override, the live-read milestone version should still be used'
+    );
+  });
+
+  test('override with unchanged version (boundary: old === new)', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v3.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v3.0\n---\n\n# State\n');
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm --archive-version v3.0', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v3.0-phases', '01-foundation')),
+      'override equal to the live version should archive normally'
+    );
+  });
+
+  test('override omitted with no ROADMAP uses getMilestoneInfo default (no-override path unchanged)', () => {
+    // createTempProject writes no ROADMAP.md, so getMilestoneInfo does NOT throw —
+    // it returns its documented default version ('v1.0'). The dated `archived-*`
+    // label is only reached if no safe version label is resolvable at all, which
+    // this common case is not. This pins the no-override path to its pre-#2288
+    // behavior (getMilestoneInfo-derived label), not a dated fallback.
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- ensure no ROADMAP.md (SUT fallback path, not teardown)
+    fs.rmSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), { recursive: true, force: true });
+
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('phases clear --confirm', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    assert.ok(
+      fs.existsSync(path.join(tmpDir, '.planning', 'milestones', 'v1.0-phases', '01-foundation')),
+      'no override + no ROADMAP archives under getMilestoneInfo default (v1.0), unchanged from pre-#2288'
+    );
+  });
+
+  test('rejects an --archive-version containing path traversal (no phase dir escapes .planning) (#2288 security)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // A traversal payload as the archive-version must be rejected outright — the
+    // value becomes a MOVED directory name, so accepting it would relocate phase
+    // history outside .planning/milestones/.
+    const result = runGsdTools(
+      'phases clear --confirm --archive-version ../../../gsd-poc-escape',
+      tmpDir,
+    );
+    assert.ok(!result.success, 'phases clear must FAIL on a path-traversal --archive-version');
+
+    // The phase directory must NOT have moved anywhere — it stays put.
+    assert.ok(
+      fs.existsSync(phase1),
+      'phase dir must remain in place when the archive-version is rejected',
+    );
+    // Nothing may have been created outside the project's milestones dir.
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '..', 'gsd-poc-escape-phases')),
+      'no directory may be created outside the project via traversal',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '.planning', 'milestones')),
+      'no archive dir should be created at all when the override is rejected',
+    );
+  });
+
+  test('rejects backslash path separators in --archive-version (#2288 security)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // Starts with an alphanumeric so it clears the leading-char anchor — this
+    // proves the backslash (Windows path separator) itself is rejected, not just
+    // a leading-dot traversal.
+    const result = runGsdTools(
+      'phases clear --confirm --archive-version v1\\\\..\\\\evil',
+      tmpDir,
+    );
+    assert.ok(!result.success, 'phases clear must FAIL on a backslash-separator --archive-version');
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place');
+  });
+
+  test('errors when --archive-version is present but its value is missing (does not silently drop the override) (#2288)', () => {
+    // A truncated invocation must fail loud, not fall through to the live read
+    // (which would silently re-file under the new milestone — the #2288 bug).
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v2.0 — Active Milestone\n'
+    );
+    writeState(tmpDir, '---\nmilestone: v2.0\n---\n\n# State\n');
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // --archive-version as the final token with no value following it.
+    const result = runGsdTools('phases clear --confirm --archive-version', tmpDir);
+    assert.ok(!result.success, 'a value-less --archive-version must be an error, not a silent fallback');
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place when the flag is rejected');
+  });
+});
+
+// ─── #2288: sibling sink — `milestone complete <version>` path safety ───────
+
+describe('milestone complete: version path-traversal guard (#2288 security)', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject();
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('rejects a milestone-complete version containing path traversal (no write/move escapes .planning)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    // `version` is interpolated into `${version}-ROADMAP.md`, `${version}-phases`,
+    // etc. as a MOVED/written path component — a traversal value must be rejected
+    // before any filesystem mutation.
+    const result = runGsdTools('milestone complete ../../../gsd-ms-escape', tmpDir);
+    assert.ok(!result.success, 'milestone complete must FAIL on a path-traversal version');
+
+    // No artifact created outside the project via traversal.
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '..', 'gsd-ms-escape-phases')),
+      'no directory may be created outside the project via a traversal version',
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmpDir, '..', 'gsd-ms-escape-ROADMAP.md')),
+      'no file may be written outside the project via a traversal version',
+    );
+    // Phase dir untouched.
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place when the version is rejected');
+  });
+
+  test('rejects a backslash-separator milestone-complete version (#2288 security)', () => {
+    const phasesDir = path.join(tmpDir, '.planning', 'phases');
+    const phase1 = path.join(phasesDir, '01-foundation');
+    fs.mkdirSync(phase1, { recursive: true });
+    fs.writeFileSync(path.join(phase1, '01-01-PLAN.md'), '# Plan');
+
+    const result = runGsdTools('milestone complete v1\\\\..\\\\evil', tmpDir);
+    assert.ok(!result.success, 'milestone complete must FAIL on a backslash-separator version');
+    assert.ok(fs.existsSync(phase1), 'phase dir must remain in place');
+  });
+});
 
 // ────────────────────────────────────────────────────────────────────────
 // Folded from tests/enh-2433-todo-phase-linking.test.cjs — consolidation epic #1969 (B4 #1973)
@@ -339,3 +563,162 @@ test('execute-phase.md: awk extracts resolves_phase from YAML frontmatter', () =
 });
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// #2308 / #2334 follow-up: new-milestone.md must not clobber the shared
+// PROJECT.md when a workstream is active, and must propagate ${GSD_WS} to
+// downstream routing. Step 1 and Step 6's bash fences are extracted and
+// EXECUTED (not grepped) so these tests fail on an inert guard — e.g. the
+// step-6 conditional merely being PRESENT (`if [ -n "$GSD_WS" ]`) is not
+// enough if GSD_WS was never re-derived and is always empty at runtime.
+// ────────────────────────────────────────────────────────────────────────
+describe('new-milestone.md: workstream-aware PROJECT.md guard (#2308)', () => {
+  const workflowPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
+  const content = fs.readFileSync(workflowPath, 'utf8');
+
+  // Locate the first ```bash fence strictly between two headings.
+  function extractFenceBetween(markdown, startHeading, endHeading) {
+    const startIdx = markdown.indexOf(startHeading);
+    const endIdx = markdown.indexOf(endHeading);
+    assert.ok(startIdx !== -1, `heading not found: ${startHeading}`);
+    assert.ok(endIdx !== -1, `heading not found: ${endHeading}`);
+    assert.ok(startIdx < endIdx, `${startHeading} must precede ${endHeading}`);
+    const section = markdown.slice(startIdx, endIdx);
+    const match = section.match(/```bash\r?\n([\s\S]*?)```/);
+    assert.ok(match, `no bash fence found between "${startHeading}" and "${endHeading}"`);
+    return match[1];
+  }
+
+  // Step 6 has multiple ```bash fences; locate the one containing `marker`.
+  function extractFenceContaining(markdown, startHeading, endHeading, marker) {
+    const startIdx = markdown.indexOf(startHeading);
+    const endIdx = markdown.indexOf(endHeading);
+    assert.ok(startIdx !== -1 && endIdx !== -1 && startIdx < endIdx, 'headings not found in order');
+    const section = markdown.slice(startIdx, endIdx);
+    const fenceRe = /```bash\r?\n([\s\S]*?)```/g;
+    let m;
+    while ((m = fenceRe.exec(section)) !== null) {
+      if (m[1].includes(marker)) return m[1];
+    }
+    assert.fail(`no bash fence containing "${marker}" found between "${startHeading}" and "${endHeading}"`);
+    return null;
+  }
+
+  describe('step 1: --ws parsing is real, executable shell (not prose)', () => {
+    const step1Fence = extractFenceBetween(content, '## 1. Load Context', '## 2. Gather Milestone Goals');
+
+    function runStep1(argumentsValue) {
+      const script = `ARGUMENTS=${JSON.stringify(argumentsValue)}\n${step1Fence}\n` +
+        'printf \'GSD_WS=[%s]\\nMILESTONE_ARG=[%s]\\n\' "$GSD_WS" "$MILESTONE_ARG"';
+      const out = execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+      return {
+        gsdWs: /GSD_WS=\[(.*)\]/.exec(out)[1],
+        milestoneArg: /MILESTONE_ARG=\[(.*)\]/.exec(out)[1],
+      };
+    }
+
+    test('parses --ws <name> into GSD_WS and strips it from the milestone name (finding 6)', () => {
+      const { gsdWs, milestoneArg } = runStep1('--ws search v2.0 Search');
+      assert.strictEqual(gsdWs, '--ws search');
+      assert.strictEqual(milestoneArg, 'v2.0 Search');
+    });
+
+    test('leaves GSD_WS empty when --ws is absent, milestone name unaffected', () => {
+      const { gsdWs, milestoneArg } = runStep1('v2.0 Search');
+      assert.strictEqual(gsdWs, '');
+      assert.strictEqual(milestoneArg, 'v2.0 Search');
+    });
+  });
+
+  describe('step 6: commit stages PROJECT.md in both modes, with no cross-step guard', () => {
+    const step6CommitFence = extractFenceContaining(
+      content,
+      '## 6. Cleanup and Commit',
+      '## 7. Load Context and Resolve Models',
+      'docs: start milestone v[X.Y] [Name]'
+    );
+
+    function runStep6Commit(argumentsValue) {
+      const gsdRunStub = 'gsd_run() { printf "%s\\n" "gsd_run_call:$*"; }\n';
+      const script = `ARGUMENTS=${JSON.stringify(argumentsValue)}\n${gsdRunStub}${step6CommitFence}`;
+      return execFileSync('bash', ['-c', script], { encoding: 'utf8' });
+    }
+
+    // Step 4 Part A's guard — not this commit — is what protects the shared
+    // heading. Part B's Evolution backfill DOES write PROJECT.md in workstream
+    // mode, so a ws-mode branch that dropped PROJECT.md from --files would
+    // strand that edit uncommitted.
+    for (const [mode, args] of [['ws', '--ws search v2.0 Search'], ['flat', 'v2.0 Search']]) {
+      test(`${mode} mode: --files stages PROJECT.md so Part B's Evolution backfill is committed`, () => {
+        const out = runStep6Commit(args);
+        assert.ok(
+          out.includes('--files .planning/PROJECT.md .planning/STATE.md'),
+          `expected PROJECT.md + STATE.md --files in ${mode} mode, got: ${out}`
+        );
+      });
+    }
+
+    test('does not guard the commit on GSD_WS — a cross-step variable is always empty here', () => {
+      // Regression guard for the inert-guard trap: GSD_WS is assigned in Step
+      // 1's shell, and each step's bash block runs in its own shell (the same
+      // reason Step 5 round-trips OUTGOING_MILESTONE through a file). A
+      // `[ -n "$GSD_WS" ]` branch here reads an unset variable, always takes
+      // the flat branch, and only appears to work.
+      assert.ok(
+        !/\[\s*-n\s*"\$GSD_WS"\s*\]/.test(step6CommitFence),
+        `step 6 must not branch on a cross-step GSD_WS; got fence:\n${step6CommitFence}`
+      );
+    });
+  });
+
+  test('routing interpolations still propagate ${GSD_WS} at the documented lines', () => {
+    assert.ok(
+      content.includes('/gsd:new-milestone --reset-phase-numbers ${GSD_WS}'),
+      'reset-phase-numbers rerun hint should propagate ${GSD_WS}'
+    );
+    assert.ok(
+      content.includes('/gsd:discuss-phase [N] ${GSD_WS}'),
+      'discuss-phase routing hint should propagate ${GSD_WS}'
+    );
+    assert.ok(
+      content.includes('/gsd:plan-phase [N] ${GSD_WS}'),
+      'plan-phase routing hint should propagate ${GSD_WS}'
+    );
+  });
+
+  test('success criteria reflects PROJECT.md update is skipped in workstream mode', () => {
+    assert.match(
+      content,
+      /PROJECT\.md updated with Current Milestone section.*skipped.*workstream/i,
+      'success criteria should note the PROJECT.md step is skipped in workstream mode'
+    );
+  });
+
+  test('step 4 scopes the workstream skip to the milestone-state write only; Evolution repair always runs (finding 2)', () => {
+    const step4Idx = content.indexOf('## 4. Update PROJECT.md');
+    const step5Idx = content.indexOf('## 5. Update STATE.md');
+    assert.ok(step4Idx !== -1 && step5Idx !== -1 && step4Idx < step5Idx, 'steps 4 and 5 should be locatable');
+    const step4Body = content.slice(step4Idx, step5Idx);
+
+    const partAIdx = step4Body.indexOf('Part A');
+    const partBIdx = step4Body.indexOf('Part B');
+    assert.ok(partAIdx !== -1 && partBIdx !== -1 && partAIdx < partBIdx, 'step 4 should have distinct Part A / Part B sections');
+
+    const partABody = step4Body.slice(partAIdx, partBIdx);
+    const partBBody = step4Body.slice(partBIdx);
+
+    assert.match(partABody, /skip/i, 'Part A should describe the workstream skip');
+    assert.ok(partABody.includes('GSD_WS'), 'Part A guard should be keyed on GSD_WS');
+    assert.match(
+      step4Body,
+      /shared/i,
+      'step 4 should justify the guard by pointing at PROJECT.md being the shared file'
+    );
+
+    // The Evolution structural repair must be reachable OUTSIDE Part A's skip,
+    // and Part B's own text must state it is unconditional.
+    assert.ok(!partABody.includes('## Evolution'), 'Evolution repair must NOT be nested inside the guarded Part A');
+    assert.ok(partBBody.includes('## Evolution'), 'Part B must contain the Evolution section template');
+    assert.match(partBBody, /always runs/i, 'Part B must state it always runs regardless of GSD_WS');
+  });
+});

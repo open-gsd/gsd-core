@@ -193,7 +193,7 @@ Research, plan, and verify a phase.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `N` | No | Phase number (defaults to next unplanned phase) |
+| `N` | No | Phase number (if omitted, the orchestrating workflow reads ROADMAP.md and targets the next unplanned phase — not a `gsd-tools.cjs` CLI feature) |
 
 | Flag | Description |
 |------|-------------|
@@ -211,8 +211,10 @@ Research, plan, and verify a phase.
 | `--validate` | Run state validation before planning begins |
 | `--bounce` | Run external plan bounce validation after planning (uses `workflow.plan_bounce_script`) |
 | `--skip-bounce` | Skip plan bounce even if enabled in config |
-| `--mvp` | Vertical MVP mode — planner organizes tasks as feature slices (UI→API→DB) instead of horizontal layers. On Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` (Walking Skeleton). Can be persisted on a phase via `**Mode:** mvp` in ROADMAP.md, which applies `--mvp` automatically without the flag. |
-| `--tdd` | TDD mode — planner applies `type: tdd` to eligible behavior-adding tasks so each begins with a failing test. Composable with `--mvp`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts red-green. |
+| `--mvp` | MVP enrichment on top of the default tracer-first ordering — frames the phase goal as a user story and, on Phase 1 of a new project with no prior phase summaries, also emits `SKELETON.md` (Walking Skeleton). Vertical slicing is now the default (see `--no-tracer`); `--mvp` no longer turns it on. Can be persisted on a phase via `**Mode:** mvp` in ROADMAP.md, which applies `--mvp` automatically without the flag. |
+| `--no-tracer` | Opt out of the default **tracer-first** decomposition and plan horizontal layers (the legacy default). By default every plan leads with one production-quality end-to-end `tracer` slice that the executor verifies before any expansion task. |
+| `--no-reversibility-gates` | Suppress the human checkpoint that a **one-way-door** decision normally earns, for runs you intend to leave unattended. By default a decision rated `one-way` — undoing it needs a data migration, breaks a published contract, or is impossible — gets a `checkpoint:decision` inserted before the task that implements it. Ratings are still recorded on tasks and `costly` decisions are still flagged, so the flag changes what stops the run, not what the plan remembers. |
+| `--tdd` | TDD mode — planner applies `type: tdd` to eligible behavior-adding tasks so each begins with a failing test. Composable with `--mvp`: `--mvp --tdd` produces vertical slices where every behavior-adding task starts red-green. The leading `tracer` task also starts red under `--tdd`. |
 | `--granularity <coarse\|standard\|fine>` | Override the planning granularity for this invocation, ignoring config. Valid values: `coarse`, `standard`, `fine`. Takes precedence over `granularities.planning`, top-level `granularity`, and `planning.granularity` config. |
 
 **Prerequisites:** `.planning/ROADMAP.md` exists
@@ -385,6 +387,11 @@ Create PR from completed phase work with auto-generated body.
 - Key decisions
 - Optional configured PRD-style sections from `ship.pr_body_sections`
 
+**Ship gates (capability-driven):** `/gsd:ship` runs every active `ship:pre` gate from the capability registry. Two are on by default:
+
+- **Security** (`security` capability): blocks while `SECURITY.md` reports `threats_open > 0`. Resolve via `/gsd:secure-phase {n}`.
+- **Broken-windows ledger** (`broken-windows` capability, issue #1950): when `workflow.windows_enforce=true` is set, blocks while `.planning/WINDOWS.md` reports any `open` entry. The ledger accumulates stubs, TODOs, skipped tests, unrun verifies, and unmet truths across phases. Resolve an entry with `gsd-tools windows fixed <id>` (defect resolved) or `gsd-tools windows waive <id> "<reason>"` (justified deferral — reason is required and recorded). Inspect via `gsd-tools windows status`. Enforcement is **opt-in** (default `workflow.windows_enforce=false`): enable with `gsd config-set workflow.windows_enforce true`; tracking continues regardless.
+
 See [Custom PR Body Sections](ship-pr-body-sections.md) for onboarding, examples, and validation rules.
 
 ---
@@ -482,6 +489,7 @@ Start next version cycle.
 |----------|----------|-------------|
 | `name` | No | Milestone name |
 | `--reset-phase-numbers` | No | Restart the new milestone at Phase 1 and archive old phase dirs before roadmapping |
+| `--ws <name>` | No | Scope the milestone to a workstream; skips the shared `PROJECT.md` write |
 
 **Prerequisites:** Previous milestone completed
 **Produces:** Updated `PROJECT.md`, new `REQUIREMENTS.md`, new `ROADMAP.md`
@@ -490,6 +498,7 @@ Start next version cycle.
 /gsd-new-milestone                  # Interactive
 /gsd-new-milestone "v2.0 Mobile"    # Named milestone
 /gsd-new-milestone --reset-phase-numbers "v2.0 Mobile"  # Restart milestone numbering at 1
+/gsd-new-milestone --ws search "v2.0 Search"  # Scope to a workstream
 ```
 
 ---

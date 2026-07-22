@@ -215,7 +215,8 @@ GSD uses a multi-agent architecture where thin orchestrators (workflow files) sp
 - Fresh 200K context window per plan
 - Follows XML task instructions precisely
 - Atomic git commit per completed task
-- Handles checkpoint types: auto, human-verify, decision, human-action
+- Handles task types: auto, tracer, checkpoint (human-verify, decision, human-action)
+- Tracer feedback gate: after a `tracer` slice, verifies it end-to-end before expansion tasks — autonomous runs halt on failure; interactive runs emit a human-verify checkpoint
 - Reports deviations from plan in SUMMARY.md
 - Invokes node repair on verification failure
 
@@ -399,6 +400,13 @@ runs its default whole-repo scan.
 - Tracks hypotheses, evidence, and eliminated theories
 - State persists across context resets
 - Requires human verification before marking resolved
+- Runs a multi-signal fix-acceptance guardrail (mutation check, no-op/deletion detector, adjacent tests, revert-and-reconfirm) before accepting a fix; degrades gracefully when Stryker or a test suite is absent
+- Ranks suspect code by Ochiai suspiciousness from test pass/fail coverage (spectrum-based fault localization) before forming hypotheses; skips cleanly when no coverage exists
+- Branches root-cause analysis across ≥2 Ishikawa categories and applies an AND-gate check before committing root_cause (guards against 5-Whys single-cause bias); root_cause may hold a set when the AND-gate fires
+- Classifies each failure as Bohrbug / Heisenbug-Mandelbug / Concurrency at Phase 1.75 and routes the investigation technique accordingly (routes Bohrbugs to SBFL+bisect, Heisenbugs to record-replay/stability with SBFL skipped, Concurrency to the atomicity/order/deadlock checklist)
+- Hardens regression tests via PBT shrinking (minimized counterexample as the seed), explicit oracle classification (specified/derived/metamorphic/implicit), and boundary neighbors around the fixed equivalence class
+- Emits a blameless-postmortem Prevention block at resolution (branching 5-Whys, why-wasn't-this-caught, a concrete recurrence guard) and records `why_not_caught` + `recurrence_guard` in the knowledge base so the same bug class is prevented, not just fixed
+- Recalls prior resolved sessions semantically via MemPalace at Phase 0 (top-k meaning-similar), catching same-root-cause/different-wording cases keyword overlap misses; falls back to keyword matching when MemPalace is absent
 - Appends to persistent knowledge base on resolution
 - Consults knowledge base on new sessions
 

@@ -17,7 +17,9 @@ INIT=$(gsd_run query init.todos)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-Extract from init JSON: `todo_count`, `todos`, `pending_dir`.
+Extract from init JSON: `todo_count`, `todos`, `pending_dir`, `response_language`.
+
+**If `response_language` is set:** All user-facing questions, prompts, and explanations in this workflow MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English — only user-facing output is translated.
 
 If `todo_count` is 0:
 ```

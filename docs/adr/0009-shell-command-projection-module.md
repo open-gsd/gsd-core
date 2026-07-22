@@ -1,6 +1,7 @@
 # Shell Command Projection Module owns runtime-aware OS command rendering
 
 - **Status:** Accepted
+- **Supersedes:** [ADR-0010](0010-file-operation-engine-module.md) (File Operation Engine Module) — absorbed into this seam's Phases 3–4 (`#3467`–`#3468`), 2026-05-13
 - **Date:** 2026-05-12
 
 We propose introducing a Shell Command Projection Module that owns projection from typed command intent to concrete shell/runtime-specific command text. GSD currently hand-builds hook commands, PATH repair commands, shim scripts, and other serialized OS-facing command strings across installer call sites. That drift has repeatedly produced cross-shell regressions (`#2376`, `#2979`, `#3002`, `#3011`, `#3181`, `#3393`, `#3413`). The proposed seam concentrates quoting, path-style, and runtime-wrapper policy in one module while keeping real subprocess execution on array-arg/non-shell paths.

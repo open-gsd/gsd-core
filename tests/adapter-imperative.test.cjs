@@ -81,7 +81,21 @@ test('imperative adapter.install/uninstall delegate in-process to install-engine
       installEngine.uninstallRuntimeArtifacts = function (...a) { uninstallArgs = a; return undefined; };
       adapter.install({ configDir: '/tmp/imp/' + r, scope: 'global', resolvedProfile: { p: 1 } });
       adapter.uninstall({ configDir: '/tmp/imp/' + r, scope: 'local' });
-      assert.deepStrictEqual(installArgs, [r, '/tmp/imp/' + r, 'global', { p: 1 }, undefined], `${r}: install delegation args`);
+      // The trailing arg is the composed capability registry (#2322): the adapter
+      // must forward one, or third-party capability skills never materialize on
+      // the default `full` install path. Its contents are the loader's business —
+      // pin only that a registry-shaped value is threaded through, not its bulk.
+      const [, , , , manifest, registry] = installArgs;
+      assert.deepStrictEqual(
+        installArgs.slice(0, 5),
+        [r, '/tmp/imp/' + r, 'global', { p: 1 }, undefined],
+        `${r}: install delegation args`,
+      );
+      assert.strictEqual(manifest, undefined, `${r}: manifest arg unchanged`);
+      assert.ok(
+        registry && typeof registry === 'object' && 'capabilityClusters' in registry,
+        `${r}: install must forward a composed capability registry (#2322), got: ${typeof registry}`,
+      );
       assert.deepStrictEqual(uninstallArgs, [r, '/tmp/imp/' + r, 'local'], `${r}: uninstall delegation args`);
     }
   } finally {

@@ -7,6 +7,20 @@
 - **Realizes:** [ADR-857](857-capability-system.md) Branch 8 (host-CLI support as `role: runtime` Capabilities)
 - **Materializes:** [ADR-58](58-runtime-install-policy-module.md) (the typed `InstallPlan` projection)
 - **Builds on:** [ADR-3660](3660-runtime-artifact-layout-module.md) (artifact layout), [ADR-894](894-capability-declaration-format.md) (the `role: runtime` body, already validated)
+- **Subsumed by:** [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) (GSD as an Embeddable Orchestration Engine) — read it first; see the amendment below
+
+## Amendment (2026-07-16): subsumed by ADR-1239 (EoS) — this ADR is the *declarative adapter*, not the whole architecture
+
+[ADR-1239](1239-gsd-embeddable-orchestration-engine.md) — **GSD as an Embeddable Orchestration Engine** (EoS), Accepted — subsumes this ADR **as the declarative adapter** in a larger frame, and inverts its direction of travel:
+
+- This ADR answers *"how does GSD project its files onto a host CLI we already know?"* — GSD reaches into the host.
+- ADR-1239 inverts that: **GSD is the engine; the host loads it through a negotiated Host-Integration Interface**, and a third party writes the thin host-plugin. ADR-1239 calls this "flips *projection* to *embedding*, and **unifies** them."
+
+**This ADR is not superseded and its status is unchanged.** The runtime descriptor is real, live, and load-bearing: it remains the *declarative* adapter within EoS. But it is a **component of** the current architecture, not the statement of it. A reader who takes this ADR as the top-level answer to "how does GSD meet a host?" will reach the wrong conclusion for any new host.
+
+**Read [ADR-1239](1239-gsd-embeddable-orchestration-engine.md) first.**
+
+Recorded because ADR-1239 declared this subsumption while this file recorded nothing, leaving the pointer one-way and EoS undiscoverable from here.
 
 ## Context
 

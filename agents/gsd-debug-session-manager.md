@@ -270,30 +270,67 @@ If user selects 1 or 2: spawn continuation agent (with any additional context pr
 
 If user selects 3: proceed to Step 4 with fix = "not applied".
 
+### 3f. FIX REJECTED BY GUARDRAIL
+
+When agent returns `## FIX REJECTED BY GUARDRAIL`:
+
+Present the failing signal and evidence to the user via AskUserQuestion:
+```
+Fix rejected by the acceptance guardrail.
+
+Failing signal: {failing signal}
+Evidence: {why it failed}
+
+Options:
+1. Revise fix — spawn continuation agent to revise the fix so the signal passes
+2. Accept as technical debt — record the unmet signal + justification (the fix lands without the gate passing; this is never silent)
+3. Abandon — stop; session stays unresolved
+```
+
+If user selects 1: spawn continuation agent with `goal: find_and_fix` naming the failing signal to revise. Loop back to Step 3.
+
+If user selects 2: spawn continuation agent instructed to record `guardrail_verdict: accepted_debt` + the justification in the debug file, then proceed to request_human_verification. Loop back to Step 3.
+
+If user selects 3: proceed to Step 4 with fix = "not applied (guardrail rejected)".
+
 ## Step 4: Return Compact Summary
+
+**Non-terminal early stop — check this FIRST.** Before returning any summary below, ask: is your own turn/context budget exhausted while the debugger (`gsd-debugger`) is still investigating — i.e. you have NOT reached `DEBUG COMPLETE`, a user-chosen `ABANDONED`, or exhausted the `INVESTIGATION INCONCLUSIVE` options? If so, do NOT fabricate a `DEBUG SESSION COMPLETE` or `ABANDONED` summary to fit this shape. Return the non-terminal marker instead:
+
+```markdown
+## CONTINUE_REQUIRED
+
+**Session:** {debug_file_path}
+**Status:** {status from frontmatter, e.g. investigating}
+**Next action:** {next_action from Current Focus}
+**Reason:** session-manager turn/context budget exhausted — investigation still in progress
+```
+
+`CONTINUE_REQUIRED` is distinct from both terminal shapes below AND from `## CHECKPOINT REACHED` (Step 3d): a `CHECKPOINT REACHED` is a genuine user-input/approval checkpoint that already correctly pauses via `AskUserQuestion` before looping back to Step 3 — it is not returned to the orchestrator. `CONTINUE_REQUIRED` is emitted only when no checkpoint is pending and the loop simply cannot proceed further in this turn. The orchestrator resumes by re-spawning this agent with the SAME `slug`/`debug_file_path` — the on-disk checkpoint at `.planning/debug/{slug}.md` (its `status` and `next_action`) is the source of truth for where to pick up. Never return control to the user as if the session were complete when it is not.
 
 Read the resolved (or current) debug file to extract final Resolution values.
 
-Return compact summary:
+Return compact summary (terminal — investigation resolved):
 
 ```markdown
 ## DEBUG SESSION COMPLETE
 
 **Session:** {final path — resolved/ if archived, otherwise debug_file_path}
-**Root Cause:** {one sentence from Resolution.root_cause, or "not determined"}
+**Root Cause:** {one sentence, or a '; '-joined list when the AND-gate identified multiple contributing causes, from Resolution.root_cause; or "not determined"}
 **Fix:** {one sentence from Resolution.fix, or "not applied"}
 **Cycles:** {N} (investigation) + {M} (fix)
 **TDD:** {yes/no}
 **Specialist review:** {specialist_hint used, or "none"}
+**Prevention:** {one-line from the blameless postmortem — "why not caught: <gate, or 'none (no gate existed for this class)'>; guard: <artifact>"}
 ```
 
-If the session was abandoned by user choice, return:
+If the session was abandoned by user choice, return (terminal — user stopped):
 
 ```markdown
 ## DEBUG SESSION COMPLETE
 
 **Session:** {debug_file_path}
-**Root Cause:** {one sentence if found, or "not determined"}
+**Root Cause:** {one sentence if found (or a '; '-joined list if the AND-gate identified multiple contributing causes), or "not determined"}
 **Fix:** not applied
 **Cycles:** {N}
 **TDD:** {yes/no}
@@ -311,5 +348,6 @@ If the session was abandoned by user choice, return:
 - [ ] Specialist dispatch executed when specialist_dispatch_enabled and hint maps to a skill
 - [ ] TDD gate applied when tdd_mode=true and ROOT CAUSE FOUND
 - [ ] Loop continues until DEBUG COMPLETE, ABANDONED, or user stops
+- [ ] Non-terminal `CONTINUE_REQUIRED` (not a fabricated terminal summary) returned when the manager's own turn/context budget is exhausted mid-investigation
 - [ ] Compact summary returned (at most 2K tokens)
 </success_criteria>

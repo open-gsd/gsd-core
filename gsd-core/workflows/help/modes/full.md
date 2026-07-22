@@ -105,7 +105,7 @@ Usage: `/gsd:discuss-phase 2`
 Usage: `/gsd:discuss-phase 2 --batch`
 Usage: `/gsd:discuss-phase 2 --batch=3`
 
-**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp]`**
+**`/gsd:plan-phase <number> [--research] [--skip-research] [--research-phase <N>] [--view] [--gaps] [--skip-verify] [--prd <file>] [--ingest <path-or-glob>] [--ingest-format <auto|nygard|madr|narrative>] [--reviews] [--text] [--tdd] [--mvp] [--no-tracer] [--no-reversibility-gates]`**
 Create detailed execution plan for a specific phase.
 
 - `--skip-research` — bypass the research subagent
@@ -116,7 +116,9 @@ Create detailed execution plan for a specific phase.
 - `--ingest <path-or-glob>` — pre-ingest external ADRs/PRDs/SPECs before planning (see *PRD Express Path* below)
 - `--ingest-format <auto|nygard|madr|narrative>` — hint the ADR ingester's parser when `--ingest` is set; defaults to `auto`
 - `--tdd` — plan in test-driven order (tests before code)
-- `--mvp` — vertical-slice MVP planning mode (see also `/gsd:mvp-phase`)
+- `--mvp` — MVP enrichment (user story + Walking Skeleton) on top of the default tracer-first ordering (see also `/gsd:mvp-phase`)
+- `--no-tracer` — opt out of the default tracer-first slice and plan horizontal layers (legacy default)
+- `--no-reversibility-gates` — suppress the `checkpoint:decision` a `one-way`-door decision normally earns, for intentionally-unattended runs (ratings are still recorded)
 
 - Generates `.planning/phases/XX-phase-name/XX-YY-PLAN.md`
 - Breaks phase into concrete, actionable tasks
@@ -249,11 +251,13 @@ Start a new milestone through unified flow.
 - Requirements definition with scoping
 - Roadmap creation with phase breakdown
 - Optional `--reset-phase-numbers` flag restarts numbering at Phase 1 and archives old phase dirs first for safety
+- Optional `--ws <name>` flag scopes the milestone to a workstream and skips the shared `PROJECT.md` write
 
 Mirrors `/gsd:new-project` flow for brownfield projects (existing PROJECT.md).
 
 Usage: `/gsd:new-milestone "v2.0 Features"`
 Usage: `/gsd:new-milestone --reset-phase-numbers "v2.0 Features"`
+Usage: `/gsd:new-milestone --ws search "v2.0 Search"`
 
 **`/gsd:complete-milestone <version>`**
 Archive completed milestone and prepare for next version.

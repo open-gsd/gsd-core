@@ -1,13 +1,28 @@
 name: Require Issue Link
 
+# Trigger (#2331): pull_request_target, NOT pull_request. A `pull_request` event
+# raised from a fork hands the job a read-only GITHUB_TOKEN regardless of the
+# `permissions:` block, so the createComment call below 403s, the unhandled
+# rejection kills the step, and the core.setFailed on the last line never runs —
+# the contributor sees an API stack trace instead of "add Closes #NNN".
+# pull_request_target runs in the base-repo context with a write-capable token.
+# Safe here: this job performs NO checkout at all and reads the PR body only via
+# an env var (never interpolated into a shell), so no head code executes. The
+# #1389 fork-forgery carve-out below still holds — it is keyed on
+# head.repo.full_name == github.repository, not on the branch name alone.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Scope unchanged by #2331 — see the note in pr-title-validator.yml. `issues:
+# write` alone already authorizes this workflow's issues.createComment call on a
+# PR: its sticky comment has posted on same-repo PRs (#106, #164, #232, #259) on
+# exactly this scope. The 403 was the fork token downgrade, not a missing scope,
+# so no `pull-requests: write` is added — this job never calls a pulls.* API.
 permissions:
   issues: write
 
@@ -60,26 +75,34 @@ jobs:
                 '',
                 'Edit the PR description to add a valid `Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN` line. This check will re-evaluate on the next PR update.',
               ].join('\n');
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              per_page: 100,
-            });
-            const existing = comments.find(comment => comment.body && comment.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
+            // #2331: the comment is a COURTESY, the setFailed below is the GATE.
+            // A failure here must never suppress the verdict. pull_request_target
+            // should make the 403 impossible; this catch is defense in depth so a
+            // future permission change degrades the diagnostic, not the gate.
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: prNumber,
-                body,
+                per_page: 100,
               });
+              const existing = comments.find(comment => comment.body && comment.body.includes(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body,
+                });
+              }
+            } catch (err) {
+              core.warning(`Could not post the missing-issue-link comment (${err.status || err.message}). Guidance follows:\n${body}`);
             }
             core.setFailed('PR body must contain a closing issue reference (e.g. "Closes #123").');

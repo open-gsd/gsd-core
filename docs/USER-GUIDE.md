@@ -231,7 +231,7 @@ See [docs/workflow-discuss-mode.md](workflow-discuss-mode.md) for the full discu
 
 The discuss-phase captures implementation decisions in CONTEXT.md under a `<decisions>` block as numbered bullets (`- **D-01:** …`). Two gates ensure those decisions survive into plans and shipped code.
 
-**Plan-phase translation gate (blocking).** After planning, GSD refuses to mark the phase planned until every trackable decision appears in at least one plan's `must_haves`, `truths`, or body.
+**Plan-phase translation gate (blocking).** After planning, GSD refuses to mark the phase planned until every trackable decision appears in at least one plan's scanned surfaces: front-matter `must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective` heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>` tag body.
 
 **Verify-phase validation gate (non-blocking).** During verification, GSD searches plans, SUMMARY.md, modified files, and recent commit messages for each trackable decision. Misses are logged to VERIFICATION.md as a warning section; verification status is unchanged.
 
@@ -886,9 +886,9 @@ Since v1.3.1, the installer pre-populates `~/.claude/settings.json` (or
     "allow": [
       "Bash(npx gsd-core *)",
       "Read(.planning/*)",
-      "Write(.planning/*)",
+      "Edit(.planning/*)",
       "Read(STATE.md)",
-      "Write(STATE.md)"
+      "Edit(STATE.md)"
     ],
     "deny": [
       "Read(.env)",

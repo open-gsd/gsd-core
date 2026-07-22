@@ -220,6 +220,100 @@ describe('extractDecisions — typed outcome (#1364 + #1365)', () => {
   });
 });
 
+// ─── #2347: evidence test must not reuse the parser's own D- grammar ──────────
+// #1365's fail-loud guard used `/\bD-[A-Za-z0-9]/` as its "is this decision-
+// shaped?" evidence test — the SAME D- prefix the parser requires. So for any
+// ID prefix the parser can't read (e.g. `D5-01`), BOTH the parser and the guard
+// see nothing, the outcome collapses to none-present (clean pass) instead of
+// could-not-parse, and the gate fails OPEN against a populated block of real
+// decisions. Fix: a bold-lead-in bullet (`- **...**`, any ID) is format-agnostic
+// evidence of a decision entry. Note none of these bullet texts contain a
+// literal "D-" token, so they isolate the bold-bullet evidence from the old
+// D--token path.
+describe('extractDecisions — format-agnostic evidence test (#2347)', () => {
+  test('populated <decisions> block with a non-D- ID prefix is could-not-parse, not none-present', () => {
+    const md = '<decisions>\n'
+      + '- **D5-01:** choose the primary datastore\n'
+      + '- **D5-02:** pick the queue technology\n'
+      + '- **D5-03:** settle on the auth model\n'
+      + '</decisions>\n';
+    const r = extractDecisions(md);
+    assert.strictEqual(r.decisions.length, 0, 'parser cannot read the D5- prefix (0 extracted)');
+    assert.strictEqual(r.outcome, 'could-not-parse',
+      'a populated block the parser cannot read must FAIL LOUD, not pass as none-present');
+  });
+
+  test('decisions HEADING section with a non-D- ID prefix is could-not-parse', () => {
+    const md = '## Decisions\n\n- **DEC-01: the chosen approach** rationale\n';
+    const r = extractDecisions(md);
+    assert.strictEqual(r.decisions.length, 0);
+    assert.strictEqual(r.outcome, 'could-not-parse',
+      'a decision-shaped heading section the parser cannot read must fail loud');
+  });
+
+  test('em-dash bullet with a non-D- ID prefix is still evidence (could-not-parse)', () => {
+    const md = '<decisions>\n- **DEC-02 — the chosen approach** body\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'could-not-parse');
+  });
+
+  // ── Regression guards: the broadened evidence must NOT create false fail-loud ─
+  test('empty <decisions> scaffold stays none-present (no false fail-loud)', () => {
+    assert.strictEqual(extractDecisions('<decisions>\n</decisions>\n').outcome, 'none-present');
+    assert.strictEqual(
+      extractDecisions('<decisions>\n\n(no decisions this phase)\n\n</decisions>\n').outcome,
+      'none-present',
+      'a prose-only scaffold with no bold-lead-in bullet must still pass cleanly');
+  });
+
+  test('an all-prose decisions block with no bold bullet stays none-present', () => {
+    const md = '<decisions>\n\nThis phase inherits every prior decision; nothing new.\n\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present');
+  });
+
+  test('canonical D- decisions still parse (no regression)', () => {
+    const md = '<decisions>\n- **D-01:** a real decision\n</decisions>\n';
+    const r = extractDecisions(md);
+    assert.strictEqual(r.outcome, 'parsed');
+    assert.strictEqual(r.decisions.length, 1);
+  });
+
+  // ── The evidence must be ID-SHAPED, not "any bold bullet" ────────────────────
+  // A decisions block / discretion section legitimately uses bold LABELS on prose
+  // bullets (- **Why:** …, - **Scope:** …). Those are not decision entries; a
+  // false could-not-parse here hard-blocks the plan gate. Guards against the
+  // over-broad evidence regex an earlier iteration shipped.
+  test('bold prose-label bullets (Why/Note/Scope) are NOT evidence — stay none-present', () => {
+    const md = '<decisions>\n'
+      + '- **Why:** rationale for inheriting prior decisions\n'
+      + '- **Scope:** everything from the previous phase carries over\n'
+      + '- **Note:** nothing new was decided here\n'
+      + '</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'bold LABELS on prose bullets must not be mistaken for decision entries');
+  });
+
+  test("a Claude's Discretion sub-section with bold-label bullets stays none-present", () => {
+    const md = '<decisions>\n'
+      + "### Claude's Discretion\n"
+      + '- **Scope:** left to judgment, no specific preference\n'
+      + '- **Follow-up:** revisit if performance regresses\n'
+      + '</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'a discretion section of bold-label prose bullets must pass the gate cleanly');
+  });
+
+  test('a bold ALL-CAPS label with no id-shape (TODO/NOTE) is not evidence', () => {
+    const md = '<decisions>\n- **TODO:** decide the datastore next phase\n- **NOTE:** blocked on infra\n</decisions>\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present',
+      'a bold ALL-CAPS label with no -<alnum> id structure is not a decision entry');
+  });
+
+  test('heading path: bold prose-label bullets under a Decisions heading stay none-present', () => {
+    const md = '## Decisions\n\n- **Why:** we kept the prior stack\n- **Scope:** no new choices this phase\n';
+    assert.strictEqual(extractDecisions(md).outcome, 'none-present');
+  });
+});
+
 // ─── QA matrix for parser correctness ────────────────────────────────────────
 
 describe('parseDecisions — parser QA matrix', () => {
@@ -826,5 +920,207 @@ describe('parseDecisions — titled-colon bullet form (#1639)', () => {
     for (let i = 1; i <= 13; i++) md += `- **D-${String(i).padStart(2, '0')}: Decision ${i}.** body\n`;
     const out = parseDecisions(md);
     assert.equal(out.length, 13, 'all 13 titled-colon decisions must parse (not vacuously 0)');
+  });
+});
+
+// ─── #2372: decision-coverage-plan must scan planner-canonical tag bodies ─────
+//
+// Bug: buildPlanMessage() told the user to cite decisions "(or body)" but
+// extractPlanDesignatedSections() only scanned <objective>/<tasks>/<task>/<action>.
+// A decision cited in <read_first>, <behavior>, <verify>, <acceptance_criteria>,
+// or <done> was invisible — false BLOCKING coverage gap, and the message sent the
+// fixer to "the body", where a re-citation still failed. Fix widens the scan to
+// the planner-canonical tag set AND corrects the message to name scanned surfaces.
+
+describe('check.decision-coverage-plan — planner-canonical tag scanning (#2372)', () => {
+  let tmpDir;
+  let planningDir;
+  let phaseDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-2372-');
+    planningDir = path.join(tmpDir, '.planning');
+    phaseDir = path.join(planningDir, 'phases', '01-init');
+    fs.mkdirSync(phaseDir, { recursive: true });
+  });
+
+  afterEach(() => cleanup(tmpDir));
+
+  // Common CONTEXT.md with a single trackable decision D-01.
+  const CONTEXT_WITH_D01 = [
+    '# Context',
+    '',
+    '<decisions>',
+    '- **D-01:** Use OAuth 2.0 for authentication',
+    '</decisions>',
+  ].join('\n');
+
+  // Helper: write CONTEXT + a PLAN whose body wraps `innerTagBody` in `tagName`.
+  function writeContextAndPlan(tagName, innerTagBody) {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    writePlanFile(phaseDir, '01', `# Plan\n\n<tasks>\n<task>\n  <${tagName}>\n${innerTagBody}\n  </${tagName}>\n</task>\n</tasks>\n`);
+  }
+
+  const cases = [
+    { tag: 'read_first', citation: '- path/to/CONTEXT.md (D-01 — auth decision)' },
+    { tag: 'behavior', citation: 'Honor D-01: redirect unauthenticated users to OAuth flow.' },
+    { tag: 'verify', citation: 'Verify D-01: token exchange returns 200 with access_token.' },
+    { tag: 'acceptance_criteria', citation: 'D-01 honored: every protected route requires a valid OAuth token.' },
+    { tag: 'done', citation: 'D-01 implemented — OAuth 2.0 flow live.' },
+  ];
+
+  for (const { tag, citation } of cases) {
+    test(`D-NN cited in <${tag}> body → covered (no false gap)`, () => {
+      writeContextAndPlan(tag, citation);
+
+      const contextPath = path.join(phaseDir, 'CONTEXT.md');
+      const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+      const parsed = JSON.parse(result.output || '{}');
+
+      assert.strictEqual(parsed.total, 1, `expected total=1, got ${JSON.stringify(parsed)}`);
+      assert.strictEqual(parsed.covered, 1, `D-01 cited in <${tag}> must count as covered. Got: ${JSON.stringify(parsed)}`);
+      assert.strictEqual(parsed.passed, true, `gate must pass when D-01 is cited in <${tag}>. Got: ${JSON.stringify(parsed)}`);
+      assert.strictEqual(parsed.uncovered.length, 0, `uncovered must be empty. Got: ${JSON.stringify(parsed.uncovered)}`);
+    });
+  }
+
+  test('control: D-NN cited nowhere → still uncovered (no false green from widening)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    writePlanFile(phaseDir, '01', '# Plan\n\n<tasks>\n<task>\n  <action>\n    Implement the feature.\n  </action>\n</task>\n</tasks>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.total, 1);
+    assert.strictEqual(parsed.covered, 0);
+    assert.strictEqual(parsed.passed, false);
+    assert.strictEqual(parsed.uncovered.length, 1);
+    assert.strictEqual(parsed.uncovered[0].id, 'D-01');
+  });
+
+  // Message/extractor parity: the remediation text must name ONLY the surfaces the
+  // extractor actually scans. Asserts no "(or body)" claim it doesn't back, AND
+  // that every newly-scanned tag is named in the message — so the two cannot drift
+  // apart again. The reporter's bug was exactly this drift.
+  test('buildPlanMessage names every scanned surface (no "(or body)" drift, #2372)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    writePlanFile(phaseDir, '01', '# Plan\nNo decision citation in any scanned surface.\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.passed, false, 'fixture intentionally leaves D-01 uncovered');
+    const msg = parsed.message || '';
+
+    // The misleading "(or body)" clause that promised a scope the extractor didn't implement is gone.
+    assert.ok(!/\(or body\)/i.test(msg), `message must not claim "(or body)" — that was the bug. Got: "${msg}"`);
+
+    // Every surface the extractor now scans MUST appear by name in the message — if any is
+    // missing, the message has drifted from the scan again.
+    const requiredSurfaceNames = [
+      'must_haves', 'truths', 'objective',
+      '<objective>', '<tasks>', '<task>', '<action>',
+      '<read_first>', '<behavior>', '<verify>', '<acceptance_criteria>', '<done>',
+    ];
+    for (const surface of requiredSurfaceNames) {
+      assert.ok(
+        msg.includes(surface),
+        `message must name scanned surface "${surface}" — otherwise the message/extractor drift apart. Got: "${msg}"`
+      );
+    }
+  });
+
+  // Reviewer-driven edge cases (code review on the initial widening flagged these):
+  //
+  // 1. Nested scanned tag inside another scanned tag: a citation in the OUTER tag's
+  //    prefix prose must still count. Initial widening used a single alternation whose
+  //    negative lookahead halted the outer tag's body at any inner scanned tag — losing
+  //    the prefix citation. Switched to per-tag matching so each tag's body terminates
+  //    only at its own closing tag (other scanned tags pass through as text into this body).
+  // 2. Non-scanned tag bearing a D-NN citation must NOT count toward coverage — guards
+  //    against future over-widening.
+  // 3. Self-closing form `<read_first />` has no body and must not error or match.
+  // 4. Attribute form `<verify type="automated">D-01</verify>` is the canonical planner
+  //    shape for <verify> and must match.
+  // 5. CRLF newlines inside tag bodies must not break capture.
+
+  test('D-NN in outer scanned tag prefix is not lost when inner scanned tag follows (per-tag capture)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    // The bug shape: <action>per D-01 <verify>...</verify></action> — D-01 lives in <action>'s prefix.
+    writePlanFile(phaseDir, '01', [
+      '# Plan',
+      '',
+      '<tasks>',
+      '<task>',
+      '  <action>',
+      '    Implement per D-01 — OAuth 2.0 flow.',
+      '    <verify>token exchange returns 200</verify>',
+      '  </action>',
+      '</task>',
+      '</tasks>',
+    ].join('\n'));
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.covered, 1, `D-01 in <action> prefix must be caught (per-tag capture). Got: ${JSON.stringify(parsed)}`);
+    assert.strictEqual(parsed.passed, true);
+  });
+
+  test('D-NN inside a non-scanned tag body does NOT count toward coverage', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    // <name> is not in the scanned set — citation here must not be picked up.
+    writePlanFile(phaseDir, '01', '# Plan\n\n<name>per D-01</name>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.total, 1);
+    assert.strictEqual(parsed.covered, 0, 'non-scanned tag body must not count. Got: ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.passed, false);
+    assert.strictEqual(parsed.uncovered.length, 1);
+  });
+
+  test('self-closing scanned tag form is safely ignored (no body to scan)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    // Self-closing form has no body. The gate must not crash and must not match the (absent) body.
+    writePlanFile(phaseDir, '01', '# Plan\n\n<tasks>\n<task>\n<read_first />\n<action>Implement feature.</action>\n</task>\n</tasks>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.total, 1);
+    assert.strictEqual(parsed.covered, 0);
+    assert.strictEqual(parsed.passed, false);
+  });
+
+  test('attribute form `<verify type="...">D-NN</verify>` is scanned (canonical planner shape)', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    writePlanFile(phaseDir, '01', '# Plan\n\n<tasks>\n<task>\n<verify type="automated">Run npm test per D-01</verify>\n</task>\n</tasks>\n');
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.covered, 1, 'attribute form on scanned tag must match. Got: ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.passed, true);
+  });
+
+  test('CRLF newlines inside scanned tag body do not break capture', () => {
+    writeContextFile(phaseDir, CONTEXT_WITH_D01);
+    const planBody = ['# Plan', '', '<tasks>', '<task>', '  <action>', '    Implement per D-01.', '  </action>', '</task>', '</tasks>', ''].join('\r\n');
+    fs.writeFileSync(path.join(phaseDir, '01-PLAN.md'), planBody);
+
+    const contextPath = path.join(phaseDir, 'CONTEXT.md');
+    const result = runDecisionCoveragePlan(phaseDir, contextPath, tmpDir);
+    const parsed = JSON.parse(result.output || '{}');
+
+    assert.strictEqual(parsed.covered, 1, 'CRLF body must not break capture. Got: ' + JSON.stringify(parsed));
+    assert.strictEqual(parsed.passed, true);
   });
 });

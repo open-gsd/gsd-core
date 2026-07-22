@@ -72,7 +72,23 @@ must_haves:
 | `autonomous` | Yes | boolean | `true` when all tasks are type `auto`. `false` when the plan contains any `checkpoint:*` task that requires human interaction. |
 | `requirements` | Yes | array of IDs | Requirement IDs from ROADMAP.md that this plan addresses. Every phase requirement ID must appear in at least one plan's `requirements` field. Empty arrays are a BLOCKER. |
 | `user_setup` | No | array of objects | External-service setup steps that Claude cannot automate (account creation, secret retrieval, dashboard configuration). When present, execute-phase generates a `USER-SETUP.md` checklist for the developer. |
+| `status` | No | `superseded` | Marks a plan that was deliberately reassigned or abandoned mid-phase and will never be executed. A `status: superseded` plan is excluded from the phase's plan and summary counts, so it never holds the phase below 100%. See [Superseded plans](#superseded-plans). Any other value (or the field's absence) has no effect on counting. |
 | `must_haves` | Yes | object | Goal-backward verification criteria. See below. |
+
+### Superseded plans
+
+A phase reads complete when every `*-PLAN.md` has a matching `*-SUMMARY.md`. When a plan is reassigned or dropped mid-phase — its work folded into a later plan — it will never gain a summary, and without a marker it would pin the phase below 100% forever (the plan-level analogue of a retired phase). Add `status: superseded` to that plan's frontmatter to exclude it from **both** the plan count (denominator) and the summary count (numerator):
+
+```yaml
+---
+phase: 05-api
+plan: "12"
+type: execute
+status: superseded
+---
+```
+
+A phase with 13 plans, two of them `superseded`, then reads `11/11 → complete` — no fabricated summary required. The match is case-insensitive. Plans without the marker are counted exactly as before.
 
 ---
 
@@ -144,7 +160,66 @@ References source files the executor needs to read. Includes project-level plann
 
 ### `<tasks>`
 
-Contains one or more `<task>` elements. Every task element must carry `<name>`, `<files>`, `<read_first>`, `<action>`, `<verify>`, `<acceptance_criteria>`, and `<done>` for `type="auto"` tasks.
+Contains one or more `<task>` elements. Every task element must carry `<name>`, `<files>`, `<read_first>`, `<action>`, `<verify>`, `<acceptance_criteria>`, and `<done>` for `type="auto"` and `type="tracer"` tasks. Optional `<precondition>` (see [Preconditions](#preconditions)) and `<reversibility>` (see [Reversibility](#reversibility)) elements may sit between `<name>` and `<files>`.
+
+---
+
+## Preconditions
+
+`<precondition>` is an **optional** element on `<task>` (issue #1949, *The Pragmatic Programmer* Topic 23 — Design by Contract). It states, in a single line of runnable/checkable prose, what must already be true for the task to begin safely. It closes the front-of-task side of the contract triad — preconditions (before) ↔ postconditions (`<verify>`/`<done>`/`<acceptance_criteria>`, after) ↔ invariants (`must_haves.truths`, across the whole plan).
+
+```xml
+<task type="auto">
+  <name>Add /reveal endpoint handler</name>
+  <precondition>server bootstraps and responds to GET /health (from the tracer slice)</precondition>
+  <files>server/reveal.ts</files>
+  <action>…</action>
+  <verify>curl /reveal?path=… opens the OS file manager</verify>
+  <done>Endpoint committed and manually verified</done>
+</task>
+```
+
+**Optional and back-compat:** a plan that omits `<precondition>` on every task behaves exactly as today — the executor skips the check with no visible change. Adding `<precondition>` to a task tells the executor to assert it before any other task work (read-only checks only: file existence, env var presence, idempotent health pings; no side-effecting checks — halt and surface a checkpoint if one seems required) and halt (returning a `checkpoint:human-verify`, no partial commit) on an unmet precondition. Plans that include `<precondition>` pass `verify plan-structure` unchanged — the structural validator checks for the presence of required tags and does not reject unknown optional tags.
+
+**Emission cases** (planner-side): emit `<precondition>` only when a task relies on state the plan's own `depends_on` ordering does not already guarantee. Three cases cover every legitimate use:
+
+1. **External service setup** (`user_setup` frontmatter) — the consuming task ties a specific setup step to itself so the executor halts if the setup was skipped.
+2. **Prior-phase artifact dependency** — a generated schema, a migration's dist output, a contract file from an earlier phase. Cross-phase `depends_on` does not cross phase boundaries, so `<precondition>` is the explicit pointer.
+3. **Environment variable / runtime configuration** — a tool, API, or script the task invokes requires an env var or runtime config that exists *now*, not at plan time.
+
+Full emission rules, anti-patterns ("the system is ready" is not checkable; do not use `<precondition>` for intra-plan sequencing — that is what `depends_on` is for), and the contract triad mapping: see `gsd-core/references/planner-preconditions.md`.
+
+---
+
+## Reversibility
+
+`<reversibility>` is an **optional** element on `<task>` (issue #1951, *The Pragmatic Programmer* Topic 15 — "Reversibility"). It records how costly the decision the task implements would be to undo, so a one-way-door choice gets a human beat before the agent walks through it. The `rating` attribute carries the classification; the body carries a one-line rationale.
+
+```xml
+<task type="auto">
+  <name>Define the on-disk event log format</name>
+  <reversibility rating="one-way">Phases 4-6 read this file; changing the
+  format after they land requires a migration for every existing project.</reversibility>
+  <files>src/event-log.cts</files>
+  <action>…</action>
+  <verify><automated>npm run test:unit -- event-log</automated></verify>
+  <done>Format documented and written by the writer under test</done>
+</task>
+```
+
+| Rating | Meaning | Effect on the plan |
+|---|---|---|
+| `reversible` | Undo is local and cheap. | None. This is the default when no rating is given. |
+| `costly` | Undo touches many call sites or needs a coordinated change. | Flagged in the plan so the reader sees the weight. Never blocks. |
+| `one-way` | Undo requires a migration, breaks a published contract, or is impossible. | The planner inserts a `checkpoint:decision` immediately **before** the dependent task. |
+
+**Optional and back-compat:** a plan that omits `<reversibility>` on every task behaves exactly as today — no flag, no checkpoint. Plans that include it pass `verify plan-structure` unchanged; the structural validator checks for the presence of required tags and does not reject unknown optional tags.
+
+**Autonomy:** inserting a `checkpoint:decision` means the plan contains a checkpoint, so its frontmatter must set `autonomous: false`.
+
+**Override:** `/gsd:plan-phase --no-reversibility-gates` (`REVERSIBILITY_GATES=false`) suppresses checkpoint insertion for intentionally-unattended runs. Ratings are still recorded and `costly` items are still flagged — the override changes what stops the run, not what the plan remembers.
+
+Full taxonomy, emission rules, and anti-patterns (chiefly: rating everything `one-way` produces checkpoint fatigue; prefer *removing* irreversibility over gating it): see `gsd-core/references/planner-reversibility.md`.
 
 ---
 
@@ -153,6 +228,7 @@ Contains one or more `<task>` elements. Every task element must carry `<name>`, 
 | Type | Use | Autonomy |
 |---|---|---|
 | `auto` | Everything the executor can do independently. | Fully autonomous. |
+| `tracer` | The leading thin end-to-end slice a plan starts with by default (tracer-first) — production-quality, wired through every layer, with a real end-to-end `<verify>`. | Fully autonomous; after committing, the executor runs the tracer's `<verify>` as an early integration gate — autonomous runs halt on failure before expansion, interactive runs present a `checkpoint:human-verify`. |
 | `checkpoint:human-verify` | Visual or functional verification that requires a human to look at a running UI or service. | Pauses execution; presents to the developer; resumes on approval. |
 | `checkpoint:decision` | Implementation choices that arose during execution and require the developer's input. | Pauses execution; presents options; resumes on selection. |
 | `checkpoint:human-action` | Truly unavoidable manual steps (account creation, hardware interaction). Used sparingly. | Pauses execution; resumes on confirmation. |

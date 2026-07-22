@@ -99,7 +99,9 @@ test('opencode descriptor declares runtime.hostBehaviors (the folded-in behavior
   assert.equal(hb.combinedFamilyInstall, true, 'commands+skills+plugin install runs through the engine (adapter)');
   assert.equal(hb.reapplyCommand, '/gsd-update --reapply');
   assert.equal(hb.attributionConfigResolver, 'opencode');
-  assert.equal(hb.flatCommandDir, 'command');
+  // #2329: OpenCode discovers commands from the PLURAL `commands/` dir; the
+  // singular `command/` made all /gsd-* commands invisible to OpenCode.
+  assert.equal(hb.flatCommandDir, 'commands');
   assert.equal(hb.frontmatterDialect, 'opencode');
   assert.equal(hb.skipHomePrefixSubstitution, true);
   assert.equal(hb.skipSettingsUi, true);

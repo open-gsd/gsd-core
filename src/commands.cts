@@ -30,7 +30,10 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 const { extractCurrentMilestone, stripShippedMilestones: _stripShippedMilestones, getMilestoneInfo, getMilestonePhaseFilter, getRoadmapPhaseInternal } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelResolverMod = require('./model-resolver.cjs');
-const { resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+const { resolveModelInternal, resolveModelForTier, resolveProviderEscalation, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, resolveGranularityInternal, assertValidGranularityOverride } = modelResolverMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import agentCommandRouterMod = require('./agent-command-router.cjs');
+const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
 import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -90,6 +93,45 @@ interface EffortSyncChange {
 }
 
 // ─── Phase Status ─────────────────────────────────────────────────────────────
+
+/**
+ * Phase-status precedence ladder — furthest-along wins (#2408).
+ *
+ * `cmdStats` builds `phasesByNumber` by scanning on-disk phase directories.
+ * When two directories normalize to the same phase key (e.g. `05-real/` and
+ * `05-real-stray/`), the status field must be folded by precedence rather
+ * than overwritten last-write-wins — otherwise `/gsd-stats` reports whatever
+ * directory `fs.readdirSync` happened to yield last, which is non-deterministic
+ * across platforms and can silently call a `Complete` phase `Not Started`.
+ */
+const PHASE_STATUS_PRECEDENCE: ReadonlyArray<string> = [
+  'Complete',
+  'Needs Review',
+  'Executed',
+  'In Progress',
+  'Planned',
+  'Not Started',
+  'Pending',
+];
+const PHASE_STATUS_RANK = new Map<string, number>(
+  PHASE_STATUS_PRECEDENCE.map((s, i) => [s, i]),
+);
+
+/**
+ * Fold two phase statuses by precedence — returns whichever is further along
+ * the {@link PHASE_STATUS_PRECEDENCE} ladder. Unrecognized statuses fall behind
+ * every recognized one (so a recognized status always wins over an unknown one;
+ * two unrecognized statuses favor `a` for determinism).
+ */
+function foldPhaseStatus(a: string, b: string): string {
+  const ra = PHASE_STATUS_RANK.get(a);
+  const rb = PHASE_STATUS_RANK.get(b);
+  if (ra === undefined && rb === undefined) return a;
+  if (ra === undefined) return b;
+  if (rb === undefined) return a;
+  // Lower rank = higher precedence (Complete=0 wins over Not Started=5).
+  return ra <= rb ? a : b;
+}
 
 /**
  * Determine phase status by checking plan/summary counts AND verification state.
@@ -165,7 +207,7 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
   const pendingDir = path.join(planningDir(cwd), 'todos', 'pending');
 
   let count = 0;
-  const todos: Array<{ file: string; created: string; title: string; area: string; path: string }> = [];
+  const todos: Array<{ file: string; created: string; title: string; area: string; path: string; severity?: string }> = [];
 
   try {
     const files = fs.readdirSync(pendingDir).filter(f => f.endsWith('.md'));
@@ -176,6 +218,9 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
       const createdMatch = content.match(/^created:\s*(.+)$/m);
       const titleMatch = content.match(/^title:\s*(.+)$/m);
       const areaMatch = content.match(/^area:\s*(.+)$/m);
+      // #2337: surface severity when present. Omit the key entirely for todos
+      // with no severity line so existing consumers of this JSON are unaffected.
+      const severityMatch = content.match(/^severity:\s*(.+)$/m);
 
       const todoArea = areaMatch ? areaMatch[1].trim() : 'general';
 
@@ -189,6 +234,7 @@ function cmdListTodos(cwd: string, area: string | undefined, raw: boolean): void
         title: titleMatch ? titleMatch[1].trim() : 'Untitled',
         area: todoArea,
         path: toPosixPath(path.relative(cwd, path.join(pendingDir, file))),
+        ...(severityMatch ? { severity: severityMatch[1].trim() } : {}),
       });
     }
   } catch { /* intentionally empty */ }
@@ -478,9 +524,10 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
  *   { model, profile, effort, effort_rendered, effort_param, effort_propagation,
  *     fast_mode, fast_mode_supported, [unknown_agent] }
  *
- * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>
+ * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>,
+ *        --failure-class <class> (#2296)
  */
-function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number }): void {
+function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string }): void {
   if (!agentType) {
     error('agent-type required');
   }
@@ -488,7 +535,29 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
   opts = opts || {};
   const config = loadConfig(cwd);
   const profile = (config['model_profile'] as string) || 'balanced';
-  const model = resolveModelInternal(cwd, agentType!);
+  // #2068: resolve the model per-attempt so dynamic_routing escalates the MODEL
+  // (heavy tier) alongside effort. Gated on an explicit --attempt exactly like the
+  // effort resolution below, so the two fields stay symmetric: with no --attempt
+  // the model comes from the classic profile path (unchanged for everyone,
+  // including dynamic_routing-enabled users who don't pass --attempt), and only an
+  // explicit attempt routes through the tier ladder. resolveModelForTier itself
+  // still falls back to resolveModelInternal when dynamic_routing is off.
+  let model = (opts.attempt !== undefined && opts.attempt !== null)
+    ? resolveModelForTier(cwd, agentType!, opts.attempt)
+    : resolveModelInternal(cwd, agentType!);
+
+  // #2296: when the caller reports WHY the previous attempt failed, consult the
+  // provider-escalation ladder. Only a quota/rate-limit class warrants it — a
+  // heavier tier on the same throttled provider is still throttled, so this
+  // ladder swaps providers instead. Gated on an explicit --failure-class so the
+  // JSON contract is byte-identical for every existing caller.
+  let escalation: Record<string, unknown> | undefined;
+  if (opts.failureClass !== undefined) {
+    const applicable = opts.failureClass === AGENT_FAILURE_CLASSES.QUOTA_EXCEEDED;
+    const resolved = resolveProviderEscalation(cwd, agentType!, opts.attempt, applicable);
+    if (resolved.escalated) model = resolved.to;
+    escalation = { class: opts.failureClass, ...resolved };
+  }
 
   const effortOpts: Record<string, unknown> = {};
   if (typeof opts.effortOverride === 'string') effortOpts['override'] = opts.effortOverride;
@@ -519,6 +588,7 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     fast_mode_supported: fastModeSupported,
   };
   if (!agentModels) result['unknown_agent'] = true;
+  if (escalation) result['escalation'] = escalation;
   output(result, raw, effort);
 }
 
@@ -1601,7 +1671,12 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
         name: existing?.name || phaseName,
         plans: (existing?.plans || 0) + plans,
         summaries: (existing?.summaries || 0) + summaries,
-        status,
+        // #2408: fold colliding statuses by precedence rather than overwriting
+        // last-write-wins. fs.readdirSync order is non-deterministic across
+        // platforms, so a naive overwrite can report a Complete phase as Not
+        // Started (or vice versa) depending on read order. The fold picks the
+        // furthest-along status, matching what an operator expects.
+        status: existing ? foldPhaseStatus(existing.status, status) : status,
       });
     }
   } catch { /* intentionally empty */ }
@@ -1732,6 +1807,8 @@ function cmdCheckCommit(cwd: string, raw: boolean): void {
 export = {
   groupFilesBySubrepo,
   determinePhaseStatus,
+  foldPhaseStatus,
+  PHASE_STATUS_PRECEDENCE,
   cmdGenerateSlug,
   cmdCurrentTimestamp,
   cmdListTodos,

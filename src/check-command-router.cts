@@ -139,7 +139,30 @@ function loadPlanContents(phaseDir: string): string[] {
 }
 
 const DESIGNATED_HEADINGS_RE = /^#{1,6}\s+(?:must[_ ]haves?|truths?|tasks?|objective)\b/i;
-const XML_DECISION_TAGS_RE = /<(?:objective|tasks?|action)(?:\s[^>]{0,1000})?>((?:(?!<(?:objective|tasks?|action)[\s>])[\s\S])*?)<\/(?:objective|tasks?|action)>/gi;
+// #2372: scanned-tag set must match the planner-canonical surfaces where a D-NN citation
+// is meaningful. `<objective>`/`<tasks>`/`<task>`/`<action>` are the historical core. The
+// planner is also explicitly told (plan-phase.md) to cite decisions in `<read_first>`,
+// `<behavior>`, `<verify>`, `<acceptance_criteria>`, and `<done>` — those are now scanned too,
+// so the gate no longer reports a false coverage gap when a decision is cited in any of them.
+//
+// Implementation: per-tag matching, NOT a single wide alternation. A single alternation
+// like `<(?:a|b|c)>...<\/(?:a|b|c)>` halts the outer tag's body capture at any inner tag
+// in the set, dropping any citation in the outer tag's prefix prose — e.g.
+// `<action>per D-05 <verify>npm test</verify></action>` would lose D-05 because `<verify>`
+// halts the `<action>` body before the citation. Per-tag matching avoids this: each tag's
+// body terminates only at its OWN closing tag, so `<verify>` inside `<action>` is absorbed
+// into `<action>`'s body (D-05 caught) AND `<verify>` is matched separately on its own pass.
+// Each per-tag regex keeps the ReDoS-safe negative-lookahead tempering (#2128).
+const XML_DECISION_TAG_NAMES = ['objective', 'tasks', 'task', 'action', 'read_first', 'behavior', 'verify', 'acceptance_criteria', 'done'] as const;
+
+function buildXmlDecisionTagRegex(tagName: string): RegExp {
+  // Per-tag: body tempering stops only at the SAME tag's reopening or closing — other
+  // scanned tags pass through as text into this body. Non-greedy `*?` to first close.
+  return new RegExp(
+    `<${tagName}(?:\\s[^>]{0,1000})?>((?:(?!<${tagName}[\\s>])[\\s\\S])*?)<\\/${tagName}>`,
+    'gi',
+  );
+}
 
 function stripCommentsAndFences(text: string): string {
   // HTML-comment stripping stays caller-side (the seam does not strip HTML comments).
@@ -167,8 +190,11 @@ function extractYamlBlock(frontmatter: string, key: string): string {
 
 function extractXmlTagBodies(text: string): string {
   const parts: string[] = [];
-  for (const match of text.matchAll(XML_DECISION_TAGS_RE)) {
-    if (match[1]) parts.push(match[1]);
+  for (const tagName of XML_DECISION_TAG_NAMES) {
+    const re = buildXmlDecisionTagRegex(tagName);
+    for (const match of text.matchAll(re)) {
+      if (match[1]) parts.push(match[1]);
+    }
   }
   return parts.join('\n');
 }
@@ -219,7 +245,10 @@ function buildPlanMessage(uncovered: UncoveredItem[]): string {
     '',
     ...uncovered.map((item) => `- **${item.id}** (${item.category || 'uncategorized'}): ${item.text}`),
     '',
-    'Resolve by citing `D-NN:` in a relevant plan\'s `must_haves`/`truths` (or body),',
+    'Resolve by citing `D-NN:` in any of the scanned plan surfaces: front-matter',
+    '`must_haves`/`truths`/`objective`, a `## must_haves`/`truths`/`tasks`/`objective`',
+    'heading, or an `<objective>`/`<tasks>`/`<task>`/`<action>`/`<read_first>`/`<behavior>`/`<verify>`/`<acceptance_criteria>`/`<done>`',
+    'tag body. Other locations (prose outside those headings, comments, other XML tags) are not scanned.',
     'OR move the decision to `### Claude\'s Discretion` / tag it `[informational]` if it should not be tracked.',
   ].join('\n');
 }
@@ -719,7 +748,11 @@ function cmdTddReviewCheckpoint(projectDir: string, args: string[], raw: boolean
         const planPath = path.join(phaseDir, file);
         const content = readIfExists(planPath);
         // Check frontmatter for type: tdd
-        const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+        // CRLF-tolerant: a PLAN.md written with Windows line endings (---\r\n...---)
+        // must still match. The same CRLF-tolerant form is already used at line 205
+        // (extractPlanDesignatedSections); this is the same canonical pattern, applied
+        // here for the tdd-classification path. Fixes #2449.
+        const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
         if (frontmatterMatch) {
           const fm = frontmatterMatch[1];
           if (/^type:\s*tdd\s*$/m.test(fm)) {
@@ -1144,6 +1177,42 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
     }
     const v = validateCoverageMatrix(matrixText);
     if (v.valid) {
+      if (v.none_declared) {
+        // The declaration is the human override for the detector — it PASSES
+        // even when detection fires (that is acceptance #5's point: the
+        // detector is fallible and the declaration is the reasoned overrule).
+        // But a contradiction must be VISIBLE, not silent: re-run detection
+        // over the phase scope and surface any signals it still finds
+        // (#2365 review S-1).
+        const declScope = readPhaseScope(projectDir, resolvedDir, phaseNumber);
+        const declDetection = detectApiIntegration(declScope.text);
+        const declSignals = declDetection.signals.map((s) => ({ verb: s.verb, noun: s.noun }));
+        // The declaration legitimately wins even over a read error (it is the
+        // human overrule), but if scope was incomplete we say so — the contract
+        // is that contradictions stay visible, not silent (#2365 review).
+        const baseMsg = declDetection.detected
+          ? `api-coverage: COVERAGE.md declares no external API integration, overriding ${declSignals.length} detected signal(s) — confirm the declaration is accurate`
+          : 'api-coverage: COVERAGE.md declares no external API integration — matrix not required';
+        output(
+          {
+            block: false,
+            passed: true,
+            coverage_present: true,
+            matrix: coverageFile,
+            counts: v.counts,
+            none_declared: true,
+            detected: declDetection.detected,
+            ...(declDetection.detected ? { signals: declSignals } : {}),
+            ...(declScope.readError ? { scope_read_error: declScope.readError } : {}),
+            message: declScope.readError
+              ? `${baseMsg} (note: phase scope was incompletely read — ${declScope.readError})`
+              : baseMsg,
+          },
+          raw,
+          undefined,
+        );
+        return;
+      }
       output(
         {
           block: false,
@@ -1191,8 +1260,27 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
   }
 
   // (2) no matrix — detect whether this phase integrates an external API.
-  const scopeText = readPhaseScope(projectDir, resolvedDir, phaseNumber);
-  const detection = detectApiIntegration(scopeText);
+  const scope = readPhaseScope(projectDir, resolvedDir, phaseNumber);
+  if (scope.readError) {
+    // Fail-closed: an unreadable plan could be the one describing the
+    // integration, so we cannot certify "no integration" — block and surface it.
+    output(
+      {
+        block: true,
+        passed: false,
+        coverage_present: false,
+        detected: false,
+        message:
+          `api-coverage: could not read the phase scope (${scope.readError}); ` +
+          'refusing to certify no external-API integration from incomplete scope. ' +
+          'Fix the unreadable plan file, or add a COVERAGE.md declaration.',
+      },
+      raw,
+      undefined,
+    );
+    return;
+  }
+  const detection = detectApiIntegration(scope.text);
   if (detection.detected) {
     // Surface only verb/noun (typed, bounded) — NOT raw prose snippets — so the
     // gate output cannot relay injected PLAN.md instructions to the orchestrator.
@@ -1235,8 +1323,27 @@ function cmdApiCoverageVerifyPre(projectDir: string, args: string[], raw: boolea
  * whole roadmap, which would cross-contaminate sibling phases). Strips nothing
  * here — detectApiIntegration strips fenced code itself.
  */
-function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: string): string {
+interface PhaseScopeRead {
+  text: string;
+  /** Non-null when a plan file EXISTED but could not be read. The gate must not
+   *  conclude "no external API integration" from provably incomplete scope — an
+   *  unreadable plan could be the one describing the integration (#2365 review:
+   *  the blocking consumer silently passed partially-read scope). A missing plan
+   *  directory is NOT a read error (a phase may legitimately have no plans yet). */
+  readError: string | null;
+}
+
+/** A filesystem error that is NOT "does not exist" — i.e. a real read failure
+ *  (EACCES/EIO/…) the gate must not swallow. `ENOENT` is a legitimate "not
+ *  there yet" and is treated as absence, not error. */
+function isRealReadFailure(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return err != null && code !== 'ENOENT';
+}
+
+function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: string): PhaseScopeRead {
   const chunks: string[] = [];
+  let readError: string | null = null;
   try {
     const entries = fs.readdirSync(phaseDir, { withFileTypes: true });
     const plans = entries
@@ -1244,25 +1351,47 @@ function readPhaseScope(projectDir: string, phaseDir: string, phaseNumber: strin
       .map((e) => e.name)
       .sort();
     for (const p of plans) {
-      chunks.push(fs.readFileSync(path.join(phaseDir, p), 'utf8'));
+      try {
+        chunks.push(fs.readFileSync(path.join(phaseDir, p), 'utf8'));
+      } catch (err) {
+        // A plan file that exists but cannot be read — record it and keep
+        // reading the rest so the message names the first failure.
+        if (!readError) {
+          readError = `could not read ${p}: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      }
     }
-  } catch {
-    // ignore — fall through to roadmap
+  } catch (err) {
+    // A MISSING phase directory is fine (no plans yet → fall through to the
+    // roadmap). A directory that exists but cannot be enumerated (EACCES/EIO)
+    // is a real read failure the gate must not silently pass (#2365 review).
+    if (isRealReadFailure(err)) {
+      return {
+        text: '',
+        readError: `could not read the phase directory: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
-  if (chunks.join('').trim().length > 0) return chunks.join('\n\n');
+  if (readError) return { text: chunks.join('\n\n'), readError };
+  if (chunks.join('').trim().length > 0) return { text: chunks.join('\n\n'), readError: null };
 
   // Fallback: ONLY this phase's ROADMAP section (not the whole file, which
-  // would pollute detection with sibling-phase prose). Best-effort; absence or
-  // an unresolvable section is non-fatal (detector returns not-detected).
+  // would pollute detection with sibling-phase prose). A MISSING roadmap/section
+  // is non-fatal; a roadmap that exists but cannot be read is a real failure.
   if (phaseNumber) {
     try {
       const section = getRoadmapPhaseWithFallback(projectDir, phaseNumber);
-      if (section) return section;
-    } catch {
-      // ignore
+      if (section) return { text: section, readError: null };
+    } catch (err) {
+      if (isRealReadFailure(err)) {
+        return {
+          text: '',
+          readError: `could not read the roadmap fallback: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
     }
   }
-  return '';
+  return { text: '', readError: null };
 }
 
 function routeCheckCommand({ args, cwd, raw }: RouteCheckCommandOptions): void {
@@ -1354,4 +1483,7 @@ export = {
   cmdCheckPredicate,
   buildPredicateDeps,
   parsePredicateFlags,
+  // Fail-closed phase-scope reader for the api-coverage gate — exported for
+  // in-process failure-injection tests (#2365 review).
+  readPhaseScope,
 };

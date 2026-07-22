@@ -6,15 +6,20 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { runGsdTools, cleanup, absPlanningPath } = require('./helpers.cjs');
 const { createFixture, seedPhase } = require('./fixtures/index.cjs');
-const { createTempProject } = require('./helpers.cjs');
+const { createTempProject, createTempDir } = require('./helpers.cjs');
 
 describe('init commands', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createFixture();
+    // #2376 macOS fix: realpath the fixture root so absolute path-field
+    // assertions (absPlanningPath comparisons below) match the code's
+    // process.cwd()-anchored output — macOS's tmpdir is a symlink
+    // (/var/... -> /private/var/...) that a spawned child resolves via
+    // realpath but `createFixture()` does not. No-op on Linux (no symlink).
+    tmpDir = fs.realpathSync(createFixture());
   });
 
   afterEach(() => {
@@ -30,9 +35,12 @@ describe('init commands', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.state_path, '.planning/STATE.md');
-    assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-    assert.strictEqual(output.config_path, '.planning/config.json');
+    assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+    assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+    assert.strictEqual(output.config_path, absPlanningPath(tmpDir, 'config.json'));
+    // #2376: execute-phase.md's verify_phase_goal step reads this instead of
+    // hardcoding '.planning/REQUIREMENTS.md' into the gsd-verifier spawn prompt.
+    assert.strictEqual(output.requirements_path, absPlanningPath(tmpDir, 'REQUIREMENTS.md'));
   });
 
   test('init execute-phase respects model_overrides for executor_model', () => {
@@ -81,13 +89,13 @@ describe('init commands', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.state_path, '.planning/STATE.md');
-    assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-    assert.strictEqual(output.requirements_path, '.planning/REQUIREMENTS.md');
-    assert.strictEqual(output.context_path, '.planning/phases/03-api/03-CONTEXT.md');
-    assert.strictEqual(output.research_path, '.planning/phases/03-api/03-RESEARCH.md');
-    assert.strictEqual(output.verification_path, '.planning/phases/03-api/03-VERIFICATION.md');
-    assert.strictEqual(output.uat_path, '.planning/phases/03-api/03-UAT.md');
+    assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+    assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+    assert.strictEqual(output.requirements_path, absPlanningPath(tmpDir, 'REQUIREMENTS.md'));
+    assert.strictEqual(output.context_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-CONTEXT.md'));
+    assert.strictEqual(output.research_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-RESEARCH.md'));
+    assert.strictEqual(output.verification_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-VERIFICATION.md'));
+    assert.strictEqual(output.uat_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-UAT.md'));
   });
 
   // #2056: normalizePhaseName() strips ANY [A-Z][A-Z0-9_]*- prefix as a project
@@ -133,7 +141,7 @@ describe('init commands', () => {
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.phase_found, true, 'LKML-01 (own project code) must resolve');
-    assert.strictEqual(output.phase_dir, '.planning/phases/LKML-01-stable-baseline-on-main');
+    assert.strictEqual(output.phase_dir, absPlanningPath(tmpDir, 'phases', 'LKML-01-stable-baseline-on-main'));
     assert.strictEqual(output.phase_number, 'LKML-01');
   });
 
@@ -154,7 +162,7 @@ describe('init commands', () => {
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.phase_found, true, 'a real MEM-01-* dir must resolve under its own prefix');
-    assert.strictEqual(output.phase_dir, '.planning/phases/MEM-01-integration');
+    assert.strictEqual(output.phase_dir, absPlanningPath(tmpDir, 'phases', 'MEM-01-integration'));
     assert.strictEqual(output.phase_number, 'MEM-01');
   });
 
@@ -237,7 +245,7 @@ describe('init commands', () => {
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.phase_found, true, 'a real MEM-01-* dir must resolve under its own prefix');
-    assert.strictEqual(output.phase_dir, '.planning/phases/MEM-01-integration');
+    assert.strictEqual(output.phase_dir, absPlanningPath(tmpDir, 'phases', 'MEM-01-integration'));
   });
 
   test('#2104 — init verify-work resolves a real foreign-prefixed phase dir', () => {
@@ -303,10 +311,10 @@ describe('init commands', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.state_path, '.planning/STATE.md');
-    assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-    assert.strictEqual(output.project_path, '.planning/PROJECT.md');
-    assert.strictEqual(output.config_path, '.planning/config.json');
+    assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+    assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+    assert.strictEqual(output.project_path, absPlanningPath(tmpDir, 'PROJECT.md'));
+    assert.strictEqual(output.config_path, absPlanningPath(tmpDir, 'config.json'));
   });
 
   test('init phase-op returns core and optional phase file paths', () => {
@@ -321,13 +329,13 @@ describe('init commands', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.state_path, '.planning/STATE.md');
-    assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-    assert.strictEqual(output.requirements_path, '.planning/REQUIREMENTS.md');
-    assert.strictEqual(output.context_path, '.planning/phases/03-api/03-CONTEXT.md');
-    assert.strictEqual(output.research_path, '.planning/phases/03-api/03-RESEARCH.md');
-    assert.strictEqual(output.verification_path, '.planning/phases/03-api/03-VERIFICATION.md');
-    assert.strictEqual(output.uat_path, '.planning/phases/03-api/03-UAT.md');
+    assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+    assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+    assert.strictEqual(output.requirements_path, absPlanningPath(tmpDir, 'REQUIREMENTS.md'));
+    assert.strictEqual(output.context_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-CONTEXT.md'));
+    assert.strictEqual(output.research_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-RESEARCH.md'));
+    assert.strictEqual(output.verification_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-VERIFICATION.md'));
+    assert.strictEqual(output.uat_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-UAT.md'));
   });
 
   test('init plan-phase detects has_reviews and reviews_path when REVIEWS.md exists', () => {
@@ -340,7 +348,7 @@ describe('init commands', () => {
 
     const output = JSON.parse(result.output);
     assert.strictEqual(output.has_reviews, true);
-    assert.strictEqual(output.reviews_path, '.planning/phases/03-api/03-REVIEWS.md');
+    assert.strictEqual(output.reviews_path, absPlanningPath(tmpDir, 'phases', '03-api', '03-REVIEWS.md'));
   });
 
   test('init plan-phase omits optional paths if files missing', () => {
@@ -961,7 +969,8 @@ describe('cmdInitTodos', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createFixture();
+    // #2376 macOS fix: see 'init commands' beforeEach above.
+    tmpDir = fs.realpathSync(createFixture());
   });
 
   afterEach(() => {
@@ -1010,7 +1019,29 @@ describe('cmdInitTodos', () => {
     assert.strictEqual(task1.title, 'Fix bug');
     assert.strictEqual(task1.area, 'backend');
     assert.strictEqual(task1.created, '2026-02-25');
-    assert.strictEqual(task1.path, '.planning/todos/pending/task-1.md');
+    assert.strictEqual(task1.path, absPlanningPath(tmpDir, 'todos', 'pending', 'task-1.md'));
+  });
+
+  // ── #2337: init todos must surface severity too, in parity with list-todos ──
+  test('surfaces severity when present, omits the key when absent (#2337)', () => {
+    const pendingDir = path.join(tmpDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+
+    fs.writeFileSync(path.join(pendingDir, 'tagged.md'),
+      'title: Crash on save\narea: core\ncreated: 2026-02-25\nseverity: blocker');
+    fs.writeFileSync(path.join(pendingDir, 'untagged.md'),
+      'title: Old todo\narea: docs\ncreated: 2026-02-24');
+
+    const result = runGsdTools('init todos', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    const tagged = output.todos.find(t => t.file === 'tagged.md');
+    const untagged = output.todos.find(t => t.file === 'untagged.md');
+    assert.ok(tagged && untagged, 'both todos should be present');
+    assert.strictEqual(tagged.severity, 'blocker', 'severity surfaced verbatim when present');
+    assert.ok(!('severity' in untagged),
+      'severity key ABSENT (backward compatible) for a todo with no severity line');
   });
 
   test('area filter returns only matching todos', () => {
@@ -1567,7 +1598,8 @@ describe('cmdInitQuick', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createFixture();
+    // #2376 macOS fix: see 'init commands' beforeEach above.
+    tmpDir = fs.realpathSync(createFixture());
   });
 
   afterEach(() => {
@@ -1587,12 +1619,14 @@ describe('cmdInitQuick', () => {
     assert.ok(/^\d{6}-[0-9a-z]{3}$/.test(output.quick_id),
       `quick_id should match YYMMDD-xxx, got: "${output.quick_id}"`);
 
-    // task_dir must use the new ID format
-    assert.ok(output.task_dir.startsWith('.planning/quick/'),
-      `task_dir should start with .planning/quick/, got: "${output.task_dir}"`);
+    // task_dir must use the new ID format, absolute (anchored on tmpDir) — #2376.
+    const quickDirAbs = absPlanningPath(tmpDir, 'quick');
+    assert.ok(output.task_dir.startsWith(`${quickDirAbs}/`),
+      `task_dir should start with ${quickDirAbs}/, got: "${output.task_dir}"`);
     assert.ok(output.task_dir.endsWith('-fix-login-bug'),
       `task_dir should end with -fix-login-bug, got: "${output.task_dir}"`);
-    assert.ok(/^\.planning\/quick\/\d{6}-[0-9a-z]{3}-fix-login-bug$/.test(output.task_dir),
+    const taskDirRel = output.task_dir.slice(quickDirAbs.length + 1);
+    assert.ok(/^\d{6}-[0-9a-z]{3}-fix-login-bug$/.test(taskDirRel),
       `task_dir format wrong: "${output.task_dir}"`);
 
     // next_num must NOT be present
@@ -1897,7 +1931,8 @@ describe('cmdInitNewMilestone', () => {
   let tmpDir;
 
   beforeEach(() => {
-    tmpDir = createFixture();
+    // #2376 macOS fix: see 'init commands' beforeEach above.
+    tmpDir = fs.realpathSync(createFixture());
   });
 
   afterEach(() => {
@@ -1915,9 +1950,9 @@ describe('cmdInitNewMilestone', () => {
     assert.ok('synthesizer_model' in output, 'Should have synthesizer_model');
     assert.ok('roadmapper_model' in output, 'Should have roadmapper_model');
     assert.ok('commit_docs' in output, 'Should have commit_docs');
-    assert.strictEqual(output.project_path, '.planning/PROJECT.md');
-    assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-    assert.strictEqual(output.state_path, '.planning/STATE.md');
+    assert.strictEqual(output.project_path, absPlanningPath(tmpDir, 'PROJECT.md'));
+    assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+    assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
   });
 
   test('file existence flags reflect actual state', () => {
@@ -1959,7 +1994,7 @@ describe('cmdInitNewMilestone', () => {
     assert.strictEqual(output.latest_completed_milestone, 'v1.2');
     assert.strictEqual(output.latest_completed_milestone_name, 'Search Refresh');
     assert.strictEqual(output.phase_dir_count, 2);
-    assert.strictEqual(output.phase_archive_path, '.planning/milestones/v1.2-phases');
+    assert.strictEqual(output.phase_archive_path, absPlanningPath(tmpDir, 'milestones', 'v1.2-phases'));
   });
 
   test('reset flow metadata is null-safe when no milestones file exists', () => {
@@ -2227,7 +2262,8 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
     let tmpDir;
 
     beforeEach(() => {
-      tmpDir = createFixture();
+      // #2376 macOS fix: see 'init commands' beforeEach above.
+      tmpDir = fs.realpathSync(createFixture());
       buildWsFixture(tmpDir, 'wsx');
     });
 
@@ -2241,13 +2277,13 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
 
       const output = JSON.parse(result.output);
       // Positive: paths must be workstream-scoped
-      assert.strictEqual(output.state_path, '.planning/workstreams/wsx/STATE.md');
-      assert.strictEqual(output.roadmap_path, '.planning/workstreams/wsx/ROADMAP.md');
-      assert.strictEqual(output.config_path, '.planning/workstreams/wsx/config.json');
+      assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'STATE.md'));
+      assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'ROADMAP.md'));
+      assert.strictEqual(output.config_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'config.json'));
       // Goodhart both-directions: must NOT be the flat form
-      assert.notStrictEqual(output.state_path, '.planning/STATE.md');
-      assert.notStrictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-      assert.notStrictEqual(output.config_path, '.planning/config.json');
+      assert.notStrictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+      assert.notStrictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+      assert.notStrictEqual(output.config_path, absPlanningPath(tmpDir, 'config.json'));
       // phase_dir is emitted and must be workstream-scoped
       assert.ok(
         output.phase_dir && output.phase_dir.includes('workstreams/wsx'),
@@ -2264,9 +2300,9 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
 
       const output = JSON.parse(result.output);
       // Flat paths must be returned when no workstream is active
-      assert.strictEqual(output.state_path, '.planning/STATE.md');
-      assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-      assert.strictEqual(output.config_path, '.planning/config.json');
+      assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+      assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+      assert.strictEqual(output.config_path, absPlanningPath(tmpDir, 'config.json'));
       // Phase is NOT found in flat .planning/phases/ (only exists under workstream)
       assert.strictEqual(output.phase_found, false,
         'phase should not be found in flat path when only workstream fixture exists');
@@ -2322,7 +2358,8 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
     let tmpDir;
 
     beforeEach(() => {
-      tmpDir = createFixture();
+      // #2376 macOS fix: see 'init commands' beforeEach above.
+      tmpDir = fs.realpathSync(createFixture());
       buildWsFixture(tmpDir, 'wsx');
     });
 
@@ -2336,12 +2373,12 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
 
       const output = JSON.parse(result.output);
       // Path fields must be scoped to the workstream
-      assert.strictEqual(output.state_path, '.planning/workstreams/wsx/STATE.md');
-      assert.strictEqual(output.roadmap_path, '.planning/workstreams/wsx/ROADMAP.md');
-      assert.strictEqual(output.requirements_path, '.planning/workstreams/wsx/REQUIREMENTS.md');
+      assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'STATE.md'));
+      assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'ROADMAP.md'));
+      assert.strictEqual(output.requirements_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'REQUIREMENTS.md'));
       // Must NOT be flat
-      assert.notStrictEqual(output.state_path, '.planning/STATE.md');
-      assert.notStrictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+      assert.notStrictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+      assert.notStrictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
       // phase_dir is workstream-scoped and phase is found
       assert.strictEqual(output.phase_found, true);
       assert.ok(
@@ -2355,9 +2392,9 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
       assert.ok(result.success, `Command failed: ${result.error}`);
 
       const output = JSON.parse(result.output);
-      assert.strictEqual(output.state_path, '.planning/STATE.md');
-      assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
-      assert.strictEqual(output.requirements_path, '.planning/REQUIREMENTS.md');
+      assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+      assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
+      assert.strictEqual(output.requirements_path, absPlanningPath(tmpDir, 'REQUIREMENTS.md'));
       // Phase only exists under workstream, so not found via flat path
       assert.strictEqual(output.phase_found, false);
     });
@@ -2369,7 +2406,8 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
     let tmpDir;
 
     beforeEach(() => {
-      tmpDir = createFixture();
+      // #2376 macOS fix: see 'init commands' beforeEach above.
+      tmpDir = fs.realpathSync(createFixture());
       buildWsFixture(tmpDir, 'wsx');
     });
 
@@ -2390,9 +2428,9 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
         `phase_dir should include workstreams/wsx, got: ${output.phase_dir}`
       );
       // Path fields are workstream-scoped
-      assert.strictEqual(output.state_path, '.planning/workstreams/wsx/STATE.md');
-      assert.strictEqual(output.roadmap_path, '.planning/workstreams/wsx/ROADMAP.md');
-      assert.notStrictEqual(output.state_path, '.planning/STATE.md');
+      assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'STATE.md'));
+      assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'workstreams', 'wsx', 'ROADMAP.md'));
+      assert.notStrictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
     });
 
     test('phase-op WITHOUT GSD_WORKSTREAM does not find workstream-only phase (negative discrimination)', () => {
@@ -2404,8 +2442,8 @@ describe('init handlers honor GSD_WORKSTREAM (ADR-0006 planningPaths consumption
       assert.strictEqual(output.phase_found, false,
         'phase_found must be false: phase only exists under workstream path');
       // Flat paths are emitted
-      assert.strictEqual(output.state_path, '.planning/STATE.md');
-      assert.strictEqual(output.roadmap_path, '.planning/ROADMAP.md');
+      assert.strictEqual(output.state_path, absPlanningPath(tmpDir, 'STATE.md'));
+      assert.strictEqual(output.roadmap_path, absPlanningPath(tmpDir, 'ROADMAP.md'));
     });
   });
 });
@@ -2455,6 +2493,283 @@ describe('#1912 — init.progress fails safe in workstream mode with no active w
   test('flat mode (no workstreams dir) is unchanged', () => {
     const result = runGsdTools('init progress', tmpDir);
     assert.ok(result.success, `flat mode should still work: ${result.error}`);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #2376: init.* path-shaped output fields must resolve regardless of the
+// calling process's own cwd — not just the orchestrator's cwd. A spawned
+// subagent's actual filesystem cwd can legitimately differ from the
+// orchestrator's (e.g. a worktree), and every `*_path`/`*_dir` field handed
+// to it must still resolve to the real file. These tests spawn gsd-tools with
+// its OS-level process cwd pointed at an unrelated decoy directory while
+// passing the real project root via `--cwd` — reproducing exactly the
+// cwd-mismatch the bug hides behind, without relying on incidental absence
+// of `.planning/` at the test runner's own cwd.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('#2376 — init.* path fields resolve when process cwd differs from --cwd project root', () => {
+  let projectDir;
+  let decoyDir;
+
+  beforeEach(() => {
+    projectDir = createFixture();
+    decoyDir = createTempDir('gsd-2376-decoy-');
+  });
+
+  afterEach(() => {
+    cleanup(projectDir);
+    cleanup(decoyDir);
+  });
+
+  test('init plan-phase emits absolute path fields that resolve from a different process cwd', () => {
+    seedPhase(projectDir, '03-api', {
+      '03-CONTEXT.md': '# Phase Context',
+    });
+    fs.writeFileSync(path.join(projectDir, '.planning', 'STATE.md'), '# State\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+
+    const result = runGsdTools(['init', 'plan-phase', '03', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    for (const field of ['state_path', 'roadmap_path', 'requirements_path', 'context_path', 'phase_dir']) {
+      const value = output[field];
+      assert.ok(value, `${field} should be present, got: ${JSON.stringify(value)}`);
+      assert.ok(path.isAbsolute(value), `${field} must be absolute, got: "${value}"`);
+      // Resolve AS-IS — no joining against decoyDir or process.cwd() — the
+      // string itself must locate the real, already-committed file/dir.
+      assert.ok(fs.existsSync(value), `${field} must resolve to the real file/dir: "${value}"`);
+    }
+  });
+
+  test('init verify-work now emits absolute state_path/roadmap_path (previously absent)', () => {
+    seedPhase(projectDir, '03-api', {
+      '03-01-PLAN.md': '# Plan',
+      '03-01-SUMMARY.md': '# Summary',
+    });
+    fs.writeFileSync(path.join(projectDir, '.planning', 'STATE.md'), '# State\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+
+    const result = runGsdTools(['init', 'verify-work', '03', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok('state_path' in output, 'cmdInitVerifyWork must now emit state_path (#2376)');
+    assert.ok('roadmap_path' in output, 'cmdInitVerifyWork must now emit roadmap_path (#2376)');
+    for (const field of ['state_path', 'roadmap_path']) {
+      assert.ok(path.isAbsolute(output[field]), `${field} must be absolute, got: "${output[field]}"`);
+      assert.ok(fs.existsSync(output[field]), `${field} must resolve to the real file: "${output[field]}"`);
+    }
+  });
+
+  test('init phase-op emits absolute path fields that resolve from a different process cwd', () => {
+    seedPhase(projectDir, '03-api', {
+      '03-CONTEXT.md': '# Phase Context',
+      '03-RESEARCH.md': '# Research',
+    });
+    fs.writeFileSync(path.join(projectDir, '.planning', 'STATE.md'), '# State\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+
+    const result = runGsdTools(['init', 'phase-op', '03', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    for (const field of ['phase_dir', 'state_path', 'roadmap_path', 'requirements_path', 'context_path', 'research_path']) {
+      const value = output[field];
+      assert.ok(value, `${field} should be present, got: ${JSON.stringify(value)}`);
+      assert.ok(path.isAbsolute(value), `${field} must be absolute, got: "${value}"`);
+      assert.ok(fs.existsSync(value), `${field} must resolve to the real file/dir: "${value}"`);
+    }
+  });
+
+  test('init todos emits absolute pending_dir/completed_dir and per-todo path fields', () => {
+    const pendingDir = path.join(projectDir, '.planning', 'todos', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+    fs.writeFileSync(path.join(pendingDir, 'task-1.md'), 'title: Fix bug\narea: backend\ncreated: 2026-02-25');
+
+    const result = runGsdTools(['init', 'todos', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok(path.isAbsolute(output.pending_dir), `pending_dir must be absolute, got: "${output.pending_dir}"`);
+    assert.ok(fs.existsSync(output.pending_dir), `pending_dir must resolve to the real directory: "${output.pending_dir}"`);
+    assert.ok(path.isAbsolute(output.completed_dir), `completed_dir must be absolute, got: "${output.completed_dir}"`);
+
+    const todo = output.todos.find((t) => t.file === 'task-1.md');
+    assert.ok(todo, 'task-1.md should be present in todos');
+    assert.ok(path.isAbsolute(todo.path), `todo.path must be absolute, got: "${todo.path}"`);
+    assert.ok(fs.existsSync(todo.path), `todo.path must resolve to the real file: "${todo.path}"`);
+  });
+
+  test('init new-project emits absolute requirements_path/roadmap_path/config_path/research_dir (previously absent)', () => {
+    fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), '{}\n');
+    fs.mkdirSync(path.join(projectDir, '.planning', 'research'), { recursive: true });
+
+    const result = runGsdTools(['init', 'new-project', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    for (const field of ['requirements_path', 'roadmap_path', 'config_path', 'research_dir']) {
+      assert.ok(field in output, `cmdInitNewProject must now emit ${field} (#2376)`);
+      const value = output[field];
+      assert.ok(path.isAbsolute(value), `${field} must be absolute, got: "${value}"`);
+      assert.ok(fs.existsSync(value), `${field} must resolve to the real file/dir: "${value}"`);
+    }
+  });
+
+  test('init new-milestone emits absolute requirements_path/config_path/research_dir/milestones_path (previously absent)', () => {
+    fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'config.json'), '{}\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'MILESTONES.md'), '# Milestones\n');
+    fs.mkdirSync(path.join(projectDir, '.planning', 'research'), { recursive: true });
+
+    const result = runGsdTools(['init', 'new-milestone', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    for (const field of ['requirements_path', 'config_path', 'research_dir', 'milestones_path']) {
+      assert.ok(field in output, `cmdInitNewMilestone must now emit ${field} (#2376)`);
+      const value = output[field];
+      assert.ok(path.isAbsolute(value), `${field} must be absolute, got: "${value}"`);
+      assert.ok(fs.existsSync(value), `${field} must resolve to the real file/dir: "${value}"`);
+    }
+  });
+
+  test('init ingest-docs emits absolute requirements_path/roadmap_path/state_path/intel_dir/conflicts_path (previously absent)', () => {
+    fs.writeFileSync(path.join(projectDir, '.planning', 'REQUIREMENTS.md'), '# Requirements\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+    fs.writeFileSync(path.join(projectDir, '.planning', 'STATE.md'), '# State\n');
+    fs.mkdirSync(path.join(projectDir, '.planning', 'intel'), { recursive: true });
+
+    const result = runGsdTools(['init', 'ingest-docs', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    for (const field of ['requirements_path', 'roadmap_path', 'state_path', 'intel_dir']) {
+      assert.ok(field in output, `cmdInitIngestDocs must now emit ${field} (#2376)`);
+      const value = output[field];
+      assert.ok(path.isAbsolute(value), `${field} must be absolute, got: "${value}"`);
+      assert.ok(fs.existsSync(value), `${field} must resolve to the real file/dir: "${value}"`);
+    }
+    // conflicts_path is written by the synthesizer, not present at init time —
+    // assert absolute-shape only, not existence.
+    assert.ok('conflicts_path' in output, 'cmdInitIngestDocs must now emit conflicts_path (#2376)');
+    assert.ok(path.isAbsolute(output.conflicts_path), `conflicts_path must be absolute, got: "${output.conflicts_path}"`);
+  });
+
+  test('init map-codebase emits absolute codebase_dir that resolves from a different process cwd', () => {
+    const codebaseDir = path.join(projectDir, '.planning', 'codebase');
+    fs.mkdirSync(codebaseDir, { recursive: true });
+    fs.writeFileSync(path.join(codebaseDir, 'STACK.md'), '# Stack');
+
+    const result = runGsdTools(['init', 'map-codebase', '--cwd', projectDir], decoyDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const output = JSON.parse(result.output);
+    assert.ok('codebase_dir' in output, 'cmdInitMapCodebase must emit codebase_dir (#2376)');
+    assert.ok(path.isAbsolute(output.codebase_dir), `codebase_dir must be absolute, got: "${output.codebase_dir}"`);
+    assert.ok(fs.existsSync(output.codebase_dir), `codebase_dir must resolve to the real directory: "${output.codebase_dir}"`);
+  });
+
+  // allow-test-rule: source-text-is-the-product (see #2376)
+  test('gsd-core/workflows/verify-work.md plan_gap_closure step references {state_path}/{roadmap_path}, not bare .planning literals', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'verify-work.md');
+    const content = fs.readFileSync(wfPath, 'utf8');
+    const stepMatch = content.match(/<step name="plan_gap_closure">[\s\S]*?<\/step>/);
+    assert.ok(stepMatch, 'plan_gap_closure step should exist in verify-work.md');
+    const step = stepMatch[0];
+    assert.ok(step.includes('{state_path}'), 'plan_gap_closure must reference {state_path} from init JSON, not a bare literal');
+    assert.ok(step.includes('{roadmap_path}'), 'plan_gap_closure must reference {roadmap_path} from init JSON, not a bare literal');
+    assert.ok(!step.includes('.planning/STATE.md'), 'plan_gap_closure must not hardcode .planning/STATE.md (#2376)');
+    assert.ok(!step.includes('.planning/ROADMAP.md'), 'plan_gap_closure must not hardcode .planning/ROADMAP.md (#2376)');
+  });
+
+  // allow-test-rule: source-text-is-the-product (see #2376)
+  test('gsd-core/workflows/diagnose-issues.md debug agent spawn references {state_path}, not a bare .planning literal', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'diagnose-issues.md');
+    const content = fs.readFileSync(wfPath, 'utf8');
+    assert.ok(content.includes('{state_path}'), 'debug agent spawn must reference {state_path} from init JSON, not a bare literal');
+    assert.ok(!content.includes('.planning/STATE.md'), 'debug agent spawn must not hardcode .planning/STATE.md (#2376)');
+  });
+
+  // allow-test-rule: source-text-is-the-product (see #2376)
+  test('gsd-core/workflows/execute-phase.md verify_phase_goal step references {requirements_path}, not a bare .planning literal', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'execute-phase.md');
+    const content = fs.readFileSync(wfPath, 'utf8');
+    const stepMatch = content.match(/<step name="verify_phase_goal">[\s\S]*?<\/step>/);
+    assert.ok(stepMatch, 'verify_phase_goal step should exist in execute-phase.md');
+    const step = stepMatch[0];
+    assert.ok(step.includes('{requirements_path}'), 'verify_phase_goal must reference {requirements_path} from init JSON, not a bare literal');
+    assert.ok(!step.includes('.planning/REQUIREMENTS.md'), 'verify_phase_goal must not hardcode .planning/REQUIREMENTS.md (#2376)');
+  });
+
+  // allow-test-rule: source-text-is-the-product (see #2376)
+  //
+  // Checks verbatim presence of the exact edited <files_to_read>/output blocks
+  // rather than scanning the whole file for absence of the old literals: several
+  // of those literals (e.g. .planning/PROJECT.md, .planning/config.json) remain
+  // legitimately elsewhere in this file in orchestrator-local bash/doc-table
+  // text that never reaches a spawned subagent — only the three specific
+  // Agent(prompt=...) blocks touched by #2376 needed to change.
+  test('gsd-core/workflows/new-project.md synthesizer/roadmapper spawns reference {research_dir}/{project_path}/{requirements_path}/{roadmap_path}/{config_path}, not bare .planning literals', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-project.md');
+    const content = fs.readFileSync(wfPath, 'utf8');
+
+    assert.ok(content.includes(
+      '<files_to_read>\n- {research_dir}/STACK.md\n- {research_dir}/FEATURES.md\n- {research_dir}/ARCHITECTURE.md\n- {research_dir}/PITFALLS.md\n</files_to_read>'
+    ), 'research-synthesizer spawn must read from {research_dir}, not bare .planning/research/*.md literals');
+    assert.ok(content.includes('Write to: {research_dir}/SUMMARY.md'),
+      'research-synthesizer spawn must write to {research_dir}/SUMMARY.md, not a bare literal');
+
+    assert.ok(content.includes(
+      '<files_to_read>\n- {project_path} (Project context)\n- {requirements_path} (v1 Requirements)\n- {research_dir}/SUMMARY.md (Research findings - if exists)\n- {config_path} (Granularity and mode settings)\n</files_to_read>'
+    ), 'roadmapper spawn must read from {project_path}/{requirements_path}/{research_dir}/{config_path}, not bare .planning literals');
+
+    assert.ok(content.includes(
+      '<files_to_read>\n  - {roadmap_path} (Current roadmap to revise)\n  </files_to_read>'
+    ), 'roadmapper revision spawn must read {roadmap_path}, not a bare .planning/ROADMAP.md literal');
+  });
+
+  // allow-test-rule: source-text-is-the-product (see #2376)
+  test('gsd-core/workflows/new-milestone.md synthesizer/roadmapper spawns reference {research_dir}/{project_path}/{requirements_path}/{config_path}/{milestones_path}, not bare .planning literals', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'new-milestone.md');
+    const content = fs.readFileSync(wfPath, 'utf8');
+
+    assert.ok(content.includes(
+      '<files_to_read>\n- {research_dir}/STACK.md\n- {research_dir}/FEATURES.md\n- {research_dir}/ARCHITECTURE.md\n- {research_dir}/PITFALLS.md\n</files_to_read>'
+    ), 'research-synthesizer spawn must read from {research_dir}, not bare .planning/research/*.md literals');
+    assert.ok(content.includes('Write to: {research_dir}/SUMMARY.md'),
+      'research-synthesizer spawn must write to {research_dir}/SUMMARY.md, not a bare literal');
+
+    assert.ok(content.includes(
+      '<files_to_read>\n- {project_path}\n- {requirements_path}\n- {research_dir}/SUMMARY.md (if exists)\n- {config_path}\n- {milestones_path}\n</files_to_read>'
+    ), 'roadmapper spawn must read from {project_path}/{requirements_path}/{research_dir}/{config_path}/{milestones_path}, not bare .planning literals');
+  });
+
+  // allow-test-rule: source-text-is-the-product (see #2376)
+  test('gsd-core/workflows/ingest-docs.md classifier/synthesizer/roadmapper spawns reference {intel_dir}/{conflicts_path}/{project_path}/{requirements_path}/{roadmap_path}/{state_path}, not bare .planning literals', () => {
+    const wfPath = path.join(__dirname, '..', 'gsd-core', 'workflows', 'ingest-docs.md');
+    const content = fs.readFileSync(wfPath, 'utf8');
+
+    assert.ok(content.includes('`OUTPUT_DIR` — `{intel_dir}/classifications`'),
+      'gsd-doc-classifier spawn OUTPUT_DIR must reference {intel_dir}, not a bare .planning/intel/classifications/ literal');
+
+    assert.ok(content.includes(
+      'CLASSIFICATIONS_DIR: {intel_dir}/classifications\n    INTEL_DIR: {intel_dir}\n    CONFLICTS_PATH: {conflicts_path}'
+    ), 'gsd-doc-synthesizer spawn must reference {intel_dir}/{conflicts_path}, not bare .planning literals');
+
+    assert.ok(content.includes(
+      'Intel: {intel_dir}/SYNTHESIS.md (entry point)\n    Per-type intel: {intel_dir}/decisions.md, {intel_dir}/requirements.md, {intel_dir}/constraints.md, {intel_dir}/context.md'
+    ), 'gsd-roadmapper spawn must reference {intel_dir}, not bare .planning/intel/*.md literals');
+
+    assert.ok(content.includes(
+      'Produce:\n    - {project_path}\n    - {requirements_path}\n    - {roadmap_path}\n    - {state_path}'
+    ), 'gsd-roadmapper spawn Produce block must reference absolute path fields, not bare .planning literals');
   });
 });
 

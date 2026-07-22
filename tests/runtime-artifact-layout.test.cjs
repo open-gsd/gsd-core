@@ -333,7 +333,9 @@ describe('resolveRuntimeArtifactLayout — opencode', () => {
 
     const commands = layout.kinds.find((k) => k.kind === 'commands');
     assert.ok(commands, 'should have a commands kind');
-    assert.strictEqual(commands.destSubpath, 'command');
+    // #2329: OpenCode discovers commands from the PLURAL `commands/` dir — the
+    // singular `command/` made all /gsd-* commands invisible to OpenCode.
+    assert.strictEqual(commands.destSubpath, 'commands');
     assert.strictEqual(commands.prefix, 'gsd-');
     assert.strictEqual(typeof commands.stage, 'function');
 

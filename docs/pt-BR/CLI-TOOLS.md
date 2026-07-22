@@ -1,6 +1,6 @@
 # Referência de Ferramentas CLI do GSD
 
-> Referência para o CLI `gsd-tools` (`get-shit-done/bin/gsd-tools.cjs`). Para comandos slash e fluxos de usuário, consulte a [Referência de Comandos](COMMANDS.md). Voltar ao [índice de documentação](README.md).
+> Referência para o CLI `gsd-tools` (`gsd-core/bin/gsd-tools.cjs`). Para comandos slash e fluxos de usuário, consulte a [Referência de Comandos](COMMANDS.md). Voltar ao [índice de documentação](README.md).
 
 ---
 
@@ -11,8 +11,8 @@
 
 |                    |                                                                                                                                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Caminho instalado**   | `get-shit-done/bin/gsd-tools.cjs`                                                                                                                                                                      |
-| **Implementação** | 20 módulos de domínio em `get-shit-done/bin/lib/` (o diretório é autoritativo)                                                                                                                        |
+| **Caminho instalado**   | `gsd-core/bin/gsd-tools.cjs`                                                                                                                                                                      |
+| **Implementação** | 20 módulos de domínio em `gsd-core/bin/lib/` (o diretório é autoritativo)                                                                                                                        |
 | **Status**         | Principal superfície de comandos em tempo de execução para orquestração, fluxos de trabalho e automação. |
 
 
@@ -491,7 +491,7 @@ Os slugs são validados contra `[a-zA-Z0-9_-]+`; slugs vazios ou contendo caminh
 
 ## Tratamento de Segredos
 
-As chaves de API configuradas via `/gsd-settings` (`brave_search`, `firecrawl`, `exa_search`) são gravadas em texto simples em `.planning/config.json`, mas são mascaradas (`****<last-4>`) em toda saída de `config-set` / `config-get`, tabela de confirmação e prompt interativo. Consulte `get-shit-done/bin/lib/secrets.cjs` para a implementação do mascaramento. O próprio arquivo `config.json` é o limite de segurança — proteja-o com permissões do sistema de arquivos e mantenha-o fora do git (`.planning/` está no gitignore por padrão).
+As chaves de API configuradas via `/gsd-settings` (`brave_search`, `firecrawl`, `exa_search`) são gravadas em texto simples em `.planning/config.json`, mas são mascaradas (`****<last-4>`) em toda saída de `config-set` / `config-get`, tabela de confirmação e prompt interativo. Consulte `gsd-core/bin/lib/secrets.cjs` para a implementação do mascaramento. O próprio arquivo `config.json` é o limite de segurança — proteja-o com permissões do sistema de arquivos e mantenha-o fora do git (`.planning/` está no gitignore por padrão).
 
 ---
 

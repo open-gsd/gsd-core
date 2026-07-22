@@ -82,6 +82,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/ui-consideration-probe.cjs',
       'gsd-core/bin/lib/code-review-flags.cjs',
       'gsd-core/bin/lib/context-utilization.cjs',
+      'gsd-core/bin/lib/broken-windows.cjs',
       'gsd-core/bin/lib/api-coverage.cjs',
       'gsd-core/bin/lib/artifacts.cjs',
       'gsd-core/bin/lib/assumption-delta.cjs',
@@ -129,6 +130,7 @@ export default tseslint.config(
       'gsd-core/bin/lib/installer-migrations/002-codex-legacy-hooks-json.cjs',
       'gsd-core/bin/lib/installer-migrations/003-rename-get-shit-done-to-gsd-core.cjs',
       'gsd-core/bin/lib/installer-migrations/004-prune-stale-pristine-snapshots.cjs',
+      'gsd-core/bin/lib/installer-migrations/005-opencode-baseline-commands-dir.cjs',
       'gsd-core/bin/lib/observability/logger.cjs',
       'gsd-core/bin/lib/active-workstream-store.cjs',
       'gsd-core/bin/lib/adr-parser.cjs',
@@ -416,5 +418,34 @@ export default tseslint.config(
     plugins: { local: localPlugin },
     languageOptions: { sourceType: 'commonjs', globals: { ...globals.node } },
     rules: { 'local/no-source-grep': 'error' },
+  },
+
+  // ── #2453 Command Routing Hub: uniform handler signature ────────────────────
+  // Every route handler in gsd-tools.cjs is declared with the SAME destructured
+  // signature — `function routeX({ args, cwd, raw, error })` — whether or not it
+  // uses all four members. That uniformity is the point: it is the dispatch
+  // contract, so a handler can be moved or added without re-deriving which
+  // members exist.
+  //
+  // `argsIgnorePattern: '^_'` is structurally in conflict with that convention:
+  // satisfying it would mean `_`-prefixing ~50 parameters, which makes the
+  // signature non-uniform across the table and defeats the contract. So args
+  // checking is disabled HERE ONLY.
+  //
+  // `varsIgnorePattern` is deliberately left intact: genuinely dead *variables*
+  // (the #2379 case — unused `require()` results) must still surface. This
+  // narrows the exemption to the one category the convention actually forces.
+  //
+  // Decision deferred by #732 ("Severities stay `warn` (no config change in this
+  // pass)"), resolved by #2453 option 1.
+  {
+    files: ['gsd-core/bin/gsd-tools.cjs'],
+    rules: {
+      'no-unused-vars': ['warn', {
+        args: 'none',
+        varsIgnorePattern: '^_',
+        caughtErrors: 'none',
+      }],
+    },
   },
 );

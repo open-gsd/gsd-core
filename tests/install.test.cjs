@@ -573,6 +573,20 @@ describe('uninstall skills cleanup — hermes', () => {
 
 // ─── Section 4: No Claude references leak into non-Claude runtimes ────────────
 
+// #2284(b): a `<runtime_compatibility>...</runtime_compatibility>` block (e.g.
+// execute-phase.md/plan-phase.md's "**Subagent spawning is runtime-specific:**"
+// table) INTENTIONALLY retains "Claude Code" as a COMPARISON-RUNTIME LABEL —
+// "- **Claude Code:** Uses `Agent(subagent_type=..., ...)`" documents how
+// Claude Code behaves for a reader on ANY installed runtime; it is never a
+// host-self-reference the install is supposed to rebrand away. Strip these
+// blocks before the leak scan below so that legitimate retention doesn't trip
+// the "zero Claude references" invariant — everything OUTSIDE a
+// `runtime_compatibility` block is still held to zero, so an actual leaked
+// self-reference elsewhere in the file still fails this test.
+function stripRuntimeCompatibilityBlocks(content) {
+  return content.replace(/<runtime_compatibility>[\s\S]*?<\/runtime_compatibility>/g, '');
+}
+
 for (const runtime of ['hermes', 'qwen']) {
   describe(`no Claude references leak into ${runtime} install`, () => {
     let tmpDir;
@@ -628,7 +642,9 @@ for (const runtime of ['hermes', 'qwen']) {
         path.basename(f) !== 'CHANGELOG.md'
       );
       const leaks = allFiles.filter(f => {
-        const c = fs.readFileSync(f, 'utf8');
+        // #2284(b): exempt `<runtime_compatibility>` comparison-table content
+        // — see the exemption's rationale above the `for` loop.
+        const c = stripRuntimeCompatibilityBlocks(fs.readFileSync(f, 'utf8'));
         return /\bCLAUDE\.md\b/.test(c) || /\bClaude Code\b/.test(c) || /\.claude\//.test(c);
       }).map(f => path.relative(tmpDir, f));
       assert.strictEqual(leaks.length, 0, `Leaking: ${leaks.join(', ')}`);
@@ -1829,6 +1845,83 @@ describe('normalizeNodePath — mise versioned path → sibling shim (#1619)', (
     assert.equal(
       normalizeNodePath('/opt/homebrew/bin/node', { existsSync: () => true }),
       '/opt/homebrew/bin/node');
+  });
+});
+
+// ─── normalizeNodePath — volta versioned image path → stable shim (#2335) ────
+//
+// Bug #2335: the volta analog of #977 (fnm) / #1619 (mise) / #2185 (Homebrew).
+// `resolveNodeRunner()` bakes process.execPath into managed hook commands, and
+// node realpaths execPath, so under volta it resolves to the concrete image
+// `<VOLTA_HOME>/tools/image/node/<ver>/bin/node` (Windows: `<...>/<ver>/node.exe`
+// — volta's own layout puts node.exe at the image root, no bin/). `volta
+// uninstall node@<ver>` prunes that image, after which every managed hook 404s.
+// The stable alias is the shim `<VOLTA_HOME>/bin/node`, a symlink to volta-shim
+// that always resolves to the active pin. <VOLTA_HOME> is derived from the path
+// (not env) so a custom VOLTA_HOME and the Windows %LOCALAPPDATA%\Volta default
+// both work — same reasoning as the Homebrew branch (#2185). Rewrite only when
+// the shim exists; otherwise fall back to raw execPath, like the mise branch.
+describe('normalizeNodePath — volta image path → sibling shim (#2335)', () => {
+  const VOLTA_HOME = '/Users/u/.volta';
+  const VOLTA_NODE_PINNED = `${VOLTA_HOME}/tools/image/node/18.17.1/bin/node`;
+  const VOLTA_SHIM = `${VOLTA_HOME}/bin/node`;
+  const VOLTA_WIN_HOME = 'C:/Users/u/AppData/Local/Volta';
+  const VOLTA_WIN_NODE = `${VOLTA_WIN_HOME}/tools/image/node/22.1.0/node.exe`; // no bin/ on Windows
+  const VOLTA_WIN_SHIM = `${VOLTA_WIN_HOME}/bin/node.exe`;
+  const VOLTA_CUSTOM_HOME = '/opt/volta-home';
+  const VOLTA_CUSTOM_NODE = `${VOLTA_CUSTOM_HOME}/tools/image/node/20.0.0/bin/node`;
+  const VOLTA_CUSTOM_SHIM = `${VOLTA_CUSTOM_HOME}/bin/node`;
+
+  test('POSIX pinned image path + shim exists → sibling shim', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_NODE_PINNED, { existsSync: p => p === VOLTA_SHIM }),
+      VOLTA_SHIM);
+  });
+
+  test('Windows node.exe + shim exists → bin/node.exe (.exe preserved)', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_WIN_NODE, { existsSync: p => p === VOLTA_WIN_SHIM }),
+      VOLTA_WIN_SHIM);
+  });
+
+  test('backslash Windows path normalizes the same as forward-slash', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_WIN_NODE.replace(/\//g, '\\'),
+        { existsSync: p => p === VOLTA_WIN_SHIM }),
+      VOLTA_WIN_SHIM);
+  });
+
+  test('custom VOLTA_HOME layout → shim derived from execPath, not env', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_CUSTOM_NODE, { existsSync: p => p === VOLTA_CUSTOM_SHIM }),
+      VOLTA_CUSTOM_SHIM);
+  });
+
+  test('no regression: shim absent → falls back to raw execPath unchanged', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_NODE_PINNED, { existsSync: () => false }),
+      VOLTA_NODE_PINNED);
+  });
+
+  test('volta shim itself is already stable → left unchanged (idempotent)', () => {
+    assert.equal(
+      normalizeNodePath(VOLTA_SHIM, { existsSync: () => true }),
+      VOLTA_SHIM);
+  });
+
+  test('a non-node volta image (yarn) is not rewritten to the node shim', () => {
+    const yarnImage = `${VOLTA_HOME}/tools/image/yarn/1.22.19/bin/yarn`;
+    assert.equal(
+      normalizeNodePath(yarnImage, { existsSync: () => true }),
+      yarnImage);
+  });
+
+  test('mise path is unaffected by the volta branch (no cross-manager capture)', () => {
+    const miseShim = '/Users/u/.local/share/mise/shims/node';
+    assert.equal(
+      normalizeNodePath('/Users/u/.local/share/mise/installs/node/26.3.0/bin/node',
+        { existsSync: p => p === miseShim }),
+      miseShim);
   });
 });
 
@@ -10297,5 +10390,132 @@ test('real install: claude-emitted execute-phase.md keeps claude default + workt
     'claude install must NOT have use_worktrees=false stamped',
   );
 });
+
   });
 }
+
+// Bug #2395 — finishInstall for non-Claude runtimes never persisted `runtime: <id>`
+// into ~/.gsd/defaults.json. resolveRuntime() precedence is GSD_RUNTIME > config.runtime
+// > 'claude', so both inputs being empty on a Cursor (or any non-Claude) install caused
+// every runtime-branded output (agent_runtime, formatGsdSlash hints, etc.) to silently
+// fall through to 'claude'. Fix mirrors the resolve_model_ids: "omit" write site that
+// already exists for non-Claude runtimes — writes runtime: <runtime> when absent.
+describe('Bug #2395: finishInstall persists runtime identity for non-Claude runtimes', () => {
+  const LOCAL_ROOT = path.join(__dirname, '..');
+  const LOCAL_FAKE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-2395-test-'));
+  const LOCAL_GSD_DIR = path.join(LOCAL_FAKE_HOME, '.gsd');
+  const LOCAL_DEFAULTS_PATH = path.join(LOCAL_GSD_DIR, 'defaults.json');
+  const LOCAL_INSTALL_MODULE = require(path.join(LOCAL_ROOT, 'bin', 'install.js'));
+  const LOCAL_SETTINGS_PATH = path.join(LOCAL_FAKE_HOME, `gsd-test-settings-${process.pid}-2395.json`);
+
+  const { before: __before, after: __after } = require('node:test');
+  const __savedHome = process.env.HOME;
+  const __savedUserProfile = process.env.USERPROFILE;
+  __before(() => {
+    process.env.HOME = LOCAL_FAKE_HOME;
+    process.env.USERPROFILE = LOCAL_FAKE_HOME;
+  });
+  __after(() => {
+    if (__savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = __savedHome;
+    if (__savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = __savedUserProfile;
+    try { cleanup(LOCAL_FAKE_HOME); } catch { /* best-effort */ }
+  });
+
+  function callFinishInstall(runtime) {
+    const original = console.log;
+    console.log = () => {};
+    try {
+      LOCAL_INSTALL_MODULE.finishInstall(
+        LOCAL_SETTINGS_PATH,
+        {}, null, false, runtime, true, null,
+      );
+    } finally {
+      console.log = original;
+    }
+  }
+
+  function seedDefaults(obj) {
+    fs.mkdirSync(LOCAL_GSD_DIR, { recursive: true });
+    fs.writeFileSync(LOCAL_DEFAULTS_PATH, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+  }
+
+  function withUserPath(fn) {
+    const saved = process.env.GSD_TEST_MODE;
+    delete process.env.GSD_TEST_MODE;
+    try {
+      return fn();
+    } finally {
+      process.env.GSD_TEST_MODE = saved;
+    }
+  }
+
+  test('absent runtime → written to <install runtime> (cursor install surfaces cursor branding)', () => {
+    withUserPath(() => {
+      seedDefaults({ model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'cursor', 'absent runtime must be populated with the install runtime identity');
+    });
+  });
+
+  test('null runtime → written to <install runtime> (treated as absent)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: null, model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'cursor', 'null runtime must be treated as absent and populated');
+    });
+  });
+
+  test('empty-string runtime → written to <install runtime> (treated as absent)', () => {
+    withUserPath(() => {
+      seedDefaults({ runtime: '', model_profile: 'balanced' });
+      callFinishInstall('codex');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'codex', 'empty-string runtime must be treated as absent and populated');
+    });
+  });
+
+  test('explicit pre-existing runtime is preserved (no clobber across runtimes)', () => {
+    withUserPath(() => {
+      // User explicitly set runtime: 'cursor' — a subsequent opencode install must not clobber.
+      seedDefaults({ runtime: 'cursor', resolve_model_ids: 'omit' });
+      callFinishInstall('opencode');
+      const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after.runtime, 'cursor', 'explicit user-set runtime must be preserved across install of a different runtime');
+    });
+  });
+
+  // The clobber guard is runtime-agnostic; parameterize across a representative slice of
+  // non-Claude runtimes. Each should populate its own runtime identity when absent.
+  for (const runtime of ['cursor', 'codex', 'opencode', 'antigravity', 'windsurf']) {
+    test(`${runtime} install populates runtime: "${runtime}" when absent`, () => {
+      withUserPath(() => {
+        seedDefaults({ model_profile: 'balanced' });
+        callFinishInstall(runtime);
+        const after = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+        assert.equal(after.runtime, runtime, `${runtime} install must persist runtime: "${runtime}" so resolveRuntime() does not fall through to 'claude'`);
+      });
+    });
+  }
+
+  test('same-runtime idempotence: second cursor install is a no-op (runtime already set)', () => {
+    withUserPath(() => {
+      seedDefaults({ model_profile: 'balanced' });
+      callFinishInstall('cursor');
+      const after1 = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      assert.equal(after1.runtime, 'cursor', 'first install must populate runtime: cursor');
+      // Capture mtime; wait briefly so a no-op vs rewrite is distinguishable.
+      const beforeMtime = fs.statSync(LOCAL_DEFAULTS_PATH).mtimeMs;
+      const start = Date.now();
+      while (Date.now() - start < 20) { /* spin briefly */ }
+      callFinishInstall('cursor');  // second install — should be a no-op on runtime
+      const after2 = JSON.parse(fs.readFileSync(LOCAL_DEFAULTS_PATH, 'utf8'));
+      const afterMtime = fs.statSync(LOCAL_DEFAULTS_PATH).mtimeMs;
+      assert.equal(after2.runtime, 'cursor', 'second install must leave runtime: cursor intact');
+      assert.equal(afterMtime, beforeMtime, 'second install must NOT rewrite defaults.json (runtime already set, idempotent)');
+    });
+  });
+});

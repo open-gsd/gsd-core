@@ -119,9 +119,19 @@ Collect phase artifacts for the review prompt:
 ```bash
 INIT=$(gsd_run query init.phase-op "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+
+# #2358: ONE run-scoped temp dir (portable via ${TMPDIR:-/tmp}) so overlapping
+# runs never collide or read each other's stale files.
+RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/gsd-review-XXXXXX")
+echo "RUN_DIR=$RUN_DIR"
 ```
 
 Read from init: `phase_dir`, `phase_number`, `padded_phase`.
+
+Capture `RUN_DIR` above (created ONCE) and thread it into every `{run_dir}`
+placeholder and `$RUN_DIR`/`${RUN_DIR}` reference within a bash block. Do NOT
+re-run `mktemp -d` later — every block must resolve to this same directory, or
+`build_prompt`'s writes and `invoke_reviewers`' reads split.
 
 Then read:
 1. `.planning/PROJECT.md` (first 80 lines — project context)
@@ -189,40 +199,42 @@ Focus on:
 Output your review in markdown format.
 ```
 
-Write to a temp file: `/tmp/gsd-review-prompt-{phase}.md`
+Write to a temp file: `{run_dir}/gsd-review-prompt.md`
 
 Also write individual section files so the budget tool can re-trim per reviewer:
 
 ```bash
+RUN_DIR="{run_dir}"   # from gather_context
+
 # Write individual section files for per-reviewer budget trimming
 # These are always written so reviewers with a budget can invoke prompt-budget
-cp "$INSTRUCTIONS_BLOCK_FILE" "/tmp/gsd-review-${PHASE}-instructions.md"
-cp "$ROADMAP_SECTION_FILE" "/tmp/gsd-review-${PHASE}-roadmap.md"
+cp "$INSTRUCTIONS_BLOCK_FILE" "${RUN_DIR}/gsd-review-instructions.md"
+cp "$ROADMAP_SECTION_FILE" "${RUN_DIR}/gsd-review-roadmap.md"
 
 # Plan files: copy each PLAN.md to a predictable numbered path
 PLAN_INDEX=0
 for PLAN_FILE in "${PHASE_DIR}"/*-PLAN.md; do
   PADDED_IDX=$(printf '%02d' "$PLAN_INDEX")
-  cp "$PLAN_FILE" "/tmp/gsd-review-${PHASE}-plan-${PADDED_IDX}.md"
+  cp "$PLAN_FILE" "${RUN_DIR}/gsd-review-plan-${PADDED_IDX}.md"
   PLAN_INDEX=$((PLAN_INDEX + 1))
 done
 
 # Optional section files (only if content was included in the combined prompt)
 if [ -f ".planning/PROJECT.md" ]; then
-  cp .planning/PROJECT.md "/tmp/gsd-review-${PHASE}-project.md"
+  cp .planning/PROJECT.md "${RUN_DIR}/gsd-review-project.md"
 fi
 if ls "${PHASE_DIR}/"*"-CONTEXT.md" >/dev/null 2>&1; then
-  cat "${PHASE_DIR}/"*"-CONTEXT.md" > "/tmp/gsd-review-${PHASE}-context.md"
+  cat "${PHASE_DIR}/"*"-CONTEXT.md" > "${RUN_DIR}/gsd-review-context.md"
 fi
 if ls "${PHASE_DIR}/"*"-RESEARCH.md" >/dev/null 2>&1; then
-  cat "${PHASE_DIR}/"*"-RESEARCH.md" > "/tmp/gsd-review-${PHASE}-research.md"
+  cat "${PHASE_DIR}/"*"-RESEARCH.md" > "${RUN_DIR}/gsd-review-research.md"
 fi
 if [ -f ".planning/REQUIREMENTS.md" ]; then
-  cp .planning/REQUIREMENTS.md "/tmp/gsd-review-${PHASE}-requirements.md"
+  cp .planning/REQUIREMENTS.md "${RUN_DIR}/gsd-review-requirements.md"
 fi
 ```
 
-Note: The variable names above (`INSTRUCTIONS_BLOCK_FILE`, `ROADMAP_SECTION_FILE`, `PHASE_DIR`, `PHASE`) reference the variables already established during prompt assembly. In practice the AI implementing this step writes the instruction and roadmap blocks to temp files while assembling the combined prompt, then copies those same temp files to the per-reviewer section paths. If the assembled prompt was built inline (string concatenation rather than file-by-file), write each section to the corresponding path after writing the combined file.
+Note: `INSTRUCTIONS_BLOCK_FILE`, `ROADMAP_SECTION_FILE`, and `PHASE_DIR` come from prompt assembly; `RUN_DIR` is the run-scoped dir from `gather_context` (#2358) re-assigned from `{run_dir}` above. Copy the temp files written during prompt assembly to these section paths (or write each section here if the prompt was built inline).
 </step>
 
 <step name="invoke_reviewers">
@@ -260,18 +272,18 @@ For each selected CLI, invoke in sequence (not parallel — avoid rate limits):
 **Gemini:**
 ```bash
 if [ -n "$GEMINI_MODEL" ] && [ "$GEMINI_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | gemini -m "$GEMINI_MODEL" -p - 2>/dev/null > /tmp/gsd-review-gemini-{phase}.md
+  cat {run_dir}/gsd-review-prompt.md | gemini -m "$GEMINI_MODEL" -p - 2>/dev/null > {run_dir}/gsd-review-gemini.md
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | gemini -p - 2>/dev/null > /tmp/gsd-review-gemini-{phase}.md
+  cat {run_dir}/gsd-review-prompt.md | gemini -p - 2>/dev/null > {run_dir}/gsd-review-gemini.md
 fi
 ```
 
 **Claude (separate session):**
 ```bash
 if [ -n "$CLAUDE_MODEL" ] && [ "$CLAUDE_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | claude --model "$CLAUDE_MODEL" -p - 2>/dev/null > /tmp/gsd-review-claude-{phase}.md
+  cat {run_dir}/gsd-review-prompt.md | claude --model "$CLAUDE_MODEL" -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | claude -p - 2>/dev/null > /tmp/gsd-review-claude-{phase}.md
+  cat {run_dir}/gsd-review-prompt.md | claude -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
 fi
 ```
 
@@ -286,13 +298,13 @@ fi
 # stdout redirect would append that noise to a non-empty file — slipping past the
 # `[ ! -s … ]` empty-output guard as a silently polluted review.
 if [ -n "$CODEX_MODEL" ] && [ "$CODEX_MODEL" != "null" ]; then
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" --skip-git-repo-check -o /tmp/gsd-review-codex-{phase}.md - 2>/tmp/gsd-review-codex-{phase}.err >/dev/null
+  cat {run_dir}/gsd-review-prompt.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" --skip-git-repo-check -o {run_dir}/gsd-review-codex.md - 2>{run_dir}/gsd-review-codex.err >/dev/null
 else
-  cat /tmp/gsd-review-prompt-{phase}.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --skip-git-repo-check -o /tmp/gsd-review-codex-{phase}.md - 2>/tmp/gsd-review-codex-{phase}.err >/dev/null
+  cat {run_dir}/gsd-review-prompt.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --skip-git-repo-check -o {run_dir}/gsd-review-codex.md - 2>{run_dir}/gsd-review-codex.err >/dev/null
 fi
-if [ ! -s /tmp/gsd-review-codex-{phase}.md ]; then
-  echo "Codex review failed or returned empty output. stderr:" > /tmp/gsd-review-codex-{phase}.md
-  cat /tmp/gsd-review-codex-{phase}.err >> /tmp/gsd-review-codex-{phase}.md
+if [ ! -s {run_dir}/gsd-review-codex.md ]; then
+  echo "Codex review failed or returned empty output. stderr:" > {run_dir}/gsd-review-codex.md
+  cat {run_dir}/gsd-review-codex.err >> {run_dir}/gsd-review-codex.md
 fi
 ```
 
@@ -301,7 +313,7 @@ fi
 Note: CodeRabbit reviews the current git diff/working tree — it does not accept a prompt or model flag. It may take up to 5 minutes. Use `timeout: 360000` on the Bash tool call. The source-grounding requirement in the build_prompt Review Instructions applies only to the prompt-fed reviewers above; CodeRabbit is a diff-only reviewer and never receives it. Treat its output as a diff observation, not a grounded plan-level verdict.
 
 ```bash
-coderabbit review --prompt-only 2>/dev/null > /tmp/gsd-review-coderabbit-{phase}.md
+coderabbit review --prompt-only 2>/dev/null > {run_dir}/gsd-review-coderabbit.md
 ```
 
 **OpenCode (via GitHub Copilot):**
@@ -333,30 +345,30 @@ if [ -n "$OPENCODE_MODEL" ] && [ "$OPENCODE_MODEL" != "null" ]; then
 else
   set --
 fi
-cat /tmp/gsd-review-prompt-{phase}.md | opencode run "$@" --format json - 2>/tmp/gsd-review-opencode-{phase}.err > /tmp/gsd-review-opencode-{phase}.json
-# Reconstruct the review from the assistant text parts. Capture into a variable and
-# test its CONTENT (not the output file's size): an empty extraction still prints a
-# trailing newline, which would fool a `[ -s file ]` check into skipping the stub.
-OPENCODE_REVIEW=$(jq -rs '[.[] | select(.type=="text") | .part.text // empty] | join("\n")' /tmp/gsd-review-opencode-{phase}.json 2>/dev/null)
+cat {run_dir}/gsd-review-prompt.md | opencode run "$@" --format json - 2>{run_dir}/gsd-review-opencode.err > {run_dir}/gsd-review-opencode.json
+# Reconstruct the review from the assistant text parts into a variable and test
+# its CONTENT, not the file size: an empty extraction still prints a trailing
+# newline that would fool a `[ -s file ]` check into skipping the stub.
+OPENCODE_REVIEW=$(jq -rs '[.[] | select(.type=="text") | .part.text // empty] | join("\n")' {run_dir}/gsd-review-opencode.json 2>/dev/null)
 if [ -n "$OPENCODE_REVIEW" ]; then
-  printf '%s\n' "$OPENCODE_REVIEW" > /tmp/gsd-review-opencode-{phase}.md
+  printf '%s\n' "$OPENCODE_REVIEW" > {run_dir}/gsd-review-opencode.md
 else
-  # No assistant text (agent emitted no final message, or stdout was not valid JSON events).
+  # No assistant text (no final message, or stdout was not valid JSON):
   {
     echo "OpenCode review returned no assistant text (#1936: agent ended its turn with no final message)."
-    OPENCODE_DIAG=$(jq -rs '[.[] | select(.type=="step_finish")] | last | "stop reason=\(.part.reason // "?"), output tokens=\(.part.tokens.output // "?")"' /tmp/gsd-review-opencode-{phase}.json 2>/dev/null)
+    OPENCODE_DIAG=$(jq -rs '[.[] | select(.type=="step_finish")] | last | "stop reason=\(.part.reason // "?"), output tokens=\(.part.tokens.output // "?")"' {run_dir}/gsd-review-opencode.json 2>/dev/null)
     [ -n "$OPENCODE_DIAG" ] && echo "Diagnostic: $OPENCODE_DIAG"
     echo "stderr:"
-    cat /tmp/gsd-review-opencode-{phase}.err
-  } > /tmp/gsd-review-opencode-{phase}.md
+    cat {run_dir}/gsd-review-opencode.err
+  } > {run_dir}/gsd-review-opencode.md
 fi
 ```
 
 **Qwen Code:**
 ```bash
-cat /tmp/gsd-review-prompt-{phase}.md | qwen - 2>/dev/null > /tmp/gsd-review-qwen-{phase}.md
-if [ ! -s /tmp/gsd-review-qwen-{phase}.md ]; then
-  echo "Qwen review failed or returned empty output." > /tmp/gsd-review-qwen-{phase}.md
+cat {run_dir}/gsd-review-prompt.md | qwen - 2>/dev/null > {run_dir}/gsd-review-qwen.md
+if [ ! -s {run_dir}/gsd-review-qwen.md ]; then
+  echo "Qwen review failed or returned empty output." > {run_dir}/gsd-review-qwen.md
 fi
 ```
 
@@ -371,11 +383,11 @@ fi
 # need an explicit root to resolve against. rev-parse (not bare pwd) so the
 # anchor is correct even when /gsd:review is invoked from a repo subdirectory.
 _CURSOR_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-CURSOR_PROMPT_ARG="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $_CURSOR_ROOT — resolve every relative file path in the review request against that absolute root. Output only the resulting markdown review. Do not edit any files."
-cursor-agent -p --mode ask --trust --output-format text "$CURSOR_PROMPT_ARG" 2>/tmp/gsd-review-cursor-{phase}.err > /tmp/gsd-review-cursor-{phase}.md
-if [ ! -s /tmp/gsd-review-cursor-{phase}.md ]; then
-  echo "Cursor review failed or returned empty output. stderr:" > /tmp/gsd-review-cursor-{phase}.md
-  cat /tmp/gsd-review-cursor-{phase}.err >> /tmp/gsd-review-cursor-{phase}.md
+CURSOR_PROMPT_ARG="Read the file at {run_dir}/gsd-review-prompt.md in full and carry out the review request it contains. The repository under review is at $_CURSOR_ROOT — resolve every relative file path in the review request against that absolute root. Output only the resulting markdown review. Do not edit any files."
+cursor-agent -p --mode ask --trust --output-format text "$CURSOR_PROMPT_ARG" 2>{run_dir}/gsd-review-cursor.err > {run_dir}/gsd-review-cursor.md
+if [ ! -s {run_dir}/gsd-review-cursor.md ]; then
+  echo "Cursor review failed or returned empty output. stderr:" > {run_dir}/gsd-review-cursor.md
+  cat {run_dir}/gsd-review-cursor.err >> {run_dir}/gsd-review-cursor.md
 fi
 ```
 
@@ -475,7 +487,7 @@ fi
 # #2176: anchor the prompt to the absolute repo root so repo-relative references
 # in the assembled review prompt resolve even on the no---add-dir fallback, and
 # require an explicit self-report if the reviewer still cannot read the repo.
-_AGY_PROMPT="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carry out the review request it contains. The repository under review is at $_AGY_WS — resolve every relative file path in the review request against that absolute root and verify claims against those files. If you cannot read files under $_AGY_WS, begin your output with the exact line REVIEWED-WITHOUT-REPO-ACCESS before the review. Output only the resulting markdown review. Do not edit any files."
+_AGY_PROMPT="Read the file at {run_dir}/gsd-review-prompt.md in full and carry out the review request it contains. The repository under review is at $_AGY_WS — resolve every relative file path in the review request against that absolute root and verify claims against those files. If you cannot read files under $_AGY_WS, begin your output with the exact line REVIEWED-WITHOUT-REPO-ACCESS before the review. Output only the resulting markdown review. Do not edit any files."
 # Capability-probe an external wall-clock killer (GNU coreutils `timeout` or the
 # macOS Homebrew `gtimeout`). Stock macOS ships NEITHER — a bare `timeout …` would
 # fail with rc 127 ("command not found") and silently lose the reviewer, so fall
@@ -485,20 +497,20 @@ _AGY_PROMPT="Read the file at /tmp/gsd-review-prompt-{phase}.md in full and carr
 # healthy run. Mirrors the probe in scripts/base64-scan.sh.
 _AGY_KILLER="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 if [ -n "$_AGY_KILLER" ]; then
-  "$_AGY_KILLER" 600 agy --print-timeout 540s "$@" -p "$_AGY_PROMPT" </dev/null 2>/dev/null > /tmp/gsd-review-antigravity-{phase}.md
+  "$_AGY_KILLER" 600 agy --print-timeout 540s "$@" -p "$_AGY_PROMPT" </dev/null 2>/dev/null > {run_dir}/gsd-review-antigravity.md
 else
-  agy --print-timeout 540s "$@" -p "$_AGY_PROMPT" </dev/null 2>/dev/null > /tmp/gsd-review-antigravity-{phase}.md
+  agy --print-timeout 540s "$@" -p "$_AGY_PROMPT" </dev/null 2>/dev/null > {run_dir}/gsd-review-antigravity.md
 fi
 _AGY_RC=$?
 if [ "$_AGY_RC" -ne 0 ]; then
-  : > /tmp/gsd-review-antigravity-{phase}.md
+  : > {run_dir}/gsd-review-antigravity.md
 fi
 
 # Step 2 — transcript fallback: catches Windows agy -p stdout bug (and any future stdout-silent edge cases).
 # Reads only lines appended AFTER the pre-flight watermark. If agy failed before writing a new response,
 # _AGY_RESULT is empty and Step 3 fires — no stale content can leak through.
 # Undocumented paths, verified agy 1.0.0–1.0.2. See maintainer note above if these break.
-if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
+if [ ! -s {run_dir}/gsd-review-antigravity.md ]; then
   if [ -f "$_AGY_CACHE" ]; then
     _AGY_CONV=$(jq -r --arg ws "$_AGY_WS" '
       .[$ws] //
@@ -516,7 +528,7 @@ if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
         _AGY_RESULT=$(tail -n +"$((_AGY_SKIP + 1))" "$_AGY_TX" 2>/dev/null | \
           jq -r 'select(.source=="MODEL" and .status=="DONE" and .type=="PLANNER_RESPONSE") | .content' \
           2>/dev/null | tail -1)
-        [ -n "$_AGY_RESULT" ] && echo "$_AGY_RESULT" > /tmp/gsd-review-antigravity-{phase}.md
+        [ -n "$_AGY_RESULT" ] && echo "$_AGY_RESULT" > {run_dir}/gsd-review-antigravity.md
       fi
     fi
   fi
@@ -524,7 +536,7 @@ fi
 
 # Step 3 — final guard: both approaches yielded nothing (auth error, first-run setup,
 # path schema changed, 404'd pinned model, pre-session stall, etc.)
-if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
+if [ ! -s {run_dir}/gsd-review-antigravity.md ]; then
   {
     echo "Antigravity review failed or returned empty output."
     # #2073 mode 2: a pinned model that 404s exits 0 with empty stdout AND an empty
@@ -540,7 +552,7 @@ if [ ! -s /tmp/gsd-review-antigravity-{phase}.md ]; then
     fi
     # #2073 mode 3: pre-session stall tell — no new conversation dir appeared.
     echo "If no agy run started, that is the pre-session-stall case: check whether a new ~/.gemini/antigravity-cli/brain/<conv-id>/ dir appeared within ~30s of launch."
-  } > /tmp/gsd-review-antigravity-{phase}.md
+  } > {run_dir}/gsd-review-antigravity.md
 fi
 
 # #2176: blind-review marker. Two tells that the reviewer ran without repo
@@ -552,15 +564,15 @@ fi
 # never mis-stamped. Stamp a machine-readable marker so the Consensus Summary
 # down-weights the review instead of counting an ungrounded verdict at full
 # weight. (Temp file + mv, no in-place sed — BSD/GNU safe.)
-if [ -s /tmp/gsd-review-antigravity-{phase}.md ] && \
-   { head -5 /tmp/gsd-review-antigravity-{phase}.md | grep -q 'REVIEWED-WITHOUT-REPO-ACCESS' || \
-     grep -qiE '(workspace|working) (directory|dir).{0,40}antigravity-cli/scratch' /tmp/gsd-review-antigravity-{phase}.md; }; then
+if [ -s {run_dir}/gsd-review-antigravity.md ] && \
+   { head -5 {run_dir}/gsd-review-antigravity.md | grep -q 'REVIEWED-WITHOUT-REPO-ACCESS' || \
+     grep -qiE '(workspace|working) (directory|dir).{0,40}antigravity-cli/scratch' {run_dir}/gsd-review-antigravity.md; }; then
   {
     echo "> [reviewed-without-repo-access] This reviewer ran without visibility into the repo under review — down-weight its verdict in the Consensus Summary."
     echo ""
-    cat /tmp/gsd-review-antigravity-{phase}.md
-  } > /tmp/gsd-review-antigravity-{phase}.md.tmp && \
-  mv /tmp/gsd-review-antigravity-{phase}.md.tmp /tmp/gsd-review-antigravity-{phase}.md
+    cat {run_dir}/gsd-review-antigravity.md
+  } > {run_dir}/gsd-review-antigravity.md.tmp && \
+  mv {run_dir}/gsd-review-antigravity.md.tmp {run_dir}/gsd-review-antigravity.md
 fi
 ```
 
@@ -581,22 +593,22 @@ prepare_trimmed_prompt_for_reviewer() {
   [ "$REVIEWER_BUDGET" = "0" ] && return 0
 
   PLAN_FILE_ARGS=""
-  for p in /tmp/gsd-review-{phase}-plan-*.md; do
+  for p in {run_dir}/gsd-review-plan-*.md; do
     [ -f "$p" ] && PLAN_FILE_ARGS="$PLAN_FILE_ARGS --plan-file $p"
   done
   PROJECT_ARG=""
-  [ -f "/tmp/gsd-review-{phase}-project.md" ] && PROJECT_ARG="--project-file /tmp/gsd-review-{phase}-project.md"
+  [ -f "{run_dir}/gsd-review-project.md" ] && PROJECT_ARG="--project-file {run_dir}/gsd-review-project.md"
   CONTEXT_ARG=""
-  [ -f "/tmp/gsd-review-{phase}-context.md" ] && CONTEXT_ARG="--context-file /tmp/gsd-review-{phase}-context.md"
+  [ -f "{run_dir}/gsd-review-context.md" ] && CONTEXT_ARG="--context-file {run_dir}/gsd-review-context.md"
   RESEARCH_ARG=""
-  [ -f "/tmp/gsd-review-{phase}-research.md" ] && RESEARCH_ARG="--research-file /tmp/gsd-review-{phase}-research.md"
+  [ -f "{run_dir}/gsd-review-research.md" ] && RESEARCH_ARG="--research-file {run_dir}/gsd-review-research.md"
   REQUIREMENTS_ARG=""
-  [ -f "/tmp/gsd-review-{phase}-requirements.md" ] && REQUIREMENTS_ARG="--requirements-file /tmp/gsd-review-{phase}-requirements.md"
+  [ -f "{run_dir}/gsd-review-requirements.md" ] && REQUIREMENTS_ARG="--requirements-file {run_dir}/gsd-review-requirements.md"
 
   gsd_run query prompt-budget \
     --budget "$REVIEWER_BUDGET" \
-    --instructions-file "/tmp/gsd-review-{phase}-instructions.md" \
-    --roadmap-file "/tmp/gsd-review-{phase}-roadmap.md" \
+    --instructions-file "{run_dir}/gsd-review-instructions.md" \
+    --roadmap-file "{run_dir}/gsd-review-roadmap.md" \
     $PLAN_FILE_ARGS $PROJECT_ARG $CONTEXT_ARG $RESEARCH_ARG $REQUIREMENTS_ARG \
     --output-prompt "$OUTPUT_PROMPT" \
     --output-metadata "$OUTPUT_META"
@@ -610,11 +622,11 @@ if [ -z "$OLLAMA_REVIEWER_BUDGET" ] || [ "$OLLAMA_REVIEWER_BUDGET" = "null" ]; t
 fi
 
 # Apply budget trim for Ollama if a budget is configured
-OLLAMA_PROMPT_FILE="/tmp/gsd-review-prompt-{phase}.md"
+OLLAMA_PROMPT_FILE="{run_dir}/gsd-review-prompt.md"
 OLLAMA_SKIP=0
 if [ -n "$OLLAMA_REVIEWER_BUDGET" ] && [ "$OLLAMA_REVIEWER_BUDGET" != "null" ] && [ "$OLLAMA_REVIEWER_BUDGET" != "0" ]; then
-  OLLAMA_TRIMMED_PROMPT="/tmp/gsd-review-prompt-{phase}-ollama.md"
-  OLLAMA_TRIM_META="/tmp/gsd-review-prompt-{phase}-ollama.metadata.json"
+  OLLAMA_TRIMMED_PROMPT="{run_dir}/gsd-review-prompt-ollama.md"
+  OLLAMA_TRIM_META="{run_dir}/gsd-review-prompt-ollama.metadata.json"
   prepare_trimmed_prompt_for_reviewer "ollama" "$OLLAMA_REVIEWER_BUDGET" "$OLLAMA_TRIMMED_PROMPT" "$OLLAMA_TRIM_META"
   OLLAMA_EXIT=$?
   if [ $OLLAMA_EXIT -ne 0 ]; then
@@ -642,9 +654,9 @@ jq -n --rawfile content "$OLLAMA_PROMPT_FILE" \
   curl -s --max-time 120 -X POST "${OLLAMA_HOST}/v1/chat/completions" \
     -H "Content-Type: application/json" -d @- 2>/dev/null | \
   jq -r '.choices[0].message.content // "Ollama review failed or returned empty output."' \
-  > /tmp/gsd-review-ollama-{phase}.md
-if [ ! -s /tmp/gsd-review-ollama-{phase}.md ]; then
-  echo "Ollama review failed or returned empty output." > /tmp/gsd-review-ollama-{phase}.md
+  > {run_dir}/gsd-review-ollama.md
+if [ ! -s {run_dir}/gsd-review-ollama.md ]; then
+  echo "Ollama review failed or returned empty output." > {run_dir}/gsd-review-ollama.md
 fi
 fi
 ```
@@ -658,11 +670,11 @@ if [ -z "$LM_STUDIO_REVIEWER_BUDGET" ] || [ "$LM_STUDIO_REVIEWER_BUDGET" = "null
 fi
 
 # Apply budget trim for LM Studio if a budget is configured
-LM_STUDIO_PROMPT_FILE="/tmp/gsd-review-prompt-{phase}.md"
+LM_STUDIO_PROMPT_FILE="{run_dir}/gsd-review-prompt.md"
 LM_STUDIO_SKIP=0
 if [ -n "$LM_STUDIO_REVIEWER_BUDGET" ] && [ "$LM_STUDIO_REVIEWER_BUDGET" != "null" ] && [ "$LM_STUDIO_REVIEWER_BUDGET" != "0" ]; then
-  LM_STUDIO_TRIMMED_PROMPT="/tmp/gsd-review-prompt-{phase}-lm_studio.md"
-  LM_STUDIO_TRIM_META="/tmp/gsd-review-prompt-{phase}-lm_studio.metadata.json"
+  LM_STUDIO_TRIMMED_PROMPT="{run_dir}/gsd-review-prompt-lm_studio.md"
+  LM_STUDIO_TRIM_META="{run_dir}/gsd-review-prompt-lm_studio.metadata.json"
   prepare_trimmed_prompt_for_reviewer "lm_studio" "$LM_STUDIO_REVIEWER_BUDGET" "$LM_STUDIO_TRIMMED_PROMPT" "$LM_STUDIO_TRIM_META"
   LM_STUDIO_EXIT=$?
   if [ $LM_STUDIO_EXIT -ne 0 ]; then
@@ -695,7 +707,7 @@ if [ -n "$LM_STUDIO_ACTUAL_MODEL" ] && [ "$LM_STUDIO_ACTUAL_MODEL" != "null" ] &
 fi
 LM_STUDIO_CONTENT=$(echo "$LM_STUDIO_RESPONSE" | jq -r '.choices[0].message.content // ""' 2>/dev/null || echo "")
 if [ -n "$LM_STUDIO_CONTENT" ]; then
-  echo "$LM_STUDIO_CONTENT" > /tmp/gsd-review-lm_studio-{phase}.md
+  echo "$LM_STUDIO_CONTENT" > {run_dir}/gsd-review-lm_studio.md
 else
   echo "Warning: LM Studio returned empty content — skipping review." >&2
 fi
@@ -711,11 +723,11 @@ if [ -z "$LLAMA_CPP_REVIEWER_BUDGET" ] || [ "$LLAMA_CPP_REVIEWER_BUDGET" = "null
 fi
 
 # Apply budget trim for llama.cpp if a budget is configured
-LLAMA_CPP_PROMPT_FILE="/tmp/gsd-review-prompt-{phase}.md"
+LLAMA_CPP_PROMPT_FILE="{run_dir}/gsd-review-prompt.md"
 LLAMA_CPP_SKIP=0
 if [ -n "$LLAMA_CPP_REVIEWER_BUDGET" ] && [ "$LLAMA_CPP_REVIEWER_BUDGET" != "null" ] && [ "$LLAMA_CPP_REVIEWER_BUDGET" != "0" ]; then
-  LLAMA_CPP_TRIMMED_PROMPT="/tmp/gsd-review-prompt-{phase}-llama_cpp.md"
-  LLAMA_CPP_TRIM_META="/tmp/gsd-review-prompt-{phase}-llama_cpp.metadata.json"
+  LLAMA_CPP_TRIMMED_PROMPT="{run_dir}/gsd-review-prompt-llama_cpp.md"
+  LLAMA_CPP_TRIM_META="{run_dir}/gsd-review-prompt-llama_cpp.metadata.json"
   prepare_trimmed_prompt_for_reviewer "llama_cpp" "$LLAMA_CPP_REVIEWER_BUDGET" "$LLAMA_CPP_TRIMMED_PROMPT" "$LLAMA_CPP_TRIM_META"
   LLAMA_CPP_EXIT=$?
   if [ $LLAMA_CPP_EXIT -ne 0 ]; then
@@ -744,7 +756,7 @@ LLAMA_CPP_CONTENT=$(jq -n --rawfile content "$LLAMA_CPP_PROMPT_FILE" \
     -H "Content-Type: application/json" -d @- 2>/dev/null | \
   jq -r '.choices[0].message.content // ""' 2>/dev/null || echo "")
 if [ -n "$LLAMA_CPP_CONTENT" ]; then
-  echo "$LLAMA_CPP_CONTENT" > /tmp/gsd-review-llama_cpp-{phase}.md
+  echo "$LLAMA_CPP_CONTENT" > {run_dir}/gsd-review-llama_cpp.md
 else
   echo "Warning: llama.cpp returned empty content — skipping review." >&2
 fi
@@ -911,7 +923,11 @@ To incorporate feedback into planning:
   /gsd:plan-phase {N} --reviews
 ```
 
-Clean up temp files.
+Clean up — remove the run's temp directory now that REVIEWS.md is committed:
+
+```bash
+rm -rf "{run_dir}"
+```
 </step>
 
 </process>

@@ -18,7 +18,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 
 ## 1. Parse and Normalize Arguments
 
-Extract from $ARGUMENTS: phase number, reviewer flags (`--codex`, `--gemini`, `--claude`, `--opencode`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--all`), `--max-cycles N`, `--text`, `--ws`.
+Extract from $ARGUMENTS: phase number, reviewer flags (`--codex`, `--gemini`, `--agy`/`--antigravity`, `--claude`, `--opencode`, `--ollama`, `--lm-studio`, `--llama-cpp`, `--all`), `--max-cycles N`, `--text`, `--ws`.
 
 ```bash
 PHASE=$(echo "$ARGUMENTS" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
@@ -26,13 +26,17 @@ PHASE=$(echo "$ARGUMENTS" | grep -oE '[0-9]+\.?[0-9]*' | head -1)
 REVIEWER_FLAGS=""
 echo "$ARGUMENTS" | grep -q '\-\-codex' && REVIEWER_FLAGS="$REVIEWER_FLAGS --codex"
 echo "$ARGUMENTS" | grep -q '\-\-gemini' && REVIEWER_FLAGS="$REVIEWER_FLAGS --gemini"
+echo "$ARGUMENTS" | grep -q '\-\-agy' && REVIEWER_FLAGS="$REVIEWER_FLAGS --agy"
+echo "$ARGUMENTS" | grep -q '\-\-antigravity' && REVIEWER_FLAGS="$REVIEWER_FLAGS --antigravity"
 echo "$ARGUMENTS" | grep -q '\-\-claude' && REVIEWER_FLAGS="$REVIEWER_FLAGS --claude"
 echo "$ARGUMENTS" | grep -q '\-\-opencode' && REVIEWER_FLAGS="$REVIEWER_FLAGS --opencode"
 echo "$ARGUMENTS" | grep -q '\-\-ollama' && REVIEWER_FLAGS="$REVIEWER_FLAGS --ollama"
 echo "$ARGUMENTS" | grep -q '\-\-lm-studio' && REVIEWER_FLAGS="$REVIEWER_FLAGS --lm-studio"
 echo "$ARGUMENTS" | grep -q '\-\-llama-cpp' && REVIEWER_FLAGS="$REVIEWER_FLAGS --llama-cpp"
 echo "$ARGUMENTS" | grep -q '\-\-all' && REVIEWER_FLAGS="$REVIEWER_FLAGS --all"
-if [ -z "$REVIEWER_FLAGS" ]; then REVIEWER_FLAGS="--codex"; fi
+# #2315: do NOT default REVIEWER_FLAGS to --codex here. The default is resolved
+# against review.default_reviewers in step 1.5 (after the config gate) so a bare
+# invocation respects the configured reviewer lineup per ADR-0011 / ADR-0015.
 
 MAX_CYCLES=$(echo "$ARGUMENTS" | grep -oE '\-\-max-cycles\s+[0-9]+' | awk '{print $2}')
 if [ -z "$MAX_CYCLES" ]; then MAX_CYCLES=3; fi
@@ -59,6 +63,47 @@ Enable it with:
   gsd config-set workflow.plan_review_convergence true
 
 Then re-run: /gsd:plan-review-convergence {PHASE}
+```
+
+```bash
+# #2315: Resolve reviewer selection when no explicit flag was given.
+# The pre-fix bug unconditionally set REVIEWER_FLAGS="--codex" in step 1, BEFORE
+# the config gate — silently overriding any configured review.default_reviewers
+# (and, transitively, review.reviewer_instances). gsd-review sees the injected
+# --codex as an explicit flag (precedence rule 1) and never reaches rule 3
+# (review.default_reviewers). ADR-0011 and ADR-0015 both assume convergence
+# respects review.default_reviewers on the no-flag path.
+#
+# After the fix: leave REVIEWER_FLAGS empty when default_reviewers is configured
+# so gsd-review applies review.default_reviewers itself (rule 3). Only fall back
+# to --codex when no default is configured, preserving the pre-fix default for
+# unconfigured users (#2315 AC3). REVIEWER_DISPLAY mirrors the resolved value
+# so the startup banner reflects what will actually run (#2315 AC4).
+if [ -z "$REVIEWER_FLAGS" ]; then
+  DEFAULT_REVIEWERS_JSON=$(gsd_run query config-get review.default_reviewers 2>/dev/null || echo "")
+  if ! command -v jq >/dev/null 2>&1; then
+    # jq is a documented production dependency (review.md:244 — "install jq if
+    # missing"). If it is absent we cannot inspect the configured default, so
+    # fail safe with --codex and surface the reason rather than silently
+    # reproducing the #2315 override under degraded conditions.
+    echo "WARNING: jq not on PATH — cannot read review.default_reviewers; falling back to --codex (#2315)" >&2
+    REVIEWER_FLAGS="--codex"
+    REVIEWER_DISPLAY="--codex (jq missing; cannot read review.default_reviewers)"
+  else
+    DEFAULT_REVIEWERS_COUNT=$(printf '%s' "$DEFAULT_REVIEWERS_JSON" | jq 'if type=="array" then length else 0 end' 2>/dev/null || echo 0)
+    if [ "${DEFAULT_REVIEWERS_COUNT:-0}" -gt 0 ] 2>/dev/null; then
+      : # leave REVIEWER_FLAGS empty — gsd-review applies review.default_reviewers itself
+      REVIEWER_DISPLAY="review.default_reviewers ($(printf '%s' "$DEFAULT_REVIEWERS_JSON" | jq -r 'join(", ")' 2>/dev/null))"
+    else
+      REVIEWER_FLAGS="--codex"
+      REVIEWER_DISPLAY="--codex (default; configure review.default_reviewers to change)"
+    fi
+  fi
+else
+  # Strip the leading space accumulated by the parse block so the banner renders
+  # "Reviewers: --gemini" not "Reviewers:  --gemini" (#2315 review nit).
+  REVIEWER_DISPLAY="${REVIEWER_FLAGS# }"
+fi
 ```
 
 ## 2. Initialize
@@ -89,7 +134,7 @@ Display startup banner:
  GSD ► PLAN CONVERGENCE — Phase {phase_number}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
- Reviewers: {REVIEWER_FLAGS}
+ Reviewers: {REVIEWER_DISPLAY}
  Max cycles: {MAX_CYCLES}
 ```
 
