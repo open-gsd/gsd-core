@@ -56,9 +56,14 @@ describe('#2483 the claude reviewer leg suppresses CLAUDE.md + auto-memory injec
     // `.split(/\r?\n/)`, not `.split('\n')` — Windows git-autocrlf checkouts yield
     // "\r\n", and a literal-"\n" split leaves a trailing "\r" on every line
     // (local/no-crlf-fragile-split).
+    // The matcher tolerates variable expansions between `claude` and its first
+    // literal flag: the effortSurface wiring (#2481) reshaped the bare-model
+    // dispatch to `claude $CLAUDE_EFFORT_ARGS -p -`, which the dash-first form
+    // of this matcher could no longer see (the count assertion below caught
+    // exactly that — a reshaped dispatch — as designed).
     const invocations = content
       .split(/\r?\n/)
-      .filter((line) => /(?:^|[|;&(]|\s)claude\s+-{1,2}\w/.test(line));
+      .filter((line) => /(?:^|[|;&(]|\s)claude\s+(?:\$\{?\w+\}?\s+)*-{1,2}\w/.test(line));
 
     assert.equal(
       invocations.length, 2,
