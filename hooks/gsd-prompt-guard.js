@@ -32,6 +32,52 @@ const INJECTION_PATTERNS = [
   /<<\s*SYS\s*>>/i,
 ];
 
+// #2304: Kimi's native hook bus delivers Kimi's tool vocabulary in the payload
+// (Write → WriteFile, Edit/MultiEdit → StrReplaceFile) while the [[hooks]]
+// matcher is registered pre-translated (runtime-hooks-surface.cts
+// buildKimiHooksTomlBlock) — so without normalizing the payload too, the
+// matcher fires but the tool_name check below exits 0 and the guard is dormant
+// on Kimi. The tool_input field names differ as well (kimi-cli
+// src/kimi_cli/tools/file/{write,replace}.py): WriteFile takes `path`/`content`,
+// StrReplaceFile takes `path` + `edit: Edit | list[Edit]` with `old`/`new` —
+// kimi-cli's hooks/events.py forwards tool_input verbatim, so both layers need
+// mapping. Accepts bare and module-qualified ('kimi_cli.tools.file:WriteFile')
+// names; unknown names fall through untouched. Inlined per guard (not
+// hooks/lib/): hook scripts are staged as standalone files, and a sibling
+// require is a staging dependency that can fail silently.
+// A Map, not an object literal: bare bracket lookup resolves prototype keys
+// ('constructor', '__proto__', 'toString') to truthy functions/objects, so the
+// !mapped fall-through never fires for them; Map.get returns undefined (same
+// shape as canonicalizeRuntimeName in src/runtime-name-policy.cts).
+const KIMI_TOOL_NAMES = new Map([['WriteFile', 'Write'], ['StrReplaceFile', 'Edit'], ['ReadFile', 'Read'], ['Shell', 'Bash']]);
+function normalizeKimiPayload(data) {
+  const raw = data.tool_name;
+  if (typeof raw !== 'string') return data;
+  const mapped = KIMI_TOOL_NAMES.get(raw.slice(raw.lastIndexOf(':') + 1));
+  if (!mapped) return data;
+  data.tool_name = mapped;
+  if (data.tool_response === undefined && data.tool_output !== undefined) {
+    data.tool_response = data.tool_output;
+  }
+  const input = data.tool_input;
+  if (input && typeof input === 'object') {
+    if (input.file_path === undefined && typeof input.path === 'string') {
+      input.file_path = input.path;
+    }
+    const edits = Array.isArray(input.edit) ? input.edit
+      : (input.edit && typeof input.edit === 'object') ? [input.edit] : [];
+    if (edits.length) {
+      if (input.old_string === undefined) {
+        input.old_string = edits.map((e) => String(e.old ?? '')).join('\n');
+      }
+      if (input.new_string === undefined) {
+        input.new_string = edits.map((e) => String(e.new ?? '')).join('\n');
+      }
+    }
+  }
+  return data;
+}
+
 let input = '';
 const stdinTimeout = setTimeout(() => process.exit(0), 3000);
 process.stdin.setEncoding('utf8');
@@ -39,7 +85,7 @@ process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => {
   clearTimeout(stdinTimeout);
   try {
-    const data = JSON.parse(input);
+    const data = normalizeKimiPayload(JSON.parse(input));
     const toolName = data.tool_name;
 
     // Only scan Write and Edit operations

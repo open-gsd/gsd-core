@@ -3127,6 +3127,83 @@ describe('bug #260: gsd-worktree-path-guard.js', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #2304 — Kimi tool vocabulary engages the guard
+// ---------------------------------------------------------------------------
+
+describe('#2304 — Kimi tool vocabulary engages the guard', () => {
+  // Payload shapes mirror kimi-cli's actual tool schemas
+  // (src/kimi_cli/tools/file/{write,replace}.py): WriteFile takes
+  // `path`/`content`, StrReplaceFile takes `path` + `edit: Edit | list[Edit]`
+  // — NOT Claude's `file_path`/`old_string`/`new_string`.
+
+  test('WriteFile targeting the main repo from a worktree is blocked like Write', () => {
+    const offendingPath = path.join(mainRepo, 'out.txt');
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'WriteFile',
+      tool_input: { path: offendingPath, content: 'leak' },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 2,
+      `Kimi WriteFile targeting an outside path must be blocked. Got ${result.status}. stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.decision, 'block');
+    // Kimi feeds stderr (not stdout) back to the model on exit 2, so the
+    // reason must also reach stderr or the model gets a bare denial.
+    assert.ok(result.stderr.includes(offendingPath),
+      `block reason must reach stderr for Kimi's exit-2 protocol. Got stderr: ${result.stderr}`);
+  });
+
+  test('StrReplaceFile targeting the main repo from a worktree is blocked like Edit', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'StrReplaceFile',
+      tool_input: { path: path.join(mainRepo, 'src', 'index.ts'), edit: { old: 'a', new: 'b' } },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 2,
+      `Kimi StrReplaceFile targeting an outside path must be blocked. Got ${result.status}. stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.decision, 'block');
+  });
+
+  test('module-qualified kimi_cli.tools.file:WriteFile is also recognized', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'kimi_cli.tools.file:WriteFile',
+      tool_input: { path: path.join(mainRepo, 'out.txt'), content: 'leak' },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 2,
+      `Module-qualified Kimi WriteFile must be blocked. Got ${result.status}. stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.decision, 'block');
+  });
+
+  test('StrReplaceFile with a path inside the worktree still passes', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'StrReplaceFile',
+      tool_input: { path: path.join(worktreeDir, 'src', 'foo.ts'), edit: { old: 'a', new: 'b' } },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 0,
+      `Kimi StrReplaceFile inside the worktree should pass. Got ${result.status}. stderr: ${result.stderr}`);
+  });
+
+  test('non-file Kimi tools still pass through silently', () => {
+    const payload = {
+      cwd: worktreeDir,
+      tool_name: 'kimi_cli.tools.file:Grep',
+      tool_input: { path: path.join(mainRepo, 'src', 'index.ts') },
+    };
+    const result = runHook(worktreeDir, payload);
+    assert.strictEqual(result.status, 0);
+    assert.strictEqual(result.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // #1342 — GSD-activity gate + fail-open for no-repo targets
 // ---------------------------------------------------------------------------
 
