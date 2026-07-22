@@ -35,10 +35,10 @@ const RUNTIME_INSTALL_CONTRACTS = {
   gemini: { surface: 'commands-gsd', settings: true, packageJson: true },
   hermes: { surface: 'hermes-skills', settings: true, packageJson: true },
   kimi: { surface: 'kimi-skills-agents', settings: false, packageJson: false },
-  // #2454 PR 1: Kimi Code (Node CLI) registers the same install shape as Kimi
-  // for now — Agent Skills + the standard gsd-core layout. PR 2 will specialize
-  // this once the kimi-code Agent Skills converter lands.
-  'kimi-code': { surface: 'kimi-skills-agents', settings: false, packageJson: false },
+  // #2454: Kimi Code (Node CLI) has NO custom named subagents (per official
+  // docs), so its install surface is skills-only (flat-skills), NOT
+  // kimi-skills-agents. The kimi-agents YAML layout is Python kimi-cli only.
+  'kimi-code': { surface: 'flat-skills', settings: false, packageJson: false },
   // #2305: Kilo's native plugin spawns the staged guard hooks, so it receives
   // the shared hooks bundle + the CommonJS package.json marker, like OpenCode.
   // (#1821 excluded Kilo on the false premise that it had no plugin surface.)
@@ -550,13 +550,7 @@ describe('installer migration install integration', { concurrency: false }, () =
     assert.equal(fs.existsSync(path.join(codexHome, 'gsd-install-state.json')), false);
   });
 
-  // #2454 PR 1: kimi-code is registered as a runtime (descriptor + flags +
-  // capability-registry) but its install layout (Agent Skills converter +
-  // global AGENTS.md) lands in PR 2 of the sequence. Excluded from the
-  // end-to-end install contract loop until PR 2 ships the install surface.
-  const SKIP_INSTALL_CONTRACT = new Set(['kimi-code']);
   for (const runtime of SUPPORTED_RUNTIMES) {
-    if (SKIP_INSTALL_CONTRACT.has(runtime)) continue;
     test(`runs a full end-to-end install for ${runtime}`, () => {
       const targetDir = path.join(tmpRoot, `.${runtime}-full-install`);
       fs.mkdirSync(targetDir, { recursive: true });
