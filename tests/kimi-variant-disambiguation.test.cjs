@@ -7,7 +7,7 @@ process.env.GSD_TEST_MODE = '1';
 
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { execFileSync } = require('node:child_process');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -24,20 +24,14 @@ function makeDisposableHome() {
 }
 
 function runInstall(args, home) {
-  // --help exits 0 before any install; the disambiguation runs BEFORE --help
-  // is processed (right after runtime selection). So --kimi --help surfaces
-  // the description notice but exits before installing.
-  try {
-    const stdout = execFileSync('node', [INSTALL_JS, ...args], {
-      env: { ...process.env, HOME: home, GSD_TEST_MODE: '1' },
-      encoding: 'utf8',
-      timeout: 15000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return { stdout, stderr: '', exit: 0 };
-  } catch (e) {
-    return { stdout: e.stdout?.toString() || '', stderr: e.stderr?.toString() || '', exit: e.status };
-  }
+  // spawnSync captures stdout AND stderr separately regardless of exit code
+  // (execFileSync drops stderr on success, which hid the console.error warnings).
+  const r = spawnSync('node', [INSTALL_JS, ...args], {
+    env: { ...process.env, HOME: home, GSD_TEST_MODE: '1' },
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  return { stdout: r.stdout || '', stderr: r.stderr || '', exit: r.status };
 }
 
 describe('Kimi variant disambiguation (#2505 Phase 5 / #2513)', () => {
