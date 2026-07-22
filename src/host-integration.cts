@@ -546,6 +546,64 @@ function shouldFlattenDispatch(dispatch: UnvalidatedDispatch): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// resolveDispatchType — ADR-1239 / epic #2505 Phase 4 (Option A)
+//
+// Maps a requested GSD subagent name (e.g. "gsd-planner") to the type an
+// Agent() call should actually use on the CURRENT runtime. On runtimes whose
+// descriptor declares `hostIntegration.dispatch.namedDispatch: true` (Claude,
+// OpenCode, Cursor, …), the requested name is returned unchanged — those hosts
+// can dispatch GSD's named subagents directly. On runtimes with
+// `namedDispatch: false` (kimi-code — only three built-in subagents
+// `coder`/`explore`/`plan`, per moonshotai.github.io/kimi-code/en/customization/
+// agents), the name is mapped to the closest built-in by role-suffix
+// heuristic. The persona rides the existing `${AGENT_SKILLS_*}` prompt
+// injection (Phase 3 / #2510) regardless of the resolved type, so the
+// dispatcher does not need to know the persona — only the toolkit tier.
+//
+// This is Option A of the Phase 4 design (per-workflow runtime detection via
+// `gsd_run query resolve-dispatch-type`), not Option B (PreToolUse mutation) —
+// Kimi Code's documented hook API supports only allow/deny on PreToolUse, not
+// tool_input rewriting, so a hook-based remap is infeasible (see #2508).
+//
+// Fail-closed: unknown dispatch shape or missing namedDispatch axis ⇒ return
+// the requested name unchanged (named-dispatch is the GSD default; degrading
+// to it on unknown runtimes preserves behavior for every runtime already in
+// the field).
+// ---------------------------------------------------------------------------
+
+// Role-suffix → built-in mapping. Order matters: the first match wins.
+// `plan`-tier agents plan/design without touching files; `explore`-tier agents
+// are read-only; everything else (executors, writers, fixers, debuggers) maps
+// to `coder` (the general-purpose built-in with the full tool set).
+const DISPATCH_TYPE_SUFFIX_MAP: ReadonlyArray<readonly [RegExp, string]> = Object.freeze([
+  [/-?(planner|roadmapper|selector|spec)$/i, 'plan'],
+  [/-?(researcher|mapper|checker|verifier|auditor|analyzer|synthesizer|profiler|curator|classifier|reviewer)$/i, 'explore'],
+]);
+
+// Names that are already generic (not gsd-*) and should map to the
+// general-purpose built-in on built-in-only runtimes.
+const GENERIC_NAMES_TO_CODER: ReadonlySet<string> = Object.freeze(new Set([
+  'general-purpose', 'general', 'default', 'sonnet', 'opus', 'haiku',
+]));
+
+function resolveDispatchType(requested: unknown, dispatch: UnvalidatedDispatch): string {
+  if (typeof requested !== 'string' || requested.length === 0) return 'coder';
+  // Built-in-only runtime (EXPLICIT namedDispatch: false, e.g. kimi-code):
+  // map to coder/explore/plan by suffix heuristic.
+  if (dispatch && typeof dispatch === 'object' && dispatch.namedDispatch === false) {
+    if (GENERIC_NAMES_TO_CODER.has(requested)) return 'coder';
+    for (const [pattern, builtin] of DISPATCH_TYPE_SUFFIX_MAP) {
+      if (pattern.test(requested)) return builtin;
+    }
+    return 'coder';
+  }
+  // Named-dispatch runtime (namedDispatch: true OR unknown/absent): use the
+  // requested name unchanged. Absent namedDispatch degrades to named-dispatch
+  // (the GSD default) so every runtime already in the field keeps working.
+  return requested;
+}
+
+// ---------------------------------------------------------------------------
 // Managed-hook event surface per hookEvents dialect (ADR-1239 / ADR-1016)
 // ---------------------------------------------------------------------------
 
@@ -665,6 +723,7 @@ export = {
   profileOf,
   negotiateHostCapabilities,
   shouldFlattenDispatch,
+  resolveDispatchType,
   hookEventSurfaceFor,
   extensionEventSurfaceFor,
 };
