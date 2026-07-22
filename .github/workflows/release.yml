@@ -669,6 +669,49 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: node scripts/verify-npm-publish.cjs --package @opengsd/gsd-core --version "$VERSION" --dist-tag latest
 
+      # Auto-merge the release/hotfix → main PR when it is cleanly mergeable, so
+      # the release's own branch lands on `main` without a manual merge click
+      # every release (#2515). Symmetric with auto-backmerge.yml's admin-merge of
+      # the main → next PR; the `main`-is-ancestor-of-`next` invariant restored
+      # by #2504 makes this merge clean every release. Runs only after the tag +
+      # npm publish are verified, so `main` never absorbs an unpublished release.
+      # A non-clean PR (a genuine divergence) is left OPEN for manual resolution
+      # rather than force-merged. Non-fatal: a published release must stand even
+      # if the merge-back can't auto-complete (org PR-policy, token, etc.).
+      - name: Auto-merge the release → main PR when clean
+        if: ${{ !inputs.dry_run }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GSD_BOT_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ needs.validate-version.outputs.branch }}
+        run: |
+          set -uo pipefail
+          PR=$(gh pr list --base main --head "$BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || echo "")
+          if [ -z "$PR" ]; then
+            echo "No open release→main PR for $BRANCH (creation may be blocked by org policy); nothing to auto-merge."
+            exit 0
+          fi
+          # GitHub computes mergeability asynchronously; poll until it settles to
+          # a terminal state before deciding.
+          STATE="UNKNOWN"
+          for _ in 1 2 3 4 5 6 7 8; do
+            STATE=$(gh pr view "$PR" --json mergeable --jq '.mergeable' 2>/dev/null || echo "UNKNOWN")
+            if [ "$STATE" = "MERGEABLE" ] || [ "$STATE" = "CONFLICTING" ]; then break; fi
+            sleep 5
+          done
+          if [ "$STATE" = "MERGEABLE" ]; then
+            # Merge commit (not squash) keeps the release branch + its version tag
+            # in main's ancestry. --admin bypasses the review gate for this
+            # already-tested, already-published release branch.
+            if gh pr merge "$PR" --admin --merge; then
+              echo "Auto-merged release→main PR #$PR."
+            else
+              echo "::warning::PR #$PR is mergeable but admin-merge failed (token/policy?). Merge it manually."
+            fi
+          else
+            echo "::warning::Release→main PR #$PR is not cleanly mergeable (state: $STATE). Left open for manual resolution."
+          fi
+
       # Regression #2423: keep `next` at the last published release for final
       # releases, not just rc/hotfix. Without this, `next` drifts to whatever
       # rc.N the release branch forked from, and every npm script banner on

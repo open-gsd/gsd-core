@@ -119,4 +119,59 @@ describe('release backmerge invariants (#2504) — release.yml finalize', () => 
         'cancels finalize mid-test before tag/publish as the unit suite grows. See #2280/#2281.'
     );
   });
+
+  // #2515: the release/hotfix → main merge-back must complete automatically when
+  // clean, not sit as a manual merge every release. This locks in that step and
+  // its guardrails: it merges only a MERGEABLE PR (never force-merges a
+  // conflict), and is non-fatal (a published release stands even if the
+  // merge-back can't auto-complete).
+  const finalizeSteps = (wf.jobs && wf.jobs.finalize && wf.jobs.finalize.steps) || [];
+  const automerge = finalizeSteps.find(
+    (s) => typeof s.name === 'string' && s.name.includes('Auto-merge the release')
+  );
+
+  test('finalize auto-merges the release/hotfix → main PR', () => {
+    assert.ok(automerge, "expected a finalize step named like 'Auto-merge the release → main PR'");
+    assert.match(
+      automerge.run || '',
+      /pr merge\b[^\n]*--admin/,
+      'the auto-merge step must admin-merge the merge-back PR (symmetric with auto-backmerge main→next). See #2515.'
+    );
+  });
+
+  test('the auto-merge only fires on a cleanly MERGEABLE PR (never force-merges a conflict)', () => {
+    assert.ok(automerge, "expected the 'Auto-merge the release → main PR' step");
+    assert.match(
+      automerge.run || '',
+      /MERGEABLE/,
+      'the auto-merge must gate on the PR being MERGEABLE so a genuine divergence is left open for ' +
+        'manual resolution rather than force-merged into main. See #2515.'
+    );
+  });
+
+  test('the auto-merge step is non-fatal (a published release stands even if it cannot complete)', () => {
+    assert.ok(automerge, "expected the 'Auto-merge the release → main PR' step");
+    assert.equal(
+      automerge['continue-on-error'],
+      true,
+      'the merge-back auto-merge must be continue-on-error: the tag + npm publish already happened, ' +
+        'so a merge-back that cannot complete (org policy, token) must not fail the release. See #2515.'
+    );
+  });
+
+  test('the auto-merge runs AFTER "Verify publish" (main only absorbs a published release)', () => {
+    const verifyIdx = finalizeSteps.findIndex(
+      (s) => typeof s.name === 'string' && s.name.includes('Verify publish')
+    );
+    const automergeIdx = finalizeSteps.findIndex(
+      (s) => typeof s.name === 'string' && s.name.includes('Auto-merge the release')
+    );
+    assert.ok(verifyIdx !== -1, "expected a 'Verify publish' step");
+    assert.ok(automergeIdx !== -1, "expected the 'Auto-merge the release → main PR' step");
+    assert.ok(
+      automergeIdx > verifyIdx,
+      'the auto-merge must run after "Verify publish" so main never absorbs a release whose npm ' +
+        'publish was not confirmed. Order is the invariant, not just a comment. See #2515.'
+    );
+  });
 });
