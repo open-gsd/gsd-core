@@ -1,5 +1,0 @@
----
-type: Fixed
-pr: 2025
----
-**`/gsd:verify-work` preserves verification state across gap-closure execution and no longer auto-promotes deferred follow-ups into blocking gaps** — resuming after `/gsd:execute-phase --gaps-only` used to lose the verification state: the UAT `## Gaps` still read `status: failed` even after their fix plans executed, so verify-work re-diagnosed them as fresh blockers, spawned a new gap plan, and reported only the new plan as verified. A state contract now links each gap to its fix plan: every UAT gap carries a stable `gap_id` (`G-{phase}-{N}`), gap-closure plans tag the ids they address in their frontmatter (`gap_ids: […]`), and a new `reconcile_gaps` step on resume marks a gap `status: resolved` when its plan has a matching `*-SUMMARY.md` — so fixed gaps aren't re-diagnosed and the phase can close. Separately, a deferred-follow-up branch captures future-work ideas (signals like "later", "next version", "out of scope") into a `## Deferred Follow-Ups` section instead of creating a blocking gap/plan. (#1921)
