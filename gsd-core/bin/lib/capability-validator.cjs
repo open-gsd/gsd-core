@@ -736,7 +736,7 @@ const VALID_HOOK_BUSES        = new Set(['host', 'engine', 'none']);
 const VALID_STATE_IO          = new Set(['filesystem', 'sandboxed-storage', 'session-log-append']);
 const VALID_TRANSPORTS        = new Set(['mcp', 'native-extension']);
 const VALID_HOST_RUNTIMES     = new Set(['node', 'bun', 'sandboxed-web', 'python', 'go', 'rust', 'electron', 'other']);
-const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only']);
+const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only', 'built-in-only']);
 // ADR-1239 amendment (#2481): how reasoning effort reaches the host.
 const VALID_EFFORT_SURFACES   = new Set(['argv', 'none']);
 
