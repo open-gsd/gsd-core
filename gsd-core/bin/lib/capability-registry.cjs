@@ -1812,7 +1812,7 @@ const capabilities = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "undocumented",
+          "subagentToolkit": "built-in-only",
           "backgroundDispatch": true,
           "builtInSubagents": [
             "coder",
@@ -5222,7 +5222,7 @@ const runtimes = {
           "nested": false,
           "maxDepth": 1,
           "background": true,
-          "subagentToolkit": "undocumented",
+          "subagentToolkit": "built-in-only",
           "backgroundDispatch": true,
           "builtInSubagents": [
             "coder",
