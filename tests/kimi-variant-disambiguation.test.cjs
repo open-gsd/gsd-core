@@ -11,6 +11,7 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { cleanup } = require('./helpers.cjs');
 
 const INSTALL_JS = path.join(__dirname, '..', 'bin', 'install.js');
 
@@ -18,7 +19,7 @@ function makeDisposableHome() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kimi-disambig-'));
   return {
     dir,
-    cleanup() { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } },
+    cleanup() { cleanup(dir); },
   };
 }
 
