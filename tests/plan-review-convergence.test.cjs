@@ -446,6 +446,164 @@ describe('plan-review-convergence: #2315 respects review.default_reviewers (no-f
   });
 });
 
+// ─── #2272: Cursor and Qwen reviewer flags reachable from convergence ────────
+
+describe('plan-review-convergence: --cursor/--qwen reviewer whitelist (#2272)', () => {
+  const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+  const SKILL_PATH = path.join(__dirname, '..', 'skills', 'gsd-plan-review-convergence', 'SKILL.md');
+  const command = fs.readFileSync(COMMAND_PATH, 'utf8');
+
+  test('workflow REVIEWER_FLAGS extraction whitelists --cursor and --qwen', () => {
+    // The runtime contract is the grep-accumulation block: each recognized flag
+    // has its own `grep -q '\\-\\-<flag>'` line. Absence = the flag is silently
+    // dropped to the --codex default (the silent-fallback footgun in #2272).
+    assert.ok(/grep -q '\\-\\-cursor'/.test(workflow), 'workflow must whitelist --cursor');
+    assert.ok(/grep -q '\\-\\-qwen'/.test(workflow), 'workflow must whitelist --qwen');
+  });
+
+  test('command documents the --cursor and --qwen reviewer flags (#2272)', () => {
+    assert.ok(command.includes('--cursor'), 'command must document --cursor flag (Cursor agent reviewer)');
+    assert.ok(command.includes('--qwen'), 'command must document --qwen flag (Qwen Code reviewer)');
+  });
+
+  test('argument-hint advertises --cursor and --qwen (#2272)', () => {
+    const hint = command.match(/^argument-hint:\s*"(.*)"\s*$/m);
+    assert.ok(hint, 'command must declare an argument-hint');
+    assert.ok(hint[1].includes('--cursor'), `argument-hint must list --cursor, got: ${hint[1]}`);
+    assert.ok(hint[1].includes('--qwen'), `argument-hint must list --qwen, got: ${hint[1]}`);
+  });
+
+  test('generated SKILL.md mirrors the --cursor and --qwen flags (argument-hint parity)', () => {
+    const skill = fs.readFileSync(SKILL_PATH, 'utf8');
+    assert.ok(skill.includes('--cursor'), 'generated SKILL.md must document --cursor (regenerate via gen:plugin-skills)');
+    assert.ok(skill.includes('--qwen'), 'generated SKILL.md must document --qwen (regenerate via gen:plugin-skills)');
+  });
+
+  // Behavioral: execute the ACTUAL deployed REVIEWER_FLAGS accumulation block and
+  // assert --cursor/--qwen pass through instead of being dropped to the --codex
+  // default. POSIX-only: the block is /bin/sh-style grep pipework; skip on Windows
+  // where a bash shim is not guaranteed on PATH.
+  test('[behavioral] the deployed extraction passes --cursor/--qwen through (not the --codex fallback)', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
+    const { execFileSync } = require('node:child_process');
+    const startIdx = workflow.indexOf('REVIEWER_FLAGS=""');
+    const endMarker = "echo \"$ARGUMENTS\" | grep -q '\\-\\-all' && REVIEWER_FLAGS=\"$REVIEWER_FLAGS --all\"";
+    const endIdx = workflow.indexOf(endMarker);
+    assert.ok(startIdx !== -1 && endIdx !== -1, 'the REVIEWER_FLAGS parse block must exist in the workflow');
+    const block = workflow.slice(startIdx, endIdx + endMarker.length) + '\nprintf "%s" "$REVIEWER_FLAGS"';
+    const run = (args) => execFileSync('bash', ['-c', block], {
+      env: { ...process.env, ARGUMENTS: args },
+      encoding: 'utf8',
+      timeout: 5000,
+    }).trim();
+
+    const cursor = run('5 --cursor');
+    assert.ok(cursor.split(/\s+/).includes('--cursor'), `--cursor must pass through, got: "${cursor}"`);
+    assert.notStrictEqual(cursor, '--codex', 'must NOT collapse to the --codex-only fallback when --cursor is given');
+
+    const qwen = run('5 --qwen');
+    assert.ok(qwen.split(/\s+/).includes('--qwen'), `--qwen must pass through, got: "${qwen}"`);
+    assert.notStrictEqual(qwen, '--codex', 'must NOT collapse to the --codex-only fallback when --qwen is given');
+
+    // #2315 regression: the parse block no longer applies a default, so a bare
+    // invocation and an unknown reviewer both yield empty here. The default is
+    // resolved later in step 1.5 against review.default_reviewers.
+    assert.strictEqual(run('5'), '', 'no reviewer flag → empty from parse (default applied in step 1.5 per #2315)');
+    assert.strictEqual(run('5 --bogus-reviewer'), '', 'unknown reviewer flag → empty from parse (no silent --codex injection)');
+    const mixed = run('5 --cursor --qwen');
+    assert.ok(mixed.includes('--cursor') && mixed.includes('--qwen'), 'both new flags accumulate together');
+    // The new flags must not be spuriously matched by an unrelated flag (independence).
+    assert.ok(!run('5 --gemini').includes('--cursor'), '--gemini must not trip the --cursor whitelist');
+    assert.ok(!run('5 --gemini').includes('--qwen'), '--gemini must not trip the --qwen whitelist');
+  });
+});
+
+// ─── #2272: upstream CONVERGENCE_ARGS allowlists stay in parity ─────────────
+
+describe('convergence reviewer-flag parity across upstream forwarders (#2272)', () => {
+  const AUTONOMOUS_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'autonomous.md');
+  const NEXT_PATH = path.join(__dirname, '..', 'gsd-core', 'workflows', 'next.md');
+
+  // autonomous.md and next.md forward ONLY the flags their CONVERGENCE_ARGS loop
+  // recognizes; raw $ARGUMENTS never reaches the skill call. So a flag the
+  // convergence workflow accepts but these loops omit is silently dropped to the
+  // --codex default one hop upstream: the same footgun #2272 exists to kill.
+  //
+  // Non-reviewer flags (--text, --max-cycles) are intentionally excluded: --text
+  // is an output-format flag and --max-cycles is parsed separately with its value.
+  const NON_REVIEWER_FLAGS = new Set(['--text', '--max-cycles']);
+
+  /** Reviewer flags the convergence workflow whitelists, from its grep-accumulation block. */
+  function convergenceReviewerFlags() {
+    const workflow = fs.readFileSync(WORKFLOW_PATH, 'utf8');
+    const flags = [...workflow.matchAll(/REVIEWER_FLAGS="\$REVIEWER_FLAGS (--[a-z-]+)"/g)].map((m) => m[1]);
+    assert.ok(flags.length > 0, 'could not parse REVIEWER_FLAGS whitelist from the convergence workflow');
+    return new Set(flags.filter((f) => !NON_REVIEWER_FLAGS.has(f)));
+  }
+
+  /** Flags the CONVERGENCE_ARGS for-loop iterates over in an upstream forwarder. */
+  function forwarderFlags(filePath) {
+    const src = fs.readFileSync(filePath, 'utf8');
+    const loop = src.match(/for REVIEW_FLAG in ([^;]+); do/);
+    assert.ok(loop, `could not find the CONVERGENCE_ARGS for-loop in ${path.basename(filePath)}`);
+    return new Set(loop[1].trim().split(/\s+/).filter((f) => !NON_REVIEWER_FLAGS.has(f)));
+  }
+
+  for (const [label, filePath] of [['autonomous.md', () => AUTONOMOUS_PATH], ['next.md', () => NEXT_PATH]]) {
+    test(`${label} CONVERGENCE_ARGS forwards every reviewer flag the convergence workflow accepts`, () => {
+      const expected = convergenceReviewerFlags();
+      const actual = forwarderFlags(filePath());
+      const missing = [...expected].filter((f) => !actual.has(f)).sort();
+      assert.deepStrictEqual(
+        missing,
+        [],
+        `${label} drops reviewer flag(s) the convergence workflow accepts: ${missing.join(', ')}. ` +
+        'Only CONVERGENCE_ARGS is forwarded to gsd-plan-review-convergence (raw $ARGUMENTS is not), ' +
+        'so an omitted flag silently falls back to --codex. Add it to the for-loop.'
+      );
+    });
+  }
+
+  // Behavioral: run the ACTUAL deployed loop and assert the new flags survive.
+  // POSIX-only: the block is /bin/sh-style grep pipework.
+  test('[behavioral] both forwarders pass --cursor/--qwen/--agy through to CONVERGENCE_ARGS', (t) => {
+    if (process.platform === 'win32') { t.skip('POSIX shell extraction; not run on Windows'); return; }
+    const { execFileSync } = require('node:child_process');
+
+    const runLoop = (filePath, args) => {
+      const src = fs.readFileSync(filePath, 'utf8');
+      const startIdx = src.indexOf('CONVERGENCE_ARGS=""');
+      assert.ok(startIdx !== -1, `CONVERGENCE_ARGS block must exist in ${path.basename(filePath)}`);
+      const doneIdx = src.indexOf('\ndone', startIdx);
+      assert.ok(doneIdx !== -1, `CONVERGENCE_ARGS loop must terminate in ${path.basename(filePath)}`);
+      const block = src.slice(startIdx, doneIdx + '\ndone'.length) + '\nprintf "%s" "$CONVERGENCE_ARGS"';
+      return execFileSync('bash', ['-c', block], {
+        env: { ...process.env, ARGUMENTS: args },
+        encoding: 'utf8',
+        timeout: 5000,
+      }).trim();
+    };
+
+    for (const [label, filePath] of [['autonomous.md', AUTONOMOUS_PATH], ['next.md', NEXT_PATH]]) {
+      for (const flag of ['--cursor', '--qwen', '--agy']) {
+        const out = runLoop(filePath, `--converge ${flag}`);
+        assert.ok(
+          out.split(/\s+/).includes(flag),
+          `${label} must forward ${flag} into CONVERGENCE_ARGS, got: "${out}"`
+        );
+      }
+      // Independence: a longer flag sharing a prefix must not trip a shorter entry.
+      const antigravity = runLoop(filePath, '--converge --antigravity');
+      assert.ok(
+        !antigravity.split(/\s+/).includes('--agy'),
+        `${label}: --antigravity must not also match the --agy entry, got: "${antigravity}"`
+      );
+      // Regression: no reviewer flag → nothing accumulated (convergence applies its own default).
+      assert.strictEqual(runLoop(filePath, '--converge'), '', `${label}: bare --converge must accumulate no reviewer flags`);
+    }
+  });
+});
+
 // ─── Workflow: initialization ──────────────────────────────────────────────
 
 describe('plan-review-convergence workflow: initialization (#2306)', () => {
