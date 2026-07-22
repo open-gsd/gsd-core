@@ -250,6 +250,12 @@ OPENCODE_MODEL=$(gsd_run query config-get review.models.opencode 2>/dev/null | j
 # pinned model that 404s server-side); otherwise agy uses its persisted default.
 AGY_MODEL=$(gsd_run query config-get review.models.agy 2>/dev/null | jq -r '.' 2>/dev/null || true)
 
+# Reasoning effort per reviewer (#2481). Empty unless the host's effortSurface
+# axis is `argv`. Pass --attempt N to walk ADR-443's escalation ladder.
+CLAUDE_EFFORT_ARGS=$(gsd_run query resolve-execution gsd-plan-checker --host claude 2>/dev/null | jq -r '.effort_argv_string // ""' 2>/dev/null || true)
+CODEX_EFFORT_ARGS=$(gsd_run query resolve-execution gsd-plan-checker --host codex 2>/dev/null | jq -r '.effort_argv_string // ""' 2>/dev/null || true)
+OPENCODE_EFFORT_ARGS=$(gsd_run query resolve-execution gsd-plan-checker --host opencode 2>/dev/null | jq -r '.effort_argv_string // ""' 2>/dev/null || true)
+
 # #1115: `--dangerously-bypass-hook-trust` only exists on codex-cli >= 0.137.0.
 # Capability-probe it so older installs don't fail with "unexpected argument"
 # (which, with stderr suppressed, produced a silent empty review). The codex
@@ -281,9 +287,9 @@ fi
 **Claude (separate session):**
 ```bash
 if [ -n "$CLAUDE_MODEL" ] && [ "$CLAUDE_MODEL" != "null" ]; then
-  cat {run_dir}/gsd-review-prompt.md | claude --model "$CLAUDE_MODEL" -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
+  cat {run_dir}/gsd-review-prompt.md | claude --model "$CLAUDE_MODEL" $CLAUDE_EFFORT_ARGS -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
 else
-  cat {run_dir}/gsd-review-prompt.md | claude -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
+  cat {run_dir}/gsd-review-prompt.md | claude $CLAUDE_EFFORT_ARGS -p - 2>/dev/null > {run_dir}/gsd-review-claude.md
 fi
 ```
 
@@ -298,9 +304,9 @@ fi
 # stdout redirect would append that noise to a non-empty file — slipping past the
 # `[ ! -s … ]` empty-output guard as a silently polluted review.
 if [ -n "$CODEX_MODEL" ] && [ "$CODEX_MODEL" != "null" ]; then
-  cat {run_dir}/gsd-review-prompt.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" --skip-git-repo-check -o {run_dir}/gsd-review-codex.md - 2>{run_dir}/gsd-review-codex.err >/dev/null
+  cat {run_dir}/gsd-review-prompt.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --model "$CODEX_MODEL" $CODEX_EFFORT_ARGS --skip-git-repo-check -o {run_dir}/gsd-review-codex.md - 2>{run_dir}/gsd-review-codex.err >/dev/null
 else
-  cat {run_dir}/gsd-review-prompt.md | codex exec --ephemeral $CODEX_BYPASS_FLAG --skip-git-repo-check -o {run_dir}/gsd-review-codex.md - 2>{run_dir}/gsd-review-codex.err >/dev/null
+  cat {run_dir}/gsd-review-prompt.md | codex exec --ephemeral $CODEX_BYPASS_FLAG $CODEX_EFFORT_ARGS --skip-git-repo-check -o {run_dir}/gsd-review-codex.md - 2>{run_dir}/gsd-review-codex.err >/dev/null
 fi
 if [ ! -s {run_dir}/gsd-review-codex.md ]; then
   echo "Codex review failed or returned empty output. stderr:" > {run_dir}/gsd-review-codex.md
@@ -345,7 +351,7 @@ if [ -n "$OPENCODE_MODEL" ] && [ "$OPENCODE_MODEL" != "null" ]; then
 else
   set --
 fi
-cat {run_dir}/gsd-review-prompt.md | opencode run "$@" --format json - 2>{run_dir}/gsd-review-opencode.err > {run_dir}/gsd-review-opencode.json
+cat {run_dir}/gsd-review-prompt.md | opencode run "$@" $OPENCODE_EFFORT_ARGS --format json - 2>{run_dir}/gsd-review-opencode.err > {run_dir}/gsd-review-opencode.json
 # Reconstruct the review from the assistant text parts into a variable and test
 # its CONTENT, not the file size: an empty extraction still prints a trailing
 # newline that would fool a `[ -s file ]` check into skipping the stub.

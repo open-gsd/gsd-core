@@ -736,6 +736,8 @@ const VALID_STATE_IO          = new Set(['filesystem', 'sandboxed-storage', 'ses
 const VALID_TRANSPORTS        = new Set(['mcp', 'native-extension']);
 const VALID_HOST_RUNTIMES     = new Set(['node', 'bun', 'sandboxed-web', 'python', 'go', 'rust', 'electron', 'other']);
 const VALID_SUBAGENT_TOOLKITS = new Set(['full', 'read-only']);
+// ADR-1239 amendment (#2481): how reasoning effort reaches the host.
+const VALID_EFFORT_SURFACES   = new Set(['argv', 'none']);
 
 // GATE A: installSurface → allowed hooksSurface values (DEFECT.GENERATIVE-FIX: parity invariant)
 // Derived from the actual pairings in the 16 real runtime descriptors.
@@ -1201,6 +1203,24 @@ function validateRuntimeBody(cap) {
       errors.push(
         'runtime.hostIntegration.runtime must be one of: ' + [...VALID_HOST_RUNTIMES].join(', ') +
         ' (or "undocumented") (got: ' + JSON.stringify(hi.runtime) + ')',
+      );
+    }
+
+    // effortSurface (axis) — ADR-1239 amendment (#2481).
+    // OPTIONAL, unlike the Phase-A axes. It was added after descriptors already
+    // existed, so requiring it would invalidate every descriptor written before it —
+    // including third-party ones, breaking the "purely additive" property ADR-1239
+    // promises for external descriptors. An omitted axis is legitimate: negotiation
+    // degrades it to the safe floor ('none') and warns, exactly as for any
+    // undeclared axis. Only a PRESENT value is checked against the vocabulary.
+    if (hi.effortSurface === undefined) {
+      // absent — nothing to validate; negotiateHostCapabilities fails it closed.
+    } else if (hi.effortSurface === '__proto__' || hi.effortSurface === 'constructor' || hi.effortSurface === 'prototype') {
+      errors.push('runtime.hostIntegration.effortSurface "' + hi.effortSurface + '" is a reserved name');
+    } else if (hi.effortSurface !== 'undocumented' && !VALID_EFFORT_SURFACES.has(hi.effortSurface)) {
+      errors.push(
+        'runtime.hostIntegration.effortSurface must be one of: ' + [...VALID_EFFORT_SURFACES].join(', ') +
+        ' (or "undocumented") (got: ' + JSON.stringify(hi.effortSurface) + ')',
       );
     }
 
@@ -2309,6 +2329,7 @@ module.exports = {
     transport:       [...VALID_TRANSPORTS],
     runtime:         [...VALID_HOST_RUNTIMES],
     subagentToolkit: [...VALID_SUBAGENT_TOOLKITS],
+    effortSurface:   [...VALID_EFFORT_SURFACES],
   },
   INSTALL_SURFACE_TO_ALLOWED_HOOKS_SURFACES,
   GEMINI_AGENT_EVENTS,

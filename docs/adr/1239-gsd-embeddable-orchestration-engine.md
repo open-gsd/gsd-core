@@ -100,6 +100,50 @@ Phase A is **implemented** and Phases B–E have landed, so this ADR is **Accept
 
 No consumer wires the negotiated result yet — Phase A is interface-definition only; the engine↔host boundary (Phase B) and the adapters (Phase C) are where it is consumed.
 
+## Amendment (2026-07-21): `effortSurface` axis (#2481)
+
+> Adds a **ninth negotiated axis** covering reasoning effort. Raised by #2475: reviewer CLIs invoked as subprocesses by the review workflow silently inherit whatever reasoning effort sits in the user's own global CLI config, producing 1–3 minute review cycles on one machine and 12–15+ minute cycles on another with no in-project way to influence it.
+
+**The gap.** Reasoning effort is a first-class, config-driven GSD concept that the negotiated schema does not describe. Three mechanisms exist and none of them meet:
+
+1. **A core effort vocabulary and cascade** ([ADR-443](443-opus48-unified-effort-and-fast-mode-routing.md)) — `resolveEffortInternal` (`src/model-resolver.cts`) resolves a *universal* effort string through invocation override → `effort.agent_overrides.<agent-id>` → `effort.routing_tier_defaults.<tier>` → `effort.default` → canonical defaults.
+2. **A core-owned per-runtime rendering table** — `EFFORT_RENDERING` / `renderEffortForRuntime` (`src/model-catalog.cts`), where each runtime declares `param`, `channel`, `supported` levels and a `clamp()` rule. It holds two entries (`claude`, `codex`) and its `channel` vocabulary is `frontmatter` | `api` — **both install-time artifact channels**. Its production callers are exactly those two channels: the static install-time renderer (`bin/install.js`, via `src/install-effort-resolver.cts`) and the manual `query resolve-execution` / effort-sync CLI surface (`src/commands.cts`). **No workflow or agent dispatch calls it**, so there is no invocation-time channel and no per-host declaration of one.
+3. **This negotiated schema** — eight axes under `capability.json` `runtime.hostIntegration`. Effort is not among them; `modelMode` covers only whether the host lets GSD drive model *selection*.
+
+`EFFORT_RENDERING` is performing this schema's job — declaring per-host support and degrading gracefully — but as a core table keyed by runtime name, at the wrong layer, predating this ADR. [ADR-443](443-opus48-unified-effort-and-fast-mode-routing.md) names the same gap in its own text: its dynamic paths *"exist only as CLI-callable resolver code… Nothing in the shipped orchestration actually calls them,"* and *"the only propagation channel actually wired into a real GSD flow is the static one (config → `install()` → frontmatter, baked once at install time)."*
+
+**The axis.** `effortSurface` declares **how reasoning effort reaches a host** — a two-value closed vocabulary consistent with the existing axes:
+
+- **`argv`** — effort is deliverable as an argument on the host's own invocation (claude `--effort`; opencode `--variant`; codex via the generic `-c model_reasoning_effort=` config override). This is the channel the schema was missing.
+- **`none`** — the host exposes no reasoning-effort mechanism.
+`undocumented` is **not** a value of this vocabulary. It is the corpus-wide sentinel (`UNDOCUMENTED` in `src/host-integration.cts`) that any axis may carry when a host's documentation does not state a value: it validates, but never propagates into effective axes — failing closed exactly like an unknown or missing value. A host whose effort mechanism is undocumented carries the sentinel and negotiates to the safe floor.
+
+Per-host `param` name, accepted level set, and clamp rule are carried **in the descriptor** rather than a core table, so `EFFORT_RENDERING` collapses into descriptor data rather than growing a parallel vocabulary.
+
+**Degradation ladder — interface point 3 (Model) gains an effort row:**
+
+| Interface point | Full | Degraded | Absent → fallback |
+|---|---|---|---|
+| 3 Model — effort | `argv`: universal effort rendered onto the invocation, clamped to the host's level set | *(no rung — see below)* | `none` / `undocumented`: effort is not propagated; host default stands |
+
+**Why there is no `config-file` member.** A config-file-only effort surface is a real shape — Gemini CLI exposed exactly that (`thinkingConfig.thinkingLevel` / `.thinkingBudget` under `modelConfig.generateContentConfig`, settable only in settings.json model presets). It is nonetheless **not** a vocabulary member, because no supported runtime has one:
+
+- **Gemini CLI was removed from this repo as a sunset runtime** — `capabilities/gemini/capability.json` was deleted by commit `8f2ebbe9b` (#1928, PR #1996), following Google's own transition notice (`developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/`).
+- **Antigravity CLI**, its documented successor, states no reasoning or thinking setting on its features/settings page (`antigravity.google/docs/cli/features`).
+- **ZCode**, the other declarative host with a rich config surface, states none either (`zcode.z.ai/en/docs/configuration`).
+
+A closed, first-party vocabulary with a member no host can claim is an invitation to guess. If a supported host later documents a config-file effort surface, adding the member is a small, evidence-backed change — and the degradation ladder already has the shape for it.
+
+**Boundary against #2313.** That epic (whose own Phase 0 records the Codex passive-model posture as a separate ADR, not yet written) owns the **static / install-time** effort channel for Codex — `model_reasoning_effort` in generated `~/.codex/agents/<agent>.toml` under the passive posture, plus a sync path — and explicitly places *"orchestrator effort-override drift"* outside its scope. This amendment covers the **invocation-time** channel only and does not change install-time emission. The two channels may share a descriptor once `EFFORT_RENDERING` folds in.
+
+**Evidence.** Per this ADR's own rule that axis values are documentation-sourced and never inferred: `claude --effort` and `opencode --variant` were verified against each CLI's `--help`; codex's `-c model_reasoning_effort=` and gemini's `thinkingConfig` were verified against first-party documentation. **The remaining installed hosts were not researched for this axis and must carry the explicit `undocumented` sentinel**, joining the 28 sentinels already carried across the 18 descriptors that declare `hostIntegration`, rather than inheriting a guessed value from a profile baseline.
+
+**Corrections to the Phase A amendment's counts** (recorded here rather than by editing that section, since ADRs are append-only). The Phase A text states "all 16 installed CLIs" and "22 such markers exist today". Both have drifted: **18** descriptors now declare `runtime.hostIntegration`, carrying **28** `undocumented` sentinels. The lists have since drifted in both directions, for different reasons: **`zcode`** carries a descriptor but is named in neither list, and **`gemini`** is named in the declarative list but its descriptor was **deliberately deleted** by `8f2ebbe9b` (#1928, PR #1996) when Google sunset Gemini CLI in favor of Antigravity CLI. Any per-host work on this axis must enumerate the descriptors from the tree, not from those lists.
+
+**Relationship to [ADR-443](443-opus48-unified-effort-and-fast-mode-routing.md).** That ADR is `Proposed`, blocked on its decided invocation-override and escalation paths having no live caller, and its own text recorded the choice of unblock path as a maintainer call it did not make. It is amended in the same change (#2481) to select path (a), to record that audit issue #1192's action-plan item 18 was never converted into a tracked follow-up, and to correct its own stale audit: the blocker's grep excluded `references/*.md`, which is `@`-included into workflows, and predates #2296's escalation caller. This axis does not by itself satisfy either of path (a)'s two mechanisms — see that ADR's amendment for the precise status. `effortSurface` is therefore the declaration layer for a decision ADR-443 already made; it does not restate ADR-443's cascade or enum.
+
+**Status:** delivered in #2481 — axis vocabulary, descriptor values, validator parity, fail-closed negotiation, the degradation row, and the consuming review-lane wiring all land together. `effortSurface` is a wired axis, not a declared-but-unconsumed one; it is the first negotiated axis whose consumer is an invocation-time argument rather than an install-time artifact.
+
 ## Host-capability profiles (negotiation baselines)
 
 - **Programmatic-CLI** (Claude Code, pi, OpenCode): imperative; full dispatch; host hook bus; MCP; `slash` surface. The richest target — minimal degradation.

@@ -610,6 +610,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
     let fastModeOverride;
     let attempt;
     let failureClass;
+    let host;
     const positionals = [];
     // #2296: the valid classes come from the classifier's own frozen enum, so
     // this validator can never drift from what `agent classify-failure` emits.
@@ -675,6 +676,13 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
         i++;
         continue;
       }
+      if (a === '--host') {
+        const val = execArgs[i + 1];
+        if (val === undefined || val.startsWith('--')) error('Missing value for --host', ERROR_REASON.USAGE);
+        host = val;
+        i++;
+        continue;
+      }
       if (a === '--raw') continue;
       if (a.startsWith('-')) error(`Unknown flag for resolve-execution: ${a}`, ERROR_REASON.USAGE);
       positionals.push(a);
@@ -687,6 +695,7 @@ function dispatchOverlayCapabilityCommand({ command, args, cwd, raw, error, load
       fastModeOverride,
       attempt,
       failureClass,
+      host,
     });
   }
 

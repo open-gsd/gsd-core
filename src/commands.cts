@@ -34,7 +34,9 @@ const { resolveModelInternal, resolveModelForTier, resolveProviderEscalation, re
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import agentCommandRouterMod = require('./agent-command-router.cjs');
 const { AGENT_FAILURE_CLASSES } = agentCommandRouterMod;
-import { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
+import { renderEffortForRuntime, renderEffortArgv, RUNTIMES_WITH_FAST_MODE } from './model-catalog.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import hostIntegrationMod = require('./host-integration.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths } = planningWorkspace;
@@ -525,9 +527,9 @@ function cmdResolveGranularity(cwd: string, phaseType: string | undefined, raw: 
  *     fast_mode, fast_mode_supported, [unknown_agent] }
  *
  * Flags: --effort <level>, --fast-mode <true|false>, --attempt <n>,
- *        --failure-class <class> (#2296)
+ *        --failure-class <class> (#2296), --host <runtime-id> (#2481)
  */
-function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string }): void {
+function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: boolean, opts?: { effortOverride?: string; fastModeOverride?: boolean; attempt?: number; failureClass?: string; host?: string }): void {
   if (!agentType) {
     error('agent-type required');
   }
@@ -587,9 +589,53 @@ function cmdResolveExecution(cwd: string, agentType: string | undefined, raw: bo
     fast_mode: fastMode,
     fast_mode_supported: fastModeSupported,
   };
+  // ADR-1239 amendment (#2481) / ADR-443 path (a): invocation-time effort for a
+  // named host. The host's negotiated `effortSurface` decides WHETHER an argument
+  // is emitted; the catalog knows the syntax. Absent --host the contract is
+  // byte-identical to before, so every existing caller is unaffected.
+  if (typeof opts.host === 'string' && opts.host.length > 0) {
+    const surface = effortSurfaceForHost(cwd, opts.host);
+    const argvRendered = renderEffortArgv(opts.host, effort, surface);
+    result['host'] = opts.host;
+    result['effort_surface'] = surface;
+    result['effort_argv'] = argvRendered.argv;
+    result['effort_argv_string'] = argvRendered.argv.join(' ');
+    result['effort_argv_value'] = argvRendered.value;
+  }
+
   if (!agentModels) result['unknown_agent'] = true;
   if (escalation) result['escalation'] = escalation;
   output(result, raw, effort);
+}
+
+/**
+ * ADR-1239 amendment (#2481) — resolve a host's negotiated `effortSurface`.
+ *
+ * Reads the host's runtime descriptor from the generated capability registry and
+ * runs it through the Host-Integration negotiation so the trust-boundary invariant
+ * applies here exactly as everywhere else: an unknown host, a missing axis, or the
+ * `undocumented` sentinel all degrade to the safe floor rather than being trusted.
+ * Never throws — a lookup failure yields `'none'`, which renders no argument.
+ */
+function effortSurfaceForHost(cwd: string, host: string): string {
+  void cwd;
+  try {
+    // Mirrors the lazy-require pattern from runtime-slash.cts §runtimeSlash —
+    // capability-registry.cjs is generated and carries no type declarations.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { runtimes } = require('./capability-registry.cjs') as {
+      runtimes: Record<string, { runtime?: { hostIntegration?: unknown } }>;
+    };
+    const declared = runtimes[host]?.runtime?.hostIntegration;
+    if (!declared || typeof declared !== 'object') return 'none';
+    // The descriptor is untrusted JSON; negotiation applies the trust-boundary
+    // invariant (effective ⊆ host-declared ∩ engine-known) and fails closed.
+    const negotiated = hostIntegrationMod.negotiateHostCapabilities(declared);
+    const surface: unknown = negotiated?.effective?.effortSurface;
+    return typeof surface === 'string' ? surface : 'none';
+  } catch {
+    return 'none';
+  }
 }
 
 /**

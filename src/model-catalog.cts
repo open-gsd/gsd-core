@@ -222,6 +222,82 @@ export interface RenderedEffort {
   channel: string | null;
 }
 
+// ─── Invocation-time (argv) effort rendering ─────────────────────────────────
+//
+// ADR-1239 amendment (#2481) / ADR-443 path (a). EFFORT_RENDERING above covers the
+// two INSTALL-TIME channels (`frontmatter`, `api`) — effort baked into a generated
+// artifact. This table covers the INVOCATION-TIME channel: the argument appended to
+// a host CLI spawned as a subprocess.
+//
+// WHETHER to emit is not decided here — it is the negotiated `effortSurface` axis on
+// the host's descriptor (`argv` | `none`). This table only knows the
+// syntax for hosts whose surface is `argv`. A host absent from this table renders
+// null, so an undeclared or undocumented host silently gets nothing rather than a
+// guessed flag.
+export interface EffortArgvSpec {
+  /** Render the argv fragment for an already-clamped effort level. */
+  render(level: string): string[];
+  /** Levels this CLI accepts; anything else clamps via `clamp` first. */
+  supported: Set<string>;
+  clamp(level: string): string;
+}
+
+export const EFFORT_ARGV: Record<string, EffortArgvSpec> = {
+  // Verified against `claude --help`: `--effort <level>`.
+  claude: {
+    render: (level: string): string[] => ['--effort', level],
+    supported: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+    clamp: (level: string): string => (level === 'minimal' ? 'low' : level),
+  },
+  // Verified against `opencode run --help`: `--variant` — "model variant
+  // (provider-specific reasoning effort, e.g., high, max, minimal)".
+  opencode: {
+    render: (level: string): string[] => ['--variant', level],
+    supported: new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
+    clamp: (level: string): string => level,
+  },
+  // First-party Codex docs: `model_reasoning_effort` is a config-only key with no
+  // dedicated flag, so the generic `-c key=value` override is the only argv route.
+  codex: {
+    render: (level: string): string[] => ['-c', `model_reasoning_effort=${level}`],
+    supported: new Set(['minimal', 'low', 'medium', 'high', 'xhigh']),
+    clamp: (level: string): string => (level === 'max' ? 'xhigh' : level),
+  },
+};
+
+export interface RenderedEffortArgv {
+  argv: string[];
+  value: string | null;
+  host: string;
+}
+
+/**
+ * Render the invocation-time effort argument for a host.
+ *
+ * `effortSurface` is the host's negotiated axis value. Only `argv` produces an
+ * argument; `none`, `undocumented`, and anything unrecognised produce nothing.
+ * Never throws.
+ */
+export function renderEffortArgv(
+  host: string,
+  universalEffort: string,
+  effortSurface: string | null | undefined,
+): RenderedEffortArgv {
+  const empty: RenderedEffortArgv = { argv: [], value: null, host };
+  if (effortSurface !== 'argv') return empty;
+  // Own-property lookup only. A plain `EFFORT_ARGV[host]` resolves `__proto__`
+  // (and `constructor`/`toString`) to inherited members, which are truthy but
+  // carry no `clamp`/`render` — a hostile host id would throw instead of
+  // degrading. The host id reaches here from a descriptor, i.e. untrusted JSON.
+  if (typeof host !== 'string' || !Object.prototype.hasOwnProperty.call(EFFORT_ARGV, host)) return empty;
+  const spec = EFFORT_ARGV[host];
+  if (!spec || typeof spec.clamp !== 'function' || typeof spec.render !== 'function') return empty;
+  if (typeof universalEffort !== 'string' || universalEffort.length === 0) return empty;
+  const clamped = spec.clamp(universalEffort);
+  if (!spec.supported.has(clamped)) return empty;
+  return { argv: spec.render(clamped), value: clamped, host };
+}
+
 /**
  * Render a universal effort string for a specific runtime.
  */

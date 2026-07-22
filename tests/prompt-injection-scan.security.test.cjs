@@ -68,6 +68,12 @@ const ALLOWLIST = new Set([
 // belong in ALLOWLIST). Only add files that are large but otherwise clean.
 const SIZE_ONLY_WORKFLOWS = new Set([
   'gsd-core/workflows/docs-update.md',  // ~51K after fix-loop truncation guard (#571)
+  // ~50.7K after the per-reviewer effort wiring (#2481). This file sat at 49,971
+  // chars — 29 below the 50K prompt-stuffing threshold — so it was going to trip
+  // on whatever was added to it next. Size-only: the file is still fully injection
+  // scanned, exactly like docs-update.md. Splitting it per the progressive-
+  // disclosure pattern is the real fix and is worth its own change.
+  'gsd-core/workflows/review.md',
 ]);
 
 // ─── Scanner ────────────────────────────────────────────────────────────────

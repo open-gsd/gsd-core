@@ -45,6 +45,15 @@ const HOST_INTEGRATION_AXES = Object.freeze({
   transport:       Object.freeze(['mcp', 'native-extension'] as const),
   runtime:         Object.freeze(['node', 'bun', 'sandboxed-web', 'python', 'go', 'rust', 'electron', 'other'] as const),
   subagentToolkit: Object.freeze(['full', 'read-only'] as const),
+  // ADR-1239 amendment (#2481): how reasoning effort reaches this host.
+  // `argv` — deliverable as an argument on the host's own invocation.
+  // `none` — the host exposes no reasoning-effort mechanism.
+  // `undocumented` is NOT a member here; it is the corpus-wide sentinel above.
+  // A config-file-only surface deliberately has NO vocabulary member: the only
+  // host that ever had one (Gemini CLI's thinkingConfig) was removed as a sunset
+  // runtime in #1928/#1996, and neither its successor Antigravity CLI nor ZCode
+  // documents a reasoning setting. Adding a member with no host would be a guess.
+  effortSurface:   Object.freeze(['argv', 'none'] as const),
 });
 
 const INTERFACE_POINTS = Object.freeze(['command', 'dispatch', 'model', 'hooks', 'state', 'artifact'] as const);
@@ -61,6 +70,7 @@ type StateIO          = 'filesystem' | 'sandboxed-storage' | 'session-log-append
 type Transport        = 'mcp' | 'native-extension';
 type HostRuntime      = 'node' | 'bun' | 'sandboxed-web' | 'python' | 'go' | 'rust' | 'electron' | 'other';
 type SubagentToolkit  = 'full' | 'read-only';
+type EffortSurface    = 'argv' | 'none';
 type DegradationLevel = 'full' | 'degraded' | 'absent';
 type InterfacePoint   = 'command' | 'dispatch' | 'model' | 'hooks' | 'state' | 'artifact';
 
@@ -82,6 +92,7 @@ interface HostIntegrationAxes {
   stateIO: StateIO;
   transport: Transport;
   runtime: HostRuntime;
+  effortSurface: EffortSurface;
 }
 
 interface DegradationResult {
@@ -104,6 +115,7 @@ const SAFE_DEFAULTS: HostIntegrationAxes = {
   stateIO:        'session-log-append',
   transport:      'mcp',
   runtime:        'node',
+  effortSurface:  'none',
 };
 
 const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' | 'ide', HostIntegrationAxes>> =
@@ -117,6 +129,7 @@ const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' 
       stateIO:        'filesystem',
       transport:      'mcp',
       runtime:        'node',
+      effortSurface:  'none',
     } as HostIntegrationAxes),
     'declarative-cli': Object.freeze({
       embeddingMode:  'declarative',
@@ -127,6 +140,7 @@ const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' 
       stateIO:        'filesystem',
       transport:      'mcp',
       runtime:        'node',
+      effortSurface:  'none',
     } as HostIntegrationAxes),
     'ide': Object.freeze({
       embeddingMode:  'imperative',
@@ -137,6 +151,7 @@ const PROFILE_BASELINES: Readonly<Record<'programmatic-cli' | 'declarative-cli' 
       stateIO:        'sandboxed-storage',
       transport:      'mcp',
       runtime:        'sandboxed-web',
+      effortSurface:  'none',
     } as HostIntegrationAxes),
   });
 
@@ -190,6 +205,13 @@ function degradationFor(point: InterfacePoint, axes: Partial<HostIntegrationAxes
     }
 
     case 'model': {
+      // NOTE (#2481): the effortSurface axis is deliberately NOT folded into this
+      // level. `modelMode` has graded interface point 3 since Phase A, and every
+      // existing consumer reads it as "can GSD drive model selection". Widening it
+      // to also mean "…and deliver effort" silently redefines an established
+      // contract — an `active` host with no declared effort surface would flip
+      // from `full` to `absent`. Effort is negotiated on its own axis and read
+      // from `effective.effortSurface` by the consumers that care.
       const mm = (axes as Record<string, unknown>).modelMode;
       if (mm === 'active')  return { level: 'full',     fallback: '' };
       if (mm === 'passive') return { level: 'degraded', fallback: 'instruction-injection / per-agent model field' };
@@ -262,6 +284,7 @@ const DEFAULT_ENGINE: EngineCapabilities = {
     stateIO:        'filesystem',
     transport:      'mcp',
     runtime:        'node',
+    effortSurface:  'argv',
   },
   known: HOST_INTEGRATION_AXES,
 };
@@ -346,6 +369,14 @@ function negotiateHostCapabilities(
     if (axis === 'modelMode') {
       if (hostVal === 'active' && engineVal === 'passive') return 'passive';
     }
+    // For effortSurface: 'argv' > 'none'. An engine that cannot deliver the
+    // host's richer channel caps the result to what it can drive.
+    if (axis === 'effortSurface') {
+      const RANK: Record<string, number> = { argv: 1, none: 0 };
+      const hr = RANK[hostVal as string] ?? 0;
+      const er = RANK[engineVal as string] ?? 0;
+      if (hr > er) return engineVal;
+    }
     return hostVal;
   }
 
@@ -357,6 +388,7 @@ function negotiateHostCapabilities(
   const effectiveStateIO        = negotiateScalar('stateIO');
   const effectiveTransport      = negotiateScalar('transport');
   const effectiveRuntime        = negotiateScalar('runtime');
+  const effectiveEffortSurface  = negotiateScalar('effortSurface');
 
   // ---------------------------------------------------------------------------
   // Dispatch struct negotiation
@@ -456,6 +488,7 @@ function negotiateHostCapabilities(
     stateIO:        effectiveStateIO,
     transport:      effectiveTransport,
     runtime:        effectiveRuntime,
+    effortSurface:  effectiveEffortSurface,
   };
 
   // ---------------------------------------------------------------------------
