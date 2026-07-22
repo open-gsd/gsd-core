@@ -588,17 +588,19 @@ const GENERIC_NAMES_TO_CODER: ReadonlySet<string> = Object.freeze(new Set([
 
 function resolveDispatchType(requested: unknown, dispatch: UnvalidatedDispatch): string {
   if (typeof requested !== 'string' || requested.length === 0) return 'coder';
-  // Named-dispatch runtime: use the requested name as-is.
-  if (dispatch && typeof dispatch === 'object' && dispatch.namedDispatch === true) {
-    return requested;
-  }
-  // Built-in-only runtime (namedDispatch false/absent with explicit builtins):
+  // Built-in-only runtime (EXPLICIT namedDispatch: false, e.g. kimi-code):
   // map to coder/explore/plan by suffix heuristic.
-  if (GENERIC_NAMES_TO_CODER.has(requested)) return 'coder';
-  for (const [pattern, builtin] of DISPATCH_TYPE_SUFFIX_MAP) {
-    if (pattern.test(requested)) return builtin;
+  if (dispatch && typeof dispatch === 'object' && dispatch.namedDispatch === false) {
+    if (GENERIC_NAMES_TO_CODER.has(requested)) return 'coder';
+    for (const [pattern, builtin] of DISPATCH_TYPE_SUFFIX_MAP) {
+      if (pattern.test(requested)) return builtin;
+    }
+    return 'coder';
   }
-  return 'coder';
+  // Named-dispatch runtime (namedDispatch: true OR unknown/absent): use the
+  // requested name unchanged. Absent namedDispatch degrades to named-dispatch
+  // (the GSD default) so every runtime already in the field keeps working.
+  return requested;
 }
 
 // ---------------------------------------------------------------------------
