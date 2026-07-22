@@ -147,12 +147,26 @@ jobs:
       # when it is absent the bounded fragment reader falls back to a fail-closed
       # stub and every capability fragment reports "could not be read", failing
       # the sync. Build the ledger first so fragments materialize.
+      #
+      # BLAST-RADIUS CONTAINMENT (#2504): version-sync is best-effort and MUST
+      # NOT be able to abort the job. The job's load-bearing purpose is to open
+      # and admin-merge the back-merge PR so `main` becomes an ancestor of
+      # `next` — the invariant that keeps the next `release → main` merge clean.
+      # Historically a failure here (missing build:lib after a workflow-copy
+      # regression, or any `npm version` lifecycle hiccup) skipped "Open PR" and
+      # left `main` diverged, breaking the following release. `continue-on-error`
+      # on both steps below keeps the ancestry PR unconditional: a sync failure
+      # is surfaced (the step shows red) but only costs a stale `next` version,
+      # which is trivially re-synced — never a broken back-merge. Do not remove;
+      # a required-steps test (release-backmerge-invariants.test.cjs) enforces it.
       - name: Install dependencies and build (required by the version-sync hook)
         if: steps.check.outputs.next_exists == 'true'
+        continue-on-error: true
         run: npm ci --silent && npm run build:lib
 
       - name: Sync next's version to main's released version
         if: steps.check.outputs.next_exists == 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           VERSION=$(git show origin/main:package.json | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
