@@ -144,8 +144,6 @@ Spawn 4 parallel gsd-codebase-mapper agents.
 
 > **Runtime-aware dispatch (#2508 Phase 4).** GSD workflows dispatch specialized subagents by role. Before dispatching on a built-in-only runtime (kimi-code — three built-ins only), resolve the role to a built-in via `gsd_run query resolve-dispatch-type --requested <role> --raw`. On named-dispatch runtimes (Claude/OpenCode/…) the role is returned unchanged; on kimi-code it maps to `coder`/`explore`/`plan` by role-suffix. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
 
-> **Runtime-aware dispatch (#2508 Phase 4).** Before any `Agent(subagent_type="gsd-*")` call below, resolve the type for the current runtime: `RESOLVED=$(gsd_run query resolve-dispatch-type --requested <name> --raw 2>/dev/null || echo <name>)`, then use `$RESOLVED`. On named-dispatch runtimes (Claude/OpenCode/…) this is the `gsd-*` name unchanged; on built-in-only runtimes (kimi-code) it maps to `coder`/`explore`/`plan` by role. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
-
 Use Agent tool with `subagent_type="gsd-codebase-mapper"`, `model="{mapper_model}"`, and `run_in_background=true` for parallel execution.
 
 **CRITICAL:** Use the dedicated `gsd-codebase-mapper` agent, NOT `Explore` or `browser_subagent`. The mapper agent writes documents directly.
@@ -412,7 +410,6 @@ Created .planning/codebase/:
 - TESTING.md ([N] lines) - Test structure and practices
 - INTEGRATIONS.md ([N] lines) - External services and APIs
 - CONCERNS.md ([N] lines) - Technical debt and issues
-
 
 ---
 

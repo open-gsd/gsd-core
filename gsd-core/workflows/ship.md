@@ -409,7 +409,6 @@ If `REVIEW_CMD` is non-empty and not `"null"`, run the external review:
 
 Ask if user wants to trigger a code review:
 
-
 **Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
 
 ```
@@ -476,8 +475,6 @@ Read the `activeHooks` array directly from `SHIP_POST_HOOKS_JSON` in-context (do
 <!-- #2508 runtime-aware-dispatch -->
 
 > **Runtime-aware dispatch (#2508 Phase 4).** GSD workflows dispatch specialized subagents by role. Before dispatching on a built-in-only runtime (kimi-code — three built-ins only), resolve the role to a built-in via `gsd_run query resolve-dispatch-type --requested <role> --raw`. On named-dispatch runtimes (Claude/OpenCode/…) the role is returned unchanged; on kimi-code it maps to `coder`/`explore`/`plan` by role-suffix. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
-
-> **Runtime-aware dispatch (#2508 Phase 4).** Before any `Agent(subagent_type="gsd-*")` call below, resolve the type for the current runtime: `RESOLVED=$(gsd_run query resolve-dispatch-type --requested <name> --raw 2>/dev/null || echo <name>)`, then use `$RESOLVED`. On named-dispatch runtimes (Claude/OpenCode/…) this is the `gsd-*` name unchanged; on built-in-only runtimes (kimi-code) it maps to `coder`/`explore`/`plan` by role. The persona rides `${AGENT_SKILLS_<ROLE>}` (Phase 3) regardless. See @gsd-core/references/runtime-aware-dispatch.md.
 
   `Agent(subagent_type=ref.agent, prompt="Ship-time capability hook for phase ${PHASE_NUMBER}. Phase dir: ${PHASE_DIR}. Consume: ${consumed_files}. Follow your agent instructions.", model="{balanced_model}")`
 - If `ref.skill` is set, dispatch with `Skill(skill="gsd-${ref.skill}", args="${PHASE_NUMBER} --auto ${GSD_WS}")` (prepend `gsd-` to `ref.skill`).
