@@ -143,11 +143,11 @@ process.stdin.on('end', () => {
       const command = data.tool_input?.command || '';
       for (const gitCwd of forceGitAddCwds(command, cwd)) {
         const branch = currentBranch(gitCwd);
-        if (branch.startsWith('worktree-agent-')) {
+        if (/^(worktree-)?agent-/.test(branch)) {
           const output = {
             decision: 'block',
             code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN',
-            reason: 'worktree-agent branches must not run git add -f or git add --force. Respect the SDK skipped_gitignored/skipped_commit_docs_false contract and leave gitignored files untracked.',
+            reason: 'agent/worktree-agent branches must not run git add -f or git add --force. Respect the SDK skipped_gitignored/skipped_commit_docs_false contract and leave gitignored files untracked.',
           };
           process.stdout.write(JSON.stringify(output));
           // Kimi CLI's exit-2 protocol feeds stderr back to the model (#2304)
