@@ -1531,8 +1531,8 @@ function extractCwdGuardBash() {
   if (!guardBash.includes('git rev-parse --show-toplevel')) {
     throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "git rev-parse --show-toplevel"');
   }
-  if (!guardBash.includes('worktree-agent-')) {
-    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "worktree-agent-"');
+  if (!guardBash.includes('(worktree-)?agent-')) {
+    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "(worktree-)?agent-"');
   }
 
   return guardBash;
