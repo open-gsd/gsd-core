@@ -398,6 +398,42 @@ const CHECKPOINT_FRAMES: Record<string, CheckpointFrame> = {
     banner: 'PUNTO DI CONTROLLO: Verifica richiesta',
     instruction: 'Digita `pass` o descrivi cosa non va.',
   },
+  dutch: {
+    banner: 'CONTROLEPUNT: Verificatie vereist',
+    instruction: 'Typ `pass` of beschrijf wat er mis is.',
+  },
+  polish: {
+    banner: 'PUNKT KONTROLNY: Wymagana weryfikacja',
+    instruction: 'Wpisz `pass` lub opisz, co jest nie tak.',
+  },
+  russian: {
+    banner: 'КОНТРОЛЬНАЯ ТОЧКА: требуется проверка',
+    instruction: 'Введите `pass` или опишите, что не так.',
+  },
+  ukrainian: {
+    banner: 'КОНТРОЛЬНА ТОЧКА: потрібна перевірка',
+    instruction: 'Введіть `pass` або опишіть, що не так.',
+  },
+  turkish: {
+    banner: 'KONTROL NOKTASI: Doğrulama gerekli',
+    instruction: '`pass` yazın veya sorunu açıklayın.',
+  },
+  hindi: {
+    banner: 'चेकपॉइंट: सत्यापन आवश्यक',
+    instruction: '`pass` लिखें या बताएं कि क्या गलत है।',
+  },
+  arabic: {
+    banner: 'نقطة تحقق: المراجعة مطلوبة',
+    instruction: 'اكتب `pass` أو صف المشكلة.',
+  },
+  vietnamese: {
+    banner: 'ĐIỂM KIỂM TRA: Cần xác minh',
+    instruction: 'Nhập `pass` hoặc mô tả vấn đề.',
+  },
+  indonesian: {
+    banner: 'TITIK PEMERIKSAAN: Verifikasi diperlukan',
+    instruction: 'Ketik `pass` atau jelaskan apa yang salah.',
+  },
 };
 
 // Free-form response_language aliases → canonical CHECKPOINT_FRAMES key.
@@ -411,6 +447,15 @@ const CHECKPOINT_LANGUAGE_ALIASES: Record<string, string> = {
   chinese: 'chinese', zh: 'chinese', 'zh-cn': 'chinese', 'zh-tw': 'chinese', mandarin: 'chinese', 'simplified chinese': 'chinese', 'traditional chinese': 'chinese', '中文': 'chinese',
   korean: 'korean', ko: 'korean', '한국어': 'korean',
   italian: 'italian', it: 'italian', italiano: 'italian',
+  dutch: 'dutch', nl: 'dutch', nederlands: 'dutch', flemish: 'dutch', vlaams: 'dutch',
+  polish: 'polish', pl: 'polish', polski: 'polish',
+  russian: 'russian', ru: 'russian', 'ru-ru': 'russian', 'русский': 'russian',
+  ukrainian: 'ukrainian', uk: 'ukrainian', ua: 'ukrainian', 'українська': 'ukrainian',
+  turkish: 'turkish', tr: 'turkish', 'türkçe': 'turkish', turkce: 'turkish',
+  hindi: 'hindi', hi: 'hindi', 'हिन्दी': 'hindi', 'हिंदी': 'hindi',
+  arabic: 'arabic', ar: 'arabic', 'العربية': 'arabic',
+  vietnamese: 'vietnamese', vi: 'vietnamese', 'tiếng việt': 'vietnamese', 'tieng viet': 'vietnamese',
+  indonesian: 'indonesian', id: 'indonesian', 'bahasa indonesia': 'indonesian',
 };
 
 function resolveCheckpointFrame(responseLanguage: string | undefined): CheckpointFrame {
@@ -419,14 +464,11 @@ function resolveCheckpointFrame(responseLanguage: string | undefined): Checkpoin
   return (key && CHECKPOINT_FRAMES[key]) || CHECKPOINT_FRAMES.english;
 }
 
-// Approximate East Asian Width ranges (Unicode property values W and F) — the
-// CJK scripts CHECKPOINT_FRAMES ships (Japanese/Chinese/Korean) render each
-// matching code point at 2 terminal/display columns, not 1. Padding computed
-// from `.length` (UTF-16 code units) undercounts these by one column per
-// wide character, visually misaligning the box's right border (#2402 review
-// medium finding). Latin-script frames (English/Spanish/French/German/
-// Portuguese/Italian) contain no wide code points, so displayWidth === length
-// for them — no behavior change there.
+// Approximate terminal-cell width. East Asian Width W/F code points occupy two
+// cells, while Unicode combining marks occupy no additional cell beyond their
+// base character. Counting only W/F ranges is insufficient for scripts such as
+// Devanagari: Hindi vowel signs and viramas are combining marks, and treating
+// each as a full cell visibly shifts the checkpoint box's right border.
 function isWideCodePoint(codePoint: number): boolean {
   return (
     (codePoint >= 0x1100 && codePoint <= 0x115f) || // Hangul Jamo
@@ -445,11 +487,14 @@ function isWideCodePoint(codePoint: number): boolean {
   );
 }
 
+const COMBINING_MARK_RE = /\p{Mark}/u;
+
 // Iterates by Unicode code point (not UTF-16 code unit) so astral characters
 // are measured once, not as two surrogate units.
 function displayWidth(text: string): number {
   let width = 0;
   for (const ch of text) {
+    if (COMBINING_MARK_RE.test(ch)) continue;
     width += isWideCodePoint(ch.codePointAt(0) as number) ? 2 : 1;
   }
   return width;
