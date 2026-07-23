@@ -1,5 +1,5 @@
 <!--
-  Optional hero image (ships alongside this file in the PR as
+  Optional hero image (ships alongside this file as
   docs/tutorials/assets/your-first-project-hero.png):
   <p align="center"><img src="assets/your-first-project-hero.png" alt="GSD Core — Git. Ship. Done." width="100%"></p>
 -->
@@ -8,11 +8,11 @@
 
 # 🚀 Your first project
 
-**From an empty folder to a shipped pull request — in one guided loop.**
+**From an empty folder to a shipped pull request — in one guided loop. Works in every GSD runtime.**
 
 ![level](https://img.shields.io/badge/level-beginner-3fb950?style=flat-square)
 ![time](https://img.shields.io/badge/time-30–45%20min-f0883e?style=flat-square)
-![runtime](https://img.shields.io/badge/runtime-Claude%20Code-8957e5?style=flat-square)
+![runtime](https://img.shields.io/badge/runtime-any%20IDE-8957e5?style=flat-square)
 ![prereq](https://img.shields.io/badge/prereq-Node%2018%2B-2f81f7?style=flat-square)
 
 </div>
@@ -20,24 +20,27 @@
 > [!TIP]
 > **This is the one guaranteed path.** You will build a tiny app, run **every**
 > command in the core loop exactly once, and — the part most tutorials skip —
-> understand *why* each step exists. No prior GSD knowledge assumed.
+> understand *why* each step exists. It works whether you use **Cursor, Claude
+> Code, OpenCode, Codex, Gemini CLI, Copilot, Windsurf** or any other supported
+> runtime.
 
 ---
 
 ## 📖 Table of contents
 
 1. [The one idea that makes GSD click](#-the-one-idea-that-makes-gsd-click)
-2. [What you'll build](#-what-youll-build)
-3. [Prerequisites](#-prerequisites)
-4. [Step 1 — Install GSD Core](#step-1--install-gsd-core)
-5. [Step 2 — Start Claude Code](#step-2--start-claude-code-with-permissions)
-6. [Step 3 — Create the project](#step-3--create-the-project)
-7. [Step 4 — Discuss Phase 1](#step-4--clear-context-then-discuss-phase-1)
-8. [Step 5 — Plan Phase 1](#step-5--plan-phase-1)
-9. [Step 6 — Execute Phase 1](#step-6--execute-phase-1)
-10. [Step 7 — Verify the work](#step-7--verify-the-work)
-11. [Step 8 — Ship it](#step-8--ship-it)
-12. [Glossary](#-mini-glossary) · [Troubleshooting](#-troubleshooting) · [What next](#-what-next)
+2. [Pick your runtime](#-pick-your-runtime)
+3. [What you'll build](#-what-youll-build)
+4. [Prerequisites](#-prerequisites)
+5. [Step 1 — Install GSD Core](#step-1--install-gsd-core-into-your-runtime)
+6. [Step 2 — Open your runtime](#step-2--open-your-runtime)
+7. [Step 3 — Create the project](#step-3--create-the-project)
+8. [Step 4 — Discuss Phase 1](#step-4--clear-context-then-discuss-phase-1)
+9. [Step 5 — Plan Phase 1](#step-5--plan-phase-1)
+10. [Step 6 — Execute Phase 1](#step-6--execute-phase-1)
+11. [Step 7 — Verify the work](#step-7--verify-the-work)
+12. [Step 8 — Ship it](#step-8--ship-it)
+13. [Glossary](#-mini-glossary) · [Troubleshooting](#-troubleshooting) · [What next](#-what-next)
 
 ---
 
@@ -108,6 +111,39 @@ flowchart TB
 
 ---
 
+## 🧩 Pick your runtime
+
+GSD installs into whichever AI coding tool you use every day. **The eight steps
+below are identical everywhere** — only two things differ per runtime:
+
+1. the **`--flag`** you pass the installer, and
+2. how you **invoke commands** (`/gsd-*`, the `/gsd:*` colon form, or plain
+   language for rules-based runtimes).
+
+| Runtime | Installer flag | How you invoke GSD |
+|---------|----------------|--------------------|
+| **Claude Code** | `--claude` | `/gsd-*` slash commands |
+| **Cursor** | `--cursor` | `/gsd-*` (pair with the `gsd-cursor` EoS for model profiles) |
+| **OpenCode** | `--opencode` | `/gsd-*` |
+| **Codex** | `--codex` (CLI ≥ 0.130.0) | `/gsd-*` |
+| **Gemini CLI** | `--gemini` | `/gsd:*` — **colon** form (`/gsd:new-project`) |
+| **GitHub Copilot** | `--copilot` | `/gsd-*` |
+| **Windsurf** | `--windsurf` | `/gsd-*` |
+| **Kilo** | `--kilo` | `/gsd-*` |
+| **Cline** | `--cline` | **rules** — no slash commands; just ask in plain language |
+| **Qwen Code** | `--qwen` | `/gsd-*` |
+| **Antigravity** | `--antigravity` | `/gsd:*` (Gemini-compatible) |
+| **CodeBuddy · Augment · Trae · …** | `--<runtime>` | `/gsd-*` |
+
+> [!NOTE]
+> **How to read the rest of this guide.** Commands are written in the `/gsd-*`
+> form. If you're on **Gemini CLI** or **Antigravity**, swap the hyphen for a
+> colon (`/gsd:new-project`). If you're on **Cline**, there are no slash commands
+> — just ask, e.g. *"start a new GSD project"*. Full per-runtime details:
+> [Install on your runtime](../how-to/install-on-your-runtime.md).
+
+---
+
 ## 🎯 What you'll build
 
 A small **Node.js command-line to-do app**:
@@ -130,20 +166,18 @@ loop, not a toolchain.
 
 ## ✅ Prerequisites
 
-Run each check. If one fails, fix it before continuing.
-
 | You need | Check with | "Good" looks like |
 |----------|------------|-------------------|
 | **Node.js 18+** | `node --version` | `v18.x.x` or higher |
-| **Claude Code** | `claude --version` | any version prints |
+| **Your AI IDE / CLI** | Cursor, Claude Code, OpenCode, Codex, Gemini CLI… | installed and opens |
 | **A terminal in an empty folder** | `pwd` | the project dir you want to use |
 | **Internet** | — | needed once, for the installer |
 
 ```mermaid
 flowchart LR
     A[node --version ≥ 18?] -->|no| A1[Install/upgrade Node] --> A
-    A -->|yes| B[claude installed?]
-    B -->|no| B1[Install Claude Code] --> B
+    A -->|yes| B[your runtime installed?]
+    B -->|no| B1[Install your IDE/CLI] --> B
     B -->|yes| C[In an empty project folder?]
     C -->|no| C1[cd into one] --> C
     C -->|yes| R([✅ Ready for Step 1])
@@ -151,78 +185,74 @@ flowchart LR
     class R ok;
 ```
 
-No database, no framework, no API keys. Got the four? You're ready.
-
 ---
 
-## Step 1 — Install GSD Core
+## Step 1 — Install GSD Core into your runtime
 
-From a terminal **in your project directory**:
+From a terminal **in your project directory**, run the installer with **your
+runtime's flag** (see [Pick your runtime](#-pick-your-runtime)):
 
 ```bash
-npx @opengsd/gsd-core@latest
+npx @opengsd/gsd-core@latest --<your-runtime> --local
 ```
 
-Answer two prompts: **runtime → Claude Code**, **scope → local** (just this
-project). You'll see:
+For example `--cursor`, `--claude`, `--opencode`, `--codex`, or `--gemini`. Use
+`--local` for just this project (or `--global` for all projects). You'll see:
 
 ```text
-✓ Installed 86 skills to .claude/commands/
-✓ Installed agents to .claude/agents/
+✓ Installed 86 skills
+✓ Installed agents
 ✓ GSD Core ready — run /gsd-new-project to start
 ```
+
+Then **restart your runtime** so it picks up the new commands and agents.
 
 <details>
 <summary>💡 <b>What just happened?</b></summary>
 
 <br>
 
-A `.claude/` directory now exists in your project. It holds GSD's **commands**
-(the `/gsd-*` slash commands) and **agents** (the sub-agents that research and
-execute). You never edit these by hand — the installer owns them.
+A config directory now holds GSD's **commands** and **agents** — `.claude/` for
+Claude Code, `~/.cursor/` for Cursor, `~/.config/opencode/` for OpenCode, and so
+on. You never edit these by hand — the installer owns them, and it transforms
+each command into your runtime's native format (for example, the `/gsd:*` colon
+form for Gemini CLI, or `.clinerules` for Cline).
 
 </details>
 
-> [!NOTE]
-> **Why local, not global?** A local install pins the GSD version to *this*
-> project, so an update elsewhere can't silently change its behaviour here.
-> [Install on your runtime](../how-to/install-on-your-runtime.md) covers global
-> installs and the other 14 supported runtimes.
-
 > [!WARNING]
-> **If it fails:** `npx: command not found` → Node isn't on your `PATH`
-> (re-check prerequisites). Network error → check your connection/proxy; the
-> first install needs internet. Picked the wrong runtime → just re-run the
-> command and choose again.
+> **Don't copy files from `agents/` or `commands/` directly** — that bypasses the
+> per-runtime transformations and produces schema errors or missing commands.
+> Always use the installer.
 
 ---
 
-## Step 2 — Start Claude Code with permissions
+## Step 2 — Open your runtime
 
-GSD spawns sub-agents that read and write files. Start with the permissions flag
-so it doesn't stop to confirm **every** file operation:
-
-```bash
-claude --dangerously-skip-permissions
-```
-
-You'll land at the Claude Code prompt, inside your project.
+Open your IDE (Cursor, Codex, OpenCode, Windsurf…) or start your CLI. You'll land
+at a prompt in your project directory.
 
 > [!CAUTION]
-> **About that scary flag.** It lets GSD's agents edit files without a prompt
-> each time — exactly what you want for a throwaway tutorial in an empty folder.
-> For real work in a repo you care about, read the
-> [security model](../explanation/security-model.md) first.
+> **Claude Code only — the permissions flag.** GSD spawns sub-agents that read and
+> write files. Starting with `claude --dangerously-skip-permissions` skips the
+> per-file confirmation — ideal for a throwaway tutorial in an empty folder. For
+> real work, read the [security model](../explanation/security-model.md) first.
+> Other runtimes handle agent file access their own way; no extra flag is needed.
 
 ---
 
 ## Step 3 — Create the project
 
-At the Claude Code prompt:
+At your runtime's prompt:
 
 ```text
 /gsd-new-project
 ```
+
+> [!NOTE]
+> **Command syntax by runtime:** Gemini CLI / Antigravity → `/gsd:new-project`;
+> Cline → just type *"start a new GSD project"*; everything else →
+> `/gsd-new-project`. The same rule applies to every `/gsd-*` command below.
 
 The first question is always **"What do you want to build?"** Paste this:
 
@@ -232,16 +262,9 @@ A Node.js CLI tool for managing to-do items. Users run `todo add "buy milk"`,
 No external dependencies — Node built-ins only.
 ```
 
-Then:
-
-- A few **clarifying questions** → answer naturally (GSD is learning what you care
-  about *before* it plans).
-- **Domain research?** → choose **Skip research** (project's too small to need it).
-- **Workflow settings** (mode, granularity, research agents) → take the
-  **recommended default** for each.
-- A **roadmapper** sub-agent runs (`Spawning roadmapper…`, ~1 min).
-
-You'll get a proposed roadmap — type **Approve**:
+Then answer the **clarifying questions**, choose **Skip research**, take the
+**recommended defaults** for workflow settings, and wait for the **roadmapper**
+(~1 min). Type **Approve** on the proposed roadmap:
 
 ```text
 Proposed Roadmap
@@ -451,12 +474,12 @@ Pull request created: https://github.com/your-org/your-repo/pull/1
 Title: feat(phase-1): core CLI — add / list / done commands
 ```
 
-That's the **full loop** — idea → merged PR — for one phase. 🚀
+That's the **full loop** — idea → merged PR — for one phase, on **any runtime**. 🚀
 
 ```mermaid
 flowchart LR
     idea([💡 idea]) --> loop
-    subgraph loop [one phase]
+    subgraph loop [one phase · any runtime]
       direction LR
       d[Discuss]-->p[Plan]-->e[Execute]-->v[Verify]-->s[Ship]
     end
@@ -483,6 +506,7 @@ next? Let GSD detect it:
 
 | Term | Meaning in GSD |
 |------|----------------|
+| **Runtime** | Your AI IDE/CLI: Cursor, Claude Code, OpenCode, Codex, Gemini CLI, … |
 | **Phase** | One slice of the roadmap you take through the whole loop. |
 | **The loop** | Discuss → Plan → Execute → Verify → Ship. |
 | **Sub-agent** | A fresh, throwaway worker GSD spawns for research or execution. |
@@ -498,22 +522,22 @@ next? Let GSD detect it:
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| A `/gsd-*` command isn't recognized | GSD installed in another folder | Confirm `.claude/commands/` exists here; re-run the installer. |
+| A GSD command isn't recognized | Wrong syntax for your runtime, or runtime not restarted | Gemini CLI/Antigravity use `/gsd:*`; Cline uses plain language. Restart the runtime after install. |
 | `Spawning researchers…` looks stuck | Research runs 1–5 min | Wait — don't interrupt. If truly hung, `/clear` and re-run the step. |
 | Verify keeps failing | Real bug in the code | Let GSD write the fix plan → `/gsd-execute-phase 1` → re-verify. |
 | Lost track of where you are | — | Open `.planning/STATE.md`, or run `/gsd-progress --next`. |
-| Something is badly wedged | — | See [Recover and troubleshoot](../how-to/recover-and-troubleshoot.md). |
+| Wrong install directory | Prerelease edition (Cursor Nightly, etc.) | Set the matching `*_CONFIG_DIR` env var — see [Install on your runtime](../how-to/install-on-your-runtime.md). |
 
 ---
 
 ## 🎓 What next
 
+- [Install on your runtime](../how-to/install-on-your-runtime.md) — exact steps for all 15 runtimes
 - [The phase loop](../explanation/the-phase-loop.md) — why it's shaped this way
 - [Context engineering](../explanation/context-engineering.md) — the theory behind fresh sub-agents
-- [How-to guides](../README.md#how-to-guides) — task-focused recipes
 - [Configure model profiles](../how-to/configure-model-profiles.md) — quality / balanced / budget tiers
 - [Onboarding an existing codebase](onboarding-an-existing-codebase.md) — bring GSD to a brownfield repo
 
 > [!TIP]
 > **You now know the whole loop.** Everything else in GSD is a refinement of these
-> eight steps. Welcome aboard. 🚀
+> eight steps — and it works the same in every runtime. Welcome aboard. 🚀
