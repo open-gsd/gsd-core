@@ -3585,3 +3585,33 @@ describe('query commit --files scoping (#2269)', () => {
     assert.match(content.slice(idx, idx + 200), /ROADMAP\.md/);
   });
 });
+
+describe('#2279: map-codebase date stamp instructions overwrite existing dates', () => {
+  const REPO_ROOT = path.join(__dirname, '..');
+
+  test('codebase-mapper agent says to SET date stamps, overwriting existing values', () => {
+    const content = fs.readFileSync(
+      path.join(REPO_ROOT, 'agents', 'gsd-codebase-mapper.md'), 'utf-8'
+    );
+    assert.match(content, /overwriting whatever date is already there/i,
+      'must instruct the agent to SET date stamps unconditionally, not just replace [YYYY-MM-DD] placeholders');
+  });
+
+  test('map-codebase workflow spawn prompts say to SET date stamps, not replace placeholders', () => {
+    const content = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'map-codebase.md'), 'utf-8'
+    );
+    const stampLines = content.match(/Set all date stamps[^\r\n]*/g) || [];
+    assert.ok(stampLines.length >= 4,
+      `must have ≥4 "Set all date stamps" instructions (4 spawn prompts + 1 sequential); got ${stampLines.length}`);
+  });
+
+  test('map-codebase sequential path says to SET date stamps overwriting existing dates', () => {
+    const content = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'map-codebase.md'), 'utf-8'
+    );
+    const idx = content.indexOf('overwriting any existing date');
+    assert.notEqual(idx, -1,
+      'workflow must instruct agents to overwrite existing dates, not just replace [YYYY-MM-DD] placeholders');
+  });
+});
