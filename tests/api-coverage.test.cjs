@@ -562,6 +562,58 @@ describe('coverage matrix — parse / validate (#1562 acceptance #2)', () => {
     assert.strictEqual(p.rows.length, 0);
   });
 
+  test('#2366 bug 1: summary table outside the matrix is not parsed as data', () => {
+    const md = [
+      '# API Coverage',
+      '',
+      '| capability | decision | reason |',
+      '|---|---|---|',
+      '| search | INTEGRATE | |',
+      '',
+      '## Coverage summary',
+      '',
+      '| tier | INTEGRATE | OPT-OUT |',
+      '|---|---|---|',
+      '| phase 8 | 12 | 6 |',
+    ].join('\n');
+    const p = parseCoverageMatrix(md);
+    assert.strictEqual(p.rows.length, 1, 'only the matrix row, not the summary table');
+    assert.strictEqual(p.rows[0].capability, 'search');
+    assert.strictEqual(p.errors.length, 0);
+  });
+
+  test('#2366 bug 2: multi-section matrix with repeated headers is parsed', () => {
+    const md = [
+      '| capability | decision | reason |',
+      '|---|---|---|',
+      '| search | INTEGRATE | |',
+      '',
+      '## Transferred',
+      '',
+      '| capability | decision | reason |',
+      '|---|---|---|',
+      '| widget | OPT-OUT | deferred to 9 |',
+    ].join('\n');
+    const p = parseCoverageMatrix(md);
+    assert.strictEqual(p.rows.length, 2, 'both sections should parse');
+    assert.strictEqual(p.rows[0].capability, 'search');
+    assert.strictEqual(p.rows[1].capability, 'widget');
+    assert.strictEqual(p.errors.length, 0);
+  });
+
+  test('#2366 bug 3: markdown emphasis on decision is stripped', () => {
+    const md = [
+      '| capability | decision | reason |',
+      '|---|---|---|',
+      '| search | INTEGRATE | |',
+      '| skip | **OPT-OUT** | not needed yet |',
+    ].join('\n');
+    const p = parseCoverageMatrix(md);
+    assert.strictEqual(p.rows.length, 2);
+    assert.strictEqual(p.rows[1].decision, 'OPT-OUT', '**OPT-OUT** should parse as OPT-OUT');
+    assert.strictEqual(p.errors.length, 0);
+  });
+
   // ── validate: boundaries 0 / 1 / 2 rows (limit-1, limit, limit+1) ────────
   test('validate — empty matrix is invalid (acceptance #1: surface must be enumerated)', () => {
     const v = validateCoverageMatrix('| capability | decision | reason |\n|---|---|---|');
