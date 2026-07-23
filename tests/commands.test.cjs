@@ -3551,3 +3551,37 @@ describe('feat-488: effort sync command', () => {
 });
   });
 }
+
+describe('query commit --files scoping (#2269)', () => {
+  const REPO_ROOT = path.join(__dirname, '..');
+
+  test('secure-phase.md passes --files to its query commit call', () => {
+    const content = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'secure-phase.md'), 'utf-8'
+    );
+    const idx = content.indexOf('add/update security threat verification');
+    assert.notEqual(idx, -1, 'must contain the security commit message');
+    assert.match(content.slice(idx, idx + 200), /--files/);
+    assert.match(content.slice(idx, idx + 200), /SECURITY\.md/);
+  });
+
+  test('validate-phase.md passes --files to its query commit call', () => {
+    const content = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'validate-phase.md'), 'utf-8'
+    );
+    const idx = content.indexOf('add/update validation strategy');
+    assert.notEqual(idx, -1, 'must contain the validation commit message');
+    assert.match(content.slice(idx, idx + 200), /--files/);
+    assert.match(content.slice(idx, idx + 200), /VALIDATION\.md/);
+  });
+
+  test('next.md passes --files to its deferral query commit call', () => {
+    const content = fs.readFileSync(
+      path.join(REPO_ROOT, 'gsd-core', 'workflows', 'next.md'), 'utf-8'
+    );
+    const idx = content.indexOf('defer incomplete Phase');
+    assert.notEqual(idx, -1, 'must contain the deferral commit message');
+    assert.match(content.slice(idx, idx + 200), /--files/);
+    assert.match(content.slice(idx, idx + 200), /ROADMAP\.md/);
+  });
+});

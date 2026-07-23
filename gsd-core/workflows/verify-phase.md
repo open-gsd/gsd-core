@@ -2,8 +2,6 @@
 
 <purpose>
 Verify phase goal achievement through goal-backward analysis. Check that the codebase delivers what the phase promised, not just that tasks completed.
-
-Executed by a verification subagent spawned from execute-phase.md.
 </purpose>
 
 <core_principle>

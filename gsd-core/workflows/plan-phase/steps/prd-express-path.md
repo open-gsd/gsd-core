@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # PRD Express Path — generate CONTEXT.md from a PRD
 
 Runs when `--prd <filepath>` is provided (§3.5 of `plan-phase.md`).

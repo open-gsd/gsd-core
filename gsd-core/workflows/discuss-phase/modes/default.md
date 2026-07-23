@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # Default mode — interactive discuss-phase
 
 > **Lazy-loaded.** Read this file from `workflows/discuss-phase.md` when no

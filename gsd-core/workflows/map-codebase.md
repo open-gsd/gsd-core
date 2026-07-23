@@ -169,7 +169,7 @@ Write these documents to {codebase_dir}/:
 - STACK.md - Languages, runtime, frameworks, dependencies, configuration
 - INTEGRATIONS.md - External APIs, databases, auth providers, webhooks
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set all date stamps (`**Analysis Date:**`, footer `*... analysis: ...*`, `<!-- refreshed: ... -->`) to {date}, overwriting any existing date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -195,7 +195,7 @@ Write these documents to {codebase_dir}/:
 - ARCHITECTURE.md - Pattern, layers, data flow, abstractions, entry points
 - STRUCTURE.md - Directory layout, key locations, naming conventions
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set all date stamps (`**Analysis Date:**`, footer `*... analysis: ...*`, `<!-- refreshed: ... -->`) to {date}, overwriting any existing date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -221,7 +221,7 @@ Write these documents to {codebase_dir}/:
 - CONVENTIONS.md - Code style, naming, patterns, error handling
 - TESTING.md - Framework, structure, mocking, coverage
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set all date stamps (`**Analysis Date:**`, footer `*... analysis: ...*`, `<!-- refreshed: ... -->`) to {date}, overwriting any existing date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -246,7 +246,7 @@ Analyze this codebase for technical debt, known issues, and areas of concern.
 Write this document to {codebase_dir}/:
 - CONCERNS.md - Tech debt, bugs, security, performance, fragile areas
 
-IMPORTANT: Use {date} for all [YYYY-MM-DD] date placeholders in documents.
+IMPORTANT: Set all date stamps (`**Analysis Date:**`, footer `*... analysis: ...*`, `<!-- refreshed: ... -->`) to {date}, overwriting any existing date.
 
 Scope: ${PATH_SCOPE_HINT:-(full repo)} — when --paths is supplied, restrict exploration to those prefixes only.
 
@@ -299,7 +299,7 @@ When the `Agent` tool is unavailable, perform codebase mapping sequentially in t
 
 **IMPORTANT:** Do NOT use `browser_subagent`, `Explore`, or any browser-based tool. Use only file system tools (Read, Bash, Write, Grep, Glob, list_dir, view_file, grep_search, or equivalent tools available in your runtime).
 
-**IMPORTANT:** Use `{date}` from init context for all `[YYYY-MM-DD]` date placeholders in documents. NEVER guess the date.
+**IMPORTANT:** Set all date stamps (`**Analysis Date:**`, footer, `<!-- refreshed -->`) to `{date}` from init context, overwriting any existing date — Update runs seed from files with concrete prior dates, so merely replacing `[YYYY-MM-DD]` placeholders is not sufficient. NEVER guess the date.
 
 **SCOPE:** When `${PATH_SCOPE_HINT}` is non-empty (i.e. `--paths` was supplied), restrict every pass below to the validated path prefixes in `${SCOPED_PATHS}`. Do NOT scan files outside those prefixes. When `${PATH_SCOPE_HINT}` is empty, perform a full-repo scan.
 

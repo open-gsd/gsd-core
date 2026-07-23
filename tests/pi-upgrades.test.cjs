@@ -24,13 +24,14 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const { cleanup } = require('./helpers.cjs');
 
 const {
   extensionEventSurfaceFor,
   negotiateHostCapabilities,
   UNDOCUMENTED,
 } = require('../gsd-core/bin/lib/host-integration.cjs');
-const { RUNTIME_PROFILE_MAP } = require('../gsd-core/bin/lib/model-catalog.cjs');
 
 const gsdPiExtension = require('../pi/gsd.cjs');
 const { _internals } = require('../pi/gsd.cjs');
@@ -99,37 +100,79 @@ test('gsdPiExtension does NOT call registerProvider (GSD steers pi\'s existing a
 // handler ACTUALLY REGISTERED via pi.on('before_provider_request', ...) in
 // gsdPiExtension. This ties the bound handler (default tier = 'sonnet') to
 // the real model-catalog steering end-to-end.
-test('the ACTUALLY-REGISTERED before_provider_request handler steers to the default-tier model-catalog pi id', async () => {
+//
+// #2460: the bound handler now FAILS-OPENS when no explicit
+// model_profile_overrides.pi[tier] is configured. pi is provider-agnostic;
+// the built-in tier default (claude-sonnet-5) is an Anthropic-ecosystem
+// assumption that broke every non-Anthropic provider. The test below
+// asserts the fail-open contract for the no-override case.
+test('the ACTUALLY-REGISTERED before_provider_request handler fail-opens when no model_profile_overrides is configured (#2460)', async () => {
   const pi = mockPi();
   gsdPiExtension(pi);
   const boundHandler = pi._recorded.events['before_provider_request'][0];
   assert.equal(typeof boundHandler, 'function');
 
-  const out = await boundHandler({ payload: {} }, { cwd: __dirname });
-  assert.ok(out, 'expected a modified payload, not undefined');
-  assert.equal(out.model, RUNTIME_PROFILE_MAP.pi.sonnet.model, 'the bound handler steers to the default (sonnet) tier\'s model-catalog pi id');
-  assert.equal(out.model, 'claude-sonnet-5');
+  // __dirname has no .planning/config.json with model_profile_overrides, so
+  // the handler must NOT steer — returns undefined so pi's chosen model flows
+  // through untouched.
+  const out = await boundHandler({ payload: { model: 'k3' } }, { cwd: __dirname });
+  assert.equal(out, undefined, 'no override configured → must fail-open (return undefined), not steer to claude-sonnet-5');
 });
 
 // -- (3) before_provider_request: active-model steering ----------------------
+//
+// #2460: the handler ONLY steers when the user has explicitly opted in via
+// model_profile_overrides. The fail-open path (no override) is the bug fix;
+// the override path below documents the opt-in contract.
 
-test('before_provider_request resolves a tier that maps to a model → returns a payload with the bare anthropic model id (model-catalog pi ids)', async () => {
+test('before_provider_request fail-opens when no model_profile_overrides is configured (#2460 bug discriminator)', async () => {
   const handler = _internals.buildBeforeProviderRequestHandler({ tier: 'sonnet' });
-  const result = await handler({ payload: { existing: 'field' } }, { cwd: __dirname });
-  assert.ok(result, 'expected a modified payload, not undefined');
-  assert.equal(result.existing, 'field', 'original payload fields are preserved');
-  assert.equal(result.model, RUNTIME_PROFILE_MAP.pi.sonnet.model, 'model id matches the model-catalog pi entry');
-  assert.equal(result.model, 'claude-sonnet-5');
+  // Reproduces the issue reporter\'s exact repro: user-selected model 'k3'
+  // (or any non-Anthropic id) must NOT be rewritten to claude-sonnet-5.
+  const result = await handler({ payload: { model: 'k3', messages: [{ role: 'user', content: 'hi' }] } }, { cwd: __dirname });
+  assert.equal(result, undefined, 'no override configured → must NOT rewrite payload.model');
 });
 
-test('before_provider_request resolves opus/haiku tiers to their model-catalog pi ids too', async () => {
-  const opusHandler = _internals.buildBeforeProviderRequestHandler({ tier: 'opus' });
-  const opusResult = await opusHandler({ payload: {} }, { cwd: __dirname });
-  assert.equal(opusResult.model, RUNTIME_PROFILE_MAP.pi.opus.model);
+test('before_provider_request steers to the override model when model_profile_overrides.pi[tier] is explicitly configured', async () => {
+  // Build a temp project with an explicit override and point the handler at it.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-steer-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile_overrides: { pi: { sonnet: 'kimi-coding/k3' } } }),
+    );
+    const handler = _internals.buildBeforeProviderRequestHandler({ tier: 'sonnet' });
+    const result = await handler({ payload: { existing: 'field', model: 'will-be-overwritten' } }, { cwd: tmpDir });
+    assert.ok(result, 'explicit override configured → expected a modified payload, not undefined');
+    assert.equal(result.existing, 'field', 'original payload fields are preserved');
+    assert.equal(result.model, 'kimi-coding/k3', 'model id matches the user-configured override');
+  } finally {
+    cleanup(tmpDir);
+  }
+});
 
-  const haikuHandler = _internals.buildBeforeProviderRequestHandler({ tier: 'haiku' });
-  const haikuResult = await haikuHandler({ payload: {} }, { cwd: __dirname });
-  assert.equal(haikuResult.model, RUNTIME_PROFILE_MAP.pi.haiku.model);
+test('before_provider_request fail-opens when override is explicitly null or empty (#2460)', async () => {
+  // Defensive: an explicit null/empty override entry must NOT be treated as
+  // "user opted in". The user might null/empty out a previously-set override.
+  // Without the empty-string guard, resolveTierEntry's falsy `if (userRaw)`
+  // would silently fall back to the built-in catalog and rewrite payload.model
+  // to claude-sonnet-5 — re-introducing the bug this PR fixes.
+  for (const emptyValue of [null, '']) {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-empty-override-${emptyValue === null ? 'null' : 'empty'}-`));
+    try {
+      fs.mkdirSync(path.join(tmpDir, '.planning'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.planning', 'config.json'),
+        JSON.stringify({ model_profile_overrides: { pi: { sonnet: emptyValue } } }),
+      );
+      const handler = _internals.buildBeforeProviderRequestHandler({ tier: 'sonnet' });
+      const result = await handler({ payload: { model: 'k3' } }, { cwd: tmpDir });
+      assert.equal(result, undefined, `override === ${JSON.stringify(emptyValue)} → must fail-open (got ${JSON.stringify(result)})`);
+    } finally {
+      cleanup(tmpDir);
+    }
+  }
 });
 
 test('before_provider_request given a tier that resolves to null returns undefined (fail-open, never a wrong/empty id)', async () => {

@@ -30,24 +30,41 @@ const ROOT = path.join(__dirname, '..');
 const WORKFLOWS_DIR = path.join(ROOT, 'gsd-core', 'workflows');
 const SHARED_REF = 'references/response-language-directive.md';
 
-const files = fs.readdirSync(WORKFLOWS_DIR).filter((f) => f.endsWith('.md')).sort();
-const violations = [];
-
-for (const name of files) {
-  const content = fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf8');
-  const hasSharedRef = content.includes(SHARED_REF);
-  const hasInline = content.includes('response_language');
-  if (!hasSharedRef && !hasInline) violations.push(name);
+function findMarkdownFilesRecursive(dir) {
+  const files = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...findMarkdownFilesRecursive(full));
+    else if (entry.isFile() && entry.name.endsWith('.md')) files.push(full);
+  }
+  return files.sort();
 }
 
-if (violations.length > 0) {
-  console.error(
-    `lint-response-language-coverage: ${violations.length} workflow(s) have no response-language coverage (#2529).\n` +
-    `Each workflow must either @-reference the shared directive (@~/.claude/gsd-core/${SHARED_REF})\n` +
-    `or carry its own inline \`response_language\` directive:\n\n` +
-    violations.map((f) => `  - gsd-core/workflows/${f}`).join('\n'),
-  );
-  process.exit(1);
+function findViolations(workflowsDir) {
+  return findMarkdownFilesRecursive(workflowsDir).filter((file) => {
+    const content = fs.readFileSync(file, 'utf8');
+    return !content.includes(SHARED_REF) && !content.includes('response_language');
+  });
 }
 
-console.log(`lint-response-language-coverage: OK (${files.length} workflows covered)`);
+function main() {
+  const files = findMarkdownFilesRecursive(WORKFLOWS_DIR);
+  const violations = findViolations(WORKFLOWS_DIR);
+
+  if (violations.length > 0) {
+    console.error(
+      `lint-response-language-coverage: ${violations.length} workflow(s) have no response-language coverage (#2529).\n` +
+      `Each workflow must either @-reference the shared directive (@~/.claude/gsd-core/${SHARED_REF})\n` +
+      `or carry its own inline \`response_language\` directive:\n\n` +
+      violations.map((file) => `  - gsd-core/workflows/${path.relative(WORKFLOWS_DIR, file).replaceAll(path.sep, '/')}`).join('\n'),
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(`lint-response-language-coverage: OK (${files.length} workflows covered)`);
+}
+
+if (require.main === module) main();
+
+module.exports = { findMarkdownFilesRecursive, findViolations };

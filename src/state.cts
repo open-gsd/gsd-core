@@ -2529,7 +2529,10 @@ function cmdStatePlannedPhase(cwd: string, phaseNumber: string | number, planCou
     return result.content;
   }, cwd, { resync: false, deriveProgressKeys: true });
 
-  output({ updated, phase: phaseNumber, plan_count: planCount }, raw, updated.length > 0 ? 'true' : 'false');
+  const result = updated.length === 0
+    ? { updated, phase: phaseNumber, plan_count: planCount, warning: 'STATE.md Current Position has no recognized labels — transition was a no-op. Verify STATE.md uses the canonical labeled format (Status:, Total Plans in Phase:, etc.).' }
+    : { updated, phase: phaseNumber, plan_count: planCount };
+  output(result, raw, updated.length > 0 ? 'true' : 'false');
 }
 
 /**

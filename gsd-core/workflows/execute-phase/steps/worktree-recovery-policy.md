@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # Worktree Recovery Policy
 
 ## ORCHESTRATOR FAIL-CLOSED RULE (#48)

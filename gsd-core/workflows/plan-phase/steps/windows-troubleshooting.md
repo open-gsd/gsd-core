@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # Windows Troubleshooting
 
 **Windows users:** If plan-phase freezes during agent spawning (common on Windows due to

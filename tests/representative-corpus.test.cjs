@@ -153,9 +153,7 @@ describe('representative corpus — api-coverage matrix (#2366)', () => {
   const manifest = readManifest('api-coverage-matrix');
 
   for (const fx of manifest.fixtures) {
-    const label = fx.currentBuggyOutput
-      ? `${fx.file} → currently silently-corrupted + spurious errors (#2366)`
-      : `${fx.file} → exactly the canonical rows, 0 errors`;
+    const label = `${fx.file} → exactly the canonical rows, 0 errors`;
     test(label, () => {
       tmpDir = makeProject();
       const phaseDir = makePhaseDir(tmpDir, '01-repcorpus');
@@ -166,18 +164,10 @@ describe('representative corpus — api-coverage matrix (#2366)', () => {
       assert.ok(r.success, `gate should succeed (JSON). stderr: ${r.error}`);
       const j = JSON.parse(r.output);
 
-      if (fx.currentBuggyOutput) {
-        assert.strictEqual(j.block, fx.currentBuggyOutput.block,
-          `${fx.file}: expected today's known-buggy block:${fx.currentBuggyOutput.block}, got ${JSON.stringify(j)}. ` +
-          `If this now differs, #2366 may be fixed — check against expectedBlock:${fx.expectedBlock} instead.`);
-        assert.strictEqual(j.error_count, fx.currentBuggyOutput.error_count, `${fx.file}: error_count`);
-        assert.deepStrictEqual(j.errors, fx.currentBuggyOutput.errors, `${fx.file}: errors`);
-      } else {
-        assert.strictEqual(j.block, fx.expectedBlock, `${fx.file}: block. Got ${JSON.stringify(j)}`);
-        assert.deepStrictEqual(j.counts, fx.expectedCounts, `${fx.file}: counts. Got ${JSON.stringify(j)}`);
-        assert.strictEqual((j.errors || []).length, fx.expectedErrorCount,
-          `${fx.file}: errors. Got ${JSON.stringify(j.errors)}`);
-      }
+      assert.strictEqual(j.block, fx.expectedBlock, `${fx.file}: block. Got ${JSON.stringify(j)}`);
+      assert.deepStrictEqual(j.counts, fx.expectedCounts, `${fx.file}: counts. Got ${JSON.stringify(j)}`);
+      assert.strictEqual((j.errors || []).length, fx.expectedErrorCount,
+        `${fx.file}: errors. Got ${JSON.stringify(j.errors)}`);
     });
   }
 });

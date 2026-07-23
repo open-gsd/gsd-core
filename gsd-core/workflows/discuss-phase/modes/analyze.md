@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 # --analyze mode — trade-off tables before each question
 
 > **Lazy-loaded overlay.** Read this file from `workflows/discuss-phase.md`

@@ -161,7 +161,7 @@ describe('CONTRACT-PIN', () => {
   test('subagentToolkit values (sorted)', () => {
     assert.deepStrictEqual(
       [...HOST_INTEGRATION_AXES.subagentToolkit].sort(),
-      ['full', 'read-only'],
+      ['built-in-only', 'full', 'read-only'],
     );
   });
 

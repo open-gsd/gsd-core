@@ -44,7 +44,7 @@ const HOST_INTEGRATION_AXES = Object.freeze({
   stateIO:         Object.freeze(['filesystem', 'sandboxed-storage', 'session-log-append'] as const),
   transport:       Object.freeze(['mcp', 'native-extension'] as const),
   runtime:         Object.freeze(['node', 'bun', 'sandboxed-web', 'python', 'go', 'rust', 'electron', 'other'] as const),
-  subagentToolkit: Object.freeze(['full', 'read-only'] as const),
+  subagentToolkit: Object.freeze(['full', 'read-only', 'built-in-only'] as const),
   // ADR-1239 amendment (#2481): how reasoning effort reaches this host.
   // `argv` — deliverable as an argument on the host's own invocation.
   // `none` — the host exposes no reasoning-effort mechanism.
