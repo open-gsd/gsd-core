@@ -662,6 +662,16 @@ describe('planWorktreeRecordAgent', () => {
     assert.equal(readBack.reason, 'empty_manifest');
   });
 
+  test('accepts the current agent-<id> namespace (#1995)', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', { ...VALID, branch: 'agent-a1' });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.entry.branch, 'agent-a1');
+    const readBack = planWorktreeWaveCleanup('/repo/main', JSON.parse(plan.manifest));
+    assert.equal(readBack.ok, true);
+    assert.equal(readBack.entries.length, 1);
+    assert.equal(readBack.entries[0].branch, 'agent-a1');
+  });
+
   test('fails loudly on malformed manifest JSON instead of clobbering it', () => {
     const plan = planWorktreeRecordAgent('{not valid json', VALID);
     assert.equal(plan.ok, false);
@@ -749,7 +759,9 @@ describe('planWorktreeRecordAgent', () => {
 
 describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () => {
   const seg = fc.stringMatching(/^[A-Za-z0-9._/-]+$/); // include '/' — the namespace allows it
-  const agentBranch = seg.map((s) => `worktree-agent-${s}`);
+  const legacyAgentBranch = seg.map((s) => `worktree-agent-${s}`);
+  const currentAgentBranch = seg.map((s) => `agent-${s}`);
+  const agentBranch = fc.oneof(legacyAgentBranch, currentAgentBranch);
   const nonEmpty = fc.stringMatching(/^\S[\S ]*$/); // no leading whitespace, not blank
 
   test('any writer-accepted entry round-trips through the cleanup reader unchanged', () => {
@@ -776,7 +788,7 @@ describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () =
         agentId: nonEmpty,
         worktreePath: nonEmpty,
         // Any branch that does NOT match the disposable namespace.
-        branch: fc.string({ minLength: 1 }).filter((b) => !/^worktree-agent-[A-Za-z0-9._/-]+$/.test(b.trim())),
+        branch: fc.string({ minLength: 1 }).filter((b) => !/^(worktree-)?agent-[A-Za-z0-9._/-]+$/.test(b.trim())),
         base: nonEmpty,
       }),
       (fields) => {
@@ -785,6 +797,79 @@ describe('planWorktreeRecordAgent — fast-check parity invariant (#1298)', () =
         assert.equal(plan.manifest, null);
       },
     ));
+  });
+});
+
+// ─── branch namespace boundary tests (#1995) ─────────────────────────────────
+// Claude Code's isolation="worktree" branch naming changed from worktree-agent-<id>
+// to agent-<id>. Both namespaces must be accepted; non-agent branches rejected.
+
+describe('worktree branch namespace boundaries (#1995)', () => {
+  const ACCEPTED_BRANCHES = [
+    'agent-a1',
+    'agent-abc123',
+    'agent-session.42',
+    'worktree-agent-a1',
+    'worktree-agent-abc123',
+    'worktree-agent-session.42',
+  ];
+  const REJECTED_BRANCHES = [
+    'feature-x',
+    'main',
+    'agent',
+    'worktree-agent',
+    'xagent-y',
+    'worktree-foo',
+    'worktree-agent-',
+    'agent-',
+    '',
+  ];
+
+  for (const branch of ACCEPTED_BRANCHES) {
+    test(`planWorktreeRecordAgent accepts branch "${branch}"`, () => {
+      const plan = planWorktreeRecordAgent('{"worktrees":[]}', {
+        agentId: 'a1', worktreePath: '/repo/wt', branch, base: 'abc123',
+      });
+      assert.equal(plan.ok, true, `expected branch "${branch}" to be accepted`);
+      assert.equal(plan.entry.branch, branch);
+    });
+  }
+
+  for (const branch of REJECTED_BRANCHES) {
+    test(`planWorktreeRecordAgent rejects branch "${branch}"`, () => {
+      const plan = planWorktreeRecordAgent('{"worktrees":[]}', {
+        agentId: 'a1', worktreePath: '/repo/wt', branch, base: 'abc123',
+      });
+      if (branch === '') {
+        assert.equal(plan.reason, 'missing_field');
+      } else {
+        assert.equal(plan.ok, false, `expected branch "${branch}" to be rejected`);
+        assert.equal(plan.reason, 'invalid_entry');
+        assert.match(plan.hint, /\(worktree-\)\?agent-/);
+      }
+    });
+  }
+
+  test('cleanup-wave retains agent-<id> entries alongside worktree-agent-<id> entries', () => {
+    const manifest = {
+      orchestrator_root: '/repo/main',
+      worktrees: [
+        { agent_id: 'a1', worktree_path: '/repo/wt-a1', branch: 'agent-a1', expected_base: 'abc' },
+        { agent_id: 'a2', worktree_path: '/repo/wt-a2', branch: 'worktree-agent-a2', expected_base: 'def' },
+      ],
+    };
+    const result = planWorktreeWaveCleanup('/repo/main', manifest);
+    assert.equal(result.ok, true);
+    assert.equal(result.entries.length, 2);
+    assert.deepEqual(result.entries.map((e) => e.branch), ['agent-a1', 'worktree-agent-a2']);
+  });
+
+  test('hint string names the widened accepted pattern', () => {
+    const plan = planWorktreeRecordAgent('{"worktrees":[]}', {
+      agentId: 'a1', worktreePath: '/repo/wt', branch: 'feature-x', base: 'abc123',
+    });
+    assert.equal(plan.ok, false);
+    assert.match(plan.hint, /\(worktree-\)\?agent-\[A-Za-z0-9\._\/-\]\+/);
   });
 });
 
@@ -822,6 +907,26 @@ describe('cmdWorktreeRecordAgent', () => {
     assert.equal(written.worktrees.length, 1);
     assert.equal(written.worktrees[0].agent_id, 'a1');
     assert.match(out.join(''), /"ok": true/);
+  });
+
+  test('accepts the current agent-<id> namespace via CLI (#1995)', () => {
+    let writtenContent = null;
+    const agentArgs = [
+      '--manifest', 'manifest.json',
+      '--agent-id', 'a1',
+      '--path', '/repo/.claude/worktrees/agent-a1',
+      '--branch', 'agent-a1',
+      '--base', 'abc123',
+    ];
+    const result = cmdWorktreeRecordAgent('/repo/main', agentArgs, {
+      readFile: () => '{"orchestrator_root":"/repo/main","worktrees":[]}',
+      writeFile: (_p, c) => { writtenContent = c; },
+      write: () => {},
+      writeErr: () => {},
+    });
+    assert.equal(result.ok, true);
+    const written = JSON.parse(writtenContent);
+    assert.equal(written.worktrees[0].branch, 'agent-a1');
   });
 
   test('exits 2 with usage when --manifest is missing', () => {
