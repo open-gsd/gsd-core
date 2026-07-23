@@ -187,7 +187,8 @@ Choice [S]:
 ```
 2. Commit the deferral record:
 ```bash
-gsd_run query commit "docs: defer incomplete Phase {src} items to backlog"
+gsd_run query commit "docs: defer incomplete Phase {src} items to backlog" \
+  --files .planning/ROADMAP.md
 ```
 3. Continue routing to `determine_next_action` immediately — no second prompt.
 
