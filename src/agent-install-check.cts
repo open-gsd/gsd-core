@@ -13,8 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import modelProfiles = require('./model-profiles.cjs');
-const { MODEL_PROFILES } = modelProfiles;
 import { getGlobalConfigDir } from './runtime-homes.cjs';
+import { getDirName } from './runtime-name-policy.cjs';
+const { MODEL_PROFILES } = modelProfiles;
 
 interface AgentsInstalledResult {
   agents_installed: boolean;
@@ -37,13 +38,18 @@ interface AgentsInstalledResult {
  *
  * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
  */
-function getAgentsDir(runtime?: string): string {
+function getAgentsDir(runtime?: string, projectDir?: string): string {
   if (process.env['GSD_AGENTS_DIR']) {
     return process.env['GSD_AGENTS_DIR'];
   }
   const resolved = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
-  if (resolved === 'claude') {
-    return path.join(__dirname, '..', '..', '..', 'agents');
+  // Check local install dir first: <projectDir>/.<dirName>/agents/
+  if (projectDir) {
+    const dirName = getDirName(resolved);
+    const localAgentsDir = path.join(projectDir, dirName, 'agents');
+    if (fs.existsSync(localAgentsDir)) {
+      return localAgentsDir;
+    }
   }
   return path.join(getGlobalConfigDir(resolved), 'agents');
 }
@@ -52,10 +58,40 @@ function getAgentsDir(runtime?: string): string {
  * Check which GSD agents are installed on disk.
  *
  * @param runtime - the active runtime name; defaults to GSD_RUNTIME env, then 'claude'
+ * @param projectDir - project root dir; when provided, checks local install dir first
  */
-function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
+function checkAgentsInstalled(runtime?: string, projectDir?: string): AgentsInstalledResult {
   const resolvedRuntime = runtime ?? (process.env['GSD_RUNTIME'] || 'claude');
-  const agentsDir = getAgentsDir(resolvedRuntime);
+  // If the resolved runtime's agents dir doesn't exist locally, check the
+  // .gsd-runtime install marker — config.json's runtime field can drift from
+  // the actual install (e.g. config says "pi" but the install was --omp).
+  let effectiveRuntime = resolvedRuntime;
+  if (projectDir) {
+    // Check if a local install exists for the resolved runtime.
+    // If not, look for a .gsd-runtime marker — config.json's runtime field can
+    // drift from the actual install (e.g. config says "pi" but the install was --omp).
+    const resolvedDirName = getDirName(resolvedRuntime);
+    const localAgentsDir = path.join(projectDir, resolvedDirName, 'agents');
+    if (!fs.existsSync(localAgentsDir)) {
+      // Scan common local install dirs for a .gsd-runtime marker
+      for (const dirName of ['.omp', '.pi', '.claude', '.opencode', '.kilo', '.codex', '.copilot', '.cursor', '.windsurf', '.augment', '.trae', '.qwen', '.hermes', '.codebuddy', '.cline', '.zcode']) {
+        const markerPath = path.join(projectDir, dirName, 'gsd-core', '.gsd-runtime');
+        try {
+          if (fs.existsSync(markerPath)) {
+            const markerRuntime = fs.readFileSync(markerPath, 'utf8').trim();
+            if (markerRuntime && markerRuntime !== resolvedRuntime) {
+              const markerLocalDir = path.join(projectDir, getDirName(markerRuntime), 'agents');
+              if (fs.existsSync(markerLocalDir)) {
+                effectiveRuntime = markerRuntime;
+                break;
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+    }
+  }
+  const agentsDir = getAgentsDir(effectiveRuntime, projectDir);
   const expectedAgents = Object.keys(MODEL_PROFILES);
   const installed: string[] = [];
   const missing: string[] = [];
@@ -67,7 +103,7 @@ function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
       installed_agents: [],
       incomplete_agents: [],
       agents_dir: agentsDir,
-      agent_runtime: resolvedRuntime,
+      agent_runtime: effectiveRuntime,
     };
   }
 
@@ -149,7 +185,7 @@ function checkAgentsInstalled(runtime?: string): AgentsInstalledResult {
     installed_agents: installed,
     incomplete_agents: incomplete,
     agents_dir: agentsDir,
-    agent_runtime: resolvedRuntime,
+    agent_runtime: effectiveRuntime,
   };
 }
 

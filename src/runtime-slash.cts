@@ -105,13 +105,33 @@ export function resolveRuntime(projectDir: string | null | undefined): string {
         }
       }
     } catch {
-      // Fall through to default — a missing/broken config must not crash
+      // Fall through to marker/default — a missing/broken config must not crash
       // runtime output formatting.
+    }
+  }
+  // Per-install .gsd-runtime marker: the installer writes this next to VERSION
+  // at <install>/gsd-core/.gsd-runtime. For a local install, that's under
+  // <projectDir>/.<dirName>/gsd-core/.gsd-runtime. This is the source of truth
+  // for "which runtime owns THIS install" — config.json's runtime field can
+  // drift (e.g. set to "pi" but the actual install is "omp"). Precedence
+  // mirrors model-resolver.cts's resolveActiveRuntime.
+  if (projectDir) {
+    try {
+      // Check common local install dir names for the marker
+      for (const dirName of ['.omp', '.pi', '.claude', '.opencode', '.kilo', '.codex', '.copilot', '.cursor', '.windsurf', '.augment', '.trae', '.qwen', '.hermes', '.codebuddy', '.cline', '.zcode']) {
+        const markerPath = path.join(projectDir, dirName, 'gsd-core', '.gsd-runtime');
+        if (fs.existsSync(markerPath)) {
+          const raw = fs.readFileSync(markerPath, 'utf8').trim();
+          const markerRuntime = resolveRuntimeNameFromCandidates(raw);
+          if (markerRuntime) return markerRuntime;
+        }
+      }
+    } catch {
+      // Fall through to default
     }
   }
   return 'claude';
 }
-
 /**
  * Convenience: format using the runtime resolved from a project directory.
  * Equivalent to `formatGsdSlash(name, resolveRuntime(projectDir))`.
