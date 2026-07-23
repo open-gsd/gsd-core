@@ -521,7 +521,7 @@ function dispatchKindEntry(entry: ArtifactKindDescriptor, runtime: string, confi
       );
   }
 
-  if (typeof entry.home === 'string' && entry.home !== '') {
+  if (scope === 'global' && typeof entry.home === 'string' && entry.home !== '') {
     result.home = path.join(os.homedir(), entry.home);
   }
 
