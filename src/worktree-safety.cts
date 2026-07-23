@@ -18,6 +18,9 @@ import { execGit as execGitSeam, posixNormalize } from './shell-command-projecti
 // remote, stalled NFS mount, etc.).  Callers can override via deps.timeout.
 const DEFAULT_GIT_TIMEOUT_MS = 10000;
 
+const WORKTREE_AGENT_BRANCH_RE = /^(worktree-)?agent-[A-Za-z0-9._/-]+$/;
+const WORKTREE_AGENT_BRANCH_PATTERN = WORKTREE_AGENT_BRANCH_RE.source;
+
 interface GitResult {
   exitCode: number;
   stdout: string;
@@ -428,7 +431,7 @@ function normalizeCleanupManifestEntry(entry: unknown): CleanupManifestEntry | n
   const branch = typeof e.branch === 'string' ? e.branch : '';
   const expectedBase = typeof e.expected_base === 'string' ? e.expected_base : '';
   if (!worktreePath || !branch || !expectedBase) return null;
-  if (!/^worktree-agent-[A-Za-z0-9._/-]+$/.test(branch)) return null;
+  if (!WORKTREE_AGENT_BRANCH_RE.test(branch)) return null;
   const rawAllowedBases = Array.isArray(e.allowed_bases) ? e.allowed_bases : [];
   const allowedBases = Array.from(new Set(
     [expectedBase, ...rawAllowedBases.filter((base): base is string => typeof base === 'string' && base.length > 0)]
@@ -939,7 +942,7 @@ function planWorktreeRecordAgent(manifestRaw: string, fields: RecordAgentFields)
     return {
       ok: false,
       reason: 'invalid_entry',
-      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ^worktree-agent-[A-Za-z0-9._/-]+$ (got branch="${branch}"). Fix the field and re-run.`,
+      hint: `Entry failed cleanup-manifest validation: --path/--branch/--base must be non-empty and --branch must match ${WORKTREE_AGENT_BRANCH_PATTERN} (accepts both agent-<id> and worktree-agent-<id> namespaces; got branch="${branch}"). Fix the field and re-run.`,
       entry: null,
       manifest: null,
     };

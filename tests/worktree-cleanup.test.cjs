@@ -187,10 +187,10 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
       const scripts = codeBlocks.map(({ body }) => body).join('\n');
       // Allow-list must reference the canonical Claude Code worktree-agent-<id>
       // namespace via a regex assertion (grep -Eq '^worktree-agent-...').
-      const allowListRe = /grep\s+-Eq?\s+'\^worktree-agent-/;
+      const allowListRe = /grep\s+-Eq?\s+'\^\(worktree-\)\?agent-/;
       assert.ok(
         allowListRe.test(scripts),
-        'worktree_branch_check must enforce a positive allow-list matching ^worktree-agent-* (#2924 hardening)'
+        'worktree_branch_check must enforce a positive allow-list matching ^(worktree-)?agent-* (#2924 hardening)'
       );
     });
 
@@ -322,10 +322,10 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     });
 
     test('block enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
-      const allowListRe = /grep\s+-Eq?\s+'\^worktree-agent-/;
+      const allowListRe = /grep\s+-Eq?\s+'\^\(worktree-\)\?agent-/;
       assert.ok(
         allowListRe.test(block),
-        'quick.md worktree_branch_check must enforce a positive allow-list matching ^worktree-agent-* (#2924 hardening)'
+        'quick.md worktree_branch_check must enforce a positive allow-list matching ^(worktree-)?agent-* (#2924 hardening)'
       );
     });
   });
@@ -404,10 +404,10 @@ describe('bug #2924: worktree HEAD attachment + destructive recovery', () => {
     test('step 0 enforces positive worktree-agent-* allow-list (#2924 hardening)', () => {
       const codeBlocks = extractFencedCodeBlocks(block);
       const scripts = codeBlocks.map(({ body }) => body).join('\n');
-      const allowListRe = /grep\s+-Eq?\s+'\^worktree-agent-/;
+      const allowListRe = /grep\s+-Eq?\s+'\^\(worktree-\)\?agent-/;
       assert.ok(
         allowListRe.test(scripts),
-        'task_commit_protocol step 0 must enforce a positive allow-list matching ^worktree-agent-* in addition to the protected-ref deny-list (#2924 hardening)'
+        'task_commit_protocol step 0 must enforce a positive allow-list matching ^(worktree-)?agent-* in addition to the protected-ref deny-list (#2924 hardening)'
       );
     });
   });
@@ -1531,8 +1531,8 @@ function extractCwdGuardBash() {
   if (!guardBash.includes('git rev-parse --show-toplevel')) {
     throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "git rev-parse --show-toplevel"');
   }
-  if (!guardBash.includes('worktree-agent-')) {
-    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "worktree-agent-"');
+  if (!guardBash.includes('(worktree-)?agent-')) {
+    throw new Error('extractCwdGuardBash: sanity check failed — extracted block does not contain "(worktree-)?agent-"');
   }
 
   return guardBash;
