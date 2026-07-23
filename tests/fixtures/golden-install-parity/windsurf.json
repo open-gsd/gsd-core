@@ -324,7 +324,7 @@
   "gsd-core/workflows/undo.md": "733189fb34cc026b",
   "gsd-core/workflows/update.md": "0c02d18be2ccd04d",
   "gsd-core/workflows/validate-phase.md": "037e8d2b226e010f",
-  "gsd-core/workflows/verify-phase.md": "2509c6d14f98367b",
+  "gsd-core/workflows/verify-phase.md": "6026003cd8e00b43",
   "gsd-core/workflows/verify-work.md": "0fb2519e1a0b47f4",
   "hooks/gsd-windsurf-pre-command.js": "7467a8a63e354aad",
   "hooks/gsd-windsurf-pre-write.js": "1c8a776d7ae2dcce",

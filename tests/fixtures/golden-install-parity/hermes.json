@@ -324,7 +324,7 @@
   "gsd-core/workflows/undo.md": "0a03405c0345fcf7",
   "gsd-core/workflows/update.md": "06e3a9996f1e6d32",
   "gsd-core/workflows/validate-phase.md": "a35b1b47667347a6",
-  "gsd-core/workflows/verify-phase.md": "8dcc38a5cfc140b9",
+  "gsd-core/workflows/verify-phase.md": "ea090f218c0ed6b0",
   "gsd-core/workflows/verify-work.md": "7cc10ba031a32465",
   "hooks/gsd-check-update-worker.js": "7989cc2bedd1138d",
   "hooks/gsd-check-update.js": "25f5ad726f76fc11",

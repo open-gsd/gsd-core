@@ -101,6 +101,24 @@ describe('resolveRuntimeArtifactLayout — codex', () => {
     assert.strictEqual(layout.kinds[0].prefix, 'gsd-');
     assert.strictEqual(typeof layout.kinds[0].stage, 'function');
   });
+
+  test('#2429: codex local scope does not set $HOME/.agents skills home override', () => {
+    const layout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'local');
+    const skills = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skills, 'codex local must have a skills kind');
+    assert.strictEqual(skills.home, undefined,
+      'codex local skills must NOT have a home override (would redirect to $HOME/.agents instead of project-local)');
+  });
+
+  test('#2429: codex global scope DOES set $HOME/.agents skills home override', () => {
+    const layout = resolveRuntimeArtifactLayout('codex', FAKE_DIR, 'global');
+    const skills = layout.kinds.find(k => k.kind === 'skills');
+    assert.ok(skills, 'codex global must have a skills kind');
+    assert.ok(typeof skills.home === 'string' && skills.home.length > 0,
+      'codex global skills MUST have a home override ($HOME/.agents)');
+    assert.ok(skills.home.includes('.agents'),
+      'codex global skills home should point to .agents directory');
+  });
 });
 
 describe('resolveRuntimeArtifactLayout — copilot', () => {
